@@ -30,7 +30,7 @@
   },
   {
     "name": "genexus_list_objects",
-    "description": "Hierarchical object listing for navigation and pagination. Prefer parentPath over parent for disambiguation, and always pass limit/offset. Supports optional fields and axiCompact in MCP arguments.",
+    "description": "Hierarchical object listing for navigation and pagination. Prefer parentPath over parent for disambiguation, and always pass limit/offset. Returns {count, total, offset, hasMore, nextOffset?, results[]}: feed `nextOffset` into the next call and stop when `hasMore` is false. Supports optional fields and axiCompact in MCP arguments.",
     "inputSchema": {
       "type": "object",
       "properties": {

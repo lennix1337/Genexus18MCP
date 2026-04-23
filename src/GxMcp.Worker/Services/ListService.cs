@@ -108,12 +108,18 @@ namespace GxMcp.Worker.Services
                         entries = entries.Where(e => (e.Name ?? string.Empty).IndexOf(nameFilter, StringComparison.OrdinalIgnoreCase) >= 0);
                     }
 
-                    foreach (var entry in entries
+                    var orderedIndexEntries = entries
                         .OrderBy(e => GetTypeSortBucket(e.Type))
                         .ThenBy(e => e.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                         .ThenBy(e => e.Type ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                        .Skip(Math.Max(0, offset))
-                        .Take(limit <= 0 ? int.MaxValue : limit))
+                        .ToList();
+
+                    int totalIndex = orderedIndexEntries.Count;
+                    int startIndex = Math.Max(0, offset);
+                    int pageSize = limit <= 0 ? int.MaxValue : limit;
+                    foreach (var entry in orderedIndexEntries
+                        .Skip(startIndex)
+                        .Take(pageSize))
                     {
                         array.Add(BuildItem(
                             entry.Name,
@@ -126,7 +132,7 @@ namespace GxMcp.Worker.Services
                         ));
                     }
 
-                    return Finalize(array.ToString());
+                    return Finalize(BuildPagedResponse(array, totalIndex, startIndex, pageSize).ToString());
                 }
 
                 source = "runtime-sdk";
@@ -166,12 +172,18 @@ namespace GxMcp.Worker.Services
                     filteredObjects = filteredObjects.Where(x => string.Equals(x.Hierarchy.ParentName, parentFilter, StringComparison.OrdinalIgnoreCase));
                 }
 
-                foreach (var item in filteredObjects
+                var orderedRuntime = filteredObjects
                     .OrderBy(x => GetTypeSortBucket(x.TypeName))
                     .ThenBy(x => x.Object.Name, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(x => x.TypeName, StringComparer.OrdinalIgnoreCase)
-                    .Skip(Math.Max(0, offset))
-                    .Take(limit <= 0 ? int.MaxValue : limit))
+                    .ToList();
+
+                int totalRuntime = orderedRuntime.Count;
+                int startRuntime = Math.Max(0, offset);
+                int pageSizeRuntime = limit <= 0 ? int.MaxValue : limit;
+                foreach (var item in orderedRuntime
+                    .Skip(startRuntime)
+                    .Take(pageSizeRuntime))
                 {
                     array.Add(BuildItem(
                         item.Object.Name,
@@ -184,13 +196,30 @@ namespace GxMcp.Worker.Services
                     ));
                 }
 
-                return Finalize(array.ToString());
+                return Finalize(BuildPagedResponse(array, totalRuntime, startRuntime, pageSizeRuntime).ToString());
             }
             catch (Exception ex)
             {
                 source = source + "-error";
                 return Finalize("{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}");
             }
+        }
+
+        private JObject BuildPagedResponse(JArray results, int total, int offset, int pageSize)
+        {
+            var response = new JObject();
+            response["count"] = results.Count;
+            response["total"] = total;
+            response["offset"] = offset;
+            int consumed = offset + results.Count;
+            bool hasMore = consumed < total;
+            response["hasMore"] = hasMore;
+            if (hasMore)
+            {
+                response["nextOffset"] = consumed;
+            }
+            response["results"] = results;
+            return response;
         }
 
         private JObject BuildItem(string name, string type, string description, string parent, string module, string path, string parentPath)

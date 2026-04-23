@@ -117,7 +117,7 @@ namespace GxMcp.Worker.Services
                     queryEmbedding = _vectorService.ComputeEmbedding(query);
                 }
 
-                var scoredResults = queryResults
+                var rankedAll = queryResults
                     .Select(entry =>
                     {
                         int score = 0;
@@ -150,14 +150,20 @@ namespace GxMcp.Worker.Services
                     .Where(r => r.Score > 0)
                     .OrderByDescending(r => r.Score)
                     .ThenBy(r => r.Entry.Name)
-                    .Take(limit)
                     .ToList();
+
+                int total = rankedAll.Count;
+                var effectiveLimit = limit <= 0 ? total : limit;
+                var scoredResults = rankedAll.Take(effectiveLimit).ToList();
+                bool hasMore = total > scoredResults.Count;
 
                 string json;
                 if (isQuick)
                 {
-                    json = Newtonsoft.Json.JsonConvert.SerializeObject(new { 
-                        count = scoredResults.Count, 
+                    json = Newtonsoft.Json.JsonConvert.SerializeObject(new {
+                        count = scoredResults.Count,
+                        total,
+                        hasMore,
                         results = scoredResults.Select(r => new {
                             guid = r.Entry.Guid,
                             name = r.Entry.Name,
@@ -171,8 +177,10 @@ namespace GxMcp.Worker.Services
                 }
                 else
                 {
-                    json = Newtonsoft.Json.JsonConvert.SerializeObject(new { 
-                        count = scoredResults.Count, 
+                    json = Newtonsoft.Json.JsonConvert.SerializeObject(new {
+                        count = scoredResults.Count,
+                        total,
+                        hasMore,
                         results = scoredResults.Select(r => new {
                             guid = r.Entry.Guid,
                             name = r.Entry.Name,
