@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - package.json
-      - .github/workflows/release.yml
 
 permissions:
   contents: write
@@ -18,39 +17,11 @@ concurrency:
 
 jobs:
   test:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 20
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Install npm deps
-        run: npm install
-
-      - name: CLI tests
-        run: npm test
-
-      - name: Gateway tests
-        run: dotnet test src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj -v minimal
-
-      - name: LLM contract smoke
-        shell: pwsh
-        run: ./scripts/mcp_llm_contract_smoke.ps1
+    uses: ./.github/workflows/ci.yml
 
   publish-and-release:
     needs: test
     runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -88,13 +59,15 @@ jobs:
 
           if [[ "$CURRENT_VERSION" == "$PREVIOUS_VERSION" ]]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "Version unchanged ($CURRENT_VERSION); skipping publish."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Version bumped: $PREVIOUS_VERSION -> $CURRENT_VERSION"
           fi
-
-          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Check if version is already published on npm
         id: npm_check
+        if: steps.version.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -103,16 +76,17 @@ jobs:
 
           if npm view "${PKG}@${VER}" version >/dev/null 2>&1; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "${PKG}@${VER} already on npm; will skip publish."
           else
             echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install dependencies
-        if: steps.npm_check.outputs.already_published == 'false'
+        if: steps.version.outputs.changed == 'true' && steps.npm_check.outputs.already_published == 'false'
         run: npm install
 
       - name: Enforce OIDC-only npm auth
-        if: steps.npm_check.outputs.already_published == 'false'
+        if: steps.version.outputs.changed == 'true' && steps.npm_check.outputs.already_published == 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -133,7 +107,7 @@ jobs:
           echo "NPM_CONFIG_USERCONFIG=$OIDC_NPMRC" >> "$GITHUB_ENV"
 
       - name: Publish to npm
-        if: steps.npm_check.outputs.already_published == 'false'
+        if: steps.version.outputs.changed == 'true' && steps.npm_check.outputs.already_published == 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -141,7 +115,7 @@ jobs:
           npm publish --access public --provenance
 
       - name: Create GitHub Release
-        if: steps.npm_check.outputs.already_published == 'false'
+        if: steps.version.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
