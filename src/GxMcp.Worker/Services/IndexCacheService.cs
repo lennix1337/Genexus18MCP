@@ -156,6 +156,15 @@ namespace GxMcp.Worker.Services
                 return entry.Module;
             }
 
+            // When an entry lives inside a Folder under a Module, qualify the
+            // folder name with its parent module to preserve hierarchy. Without
+            // this, folders sharing names across modules (e.g. "Procs") collapse
+            // into a single bucket in the parent index.
+            if (!string.IsNullOrWhiteSpace(entry.Module))
+            {
+                return string.Format("{0}/{1}", entry.Module, entry.Parent);
+            }
+
             return entry.Parent;
         }
 

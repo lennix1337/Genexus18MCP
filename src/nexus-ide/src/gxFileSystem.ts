@@ -661,8 +661,18 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
             ? result
             : [];
 
-    const getEntryKey = (entry: any): string =>
-      `${String(entry?.type ?? "")}:${String(entry?.path ?? entry?.name ?? "")}`.toLowerCase();
+    const getEntryKey = (entry: any): string => {
+      const type = String(entry?.type ?? "").toLowerCase();
+      const path = typeof entry?.path === "string" ? entry.path.trim() : "";
+      if (path.length > 0) {
+        return `${type}:${path.toLowerCase()}`;
+      }
+      const parentPath = typeof entry?.parentPath === "string" ? entry.parentPath.trim() : "";
+      const name = String(entry?.name ?? "").toLowerCase();
+      return parentPath.length > 0
+        ? `${type}:${parentPath.toLowerCase()}/${name}`
+        : `${type}:${name}`;
+    };
 
     const getTypeSortBucket = (type: unknown): number => {
       const normalized = typeof type === "string" ? type.toLowerCase() : "";
@@ -779,6 +789,12 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
 
       if (parentPath.length === 0) {
         return entryParent.length === 0 || entryParent === ROOT_PARENT_NAME;
+      }
+
+      // Nested parent: a name-only match is ambiguous across modules
+      // (e.g. ModuloA/Procs vs ModuloB/Procs). Require parentPath to disambiguate.
+      if (parentPath.includes("/")) {
+        return false;
       }
 
       return entryParent === parentName;
