@@ -15,6 +15,7 @@ using Artech.Architecture.Common.Services;
 using Artech.Udm.Framework;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System.Security;
 
 namespace GxMcp.Worker.Services
 {
@@ -126,14 +127,17 @@ namespace GxMcp.Worker.Services
                 if (string.IsNullOrEmpty(kbPath)) return "{\"error\": \"KB Path not found in Environment (GX_KB_PATH)\"}";
 
                 string tempFile = Path.Combine(Path.GetTempPath(), "GxBuild_" + Guid.NewGuid().ToString().Substring(0,8) + ".msbuild");
+                string importPath = SecurityElement.Escape(Path.Combine(_gxDir, "Genexus.Tasks.targets"));
+                string kbPathEsc = SecurityElement.Escape(kbPath);
+                string targetEsc = SecurityElement.Escape(target ?? string.Empty);
                 var sb = new StringBuilder();
                 sb.AppendLine("<Project DefaultTargets=\"Execute\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">");
-                sb.AppendLine("  <Import Project=\"" + Path.Combine(_gxDir, "Genexus.Tasks.targets") + "\" />");
+                sb.AppendLine("  <Import Project=\"" + importPath + "\" />");
                 sb.AppendLine("  <Target Name=\"Execute\">");
-                sb.AppendLine("    <OpenKnowledgeBase Directory=\"" + kbPath + "\" />");
-                
+                sb.AppendLine("    <OpenKnowledgeBase Directory=\"" + kbPathEsc + "\" />");
+
                 if (action.Equals("Build", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(target))
-                    sb.AppendLine("    <BuildOne BuildCalled=\"false\" ObjectName=\"" + target + "\" ForceRebuild=\"false\" />");
+                    sb.AppendLine("    <BuildOne BuildCalled=\"false\" ObjectName=\"" + targetEsc + "\" ForceRebuild=\"false\" />");
                 else if (action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase))
                     sb.AppendLine("    <RebuildAll />");
                 else if (action.Equals("Reorg", StringComparison.OrdinalIgnoreCase))

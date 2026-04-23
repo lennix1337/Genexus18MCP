@@ -147,7 +147,9 @@ namespace GxMcp.Worker.Services
 
             var index = _indexCacheService.GetIndex();
             var affectedObjects = new List<string>();
-            if (index != null && index.Objects.TryGetValue(oldName, out var entry)) if (entry.CalledBy != null) affectedObjects.AddRange(entry.CalledBy);
+            // index.Objects is keyed as "Type:Name" via GetEntryStorageKey, not bare Name.
+            if (index != null && index.Objects.TryGetValue("Attribute:" + oldName, out var entry) && entry.CalledBy != null)
+                affectedObjects.AddRange(entry.CalledBy);
 
             string pattern = @"(?i)\b" + System.Text.RegularExpressions.Regex.Escape(oldName) + @"\b";
             int updatedCount = 0;
