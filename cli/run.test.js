@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
 const { renderOutput } = require('./lib/output');
+const { compareSemver } = require('./lib/update-check');
 
 const cliPath = path.join(__dirname, 'run.js');
 
@@ -302,6 +303,24 @@ test('quiet flag suppresses launcher stderr noise', () => {
 
     assert.equal(result.status, 1);
     assert.equal(result.stderr.trim(), '');
+});
+
+test('update --help returns usage entry', () => {
+    const result = runCli(['update', '--help', '--format', 'json']);
+    assert.equal(result.status, 0);
+
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.meta.command, 'help');
+    assert.equal(parsed.ok.command, 'update');
+    assert.ok(parsed.ok.usage.includes('genexus-mcp update'));
+});
+
+test('compareSemver detects newer, older, equal versions', () => {
+    assert.equal(compareSemver('1.3.1', '1.3.0'), 1);
+    assert.equal(compareSemver('v1.4.0', '1.3.9'), 1);
+    assert.equal(compareSemver('1.3.0', '1.3.0'), 0);
+    assert.equal(compareSemver('1.2.9', '1.3.0'), -1);
+    assert.equal(compareSemver('garbage', '1.0.0'), 0);
 });
 
 test('gateway passthrough remains intact when no AXI subcommand is used', () => {

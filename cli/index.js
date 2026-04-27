@@ -22,6 +22,7 @@ const {
     usageEnvelope,
     commandHelpMap
 } = require('./commands/axi');
+const { startBackgroundUpdateCheck, handleUpdate } = require('./lib/update-check');
 
 const EXIT_CODES = {
     OK: 0,
@@ -43,7 +44,7 @@ const GLOBAL_DEFAULTS = {
     help: false
 };
 
-const KNOWN_COMMANDS = new Set(['status', 'doctor', 'tools', 'config', 'init', 'setup', 'help', 'home', 'axi', 'llm', 'layout']);
+const KNOWN_COMMANDS = new Set(['status', 'doctor', 'tools', 'config', 'init', 'setup', 'help', 'home', 'axi', 'llm', 'layout', 'update']);
 
 function parseArgs(argv) {
     const result = {
@@ -332,11 +333,16 @@ function resolveMetaCommand(parsed, targetHelp) {
         if (parsed.subcommand === 'inspect') return 'layout.inspect';
         return 'layout.status';
     }
+    if (parsed.command === 'update') return 'update';
     return parsed.command || 'unknown';
 }
 
 async function main(argv) {
     const parsed = parseArgs(argv);
+
+    if (parsed.command !== 'update') {
+        startBackgroundUpdateCheck({ quiet: parsed.options.quiet });
+    }
 
     if (!parsed.command) {
         return launchGateway(argv, parsed.options);
@@ -437,6 +443,9 @@ async function main(argv) {
             break;
         case 'init':
             result = await handleInit(parsed.options, ctx);
+            break;
+        case 'update':
+            result = await handleUpdate(parsed.options, ctx);
             break;
         default:
             writeStructured(

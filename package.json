@@ -1,6 +1,6 @@
 {
   "name": "genexus-mcp",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "A high-performance Model Context Protocol (MCP) server for GeneXus 18",
   "scripts": {
     "test": "node --test cli/run.test.js",

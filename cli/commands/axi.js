@@ -871,6 +871,10 @@ function commandHelpMap() {
             usage: 'genexus-mcp llm help [--full] [--fields f1,f2] [--format toon|json|text]',
             examples: ['genexus-mcp llm help --format json', 'genexus-mcp llm help --full --format json']
         },
+        update: {
+            usage: 'genexus-mcp update [--format toon|json|text]',
+            examples: ['genexus-mcp update', 'genexus-mcp update --format json']
+        },
         layout: {
             usage: 'genexus-mcp layout status [--title "GeneXus"] [--format ...] OR genexus-mcp layout run --action <focus|activate-layout|activate-tab|send-keys|type-text|click> [--tab "Layout"] [--keys "..."] [--text "..."] [--x N --y N] [--title "..."] [--format ...] OR genexus-mcp layout inspect [--tab "Layout"] [--limit N] [--full] [--title "..."] [--format ...]',
             examples: ['genexus-mcp layout status --format json', 'genexus-mcp layout run --action activate-tab --tab "Layout" --format json', 'genexus-mcp layout inspect --tab Layout --format json']
@@ -935,7 +939,7 @@ async function handleHelp(targetCommand, ctx) {
                 bin: binPath,
                 command: 'genexus-mcp',
                 description: 'GeneXus MCP launcher and AXI-oriented utility CLI',
-                commands: ['home', 'axi home', 'status', 'doctor', 'tools list', 'config show', 'layout status', 'layout run', 'layout inspect', 'init', 'llm help', 'help'],
+                commands: ['home', 'axi home', 'status', 'doctor', 'tools list', 'config show', 'layout status', 'layout run', 'layout inspect', 'init', 'llm help', 'update', 'help'],
                 defaults: { format: 'toon', limit: 100 }
             },
             help: [
