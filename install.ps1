@@ -409,14 +409,29 @@ if (-not $SkipExtensionInstall) {
         if ($LASTEXITCODE -ne 0) {
             $vsceLog = Join-Path $extensionDir "vsce-package.log"
             Write-Error "vsce package failed. Checking for common issues..."
-            if (-not (Test-Path (Join-Path $extensionDir "LICENSE.txt"))) {
-                Write-Warn "LICENSE.txt is missing in $extensionDir. Copying from root..."
-                Copy-Item (Join-Path $root "LICENSE.txt") (Join-Path $extensionDir "LICENSE.txt")
-                & $npxCommand --yes @vscode/vsce package --out nexus-ide.vsix
+            $extensionLicensePath = Join-Path $extensionDir "LICENSE.txt"
+            if (-not (Test-Path $extensionLicensePath)) {
+                $licenseCandidates = @("LICENSE.txt", "LICENSE.md", "LICENSE")
+                $sourceLicensePath = $null
+                foreach ($candidate in $licenseCandidates) {
+                    $candidatePath = Join-Path $root $candidate
+                    if (Test-Path $candidatePath) {
+                        $sourceLicensePath = $candidatePath
+                        break
+                    }
+                }
+
+                if ($sourceLicensePath) {
+                    Write-Warn "LICENSE.txt is missing in $extensionDir. Copying from $sourceLicensePath..."
+                    Copy-Item $sourceLicensePath $extensionLicensePath -Force
+                    & $npxCommand --yes @vscode/vsce package --out nexus-ide.vsix
+                } else {
+                    Write-Warn "No license file found at repository root (LICENSE, LICENSE.md, LICENSE.txt)."
+                }
             }
-            
+
             if ($LASTEXITCODE -ne 0) {
-                throw "vsce package failed again. Please check if LICENSE.txt is being ignored by Git or if there are other issues in package.json."
+                throw "vsce package failed again. Please check license include patterns and package.json."
             }
         }
 
