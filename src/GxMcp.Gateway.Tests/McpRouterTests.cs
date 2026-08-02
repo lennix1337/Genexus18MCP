@@ -365,8 +365,9 @@ namespace GxMcp.Gateway.Tests
         }
 
         // issue #50: a requested folder/module destination is forwarded to the worker (as
-        // folder/destModule/parentPath) so it can reject with FolderPlacementUnsupported instead
-        // of silently creating in Root Module. `module` is remapped to destModule to avoid
+        // folder/destModule/parentPath) so the object actually lands there — since v2.35.0 the
+        // worker creates in Root Module and then moves, reporting the outcome under `placement`,
+        // instead of the earlier up-front rejection. `module` is remapped to destModule to avoid
         // colliding with the routing `module=Object` field.
         [Fact]
         public void ConvertToolCall_CreateObject_ForwardsFolderDestination()

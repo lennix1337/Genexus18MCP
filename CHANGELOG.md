@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Agent instructions no longer claim that folder/module placement is impossible.** `AGENTS.md` — loaded as context in every agent session, and the shared convention file for Claude Code, Cursor, Codex and Aider — still described object placement as an SDK wall and told agents to move objects from the GeneXus IDE by hand. Placement has worked since v2.35.0, so agents reading that section were skipping `genexus_properties action=move` and `genexus_create folder=`/`module=` entirely. The section now documents the move, the `MoveNotPersisted` write-back check, and the fact that `action=set propertyName=Folder` is routed to the move rather than rejected. Server behavior is unchanged — only the instructions were wrong.
+
+### Internal
+
+- The rewritten `AGENTS.md` section keeps a short *why this was believed* note: the `Parent`/`ParentKey`/`Module` setters genuinely read as empty stubs in the facade/reference assembly, which is what produced the original verdict; the runtime persist goes through `EntityManager.SaveWithParent` (`ObjectMover`). Without that note the wrong conclusion is re-derivable from a decompile.
+- Struck the matching "confirmed WALL" line in `docs/sdk_uncovered_endpoints_2026-07-20.md` with a dated pointer to v2.35.0, leaving the rest of that dated snapshot intact.
+- `PropertyService._placementProps` and the `McpRouterTests` issue-#50 comment described the pre-v2.35.0 rejection paths; both now describe the routing that replaced them.
+- Corrected the test counts in `AGENTS.md` (they understated both suites by roughly 2.4x) and the tool count in `README.md` (46 → 47, adding the missing `genexus_wwp` bullet to Tool Surface).
+
 ## v2.38.0 — 2026-08-01
 
 The release improves safe GeneXus authoring, persistence verification, inline specification feedback, source-search performance, and modern MCP interoperability.

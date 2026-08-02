@@ -59,8 +59,8 @@ If the build fails with `MSB3027` / `MSB3021` citing `GxMcp.Gateway.exe` or `GxM
 ### Test
 
 ```powershell
-dotnet test src\GxMcp.Worker.Tests\GxMcp.Worker.Tests.csproj      # net48; ~570 tests
-dotnet test src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj    # net8.0; ~310 tests
+dotnet test src\GxMcp.Worker.Tests\GxMcp.Worker.Tests.csproj      # net48;  ~1,790 tests
+dotnet test src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj    # net8.0;   ~760 tests
 dotnet test Genexus18MCP.sln                                     # both
 npm test                                                          # cli tests only (node --test)
 
@@ -238,14 +238,38 @@ Verb { <route> => <Object>; <route2> => <Object2>; }
   (set the Procedure's `REST=True` / `Expose as ...`) reached at `<app>/rest/<ProcName>`,
   rather than trying to mix verbs in one API object.
 
-### Folder / module placement is read-only via the SDK
+### Folder / module placement (SDK-backed since v2.35.0)
 
-Moving an object into a folder or module is **not** supported through the tools:
-`KBObject`'s `Parent` / `ParentKey` / `Module` setters are no-op stubs at the IL
-level in the GeneXus 18 SDK. `genexus_properties action=set propertyName=Folder`
-now fails with `FolderMoveNotSupported` instead of silently reporting success.
-Create folders/modules with `genexus_create type=Folder|Module`, but place objects
-into them from the GeneXus IDE (KB Explorer drag-and-drop / right-click Move).
+Objects **can** be placed into a Folder or Module through the tools — the same
+operation as KB Explorer drag-and-drop / right-click → Move in the IDE.
+
+- **Move an existing object:** `genexus_properties action=move name=<obj>
+  destination=<Folder or Module>`. The container kind is auto-detected; pass
+  `destKind=Folder|Module` only to disambiguate a shared name. `dryRun=true`
+  previews `from` / `to` without writing.
+- **Write-back is verified.** The parent is re-read after the save, so a write
+  the SDK silently drops returns `MoveNotPersisted` rather than a false success.
+- **Create directly in a container:** `genexus_create … folder=<name>` or
+  `module=<name>` creates the object in Root Module and then moves it, reporting
+  the outcome under `placement`.
+- **`action=set` on a placement property is routed, not rejected.**
+  `propertyName=Folder|FolderId|FolderGuid|Module|ModuleId|Parent|ParentKey|ParentId`
+  is recognised as a reparent (`PropertyService.IsObjectPlacementProperty`) and
+  dispatched to `ObjectService.MoveObject` instead of a scalar property write.
+- **`list` / `inspect` re-file immediately** — `IndexCacheService.InvalidateHierarchy`
+  drops the per-Guid hierarchy cache and the old parent's `ChildrenByParent` slot
+  before the index entry is updated.
+
+Create the containers themselves with `genexus_create type=Folder|Module`.
+
+> **Why the SDK looks like it can't do this.** `KBObject`'s `Parent` / `ParentKey` /
+> `Module` setters *do* read as empty stubs at the IL level — but only in the
+> facade/reference assembly. Decompiling that assembly is what produced the
+> earlier "placement is unsupported" verdict. The runtime persist goes through
+> `Artech.Udm.Framework.EntityManager.SaveWithParent` (see
+> `src/GxMcp.Worker/Helpers/ObjectMover.cs`, with `UpdateParent` and `KBObject.Save`
+> as fallbacks). Don't re-derive the old conclusion from a reference-assembly
+> decompile.
 
 ### Control-bound events must be written AFTER the layout
 

@@ -93,7 +93,10 @@ objects & parts CRUD (`genexus_create/read/edit/delete_object`), structure/varia
 (`genexus_structure`, `genexus_variable`), layout/WebForm (`genexus_layout`, `genexus_edit_form`),
 patterns (`genexus_apply_pattern`), refactor (`genexus_refactor`). Known residual gaps on this axis
 are already tracked in `docs/sdk_coverage_gap_matrix.md`:
-**Move object to folder/module** (SDK setters are no-op stubs — confirmed WALL, see AGENTS.md),
+~~**Move object to folder/module** (SDK setters are no-op stubs — confirmed WALL, see AGENTS.md)~~
+— **superseded 2026-07-24 (v2.35.0):** shipped as `genexus_properties action=move`, persisted via
+`EntityManager.SaveWithParent`. The "no-op stubs" reading came from a facade/reference assembly;
+see CHANGELOG v2.35.0 and `src/GxMcp.Worker/Helpers/ObjectMover.cs`.
 **WWP settings/components persist** (⛔ blocked, `project_wwp_settings_components_persist_blocked`),
 and the **full 9-hook pattern build sequence** (only `UpdateParentObject` wired).
 

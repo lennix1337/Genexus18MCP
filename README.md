@@ -20,7 +20,7 @@ In practice: you point the MCP at your KB, then ask your AI assistant things lik
 
 ## What you can do with it
 
-A quick map of what the agent can do against your real KB through the **46 tools** (details in [Tool Surface](#tool-surface)):
+A quick map of what the agent can do against your real KB through the **47 tools** (details in [Tool Surface](#tool-surface)):
 
 | Area | What the agent can do |
 |---|---|
@@ -234,7 +234,7 @@ Still stuck? [Open an issue](https://github.com/lennix1337/Genexus18MCP/issues) 
 
 ## Tool Surface
 
-The worker exposes **46 tools** to the MCP router, grouped by capability below. Most are umbrellas with an `action` (e.g. `genexus_db action=sql_ddl`); the detailed schemas live in [`src/GxMcp.Gateway/tool_definitions.json`](src/GxMcp.Gateway/tool_definitions.json).
+The worker exposes **47 tools** to the MCP router, grouped by capability below. Most are umbrellas with an `action` (e.g. `genexus_db action=sql_ddl`); the detailed schemas live in [`src/GxMcp.Gateway/tool_definitions.json`](src/GxMcp.Gateway/tool_definitions.json).
 
 **Orientation & health**
 - `genexus_whoami` — KB context, version, worker/index/database health, self-update check, next-step hints
@@ -267,6 +267,7 @@ The worker exposes **46 tools** to the MCP router, grouped by capability below. 
 **Refactor, patterns & compare**
 - `genexus_refactor` — rename, extract procedure, WWP condition set
 - `genexus_apply_pattern` — apply a GeneXus pattern (WorkWith, WorkWithPlus, …); `mode=actions` manages typed WorkWithPlus grid actions and Action Groups
+- `genexus_wwp` — WorkWithPlus Action Group / grid-action editing: `list`, `add_action`, `update_action`, `move_action`, `remove_action`
 - `genexus_compare` — IDE "Compare Objects" parity (`IComparerService`)
 - `genexus_merge` — 2- or 3-way object merge (`IMergeService`)
 

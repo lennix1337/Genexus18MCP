@@ -321,9 +321,10 @@ namespace GxMcp.Worker.Services
             { PropertyName = propName; }
         }
 
-        // Object-level placement "properties" that the SDK exposes but cannot persist
-        // (the Parent/ParentKey/Module setters are IL no-ops). Setting any of these on an
-        // object silently does nothing, so we reject the write up front.
+        // Object-level "properties" that actually mean "reparent this object". They are not
+        // scalar property writes, so a request naming one is routed to ObjectService.MoveObject
+        // (which persists via the Udm EntityManager and re-reads to confirm) rather than being
+        // pushed through SetPropertyValue. See ObjectMover for why the direct setters look inert.
         private static readonly HashSet<string> _placementProps = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "Folder", "FolderId", "FolderGuid", "Module", "ModuleId", "Parent", "ParentKey", "ParentId"
