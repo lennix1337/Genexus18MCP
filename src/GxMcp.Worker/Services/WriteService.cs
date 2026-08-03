@@ -1119,7 +1119,9 @@ namespace GxMcp.Worker.Services
                         result: new JObject
                         {
                             ["part"] = partName,
-                            ["details"] = "Dry-run for non-pattern/visual parts: input received; not validated against SDK. Save skipped."
+                            ["details"] = "Dry-run for non-pattern/visual parts: input received; not validated against SDK. Save skipped.",
+                            ["verified"] = new JArray("inputReceived"),
+                            ["savePathExercised"] = false
                         });
                 }
 

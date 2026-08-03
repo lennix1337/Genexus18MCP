@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **`dryRun` precheck failures no longer return `ok` status when reading current pattern/visual parts fail, and `dryRun` responses now detail verification scope.** (Issue #67) When `ReadPatternPartXml` or `ReadVisualPartXml` threw an exception during precheck, the `dryRun` catch block previously returned `code: "WriteDryRun"` inside an `ok` envelope, masking the read failure. Catch blocks now return `PatternReadFailed` / `VisualReadFailed` error envelopes. Successful `dryRun` responses now explicitly include `verified` scope (`["xmlParse", "childrenOrderedList", "diffVsCurrent"]`), `savePathExercised: false`, and a warning on WorkWithPlus `PatternInstance` parts noting that pattern saves can still be rejected by the WWP validator on save.
 - **Agent instructions no longer claim that folder/module placement is impossible.** `AGENTS.md` — loaded as context in every agent session, and the shared convention file for Claude Code, Cursor, Codex and Aider — still described object placement as an SDK wall and told agents to move objects from the GeneXus IDE by hand. Placement has worked since v2.35.0, so agents reading that section were skipping `genexus_properties action=move` and `genexus_create folder=`/`module=` entirely. The section now documents the move, the `MoveNotPersisted` write-back check, and the fact that `action=set propertyName=Folder` is routed to the move rather than rejected. Server behavior is unchanged — only the instructions were wrong.
 
 ### Internal

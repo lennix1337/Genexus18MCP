@@ -64,8 +64,14 @@ namespace GxMcp.Worker.Services
                     var dryResp = new JObject
                     {
                         ["part"] = partName,
-                        ["details"] = "Dry-run: input parsed and would update pattern XML. Save skipped."
+                        ["details"] = "Dry-run: input parsed and would update pattern XML. Save skipped.",
+                        ["verified"] = new JArray("xmlParse", "childrenOrderedList", "diffVsCurrent"),
+                        ["savePathExercised"] = false
                     };
+                    if (string.Equals(partName, "PatternInstance", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dryResp["warning"] = "Dry-run verified XML structure and diff against current pattern. Note: WorkWithPlus pattern saves can still be rejected by the WWP validator on save.";
+                    }
                     AttachReconcileReport(dryResp, reconcileReport);
                     return Models.McpResponse.Ok(target: target, code: "WriteDryRun", result: dryResp);
                 }
@@ -75,13 +81,13 @@ namespace GxMcp.Worker.Services
                 Logger.Debug("[DEBUG-SAVE] Pattern no-change precheck skipped: " + ex.Message);
                 if (dryRun)
                 {
-                    var dryResp = new JObject
-                    {
-                        ["part"] = partName,
-                        ["details"] = "Dry-run: input parsed; current pattern read failed (" + ex.Message + "). Save skipped."
-                    };
-                    AttachReconcileReport(dryResp, reconcileReport);
-                    return Models.McpResponse.Ok(target: target, code: "WriteDryRun", result: dryResp);
+                    return CreateWriteError(
+                        "Pattern dry-run precheck failed",
+                        target,
+                        partName,
+                        "Dry-run input parsed, but reading current pattern failed (" + ex.Message + "). State comparison skipped.",
+                        obj,
+                        code: "PatternReadFailed");
                 }
             }
 

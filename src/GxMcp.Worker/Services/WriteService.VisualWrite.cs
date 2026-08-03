@@ -217,7 +217,9 @@ namespace GxMcp.Worker.Services
                     var dryResp = new JObject
                     {
                         ["part"] = partName,
-                        ["details"] = "Dry-run: input parsed and would update visual XML. Save skipped."
+                        ["details"] = "Dry-run: input parsed and would update visual XML. Save skipped.",
+                        ["verified"] = new JArray("xmlParse", "layoutGotchas", "diffVsCurrent"),
+                        ["savePathExercised"] = false
                     };
                     var dryHtmlWarnings = BuildHtmlFormatWarnings(prospectiveGotchas);
                     AttachWarnings(dryResp, MergeWarnings(patternShadowWarnings, dryHtmlWarnings));
@@ -239,14 +241,13 @@ namespace GxMcp.Worker.Services
                 Logger.Debug("[DEBUG-SAVE] Visual no-change precheck skipped: " + ex.Message);
                 if (dryRun)
                 {
-                    return Models.McpResponse.Ok(
-                        target: target,
-                        code: "WriteDryRun",
-                        result: new JObject
-                        {
-                            ["part"] = partName,
-                            ["details"] = "Dry-run: input parsed; current visual read failed (" + ex.Message + "). Save skipped."
-                        });
+                    return CreateWriteError(
+                        "Visual dry-run precheck failed",
+                        target,
+                        partName,
+                        "Dry-run input parsed, but reading current visual part failed (" + ex.Message + "). State comparison skipped.",
+                        obj,
+                        code: "VisualReadFailed");
                 }
             }
 
