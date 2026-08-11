@@ -1,5 +1,7 @@
 # GeneXus MCP Server — GeneXus 18 for Claude, Cursor, and AI Agents
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.lennix1337%2Fgenexus.svg)](https://mcptoplist.com/server/io.github.lennix1337%2Fgenexus)
+
 [![npm version](https://img.shields.io/npm/v/genexus-mcp.svg)](https://www.npmjs.com/package/genexus-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/genexus-mcp.svg)](https://www.npmjs.com/package/genexus-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
