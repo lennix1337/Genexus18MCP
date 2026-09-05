@@ -326,7 +326,7 @@ produced by `DataSelectorStructurePart.ToString()` on U16.
 **Lifecycle, build, test & DB**
 - `genexus_lifecycle` — build (incl. `compile_check`), validate, index, reorg, poll status
 - `genexus_test` — run native GXtest tests
-- `genexus_db` — DB umbrella: schema-drift, `sql_ddl`/`sql_navigation`, static index advisor, `sample_data`, Domain/SDT type introspection, translation import, `reorg_impact`, and non-mutating `reorg_preview` with exact DDL only from a current Impact Analysis artifact
+- `genexus_db` — DB umbrella: schema-drift, `sql_ddl`/`sql_navigation`, static index advisor, `sample_data`, typed Transaction record query/insert/update with dry-run, optimistic versioning, reread and verified rollback, Domain/SDT type introspection, translation import, `reorg_impact`, and non-mutating `reorg_preview` with exact DDL only from a current Impact Analysis artifact
 - `genexus_deploy` — deploy application (`IDeploymentService`): `list_targets` (read) / `deploy` (destructive, `confirm=true`)
 - `genexus_run_object` / `genexus_browser` — resolve runtime URL and headless-browser verification
 

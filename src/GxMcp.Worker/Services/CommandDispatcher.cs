@@ -40,6 +40,8 @@ namespace GxMcp.Worker.Services
         private readonly NavigationSqlService _navigationSqlService;
         // Wave-3 items 42 + 92: sample-data generator + translations CSV importer.
         private readonly SampleDataService _sampleDataService;
+        // Typed application-row access derived from GeneXus Transaction metadata.
+        private readonly TransactionRecordsService _transactionRecordsService;
         private readonly TranslationsService _translationsService;
         private readonly LinterService _linterService;
         private readonly PatternService _patternService;
@@ -184,6 +186,7 @@ namespace GxMcp.Worker.Services
             _navigationService = new NavigationService(_kbService);
             _navigationSqlService = new NavigationSqlService(_navigationService, _kbService, _objectService);
             _sampleDataService = new SampleDataService(_objectService);
+            _transactionRecordsService = new TransactionRecordsService(_kbService, _objectService);
             _translationsService = new TranslationsService(null); // writeService linked in Phase 2
             _listService = new ListService(_kbService, _indexCacheService);
             _uiService = new UIService(_kbService, _objectService);
@@ -1633,6 +1636,10 @@ namespace GxMcp.Worker.Services
             {
                 int rows = args?["rows"]?.ToObject<int?>() ?? 5;
                 return _sampleDataService.Generate(target, rows);
+            }
+            if (action == "QueryRecords" || action == "InsertRecord" || action == "UpdateRecords")
+            {
+                return _transactionRecordsService.Execute(action, target, args);
             }
             if (action == "TranslationsImport")
             {

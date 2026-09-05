@@ -35,10 +35,75 @@ namespace GxMcp.Gateway.Tests
         [Fact]
         public void ReadOnlyActionTools_ClassifiedAsReadOnly()
         {
-            Assert.True(OperationClassifier.IsReadOnly("genexus_navigation", new JObject { ["action"] = "view" }));
             Assert.True(OperationClassifier.IsReadOnly("genexus_security", new JObject { ["action"] = "scan_native" }));
             Assert.True(OperationClassifier.IsReadOnly("genexus_browser", new JObject { ["action"] = "preview" }));
             Assert.True(OperationClassifier.IsReadOnly("genexus_api", new JObject { ["action"] = "diff_baseline" }));
+        }
+
+        [Fact]
+        public void ActionTokensUseExactOrdinalMatching()
+        {
+            Assert.Equal(OperationClassifier.OperationKind.ReadOnly,
+                OperationClassifier.ClassifyAction("genexus_db", "records_query"));
+            Assert.Equal(OperationClassifier.OperationKind.Unknown,
+                OperationClassifier.ClassifyAction("genexus_db", "RECORDS_QUERY"));
+            Assert.False(OperationClassifier.IsReadOnly("genexus_db", new JObject
+            {
+                ["action"] = "RECORDS_QUERY",
+                ["dryRun"] = true
+            }));
+        }
+
+        [Fact]
+        public void KnownExternalSideEffectsAreNotReadOnly()
+        {
+            Assert.False(OperationClassifier.IsReadOnly("genexus_navigation", new JObject
+            {
+                ["action"] = "view"
+            }));
+            Assert.False(OperationClassifier.IsReadOnly("genexus_transfer", new JObject
+            {
+                ["action"] = "export"
+            }));
+            Assert.False(OperationClassifier.IsReadOnly("genexus_browser", new JObject
+            {
+                ["action"] = "preview",
+                ["buildFirst"] = true
+            }));
+            Assert.False(OperationClassifier.IsReadOnly("genexus_browser", new JObject
+            {
+                ["action"] = "preview",
+                ["capture"] = new JArray("screenshot")
+            }));
+            Assert.False(OperationClassifier.IsReadOnly("genexus_browser", new JObject
+            {
+                ["action"] = "preview",
+                ["updateBaseline"] = true
+            }));
+        }
+
+        [Fact]
+        public void TransactionRecordActionsRespectPreviewBoundary()
+        {
+            Assert.True(OperationClassifier.IsReadOnly("genexus_db", new JObject
+            {
+                ["action"] = "records_query"
+            }));
+            Assert.True(OperationClassifier.IsReadOnly("genexus_db", new JObject
+            {
+                ["action"] = "records_insert",
+                ["dryRun"] = true
+            }));
+            Assert.False(OperationClassifier.IsReadOnly("genexus_db", new JObject
+            {
+                ["action"] = "records_insert",
+                ["dryRun"] = false
+            }));
+            Assert.True(OperationClassifier.IsReadOnly("genexus_db", new JObject
+            {
+                ["action"] = "records_update",
+                ["dryRun"] = true
+            }));
         }
 
         [Theory]

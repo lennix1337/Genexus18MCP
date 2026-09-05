@@ -262,6 +262,31 @@ namespace GxMcp.Gateway
         // part=Structure read survived the delete). The verb-substring heuristic
         // covers names like edit/create/refactor; umbrella tools and
         // action-dependent tools need the explicit cases below.
+        internal static void MarkRecordWriteOutcomeUnknown(JObject payload)
+        {
+            payload["retriable"] = false;
+            payload["retrySafe"] = false;
+            payload["persisted"] = JValue.CreateNull();
+            payload["commitState"] = "Indeterminate";
+            payload["rereadConfirmed"] = false;
+        }
+
+        internal static bool IsTransactionRecordOperation(string toolName, JObject? args)
+        {
+            if (!string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase)) return false;
+            string? action = args?["action"]?.ToString();
+            return string.Equals(action, "records_query", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(action, "records_insert", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(action, "records_update", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Record reads and previews are live database observations. Neither an empty
+        // query nor an earlier successful mutation may bypass a fresh worker call.
+        internal static string? CreateSemanticCacheKey(string kbScope, string toolName,
+            JObject? args, bool isMutating, bool isLiveTool)
+            => isMutating || isLiveTool || IsTransactionRecordOperation(toolName, args)
+                ? null : $"{kbScope}|{toolName}:{args?.ToString(Newtonsoft.Json.Formatting.None)}";
+
         internal static bool IsMutatingTool(string toolName, JObject? args)
         {
             if (string.IsNullOrWhiteSpace(toolName)) return false;
@@ -342,6 +367,9 @@ namespace GxMcp.Gateway
 
             if (string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase))
             {
+                if (IsTransactionRecordOperation(toolName, args))
+                    return !string.Equals(args?["action"]?.ToString(), "records_query", StringComparison.OrdinalIgnoreCase)
+                        && args?["dryRun"]?.ToObject<bool?>() == false;
                 // translations_import writes translated strings into object parts and
                 // sample_data writes test rows into the DB — both mutate state that the
                 // (cacheable) db analysis reads report on. All other actions

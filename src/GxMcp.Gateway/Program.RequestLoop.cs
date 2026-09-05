@@ -1625,9 +1625,7 @@ namespace GxMcp.Gateway
                     // (guaranteed miss) and live tools never read from it, so for those
                     // the key — and the expensive payload ToString for genexus_edit/write
                     // — is pure waste.
-                    string? cKey = !isMutating && !isLiveTool
-                        ? $"{kbScope}|{tName}:{tArgs?.ToString(Formatting.None)}"
-                        : null;
+                    string? cKey = CreateSemanticCacheKey(kbScope, tName, tArgs, isMutating, isLiveTool);
                     if (cKey != null && _semanticCache.TryGet(cKey, out var cachedResponse))
                     {
                         if (_verboseRequestLogs) Log($"[Cache] HIT for {tName}");
@@ -2407,7 +2405,11 @@ namespace GxMcp.Gateway
                                 ["retriable"] = true
                             };
 
+                            bool recordWrite = IsTransactionRecordOperation(tName!, tArgs) && IsMutatingTool(tName!, tArgs);
+                            if (recordWrite) MarkRecordWriteOutcomeUnknown(timeoutPayload);
                             var help = new JArray();
+                            if (recordWrite)
+                                help.Add("Do not repeat the write. Poll the original operation result, then query the record keys against the datastore.");
                             if (!string.IsNullOrWhiteSpace(operationId))
                             {
                                 timeoutPayload["operationId"] = operationId;
@@ -2426,7 +2428,7 @@ namespace GxMcp.Gateway
                                     timeoutPayload["reReadRequired"] = true;
                                 }
                             }
-                            else
+                            else if (!recordWrite)
                             {
                                 help.Add("Retry with narrower scope or lower limit.");
                             }

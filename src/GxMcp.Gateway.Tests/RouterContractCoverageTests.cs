@@ -116,6 +116,9 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_db", "sql_ddl", "Analyze", "GetSQL")]
         [InlineData("genexus_db", "sql_navigation", "Analyze", "GetSqlForNavigation")]
         [InlineData("genexus_db", "sample_data", "Analyze", "GenerateSampleData")]
+        [InlineData("genexus_db", "records_query", "Analyze", "QueryRecords")]
+        [InlineData("genexus_db", "records_insert", "Analyze", "InsertRecord")]
+        [InlineData("genexus_db", "records_update", "Analyze", "UpdateRecords")]
         [InlineData("genexus_db", "types_list", "types", "list")]
         [InlineData("genexus_db", "types_describe", "types", "describe")]
         [InlineData("genexus_db", "types_validate", "types", "validate_value")]
@@ -132,6 +135,29 @@ namespace GxMcp.Gateway.Tests
         {
             var args = new JObject { ["action"] = actionName, ["name"] = "SampleObject", ["type"] = "Procedure" };
             AssertRoute(new OperationsRouter().ConvertToolCall(tool, args), module, action);
+        }
+
+        [Fact]
+        public void Transaction_records_forward_transaction_identity_and_safety_fields()
+        {
+            var converted = new OperationsRouter().ConvertToolCall("genexus_db", JObject.Parse(@"{
+                action: 'records_update',
+                transaction: 'SampleTransaction',
+                where: { CompanyId: 1 },
+                values: { CommunicationId: 42 },
+                dryRun: true,
+                expectedVersion: 'trn-v1:token',
+                rollbackOnFailure: true
+            }"));
+
+            var routed = JObject.FromObject(converted!);
+            Assert.Equal("Analyze", (string?)routed["module"]);
+            Assert.Equal("UpdateRecords", (string?)routed["action"]);
+            Assert.Equal("SampleTransaction", (string?)routed["target"]);
+            Assert.Equal("SampleTransaction", (string?)routed["params"]?["transaction"]);
+            Assert.True((bool?)routed["params"]?["dryRun"]);
+            Assert.Equal("trn-v1:token", (string?)routed["params"]?["expectedVersion"]);
+            Assert.True((bool?)routed["params"]?["rollbackOnFailure"]);
         }
 
         [Theory]

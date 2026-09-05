@@ -936,7 +936,7 @@ namespace GxMcp.Gateway.Routers
         private static object? ConvertDbUmbrella(JObject? args)
         {
             string? action = args?["action"]?.ToString()?.ToLowerInvariant();
-            string? target = args?["target"]?.ToString() ?? args?["name"]?.ToString() ?? args?["trn"]?.ToString();
+            string? target = args?["target"]?.ToString() ?? args?["name"]?.ToString() ?? args?["trn"]?.ToString() ?? args?["transaction"]?.ToString();
             string? type = args?["type"]?.ToString();
 
             switch (action)
@@ -973,6 +973,34 @@ namespace GxMcp.Gateway.Routers
                     int rows = args?["rows"]?.ToObject<int?>() ?? 5;
                     return new { module = "Analyze", action = "GenerateSampleData", target, rows, type };
                 }
+
+                case "records_query":
+                    return new
+                    {
+                        module = "Analyze",
+                        action = "QueryRecords",
+                        target,
+                        type,
+                        @params = args
+                    };
+                case "records_insert":
+                    return new
+                    {
+                        module = "Analyze",
+                        action = "InsertRecord",
+                        target,
+                        type,
+                        @params = args
+                    };
+                case "records_update":
+                    return new
+                    {
+                        module = "Analyze",
+                        action = "UpdateRecords",
+                        target,
+                        type,
+                        @params = args
+                    };
 
                 case "types_list":
                 case "types_describe":
@@ -1019,7 +1047,7 @@ namespace GxMcp.Gateway.Routers
                     {
                         module = "Error",
                         action = "InvalidAction",
-                        error = $"genexus_db: unknown action '{action}'. Valid: drift_check|drift_report|optimize_analyze|optimize_suggest|optimize_report|sql_ddl|sql_navigation|sample_data|types_list|types_describe|types_validate|translations_import|reorg_impact|reorg_preview."
+                        error = $"genexus_db: unknown action '{action}'. Valid: drift_check|drift_report|optimize_analyze|optimize_suggest|optimize_report|sql_ddl|sql_navigation|sample_data|records_query|records_insert|records_update|types_list|types_describe|types_validate|translations_import|reorg_impact|reorg_preview."
                     };
             }
         }

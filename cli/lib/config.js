@@ -728,7 +728,7 @@ function clientCommandHealth(entry, client = null) {
     return { stale: false, reason: null };
 }
 
-function buildManualClientSetup(client) {
+function buildManualClientSetup(client, targetConfigPath = null) {
     return {
         mode: 'manual',
         managedConfigPath: client.path,
@@ -737,7 +737,7 @@ function buildManualClientSetup(client) {
         command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
         args: ['-y', 'genexus-mcp@latest'],
         environment: {
-            GX_CONFIG_PATH: '<config.json path printed by genexus-mcp init>'
+            GX_CONFIG_PATH: targetConfigPath || '<config.json path printed by genexus-mcp init>'
         },
         steps: [
             'Open OpenCode Desktop settings and select MCP.',
@@ -800,15 +800,6 @@ function patchClientConfig(targetConfigPath, opts = {}) {
     // Validate corporate-install env var before we write it into N client configs.
     // Otherwise we silently propagate a broken path to every AI client and the
     // user only finds out when each one fails with "Failed to connect".
-    if (process.env.GENEXUS_MCP_GATEWAY_EXE && !fs.existsSync(process.env.GENEXUS_MCP_GATEWAY_EXE)) {
-        const err = new Error(
-            `GENEXUS_MCP_GATEWAY_EXE points to a path that does not exist: ${process.env.GENEXUS_MCP_GATEWAY_EXE}. ` +
-            `Refusing to write this into client configs. Unset the env var (to use the npx launcher) or re-run scripts/install.ps1 to materialize the exe.`
-        );
-        err.code = 'GATEWAY_EXE_MISSING';
-        throw err;
-    }
-
     const serverName = opts.serverName || DEFAULT_MCP_SERVER_NAME;
     const force = Boolean(opts.force);
     const onlyExisting = opts.onlyExisting !== false;
@@ -816,6 +807,24 @@ function patchClientConfig(targetConfigPath, opts = {}) {
         ids: opts.ids,
         platform: process.platform
     });
+
+    // A direct gateway path only matters to clients that can be written. A
+    // detect-only client such as OpenCode Desktop must still receive manual
+    // setup guidance when its app-managed config is not detectable.
+    const writableCandidates = candidates.filter((client) =>
+        client.writeSupported !== false
+        && (!onlyExisting || detectClientInstalled(client).installed)
+    );
+    if (writableCandidates.length > 0
+        && process.env.GENEXUS_MCP_GATEWAY_EXE
+        && !fs.existsSync(process.env.GENEXUS_MCP_GATEWAY_EXE)) {
+        const err = new Error(
+            `GENEXUS_MCP_GATEWAY_EXE points to a path that does not exist: ${process.env.GENEXUS_MCP_GATEWAY_EXE}. ` +
+            `Refusing to write this into client configs. Unset the env var (to use the npx launcher) or re-run scripts/install.ps1 to materialize the exe.`
+        );
+        err.code = 'GATEWAY_EXE_MISSING';
+        throw err;
+    }
 
     const patched = [];
     const failed = [];
@@ -825,9 +834,19 @@ function patchClientConfig(targetConfigPath, opts = {}) {
         // Detect-only agents (e.g. OpenCode Desktop) can't be auto-written; surface
         // the manual step instead of pretending we registered them.
         if (client.writeSupported === false) {
-            if (detectClientInstalled(client).installed) {
-                skipped.push({ client: client.name, reason: client.manualNote || 'manual setup required' });
+            const detection = detectClientInstalled(client);
+            if (onlyExisting && !detection.installed) {
+                skipped.push({ client: client.name, reason: 'not installed' });
+                continue;
             }
+            skipped.push({
+                client: client.name,
+                reason: client.manualNote || 'manual setup required',
+                registrationMode: 'manual',
+                installed: detection.installed,
+                detectedAt: detection.markerHit || (detection.hasConfig ? client.path : null),
+                manualSetup: buildManualClientSetup(client, targetConfigPath)
+            });
             continue;
         }
         // "Installed" keys off install markers (the agent itself is present), not

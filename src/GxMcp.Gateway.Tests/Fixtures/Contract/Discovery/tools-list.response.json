@@ -1013,7 +1013,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Database umbrella. action: drift_check|drift_report (Transaction↔DB schema drift) | optimize_analyze|optimize_suggest|optimize_report (static index advisor) | sql_ddl|sql_navigation (SQL for Transaction/Procedure) | sample_data (fake INSERTs) | types_list|types_describe|types_validate (Domains/SDT constraints) | reorg_impact (timestamp/deep ImpactDatabase) | reorg_preview (non-mutating logical↔physical impact diff plus exact SQL only when a current artifact is available) | translations_import.",
+      "description": "Database umbrella. action: drift_check|drift_report (Transaction↔DB schema drift) | optimize_analyze|optimize_suggest|optimize_report (static index advisor) | sql_ddl|sql_navigation (SQL for Transaction/Procedure) | sample_data (fake INSERTs) | records_query|records_insert|records_update (typed application rows through Transaction metadata; writes default to dryRun; direct SQL only and no GeneXus business rules) | types_list|types_describe|types_validate (Domains/SDT constraints) | reorg_impact (timestamp/deep ImpactDatabase) | reorg_preview (non-mutating logical↔physical impact diff plus exact SQL only when a current artifact is available) | translations_import.",
       "inputSchema": {
         "examples": [
           {
@@ -1031,7 +1031,7 @@
         ],
         "properties": {
           "action": {
-            "description": "Database operation to perform.",
+            "description": "Database operation. records_query is read-only; records_insert/records_update default to dryRun=true and require the matching single-use v2 preview token for persistence.",
             "enum": [
               "drift_check",
               "drift_report",
@@ -1041,6 +1041,9 @@
               "sql_ddl",
               "sql_navigation",
               "sample_data",
+              "records_query",
+              "records_insert",
+              "records_update",
               "types_list",
               "types_describe",
               "types_validate",
@@ -1050,9 +1053,40 @@
             ],
             "type": "string"
           },
+          "dataStore": {
+            "description": "records_*: existing active-environment datastore; defaults to the SDK default.",
+            "type": "string"
+          },
+          "databaseManagedFields": {
+            "description": "records_*: reviewed trigger-maintained fields; excludes keys and supplied values. Included in the preview token.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "deep": {
             "description": "reorg_impact/reorg_preview only: run ISpecifierService.ImpactDatabase (specification, build-heavy) for the authoritative AnalysisResult. Default false (cheap timestamp heuristic).",
             "type": "boolean"
+          },
+          "dryRun": {
+            "default": true,
+            "description": "records_insert/update: validate and reread the plan without writing.",
+            "type": "boolean"
+          },
+          "expectedCount": {
+            "description": "records_update: defaults to exactly one matched record.",
+            "type": "integer"
+          },
+          "expectedVersion": {
+            "description": "records_*: v2 token from the matching write dry-run; query/v1 tokens cannot authorize writes.",
+            "type": "string"
+          },
+          "fields": {
+            "description": "records_query: optional root-attribute projection.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "format": {
             "description": "optimize_report only.",
@@ -1095,13 +1129,30 @@
             "description": "sql_navigation only.",
             "type": "integer"
           },
+          "limit": {
+            "description": "records_query: 1-1000; default 100.",
+            "type": "integer"
+          },
           "name": {
             "description": "Object/transaction/type name.",
             "type": "string"
           },
+          "rollbackOnFailure": {
+            "default": true,
+            "description": "records_*: default true; validation failures roll back before commit. Post-commit compensation is refused to preserve concurrent writers.",
+            "type": "boolean"
+          },
           "rows": {
             "description": "sample_data: 1-1000; default 5.",
             "type": "integer"
+          },
+          "timeoutSeconds": {
+            "description": "records_*: command timeout, 1-60 seconds.",
+            "type": "integer"
+          },
+          "transaction": {
+            "description": "records_*: root-level Transaction name.",
+            "type": "string"
           },
           "trn": {
             "description": "sample_data: Transaction name.",
@@ -1114,6 +1165,18 @@
           "value": {
             "description": "types_validate.",
             "type": "string"
+          },
+          "values": {
+            "description": "records_insert/update: typed attribute values.",
+            "type": "object"
+          },
+          "versionToken": {
+            "description": "records_*: alias of expectedVersion.",
+            "type": "string"
+          },
+          "where": {
+            "description": "records_query/update: equality filters only; update requires a filter.",
+            "type": "object"
           }
         },
         "required": [

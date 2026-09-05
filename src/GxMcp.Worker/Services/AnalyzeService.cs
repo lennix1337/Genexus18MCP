@@ -2166,11 +2166,9 @@ namespace GxMcp.Worker.Services
 
         public string ExplainCode(string target, string codeSnippet)
         {
-            // analyze mode=explain was a placeholder that returned a hardcoded
-            // "Code analysis simulation" string regardless of input. The mode is
-            // now removed from the public tool schema; if an old client still
-            // dispatches here, return a clear NotImplemented envelope so the
-            // agent doesn't trust a fake answer.
+            // Keep the legacy explain route as an explicit compatibility
+            // envelope. It is intentionally not a fabricated explanation: old
+            // clients get a typed NotImplemented result and a supported-mode hint.
             return Models.McpResponse.Err(code: "ModeNotImplemented",
                 message: "analyze mode=explain is not implemented.",
                 hint: "Use mode=summary, linter, navigation, data_context, or pattern_metadata instead.");

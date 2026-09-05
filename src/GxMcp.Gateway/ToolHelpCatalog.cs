@@ -111,7 +111,7 @@ namespace GxMcp.Gateway
                 "- `complexity` — line/cyclomatic counts.\n" +
                 "- `naming` — naming-convention audit.\n" +
                 "- `summary` — LLM-oriented summary of the object.\n" +
-                "- `explain` — natural-language explanation of a slice of source.\n\n" +
+                "- `explain` — legacy compatibility route; returns a typed NotImplemented envelope instead of inventing an explanation.\n\n" +
                 "## When to use what\n" +
                 "- Raw source: `genexus_read`.\n" +
                 "- Single-object metadata: `genexus_inspect`.\n" +
@@ -262,11 +262,15 @@ namespace GxMcp.Gateway
 
             ["genexus_db"] =
                 "# genexus_db\n\n" +
-                "Umbrella tool for datastore/index/DDL/sample-data actions. This entry covers the static index-advisor actions (`optimize_analyze|optimize_suggest|optimize_report`) — walks every Procedure / WebPanel / DataProvider Source + Events part, regex-parses `For each` blocks, derives (Transaction × where-signature × sort) access patterns, then surfaces concrete optimization opportunities.\n\n" +
+                "Umbrella tool for datastore/index/DDL/sample-data actions. This entry covers the static index-advisor actions (`optimize_analyze|optimize_suggest|optimize_report`) — walks every Procedure / WebPanel / DataProvider Source + Events part, regex-parses `For each` blocks, derives (Transaction × where-signature × sort) access patterns, then surfaces concrete optimization opportunities. It also exposes typed Transaction-record reads and guarded writes.\n\n" +
                 "## Actions\n" +
                 "- `optimize_analyze [target=<Tx>]` — KB-wide pattern scan. Returns `{transactions:[{name, accessPatterns:[{whereSignature, callerCount, sortAttributes, samples:[...]}]}]}` sorted by callerCount desc. `target` is an optional filter.\n" +
                 "- `optimize_suggest target=<Tx>` — for one Transaction, proposes covering indexes for the top where-signatures that are NOT covered by an existing index. Returns `{existingIndexes:[...], suggestedIndexes:[{columns, rationale, coveredQueries, estimatedBenefit, confidence, ddl}], redundantIndexes:[{name, reason}]}`. DDL is paste-ready (`CREATE INDEX IX_Tx_A_B ON Tx (A, B);`).\n" +
                 "- `optimize_report [format=markdown|json]` — top-10 unindexed hot paths across the whole KB ranked by callerCount. `format=markdown` adds a paste-ready table under `report`.\n\n" +
+                "- `records_query` — read typed rows from the Transaction's root table using equality-only `where`, optional root-attribute `fields`, and a bounded `limit` (1–1000). It returns the resolved metadata and an optimistic `versionToken`.\n" +
+                "- `records_insert` / `records_update` — validate typed values and return a complete preview by default. Persistence requires `dryRun=false` plus the matching single-use v2 preview token from the same operation; snapshots and verification use a serializable database transaction.\n\n" +
+                "## Record safety boundary\n" +
+                "These actions execute parameterized SQL against the existing physical table resolved from SDK metadata. They do not run GeneXus business rules, BC events, Specify, Generate, Build, Reorg, or application triggers beyond what the database itself enforces. A commit timeout is indeterminate: do not repeat the write blindly.\n\n" +
                 "## Where-signature canonicalisation\n" +
                 "Two queries `Where AluCod = &c` and `Where AluCod = 1` collapse to the same signature `AluCod`. Literals and variables (&...) are stripped; only attribute references survive. Order is alphabetical so `{A,B}` and `{B,A}` collide.\n\n" +
                 "## Confidence\n" +
@@ -434,7 +438,7 @@ namespace GxMcp.Gateway
                 "Read the IDE-style navigation report for a GeneXus object.\n\n" +
                 "## Action\n" +
                 "- `view` — inspect navigation levels, referenced tables, filters, orders, and the report status.\n\n" +
-                "This action is read-only and does not modify source or generated artifacts. A report with no levels is a valid `NoNavigationBlocks` result; a missing report is an error that should be investigated separately.\n",
+                "The report is read-only with respect to source and generated artifacts, but a fresh result is also written to the per-KB navigation cache. A report with no levels is a valid `NoNavigationBlocks` result; a missing report is an error that should be investigated separately.\n",
 
             ["genexus_api"] =
                 "# genexus_api\n\n" +
@@ -490,7 +494,7 @@ namespace GxMcp.Gateway
                 "- `capture` — collect a screenshot or browser artifact.\n" +
                 "- `cross` — exercise cross-browser verification.\n" +
                 "- `preview` — inspect a preview surface.\n\n" +
-                "These actions are read-only with respect to the KB. They may create temporary browser artifacts; use the response path and cleanup guidance rather than treating them as KB writes.\n",
+                "The inspection actions are read-only with respect to the KB, but `preview` becomes state-changing when `buildFirst=true`, `updateBaseline=true`, or `capture` includes `screenshot`; those options can build or write browser artifacts. Use the response path and cleanup guidance.\n",
 
             ["genexus_telemetry"] =
                 "# genexus_telemetry\n\n" +
@@ -516,7 +520,7 @@ namespace GxMcp.Gateway
                 "- `export` — create an XPZ export, optionally including dependency closure.\n" +
                 "- `inspect` — inspect an XPZ manifest without importing it.\n" +
                 "- `import` — import the package into the active KB after validating its manifest.\n\n" +
-                "`export` and `inspect` are read-only with respect to the KB; `import` mutates it. Review conflicts and use a disposable or explicitly selected target KB for untrusted packages.\n",
+                "`export` writes the requested XPZ artifact, `inspect` is read-only, and `import` mutates the KB. Review the output path and conflicts, and use a disposable or explicitly selected target KB for untrusted packages.\n",
 
             ["genexus_deploy"] =
                 "# genexus_deploy\n\n" +
@@ -547,11 +551,12 @@ namespace GxMcp.Gateway
         internal static string? Get(string toolName)
         {
             if (string.IsNullOrWhiteSpace(toolName)) return null;
-            if (_helpTexts.TryGetValue(toolName, out var text)) return text;
+            if (_helpTexts.TryGetValue(toolName, out var text))
+                return text + OperationClassifier.BuildHelpContract(toolName);
             // Legacy alias → canonical: resolve and retry so old tool names still find help.
             if (McpRouter.TryRewriteLegacyTool(toolName, null, out var canonical, out _)
                 && _helpTexts.TryGetValue(canonical, out var canonText))
-                return canonText;
+                return canonText + OperationClassifier.BuildHelpContract(canonical);
             return null;
         }
 

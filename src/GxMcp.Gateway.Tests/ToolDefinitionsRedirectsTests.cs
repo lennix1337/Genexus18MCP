@@ -7,7 +7,8 @@ namespace GxMcp.Gateway.Tests
 {
     // Item #13 (v2.6.4): tool descriptions front-load WWP routing hints so the
     // LLM picks the right entry point from `tools/list` without exploration.
-    // Item #1: analyze.mode dropped 'explain'. Item #12: genexus_recipe registered.
+    // Item #1: analyze.mode=explain remains a typed legacy-compatibility route.
+    // Item #12: genexus_recipe registered.
     public class ToolDefinitionsRedirectsTests
     {
         private static JArray LoadToolDefinitions()

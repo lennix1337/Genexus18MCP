@@ -141,42 +141,49 @@ namespace GxMcp.Gateway.Tests
         [LiveKbFact]
         public async Task Navigation_NoForEachBlocks_ReturnsNoNavigationBlocksStatus()
         {
-            // The first rows are not a contract: a KB can legitimately begin
-            // with procedures that contain navigation blocks. Walk every page
-            // in stable service order until a valid empty navigation report is
-            // found, while retaining enough evidence to diagnose a bad fixture.
             const int pageSize = 50;
-            const int maxProcedures = 5000;
+            const int maxPageRequests = 120;
+            const int maxTransientRetries = 8;
             int offset = 0;
-            int indexingRetries = 0;
+            int pageRequests = 0;
+            int transientRetries = 0;
             var observed = new System.Collections.Generic.List<string>();
             JObject? hit = null;
 
-            while (offset < maxProcedures)
+            while (hit == null && pageRequests < maxPageRequests)
             {
+                pageRequests++;
                 var list = await _h.CallToolAsync("genexus_list_objects", new JObject
                 {
                     ["typeFilter"] = "Procedure",
                     ["limit"] = pageSize,
-                    ["offset"] = offset
+                    ["offset"] = offset,
+                    ["sort"] = "name"
                 });
                 var listPayload = LiveGatewayHarness.ParseToolPayload(list);
-                Assert.NotNull(listPayload);
-
-                if (string.Equals(listPayload!["code"]?.ToString(), "IndexNotReady", System.StringComparison.OrdinalIgnoreCase))
+                var decision = NavigationListStateMachine.Evaluate(
+                    listPayload, LiveGatewayHarness.IsToolError(list), offset);
+                if (decision.Kind == NavigationListDecisionKind.Retry)
                 {
-                    if (indexingRetries++ >= 5)
-                        Assert.Fail("Procedure listing remained unavailable after index retries.");
-                    await Task.Delay(1000);
+                    transientRetries++;
+                    if (transientRetries > maxTransientRetries)
+                        Assert.Fail("Procedure listing did not become complete after transient retries. Last reason: " + decision.Reason);
+                    await Task.Delay(Math.Min(2000, 250 * transientRetries));
                     continue;
                 }
 
-                if (LiveGatewayHarness.IsToolError(list))
-                    Assert.Fail("Procedure listing failed: " + listPayload.ToString(Newtonsoft.Json.Formatting.None));
+                transientRetries = 0;
+                if (decision.Kind == NavigationListDecisionKind.Fail)
+                    Assert.Fail("Procedure listing failed: " + (listPayload?.ToString(Newtonsoft.Json.Formatting.None) ?? "<unparseable>"));
+                if (decision.Kind == NavigationListDecisionKind.Exhausted)
+                    break;
 
+                if (listPayload == null)
+                    throw new InvalidOperationException("Procedure listing returned no parseable payload.");
                 var items = listPayload["results"] as JArray
                     ?? listPayload["items"] as JArray;
-                if (items == null || items.Count == 0) break;
+                if (items == null)
+                    throw new InvalidOperationException("Procedure listing returned no result array after a process decision.");
 
                 foreach (var item in items)
                 {
@@ -200,7 +207,12 @@ namespace GxMcp.Gateway.Tests
                         ?? navPayload["code"]?.ToString()
                         ?? (LiveGatewayHarness.IsToolError(nav) ? "error" : "unknown");
                     observed.Add(name + "=" + navStatus);
-                    if (levels != null && levels.Count == 0)
+                    bool validNoBlocks = !LiveGatewayHarness.IsToolError(nav)
+                        && levels != null
+                        && levels.Count == 0
+                        && string.Equals(navPayload["status"]?.ToString(), "NoNavigationBlocks", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(navPayload["hint"]?.ToString());
+                    if (validNoBlocks)
                     {
                         hit = navPayload;
                         break;
@@ -209,15 +221,16 @@ namespace GxMcp.Gateway.Tests
 
                 if (hit != null) break;
 
-                bool hasMore = listPayload["hasMore"]?.ToObject<bool?>() == true;
-                int? nextOffset = listPayload["nextOffset"]?.ToObject<int?>()
-                    ?? listPayload["pagination"]?["nextOffset"]?.ToObject<int?>();
-                if (!hasMore || !nextOffset.HasValue || nextOffset.Value <= offset) break;
-                offset = nextOffset.Value;
+                if (decision.NextOffset.HasValue)
+                {
+                    offset = decision.NextOffset.Value;
+                    continue;
+                }
+                break;
             }
 
             Assert.True(hit != null,
-                "No Procedure returned NoNavigationBlocks after paginating the KB. Observed: " +
+                $"No Procedure returned NoNavigationBlocks after {pageRequests} page requests. Observed: " +
                 string.Join(", ", observed.Take(40)));
             Assert.Equal("NoNavigationBlocks", hit!["status"]?.ToString());
             Assert.NotNull(hit["hint"]);

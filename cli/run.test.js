@@ -833,9 +833,65 @@ test('clients add reports OpenCode Desktop manual skip without mutating its app-
         assert.equal(result.status, 0);
         const parsed = JSON.parse(result.stdout);
         assert.deepEqual(parsed.ok.patchedClients, []);
-        assert.ok(parsed.meta.skippedClients.some((entry) =>
-            entry.client === 'OpenCode Desktop' && /Settings > MCP|manual setup/i.test(entry.reason)));
+        const skipped = parsed.meta.skippedClients.find((entry) => entry.client === 'OpenCode Desktop');
+        assert.ok(skipped && /Settings > MCP|manual setup/i.test(skipped.reason));
+        assert.equal(skipped.registrationMode, 'manual');
+        assert.equal(skipped.installed, true);
+        assert.equal(skipped.manualSetup.environment.GX_CONFIG_PATH, cfgPath);
+        assert.ok(parsed.help.some((entry) => /manual setup/i.test(entry)));
         assert.deepEqual(JSON.parse(fs.readFileSync(desktopConfig, 'utf8')), original);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('clients add always reports undetected OpenCode Desktop manual setup', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-opencode-desktop-undetected-'));
+    try {
+        const env = sandboxHomeEnv(tempRoot);
+        const cfgPath = path.join(tempRoot, 'config.json');
+        fs.writeFileSync(cfgPath, JSON.stringify({ Environment: { KBPath: tempRoot } }));
+
+        const result = runCli(['clients', 'add', '--clients', 'opencode-desktop', '--format', 'json'], {
+            env: {
+                ...env,
+                GX_CONFIG_PATH: cfgPath,
+                GENEXUS_MCP_GATEWAY_EXE: path.join(tempRoot, 'missing', 'GxMcp.Gateway.exe')
+            }
+        });
+        assert.equal(result.status, 0);
+        const parsed = JSON.parse(result.stdout);
+        assert.deepEqual(parsed.ok.patchedClients, []);
+        const skipped = parsed.meta.skippedClients.find((entry) => entry.client === 'OpenCode Desktop');
+        assert.ok(skipped, 'undetected detect-only client should still be actionable');
+        assert.equal(skipped.installed, false);
+        assert.equal(skipped.manualSetup.environment.GX_CONFIG_PATH, cfgPath);
+        assert.equal(skipped.manualSetup.command, process.platform === 'win32' ? 'npx.cmd' : 'npx');
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('clients add still refuses a missing gateway for writable clients', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-client-missing-gateway-'));
+    try {
+        const env = sandboxHomeEnv(tempRoot);
+        const cfgPath = path.join(tempRoot, 'config.json');
+        const cursorConfig = path.join(tempRoot, '.cursor', 'mcp.json');
+        fs.writeFileSync(cfgPath, JSON.stringify({ Environment: { KBPath: tempRoot } }));
+
+        const result = runCli(['clients', 'add', '--clients', 'cursor', '--format', 'json'], {
+            env: {
+                ...env,
+                GX_CONFIG_PATH: cfgPath,
+                GENEXUS_MCP_GATEWAY_EXE: path.join(tempRoot, 'missing', 'GxMcp.Gateway.exe')
+            }
+        });
+        assert.equal(result.status, 1);
+        const parsed = JSON.parse(result.stdout);
+        assert.equal(parsed.error.code, 'operation_error');
+        assert.match(parsed.error.message, /GATEWAY_EXE_MISSING|does not exist/i);
+        assert.equal(fs.existsSync(cursorConfig), false, 'failed validation must not create a client config');
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

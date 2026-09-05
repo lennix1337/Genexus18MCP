@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Gateway
@@ -25,8 +26,8 @@ namespace GxMcp.Gateway
         {
             public ActionContract(IEnumerable<string> readOnly, IEnumerable<string> mutating)
             {
-                ReadOnly = new HashSet<string>(readOnly, StringComparer.OrdinalIgnoreCase);
-                Mutating = new HashSet<string>(mutating, StringComparer.OrdinalIgnoreCase);
+                ReadOnly = new HashSet<string>(readOnly, StringComparer.Ordinal);
+                Mutating = new HashSet<string>(mutating, StringComparer.Ordinal);
             }
 
             public HashSet<string> ReadOnly { get; }
@@ -84,8 +85,8 @@ namespace GxMcp.Gateway
                     readOnly: new[] { "list", "list_environments", "get_environment", "get_startup" },
                     mutating: new[] { "open", "close", "set_default", "set_startup", "set_environment" }),
                 ["genexus_navigation"] = Contract(
-                    readOnly: new[] { "view" },
-                    mutating: Array.Empty<string>()),
+                    readOnly: Array.Empty<string>(),
+                    mutating: new[] { "view" }),
                 ["genexus_api"] = Contract(
                     readOnly: new[] { "list", "describe", "routes_inspect", "diff_baseline" },
                     mutating: new[] { "routes_clone", "routes_update", "snapshot" }),
@@ -111,8 +112,8 @@ namespace GxMcp.Gateway
                     readOnly: new[] { "smoke", "a11y", "wcag", "capture", "cross", "preview" },
                     mutating: Array.Empty<string>()),
                 ["genexus_db"] = Contract(
-                    readOnly: new[] { "drift_check", "drift_report", "optimize_analyze", "optimize_suggest", "optimize_report", "sql_ddl", "sql_navigation", "types_list", "types_describe", "types_validate", "reorg_impact", "reorg_preview" },
-                    mutating: new[] { "sample_data", "translations_import" }),
+                    readOnly: new[] { "drift_check", "drift_report", "optimize_analyze", "optimize_suggest", "optimize_report", "sql_ddl", "sql_navigation", "records_query", "types_list", "types_describe", "types_validate", "reorg_impact", "reorg_preview" },
+                    mutating: new[] { "sample_data", "records_insert", "records_update", "translations_import" }),
                 ["genexus_versioning"] = Contract(
                     readOnly: new[] { "history_list", "history_get", "time_travel", "blame", "diff", "diff_generated" },
                     mutating: new[] { "history_save", "history_restore", "undo" }),
@@ -132,8 +133,8 @@ namespace GxMcp.Gateway
                     readOnly: new[] { "recall", "list" },
                     mutating: new[] { "save", "forget", "promote", "consolidate" }),
                 ["genexus_transfer"] = Contract(
-                    readOnly: new[] { "export", "inspect" },
-                    mutating: new[] { "import" }),
+                    readOnly: new[] { "inspect" },
+                    mutating: new[] { "export", "import" }),
                 ["genexus_deploy"] = Contract(
                     readOnly: new[] { "list_targets" },
                     mutating: new[] { "deploy" }),
@@ -147,7 +148,7 @@ namespace GxMcp.Gateway
 
         // Only actions with a documented preview mode may become read-only when
         // dryRun=true. An arbitrary dryRun flag must not hide a write.
-        private static readonly HashSet<string> DryRunCapableActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly HashSet<string> DryRunCapableActions = new HashSet<string>(StringComparer.Ordinal)
         {
             "genexus_data_view:create",
             "genexus_data_view:update",
@@ -193,6 +194,8 @@ namespace GxMcp.Gateway
             "genexus_create:save_as",
             "genexus_create:template",
             "genexus_memory:consolidate",
+            "genexus_db:records_insert",
+            "genexus_db:records_update",
             "genexus_transfer:import",
             "genexus_wwp:add_action",
             "genexus_wwp:update_action",
@@ -203,6 +206,34 @@ namespace GxMcp.Gateway
         };
 
         internal static IReadOnlyCollection<string> ActionTools => ActionContracts.Keys;
+
+        internal static string BuildHelpContract(string toolName)
+        {
+            if (!ActionContracts.TryGetValue(toolName, out var contract)) return string.Empty;
+
+            string readOnly = string.Join(", ", contract.ReadOnly.OrderBy(action => action, StringComparer.Ordinal)
+                .Select(action => "`" + action + "`"));
+            string mutating = string.Join(", ", contract.Mutating.OrderBy(action => action, StringComparer.Ordinal)
+                .Select(action => "`" + action + "`"));
+            string preview = string.Join(", ", DryRunCapableActions
+                .Where(key => key.StartsWith(toolName + ":", StringComparison.OrdinalIgnoreCase))
+                .Select(key => key.Substring(toolName.Length + 1))
+                .OrderBy(action => action, StringComparer.Ordinal)
+                .Select(action => "`" + action + "`"));
+
+            var lines = new List<string>
+            {
+                "\n## Action contract\n",
+                "- Read-only actions: " + (string.IsNullOrEmpty(readOnly) ? "none" : readOnly) + ".\n",
+                "- Mutating actions: " + (string.IsNullOrEmpty(mutating) ? "none" : mutating) + ".\n"
+            };
+            if (!string.IsNullOrEmpty(preview))
+            {
+                lines.Add("- `dryRun=true` is a read-only preview only for: " + preview + ".\n");
+            }
+
+            return string.Concat(lines);
+        }
 
         internal static OperationKind ClassifyAction(string? toolName, string? action)
         {
@@ -224,11 +255,35 @@ namespace GxMcp.Gateway
 
             string? action = args?["action"]?.ToString();
             var kind = ClassifyAction(toolName, action);
-            if (kind == OperationKind.ReadOnly) return true;
+            if (kind == OperationKind.ReadOnly)
+                return !HasKnownSideEffects(toolName, action, args);
             if (kind != OperationKind.Mutating) return false;
 
             string key = toolName + ":" + action;
             return args?["dryRun"]?.ToObject<bool?>() == true && DryRunCapableActions.Contains(key);
+        }
+
+        private static bool HasKnownSideEffects(string toolName, string? action, JObject? args)
+        {
+            if (!string.Equals(toolName, "genexus_browser", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(action, "preview", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (args?["buildFirst"]?.ToObject<bool?>() == true
+                || args?["updateBaseline"]?.ToObject<bool?>() == true)
+            {
+                return true;
+            }
+
+            JToken? capture = args?["capture"];
+            if (capture is JArray captures)
+            {
+                return captures.Any(item => string.Equals(item?.ToString(), "screenshot", StringComparison.OrdinalIgnoreCase));
+            }
+
+            return string.Equals(capture?.ToString(), "screenshot", StringComparison.OrdinalIgnoreCase);
         }
 
         private static ActionContract Contract(IEnumerable<string> readOnly, IEnumerable<string> mutating)

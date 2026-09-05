@@ -59,6 +59,8 @@ namespace GxMcp.Gateway.Tests
 
                 string? tool = CodeToken(cells[1]);
                 if (string.IsNullOrWhiteSpace(tool)) continue;
+                if (rows.ContainsKey(tool))
+                    throw new InvalidDataException("Duplicate action inventory row for " + tool);
                 rows[tool] = (ActionTokens(cells[2]), ActionTokens(cells[3]));
             }
 
@@ -92,12 +94,37 @@ namespace GxMcp.Gateway.Tests
         public void EveryActionToolHasHelpAndInventoryCoverage()
         {
             var inventory = LoadInventory();
-            foreach (var tool in OperationClassifier.ActionTools)
+            var schemaTools = LoadToolDefinitions()
+                .Where(tool => tool["inputSchema"]?["properties"]?["action"]?["enum"] is JArray)
+                .Select(tool => tool["name"]!.ToString())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            Assert.Equal(schemaTools.OrderBy(name => name, StringComparer.OrdinalIgnoreCase),
+                inventory.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
+            foreach (var tool in schemaTools)
             {
                 var help = ToolHelpCatalog.Get(tool);
                 Assert.False(string.IsNullOrWhiteSpace(help), $"No help text for {tool}");
                 Assert.True(help!.Length >= 200, $"Help for {tool} should describe its action contract");
                 Assert.True(inventory.ContainsKey(tool), $"No action inventory row for {tool}");
+                Assert.Contains("## Action contract", help, StringComparison.Ordinal);
+                Assert.Contains("Read-only actions:", help, StringComparison.Ordinal);
+                Assert.Contains("Mutating actions:", help, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
+        public void HelpDocumentsEverySchemaActionToken()
+        {
+            foreach (var tool in LoadToolDefinitions()
+                .Where(tool => tool["inputSchema"]?["properties"]?["action"]?["enum"] is JArray))
+            {
+                string toolName = tool["name"]!.ToString();
+                string help = ToolHelpCatalog.Get(toolName) ?? string.Empty;
+                foreach (var action in (JArray)tool["inputSchema"]!["properties"]!["action"]!["enum"]!)
+                {
+                    Assert.Contains("`" + action + "`", help, StringComparison.Ordinal);
+                }
             }
         }
 
@@ -114,8 +141,8 @@ namespace GxMcp.Gateway.Tests
                 Assert.True(inventory.TryGetValue(pair.Key, out var row), $"No action inventory row for {pair.Key}");
                 var actions = ((JArray)pair.Value["inputSchema"]!["properties"]!["action"]!["enum"]!)
                     .Select(token => token.ToString())
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var documented = row.ReadOnly.Concat(row.Mutating).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    .ToHashSet(StringComparer.Ordinal);
+                var documented = row.ReadOnly.Concat(row.Mutating).ToHashSet(StringComparer.Ordinal);
 
                 Assert.True(actions.SetEquals(documented),
                     $"Inventory actions for {pair.Key} differ from schema. Schema: " +
@@ -123,7 +150,7 @@ namespace GxMcp.Gateway.Tests
                     "; inventory: " +
                     string.Join(", ", documented.OrderBy(value => value, StringComparer.OrdinalIgnoreCase)));
 
-                Assert.Empty(row.ReadOnly.Intersect(row.Mutating, StringComparer.OrdinalIgnoreCase));
+                Assert.Empty(row.ReadOnly.Intersect(row.Mutating, StringComparer.Ordinal));
                 foreach (var action in row.ReadOnly)
                     Assert.Equal(OperationClassifier.OperationKind.ReadOnly,
                         OperationClassifier.ClassifyAction(pair.Key, action));
@@ -143,6 +170,6 @@ namespace GxMcp.Gateway.Tests
             => Regex.Matches(cell, "`([^`]+)`", RegexOptions.CultureInvariant)
                 .Cast<Match>()
                 .Select(match => match.Groups[1].Value)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                .ToHashSet(StringComparer.Ordinal);
     }
 }

@@ -1857,6 +1857,9 @@ async function handleClients(subcommand, options, ctx) {
             }
             const help = [];
             if (patch.patched.length > 0) help.push('Restart the affected AI client(s) to load the new MCP config.');
+            if (patch.skipped.some((entry) => entry.registrationMode === 'manual')) {
+                help.push('Some selected clients require manual setup; use meta.skippedClients[].manualSetup for the exact command and environment.');
+            }
             if (patch.failed.some((f) => f.reason && f.reason.includes('third-party or HTTP MCP server'))) {
                 help.push('A collision with an existing MCP server (e.g. official GeneXus MCP) was detected.');
                 help.push('Use --server-name=<customName> (e.g. --server-name Gx18byLennix) or pass --force.');

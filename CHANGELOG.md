@@ -2,9 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- **Typed Transaction record access (PR #133).** Added `genexus_db` actions
+  `records_query`, `records_insert`, and `records_update`. They derive table,
+  attributes, key metadata, and scalar conversions from the GeneXus
+  Transaction, bound every read, return an optimistic `versionToken`, default
+  writes to `dryRun=true`, and require a matching single-use v2 preview receipt
+  before persistence. Direct SQL boundaries and the absence of GeneXus business
+  rules are reported explicitly. Contributed by David Agostini
+  (@davidagostini). [PR #133](https://github.com/lennix1337/Genexus18MCP/pull/133)
+
 ### Changed
 
-- **Tool schema budget for action contracts (Issues #139/#140).** Raised the guarded schema-size budget from 24,500 to 25,000 tokens to accommodate the required descriptions for all 31 action-bearing tools; the current measured size is ~24,666 tokens with ~334 tokens of headroom.
+- **Tool schema budget for action contracts (Issues #139/#140).** Raised the guarded schema-size budget from 24,500 to 25,000 tokens to accommodate the required descriptions for all 31 action-bearing tools; that increment measured ~24,666 tokens with ~334 tokens of headroom before PR #133.
+- **Tool schema budget for typed Transaction records (PR #133).** Raised the guarded budget from 25,000 to 25,500 tokens for the `records_query`, `records_insert`, and `records_update` schemas and safety contract; the current measured size is ~25,165 tokens with ~335 tokens of headroom.
+- **Typed Transaction integration quality gates (PR #133).** Kept record reads bounded to the requested projection plus one truncation sentinel, preserved the serializable write verification sequence, and made action/help/inventory parity machine-checkable.
 
 ### Fixed
 
@@ -12,7 +25,9 @@
 - **Action contract parity and conservative classification (Issue #139).** Added descriptions to all 31 umbrella `action` properties and replaced permissive fallback logic with explicit read-only/mutating sets; omitted and unknown actions are now non-read-only, with every supported `dryRun` preview exception covered by the same contract tests.
 - **Tool help and capability inventory parity (Issue #140).** Added help coverage for every action-bearing tool, introduced a schema-checked inventory of all valid actions and mutation semantics, and corrected the README's 50-tool count and dependency-graph wording.
 - **OpenCode Desktop setup guidance (Issue #135).** Kept the Desktop target detect-only, exposed structured local-server fields and validation steps, and made `clients add` report a manual setup skip without touching the app-managed configuration file.
-- **Deterministic no-navigation smoke coverage (Issue #137).** The live Procedure navigation test now paginates the complete listing with bounded retries for an indexing response and reports observed object/status pairs when no `NoNavigationBlocks` result exists.
+- **OpenCode Desktop explicit setup (Issue #135).** `clients add --clients opencode-desktop` now always returns actionable manual setup, including the resolved `GX_CONFIG_PATH`, even when the app is not detected or a stale gateway path is present; writable-client launcher validation remains enforced.
+- **Deterministic no-navigation smoke coverage (Issue #137).** The live Procedure navigation test now uses stable name ordering, bounded page/transient-retry caps, progressive backoff, and an explicit `NoNavigationBlocks` status/hint before accepting a hit.
+- **Side-effect-aware action classification (Issues #139/#140).** Navigation cache refreshes, transfer exports, and browser preview build/baseline/screenshot options are no longer reported as pure reads; typed record actions now share exact action-token and dry-run contracts across routing, help, inventory, and cache policy.
 - **Legacy `genexus_analyze` explain envelope (Issue #136).** Restored `mode="explain"` to the published schema and discovery fixture so the existing typed `NotImplemented` response is reachable instead of being rejected by gateway enum validation.
 - **Transitive npm security updates (Issue #134).** Refreshed the lockfile to `brace-expansion@1.1.18` and `js-yaml@4.3.2`, removing the two high-severity audit findings without changing the declared dependency surface.
 - **Race condition and E409 conflict during npm provenance publish.** Hardened `.github/workflows/release.yml` to gracefully handle npm registry E409 "Cannot publish over previously staged version" during asynchronous Sigstore provenance ingestion, added an active polling loop verifying registry availability before completing, removed duplicate `released` trigger causing simultaneous workflow runs, removed obsolete `always-auth` npmrc configuration, and updated `release.ps1` to detect active in-flight release workflows before triggering redundant fallback runs.

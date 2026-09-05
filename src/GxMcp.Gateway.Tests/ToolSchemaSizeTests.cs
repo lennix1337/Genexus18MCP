@@ -158,7 +158,10 @@ namespace GxMcp.Gateway.Tests
             //   2026-09-04 (Issues #139/#140 action contract parity): 24500 → 25000
             //   for explicit descriptions on all 31 action-bearing tool properties and
             //   their machine-checked action inventory. Measured ~24666; ~334 headroom.
-            Assert.True(approxTokens < 25000, $"tool_definitions.json is ~{approxTokens} tokens; budget 25000.");
+            //   2026-09-04 (PR #133 typed Transaction records): 25000 → 25500 for
+            //   records_query/records_insert/records_update schemas and their safety
+            //   contract. Measured ~25165; ~335 headroom.
+            Assert.True(approxTokens < 25500, $"tool_definitions.json is ~{approxTokens} tokens; budget 25500.");
         }
     }
 }
