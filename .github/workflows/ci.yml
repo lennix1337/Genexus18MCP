@@ -42,6 +42,27 @@ jobs:
       - name: Root lint
         run: npm run lint
 
+      - name: Validate quality gate manifests and scripts
+        shell: pwsh
+        run: |
+          $scriptPaths = @(
+            'scripts/pr-preflight.ps1',
+            'scripts/pr-push.ps1',
+            'scripts/test-live.ps1',
+            'scripts/check-build-warning-baseline.ps1'
+          )
+          foreach ($path in $scriptPaths) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              throw "PowerShell syntax errors in ${path}: $($errors -join '; ')"
+            }
+          }
+          ./scripts/check-build-warning-baseline.ps1 -ValidateOnly
+          python -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/bench-live-http.py').read_text(encoding='utf-8')); print('benchmark-python: valid')"
+
       - name: Install Nexus IDE deps
         working-directory: src/nexus-ide
         run: npm ci

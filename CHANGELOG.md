@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Internal
+
+- **Executable quality gates.** Added fork-safe PR preflight/push helpers,
+  an isolated live-KB smoke runner and workflow, a machine-readable
+  build-warning baseline, performance-regression thresholds, and
+  non-destructive release dry-runs.
+
+### Fixed
+
+- **Live contract parity.** Declared the `genexus_analyze` explain payload in
+  the source and discovery schemas, and skip navigation live coverage only
+  when the supplied KB has no generated navigation report.
+
 ## v2.57.0 - 2026-09-05
 
 ### Added

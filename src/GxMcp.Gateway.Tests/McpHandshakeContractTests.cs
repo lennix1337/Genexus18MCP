@@ -79,6 +79,17 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ToolsList_AnalyzeExplain_ShouldDeclareCodeArgument()
+        {
+            var tools = Dispatch("tools/list")["tools"] as JArray;
+            Assert.NotNull(tools);
+
+            var analyze = Assert.Single(tools!, tool =>
+                string.Equals(tool["name"]?.ToString(), "genexus_analyze", StringComparison.Ordinal));
+            Assert.Equal("string", analyze["inputSchema"]?["properties"]?["code"]?["type"]?.ToString());
+        }
+
+        [Fact]
         public void ToolsList_ShouldBeDeterministicallySortedByName()
         {
             var tools = Dispatch("tools/list")["tools"] as JArray;

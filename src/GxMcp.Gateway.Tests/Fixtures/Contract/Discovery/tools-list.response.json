@@ -22,6 +22,10 @@
           }
         ],
         "properties": {
+          "code": {
+            "description": "mode=explain: legacy code snippet to carry through the compatibility envelope.",
+            "type": "string"
+          },
           "format": {
             "description": "mode=dependency_heatmap: ascii adds rendered bar chart.",
             "enum": [

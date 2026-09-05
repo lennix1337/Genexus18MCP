@@ -11,6 +11,7 @@ Usage:
       [--iterations 12] [--port 5000] [--out bench-live.json] [--name baseline]
       [--ops whoami,query,edit_dryrun]      # subset of the op catalog
       [--compare baseline.json]             # print delta table vs a prior --out
+      [--fail-on-regression]                # exit 1 when p50 exceeds the threshold
 
 Ops (all read-only / dry-run — nothing persists on the KB):
   whoami, list_objects, query, search_source, inspect, read,
@@ -149,7 +150,7 @@ def envelope_is_ok(env):
     return st in ("ok", "success") or env.get("ok") is True
 
 
-def print_comparison(baseline, current):
+def print_comparison(baseline, current, max_p50_regression):
     print("\n=== COMPARISON (baseline -> current) ===")
     base_ops = baseline.get("ops", {})
     cur_ops = current.get("ops", {})
@@ -158,7 +159,7 @@ def print_comparison(baseline, current):
         keys = [k for k in base_ops if k in cur_ops]
     if not keys:
         print("  no overlapping ops to compare")
-        return
+        return None
     print(f"  {'op':<18} {'base p50':>9} {'cur p50':>9} {'delta':>8}   "
           f"{'base p95':>9} {'cur p95':>9} {'delta':>8}")
     total = 0.0
@@ -174,7 +175,7 @@ def print_comparison(baseline, current):
               f"{b95:8.2f}ms {c95:8.2f}ms {d95:+7.1f}%")
         total += d50
         n += 1
-        if d50 > 25.0:
+        if d50 > max_p50_regression:
             regressions.append((k, d50))
     if n:
         print(f"\n  mean p50 delta: {total/n:+.1f}%")
@@ -182,7 +183,8 @@ def print_comparison(baseline, current):
         for k, d in regressions:
             print(f"  WARNING: {k} p50 regressed {d:+.1f}% — investigate before shipping")
     else:
-        print("  no p50 regressions > +25%")
+        print(f"  no p50 regressions > +{max_p50_regression:.1f}%")
+    return regressions
 
 
 def main():
@@ -197,7 +199,15 @@ def main():
                     help="Comma-separated subset of the op catalog. Default: all ops.")
     ap.add_argument("--compare", default=None,
                     help="Path to a prior --out JSON; prints a p50/p95 delta table vs this run.")
+    ap.add_argument("--max-p50-regression", type=float, default=25.0,
+                    help="p50 regression percentage that is considered a failure (default: 25).")
+    ap.add_argument("--fail-on-regression", action="store_true",
+                    help="Exit 1 when comparison mode finds a p50 regression above the threshold.")
     args = ap.parse_args()
+
+    if args.max_p50_regression < 0:
+        print("FATAL: --max-p50-regression must be non-negative")
+        return 2
 
     ops = [o.strip() for o in (args.ops or "").split(",") if o.strip()] if args.ops else list(ALL_OPS)
     unknown = [o for o in ops if o not in ALL_OPS]
@@ -408,9 +418,16 @@ def main():
         except Exception as ex:
             print(f"\nWARN: could not load baseline {args.compare}: {ex}")
         else:
-            print_comparison(baseline, out)
+            regressions = print_comparison(baseline, out, args.max_p50_regression)
+            if args.fail_on_regression:
+                if regressions is None:
+                    print("FATAL: performance comparison has no overlapping operations")
+                    return 2
+                if regressions:
+                    return 1
     print("\n=== DONE ===")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

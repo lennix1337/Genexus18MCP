@@ -219,15 +219,26 @@ if ($remoteTag) {
     Ok "Tag $tag is free on origin."
 }
 
-# Verify CHANGELOG has an entry for this version (best-effort).
+# Verify that release notes exist before any version bump. The release script
+# owns promoting `## Unreleased`, but it must never ship an empty or generic
+# release body.
 $changelogPath = Join-Path $root 'CHANGELOG.md'
-if (Test-Path $changelogPath) {
-    $changelog = Get-Content $changelogPath -Raw
-    if ($changelog -notmatch "## v$([Regex]::Escape($Version))\b") {
-        Warn "CHANGELOG.md has no '## v$Version' entry. Continuing - but add one before tagging real releases."
-    } else {
-        Ok "CHANGELOG entry for v$Version found."
+if (-not (Test-Path $changelogPath -PathType Leaf)) {
+    Fail "CHANGELOG.md not found at $changelogPath."
+}
+$changelog = Get-Content $changelogPath -Raw
+$versionHeadingPattern = "(?m)^##[ \t]+v$([Regex]::Escape($Version))(?=[ \t]|$)"
+if ($changelog -match $versionHeadingPattern) {
+    Ok "CHANGELOG entry for v$Version found."
+} else {
+    $unreleasedMatch = [Regex]::Match(
+        $changelog,
+        '(?ms)^##[ \t]+Unreleased[ \t]*\r?\n(?<body>.*?)(?=\r?\n##[ \t]|\z)')
+    if (-not $unreleasedMatch.Success -or
+        [string]::IsNullOrWhiteSpace($unreleasedMatch.Groups['body'].Value)) {
+        Fail "CHANGELOG.md has no substantive '## Unreleased' section to promote into '## v$Version'."
     }
+    Ok "CHANGELOG has release notes ready to promote into ## v$Version."
 }
 
 # -- 2. Bump version files if needed ---------------------------------------
@@ -254,14 +265,23 @@ if (Test-Path $workerCsprojVersionPath) {
         $workerCsprojVersion = $Matches[1].Trim()
     }
 }
-$needsBump = ($Version -ne $currentVersion) -or
+$changelogNeedsPromotion = -not ($changelog -match $versionHeadingPattern)
+$needsBump = $changelogNeedsPromotion -or
+             ($Version -ne $currentVersion) -or
              ($csprojVersion -and $csprojVersion -ne $Version) -or
              ($workerCsprojVersion -and $workerCsprojVersion -ne $Version)
 if ($needsBump -and ($Version -eq $currentVersion) -and ($csprojVersion -ne $Version)) {
     Warn "csproj InformationalVersion=$csprojVersion is out of sync with package.json=$Version - forcing bump pass to realign."
 }
 if ($needsBump) {
-    Step "Bumping version: $currentVersion -> $Version"
+    $stepLabel = if ($Version -ne $currentVersion) {
+        "Bumping version: $currentVersion -> $Version"
+    } elseif ($changelogNeedsPromotion) {
+        "Synchronizing release metadata for $Version"
+    } else {
+        "Realigning release metadata for $Version"
+    }
+    Step $stepLabel
 
     # package.json - preserve formatting via regex (ConvertTo-Json reorders keys).
     if (-not $DryRun) {
@@ -326,10 +346,10 @@ if ($needsBump) {
         if (-not $DryRun) {
             $dateStr = (Get-Date).ToString('yyyy-MM-dd')
             $rawCl = [System.IO.File]::ReadAllText($changelogPath)
-            if ($rawCl -notmatch "## v$([Regex]::Escape($Version))") {
-                if ($rawCl -match '(?m)^## Unreleased\s*[\r\n]+') {
+            if ($rawCl -notmatch $versionHeadingPattern) {
+                if ($rawCl -match '(?m)^##[ \t]+Unreleased[ \t]*\r?\n') {
                     $bumpedCl = [Regex]::Replace($rawCl,
-                        '(?m)^## Unreleased\s*[\r\n]+',
+                        '(?m)^##[ \t]+Unreleased[ \t]*\r?\n',
                         "## Unreleased`r`n`r`n## v$Version - $dateStr`r`n`r`n")
                     [System.IO.File]::WriteAllText($changelogPath, $bumpedCl, [System.Text.UTF8Encoding]::new($false))
                     Ok "CHANGELOG.md -> promoted ## Unreleased to ## v$Version"
@@ -342,6 +362,10 @@ if ($needsBump) {
                 }
             } else {
                 Ok "CHANGELOG.md -> ## v$Version already present."
+            }
+            $promoted = [System.IO.File]::ReadAllText($changelogPath)
+            if ($promoted -notmatch $versionHeadingPattern) {
+                Fail "CHANGELOG.md promotion did not create the exact ## v$Version heading."
             }
         } else {
             Ok "CHANGELOG.md -> ## v$Version (dry-run)"
@@ -428,6 +452,19 @@ if (-not $SkipTests) {
     Warn "-SkipTests set; not running test suite."
 }
 
+# A release build can succeed while adding a new nullable/analyzer warning.
+# Keep this gate independent from the test switch: skipping tests must not skip
+# the warning-surface regression check.
+Step "Checking Release warning baseline"
+Invoke-Cmd 'pwsh' @(
+    '-NoProfile',
+    '-File',
+    (Join-Path $root 'scripts\check-build-warning-baseline.ps1'),
+    '-BaselineFile',
+    (Join-Path $root 'docs\build_warning_baseline.json')
+)
+Ok "Release warning baseline passed."
+
 # -- 4b. Validate artefact version stamps match $Version ------------------
 # With -SkipBuild a stale publish/ can ship silently; catch it here.
 Step "Validating artefact version stamps"
@@ -462,10 +499,10 @@ if (-not $DryRun) {
 # -- 5. Zip publish/ -> publish.zip -----------------------------------------
 Step "Packing publish.zip"
 $zipPath = Join-Path $root 'publish.zip'
-if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 $shaPath = "$zipPath.sha256"
-if (Test-Path $shaPath) { Remove-Item $shaPath -Force }
 if (-not $DryRun) {
+    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+    if (Test-Path $shaPath) { Remove-Item $shaPath -Force }
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
@@ -519,7 +556,7 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
     # Pull the block between `## v$Version` and the next `## v` heading.
     $cl = Get-Content $changelogPath -Raw
     $rx = [Regex]::new(
-        "## v$([Regex]::Escape($Version))(?:\s+-\s+[^\r\n]+)?[\r\n]+(.*?)(?=\r?\n## v|\z)",
+        "(?m)^##[ \t]+v$([Regex]::Escape($Version))(?:[ \t]+-[^\r\n]+)?[\r\n]+(.*?)(?=\r?\n##[ \t]+v|\z)",
         [System.Text.RegularExpressions.RegexOptions]::Singleline)
     $m = $rx.Match($cl)
     if ($m.Success) {
@@ -528,8 +565,12 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
     }
 }
 if (-not $notes) {
-    $notes = "Release $tag. See CHANGELOG.md for details."
-    Warn "Falling back to a generic release-notes body."
+    if ($DryRun) {
+        $notes = "[dry-run] Release notes would be extracted from CHANGELOG.md."
+        Ok "[dry-run] release notes would be extracted from the promoted changelog section."
+    } else {
+        Fail "No substantive release notes were extracted for $tag. Refusing a generic release body."
+    }
 }
 
 # -- 9. Create release WITH publish.zip in the same call -------------------

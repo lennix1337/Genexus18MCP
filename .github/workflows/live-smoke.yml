@@ -1,0 +1,45 @@
+name: Live KB Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      kb_path:
+        description: 'KB folder on the self-hosted Windows runner'
+        required: true
+        default: 'C:\KBs\KBTeste'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    # GeneXus 18 and the configured test KB are proprietary/local resources;
+    # ordinary hosted CI must never attempt this job.
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Run live KB gate
+        shell: pwsh
+        run: >-
+          .\scripts\test-live.ps1
+          -KbPath "${{ inputs.kb_path }}"
+          -RunBenchmark
+          -BenchmarkOut "$env:RUNNER_TEMP\gxmcp-live-benchmark.json"
+          -Iterations 8
+
+      - name: Upload benchmark
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: gxmcp-live-benchmark
+          path: ${{ runner.temp }}\gxmcp-live-benchmark.json
+          if-no-files-found: ignore

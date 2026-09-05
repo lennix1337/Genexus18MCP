@@ -1,14 +1,16 @@
 # Release build warning baseline
 
-Captured on 2026-09-04 after the warning cleanup for issue #138.
+Captured on 2026-09-05 after the warning cleanup for issue #138.
 
 ## Measurement
 
-The baseline is produced with the repository's GeneXus SDK path configured:
+The machine-readable source of truth is
+[`build_warning_baseline.json`](build_warning_baseline.json). The manifest is
+produced with the repository's GeneXus SDK path configured:
 
 ```powershell
 $env:GX_PATH = 'C:\Program Files (x86)\GeneXus\GeneXus18'
-dotnet build Genexus18MCP.sln -c Release -t:Rebuild -v:minimal
+.\scripts\check-build-warning-baseline.ps1 -UpdateBaseline -GxPath $env:GX_PATH
 ```
 
 The build completed successfully (`exit code 0`). It emitted 444 compiler/analyzer
@@ -31,5 +33,8 @@ are not emitted, and the benchmark initialization warnings in
 - `MSB3277` must remain at zero; its suppression is scoped to
   `GxMcp.Worker.Tests` and does not hide compiler/analyzer warnings.
 - Future warning work should compare distinct `(code, file, line)` locations
-  against this baseline and must not increase the total without an explicit
-  update to this document.
+  against the JSON manifest and must not increase the total without an
+  explicit baseline update reviewed with a Release rebuild.
+- The release script runs
+  `.\scripts\check-build-warning-baseline.ps1` without `-UpdateBaseline` and
+  fails on `MSB3277` or any new warning location.

@@ -138,7 +138,7 @@ namespace GxMcp.Gateway.Tests
                 "read error must include availableParts / hint. payload=" + text);
         }
 
-        [LiveKbFact]
+        [LiveKbFact(requiresNavigation: true)]
         public async Task Navigation_NoForEachBlocks_ReturnsNoNavigationBlocksStatus()
         {
             const int pageSize = 200;
