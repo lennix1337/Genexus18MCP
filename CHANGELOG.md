@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2.57.0 - 2026-09-05
+
 ### Added
 
 - **Typed Transaction record access (PR #133).** Added `genexus_db` actions
