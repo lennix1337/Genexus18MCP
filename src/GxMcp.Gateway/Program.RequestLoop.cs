@@ -1602,7 +1602,9 @@ namespace GxMcp.Gateway
                         BroadcastResourceUpdated("genexus://objects", $"tool:{tName}");
                     }
 
-                    // 2. SEMANTIC CACHE: Try to get from cache for read-only tools.
+                    // 2. SEMANTIC CACHE: Try to get from cache for classifier-approved
+                    // read-only tools. CreateSemanticCacheKey repeats the safety gate
+                    // so side-effectful action parameters cannot be cached accidentally.
                     // Skip caching for live-progress lifecycle reads (status/result/cancel) and logs —
                     // these must always reflect current worker state, not a stale snapshot.
                     string lcAction = tArgs?["action"]?.ToString()?.ToLowerInvariant();
@@ -2376,11 +2378,12 @@ namespace GxMcp.Gateway
 
                             // PERF: `cKey != null` also excludes mutating tools (which
                             // cleared the cache and must not pollute it with a write
-                            // result). The old `Contains("write")/Contains("patch")` check
-                            // missed tools like genexus_edit.
+                            // result), plus parameter-dependent side effects recognized by
+                            // OperationClassifier. The old `Contains("write")/Contains("patch")`
+                            // check missed tools like genexus_edit.
                             // C1 (race fix): if a mutation invalidated the cache while this read
                             // was in flight, the pre-mutation envelope must not be stored.
-                            if (!isErr && !isTransient && !tName.Contains("write") && !tName.Contains("patch") && !isLiveTool && cKey != null
+                            if (!isErr && !isTransient && !isLiveTool && cKey != null
                                 && System.Threading.Volatile.Read(ref SemanticCacheEpoch) == cacheEpochAtDispatch)
                             {
                                 // Store full envelope in semantic cache (rebuilt on hit above)

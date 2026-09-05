@@ -160,6 +160,25 @@ namespace GxMcp.Gateway.Tests
             }
         }
 
+        [Fact]
+        public void SchemaAnnotationsDoNotClaimReadOnlyForMutatingActions()
+        {
+            foreach (var tool in LoadToolDefinitions()
+                .Where(tool => tool["inputSchema"]?["properties"]?["action"]?["enum"] is JArray))
+            {
+                string toolName = tool["name"]!.ToString();
+                var actions = (JArray)tool["inputSchema"]!["properties"]!["action"]!["enum"]!;
+                bool hasMutatingAction = actions.Any(action =>
+                    OperationClassifier.ClassifyAction(toolName, action.ToString())
+                    == OperationClassifier.OperationKind.Mutating);
+                if (hasMutatingAction)
+                {
+                    Assert.False(tool["annotations"]?["readOnlyHint"]?.Value<bool>() == true,
+                        $"{toolName} cannot advertise readOnlyHint=true with mutating actions");
+                }
+            }
+        }
+
         private static string? CodeToken(string cell)
         {
             var match = Regex.Match(cell, "`([^`]+)`", RegexOptions.CultureInvariant);

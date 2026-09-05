@@ -2998,11 +2998,11 @@
     {
       "annotations": {
         "destructiveHint": false,
-        "idempotentHint": true,
+        "idempotentHint": false,
         "openWorldHint": false,
-        "readOnlyHint": true
+        "readOnlyHint": false
       },
-      "description": "View navigation report (IDE Right-click → View Navigation). latest=true returns cached report from .gx/navigation-cache; else runs fresh.",
+      "description": "View navigation report (IDE Right-click → View Navigation). latest=true reads the most recent report from .gx/navigation-cache; latest=false runs fresh and refreshes that per-KB cache.",
       "inputSchema": {
         "examples": [
           {
@@ -3029,7 +3029,7 @@
           },
           "latest": {
             "default": false,
-            "description": "Return the most recent cached navigation if any; otherwise run fresh.",
+            "description": "Read the most recent cached navigation when true; when false, run fresh and refresh the per-KB navigation cache.",
             "type": "boolean"
           },
           "name": {

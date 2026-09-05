@@ -27,7 +27,21 @@ namespace GxMcp.Gateway.Tests
         {
             var args = new JObject { ["action"] = action };
             Assert.False(Program.IsMutatingTool("genexus_db", args));
+            Assert.True(OperationClassifier.IsReadOnly("genexus_db", args));
             Assert.Null(Program.CreateSemanticCacheKey("sample", "genexus_db", args, false, false));
+        }
+
+        [Fact]
+        public void SideEffectfulActionCallsNeverGetSemanticCacheKeys()
+        {
+            Assert.Null(Program.CreateSemanticCacheKey("sample", "genexus_navigation",
+                new JObject { ["action"] = "view", ["name"] = "Customer" }, false, false));
+            Assert.Null(Program.CreateSemanticCacheKey("sample", "genexus_transfer",
+                new JObject { ["action"] = "export", ["name"] = "Customer" }, false, false));
+            Assert.Null(Program.CreateSemanticCacheKey("sample", "genexus_browser",
+                new JObject { ["action"] = "preview", ["buildFirst"] = true }, false, false));
+            Assert.Null(Program.CreateSemanticCacheKey("sample", "genexus_browser",
+                new JObject { ["action"] = "preview", ["capture"] = new JArray("screenshot") }, false, false));
         }
 
         [Theory]

@@ -141,25 +141,42 @@ namespace GxMcp.Gateway.Tests
         [LiveKbFact]
         public async Task Navigation_NoForEachBlocks_ReturnsNoNavigationBlocksStatus()
         {
-            const int pageSize = 50;
-            const int maxPageRequests = 120;
+            const int pageSize = 200;
+            const int maxPageRequests = 1000;
             const int maxTransientRetries = 8;
+            var maxDuration = TimeSpan.FromMinutes(2);
+            var budget = System.Diagnostics.Stopwatch.StartNew();
             int offset = 0;
             int pageRequests = 0;
             int transientRetries = 0;
             var observed = new System.Collections.Generic.List<string>();
             JObject? hit = null;
 
-            while (hit == null && pageRequests < maxPageRequests)
+            while (hit == null)
             {
+                if (pageRequests >= maxPageRequests)
+                    Assert.Fail($"Inconclusive: Procedure pagination reached the safety cap of {maxPageRequests} pages before a terminal page.");
+                int remainingBeforePage = (int)Math.Max(0, (maxDuration - budget.Elapsed).TotalMilliseconds);
+                if (remainingBeforePage <= 0)
+                    Assert.Fail($"Inconclusive: Procedure navigation smoke exceeded its global {maxDuration.TotalSeconds:0}s budget after {pageRequests} page requests.");
+
                 pageRequests++;
-                var list = await _h.CallToolAsync("genexus_list_objects", new JObject
+                JObject list;
+                try
                 {
-                    ["typeFilter"] = "Procedure",
-                    ["limit"] = pageSize,
-                    ["offset"] = offset,
-                    ["sort"] = "name"
-                });
+                    list = await _h.CallToolAsync("genexus_list_objects", new JObject
+                    {
+                        ["typeFilter"] = "Procedure",
+                        ["limit"] = pageSize,
+                        ["offset"] = offset,
+                        ["sort"] = "name"
+                    }, timeoutMs: remainingBeforePage);
+                }
+                catch (TimeoutException ex)
+                {
+                    Assert.Fail($"Inconclusive: Procedure listing exceeded the global {maxDuration.TotalSeconds:0}s budget ({ex.Message}).");
+                    throw;
+                }
                 var listPayload = LiveGatewayHarness.ParseToolPayload(list);
                 var decision = NavigationListStateMachine.Evaluate(
                     listPayload, LiveGatewayHarness.IsToolError(list), offset);
@@ -167,8 +184,16 @@ namespace GxMcp.Gateway.Tests
                 {
                     transientRetries++;
                     if (transientRetries > maxTransientRetries)
-                        Assert.Fail("Procedure listing did not become complete after transient retries. Last reason: " + decision.Reason);
-                    await Task.Delay(Math.Min(2000, 250 * transientRetries));
+                        Assert.Fail("Inconclusive: Procedure listing did not become complete after transient retries. Last reason: " + decision.Reason);
+
+                    int? etaMs = listPayload?["etaMs"]?.Value<int?>();
+                    int delayMs = etaMs.HasValue && etaMs.Value > 0
+                        ? Math.Min(5000, Math.Max(250, etaMs.Value))
+                        : Math.Min(2000, 250 * transientRetries);
+                    int remainingBeforeDelay = (int)Math.Max(0, (maxDuration - budget.Elapsed).TotalMilliseconds);
+                    if (remainingBeforeDelay <= 0)
+                        Assert.Fail($"Inconclusive: Procedure listing exceeded its global {maxDuration.TotalSeconds:0}s budget while waiting for the index.");
+                    await Task.Delay(Math.Min(delayMs, remainingBeforeDelay));
                     continue;
                 }
 
@@ -187,14 +212,27 @@ namespace GxMcp.Gateway.Tests
 
                 foreach (var item in items)
                 {
+                    int remainingBeforeNavigation = (int)Math.Max(0, (maxDuration - budget.Elapsed).TotalMilliseconds);
+                    if (remainingBeforeNavigation <= 0)
+                        Assert.Fail($"Inconclusive: Procedure navigation smoke exceeded its global {maxDuration.TotalSeconds:0}s budget after {pageRequests} page requests.");
+
                     string? name = item["name"]?.ToString();
                     if (string.IsNullOrWhiteSpace(name)) continue;
 
-                    var nav = await _h.CallToolAsync("genexus_analyze", new JObject
+                    JObject nav;
+                    try
                     {
-                        ["name"] = name,
-                        ["mode"] = "navigation"
-                    });
+                        nav = await _h.CallToolAsync("genexus_analyze", new JObject
+                        {
+                            ["name"] = name,
+                            ["mode"] = "navigation"
+                        }, timeoutMs: remainingBeforeNavigation);
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        Assert.Fail($"Inconclusive: navigation analysis exceeded the global {maxDuration.TotalSeconds:0}s budget ({ex.Message}).");
+                        throw;
+                    }
                     var navPayload = LiveGatewayHarness.ParseToolPayload(nav);
                     if (navPayload == null)
                     {

@@ -260,8 +260,15 @@ namespace GxMcp.Gateway
             if (kind != OperationKind.Mutating) return false;
 
             string key = toolName + ":" + action;
-            return args?["dryRun"]?.ToObject<bool?>() == true && DryRunCapableActions.Contains(key);
+            bool dryRun = args?["dryRun"]?.ToObject<bool?>() == true
+                || (args?["dryRun"] == null && IsDefaultDryRunRecordAction(toolName, action));
+            return dryRun && DryRunCapableActions.Contains(key);
         }
+
+        private static bool IsDefaultDryRunRecordAction(string toolName, string? action)
+            => string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase)
+                && (string.Equals(action, "records_insert", StringComparison.Ordinal)
+                    || string.Equals(action, "records_update", StringComparison.Ordinal));
 
         private static bool HasKnownSideEffects(string toolName, string? action, JObject? args)
         {

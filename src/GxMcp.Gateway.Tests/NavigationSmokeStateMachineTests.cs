@@ -23,6 +23,17 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(NavigationListDecisionKind.Retry, decision.Kind);
         }
 
+        [Theory]
+        [InlineData("{'totalIsPartial':true,'results':[],'hasMore':false}")]
+        [InlineData("{'pagination':{'totalIsPartial':true},'results':[],'hasMore':false}")]
+        public void CanonicalPartialTotalMarkersAreRetryable(string json)
+        {
+            var decision = NavigationListStateMachine.Evaluate(
+                JObject.Parse(json), isError: false, offset: 0);
+
+            Assert.Equal(NavigationListDecisionKind.Retry, decision.Kind);
+        }
+
         [Fact]
         public void ExplicitEmptyTerminalPageIsExhausted()
         {

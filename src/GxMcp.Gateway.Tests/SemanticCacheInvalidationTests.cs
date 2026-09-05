@@ -52,6 +52,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_asset", "write")]
         [InlineData("genexus_history", "save")]
         [InlineData("genexus_history", "restore")]
+        [InlineData("genexus_transfer", "export")]
         [InlineData("genexus_transfer", "import")]
         [InlineData("genexus_data_view", "create")]
         [InlineData("genexus_data_view", "update")]
@@ -92,6 +93,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_generator_reference", "remove")]
         [InlineData("genexus_api", "routes_clone")]
         [InlineData("genexus_api", "routes_update")]
+        [InlineData("genexus_navigation", "view")]
         public void MutatingActions_AreDetected(string toolName, string action)
         {
             var args = new JObject { ["action"] = action };
@@ -135,7 +137,6 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_properties", "get")]
         [InlineData("genexus_asset", "read")]
         [InlineData("genexus_history", "list")]
-        [InlineData("genexus_transfer", "export")]
         [InlineData("genexus_transfer", "inspect")]
         [InlineData("genexus_data_view", "inspect")]
         [InlineData("genexus_data_view", "dry_run")]
@@ -217,6 +218,21 @@ namespace GxMcp.Gateway.Tests
             Assert.False(Program.IsMutatingTool("genexus_api", new JObject
             {
                 ["action"] = action
+            }));
+        }
+
+        [Fact]
+        public void BrowserPreviewSideEffects_InvalidateSemanticCache()
+        {
+            Assert.True(Program.IsMutatingTool("genexus_browser", new JObject
+            {
+                ["action"] = "preview",
+                ["buildFirst"] = true
+            }));
+            Assert.True(Program.IsMutatingTool("genexus_browser", new JObject
+            {
+                ["action"] = "preview",
+                ["capture"] = new JArray("screenshot")
             }));
         }
 

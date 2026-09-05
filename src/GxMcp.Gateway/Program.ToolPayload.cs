@@ -282,9 +282,13 @@ namespace GxMcp.Gateway
 
         // Record reads and previews are live database observations. Neither an empty
         // query nor an earlier successful mutation may bypass a fresh worker call.
+        // The action classifier is also the cache safety boundary: action-dependent
+        // file/browser side effects must not be cached merely because the legacy
+        // invalidation list does not know about them yet.
         internal static string? CreateSemanticCacheKey(string kbScope, string toolName,
             JObject? args, bool isMutating, bool isLiveTool)
-            => isMutating || isLiveTool || IsTransactionRecordOperation(toolName, args)
+            => isMutating || isLiveTool || !OperationClassifier.IsReadOnly(toolName, args)
+                || IsTransactionRecordOperation(toolName, args)
                 ? null : $"{kbScope}|{toolName}:{args?.ToString(Newtonsoft.Json.Formatting.None)}";
 
         internal static bool IsMutatingTool(string toolName, JObject? args)
@@ -361,8 +365,10 @@ namespace GxMcp.Gateway
 
             if (string.Equals(toolName, "genexus_transfer", StringComparison.OrdinalIgnoreCase))
             {
-                // import is destructive (applies an XPZ into the KB); export/inspect read-only.
-                return string.Equals(args?["action"]?.ToString(), "import", StringComparison.OrdinalIgnoreCase);
+                // import applies an XPZ into the KB; export writes an XPZ artifact.
+                string? action = args?["action"]?.ToString();
+                return string.Equals(action, "export", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "import", StringComparison.OrdinalIgnoreCase);
             }
 
             if (string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase))
@@ -434,6 +440,14 @@ namespace GxMcp.Gateway
                        string.Equals(action, "reorg", StringComparison.OrdinalIgnoreCase) ||
                        string.Equals(action, "snapshots-restore", StringComparison.OrdinalIgnoreCase);
             }
+
+            // Keep cache invalidation aligned with the action contract for umbrella
+            // tools whose side effects are not covered by the historical branches
+            // above (navigation cache refresh, document/recipe files, browser
+            // baselines/builds, and remaining typed action tools).
+            if (OperationClassifier.ActionTools.Contains(toolName)
+                && !string.IsNullOrWhiteSpace(args?["action"]?.ToString()))
+                return !OperationClassifier.IsReadOnly(toolName, args);
 
             return false;
         }

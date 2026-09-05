@@ -76,6 +76,8 @@ namespace GxMcp.Gateway.Tests
                 || string.Equals(indexStatus, "UltraLiteReady", StringComparison.OrdinalIgnoreCase)
                 || payload["partial"]?.Value<bool?>() == true
                 || payload["_meta"]?["partial"]?.Value<bool?>() == true
+                || payload["totalIsPartial"]?.Value<bool?>() == true
+                || payload["pagination"]?["totalIsPartial"]?.Value<bool?>() == true
                 || payload["retriable"]?.Value<bool?>() == true;
         }
 
