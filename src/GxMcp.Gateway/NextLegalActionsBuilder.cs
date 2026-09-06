@@ -30,6 +30,13 @@ namespace GxMcp.Gateway
         {
             if (string.IsNullOrWhiteSpace(toolName)) return null;
 
+            // Resolve legacy aliases once, before both policy checks and the
+            // action-specific switch. This keeps follow-up suggestions on the
+            // canonical tool/action contract without removing compatibility for
+            // older clients.
+            args = OperationClassifier.NormalizeArguments(toolName, args, out var canonicalTool);
+            toolName = canonicalTool;
+
             // Tools with explicit next-legal-action builders (genexus_read, genexus_query)
             // are allowed to produce suggestions even though they are read-only.
             if (!string.Equals(toolName, "genexus_read", StringComparison.OrdinalIgnoreCase) &&
@@ -53,11 +60,8 @@ namespace GxMcp.Gateway
                     "save_as" => BuildForSaveAs(args, responsePayload),
                     _ => null,
                 }),
-                "genexus_create_object" => isError ? null : BuildForCreateObject(args, responsePayload),
-                "genexus_create_popup" => isError ? null : BuildForCreatePopup(args, responsePayload),
                 "genexus_edit" => isError ? null : BuildForEdit(args, responsePayload),
                 "genexus_lifecycle" => BuildForLifecycle(args, responsePayload, isError),
-                "genexus_save_as" => isError ? null : BuildForSaveAs(args, responsePayload),
                 "genexus_versioning" => isError ? null : BuildForVersioning(args, responsePayload),
                 _ => null,
             };

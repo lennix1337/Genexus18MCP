@@ -151,6 +151,16 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void GetStandardHeaderName_ShouldUseTaskIdForTaskRequests()
+        {
+            var request = JObject.Parse(
+                "{\"method\":\"tasks/get\",\"params\":{\"taskId\":\"task-123\"}}"
+            );
+
+            Assert.Equal("task-123", McpHttpProtocol.GetStandardHeaderName(request));
+        }
+
+        [Fact]
         public void ValidatePostHeaders_ShouldAcceptJsonAndSse()
         {
             var context = new DefaultHttpContext();
@@ -197,6 +207,29 @@ namespace GxMcp.Gateway.Tests
 
             Assert.NotNull(error);
             Assert.Equal(StatusCodes.Status406NotAcceptable, error.Value.StatusCode);
+        }
+
+        [Fact]
+        public void ValidateBodyLength_AllowsUnknownLength()
+        {
+            Assert.Null(McpHttpProtocol.ValidateBodyLength(null));
+        }
+
+        [Theory]
+        [InlineData(0L, false)]
+        [InlineData(2097152L, false)]
+        [InlineData(2097153L, true)]
+        public void ValidateBodyLength_EnforcesTheGatewayLimit(long contentLength, bool rejected)
+        {
+            var error = McpHttpProtocol.ValidateBodyLength(contentLength);
+
+            Assert.Equal(rejected, error.HasValue);
+            if (rejected)
+            {
+                Assert.Equal(StatusCodes.Status413PayloadTooLarge, error!.Value.StatusCode);
+                Assert.Equal(-32600, error.Value.JsonRpcCode);
+                Assert.Equal(2097152, error.Value.Data?["maxBytes"]?.Value<int>());
+            }
         }
 
         [Fact]
@@ -279,6 +312,15 @@ namespace GxMcp.Gateway.Tests
             Assert.True(McpHttpProtocol.IsInitializeRequest(JObject.Parse("""{"method":"initialize"}""")));
             Assert.False(McpHttpProtocol.IsInitializeRequest(JObject.Parse("""{"method":"Initialize"}""")));
             Assert.False(McpHttpProtocol.IsInitializeRequest(JObject.Parse("""{"method":"initialize "}""")));
+        }
+
+        [Fact]
+        public void CancellationNotificationIsRecognizedWithoutTreatingItAsARequestId()
+        {
+            Assert.True(McpHttpProtocol.IsCancellationNotification(
+                JObject.Parse("""{"method":"notifications/cancelled","params":{"requestId":1}}""")));
+            Assert.False(McpHttpProtocol.IsCancellationNotification(
+                JObject.Parse("""{"method":"notifications/cancelled "}""")));
         }
     }
 }

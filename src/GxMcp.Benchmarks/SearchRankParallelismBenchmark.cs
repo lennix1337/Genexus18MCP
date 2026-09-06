@@ -14,7 +14,7 @@ namespace GxMcp.Benchmarks
     // (name/description/keyword/tag/table scoring over the terms) + the unsafe
     // unrolled 128-dim CosineSimilarity from VectorService + the noise-type
     // short-circuit + the Score > 0 filter + ToList. The Worker project targets
-    // net48 (GeneXus SDK) and can't be referenced from this net8.0 project, so the
+    // net48 (GeneXus SDK) and can't be referenced from this net10.0 project, so the
     // two scoring functions are ported here verbatim (see GxMcp.Worker
     // Services/SearchService.cs and Services/VectorService.cs).
     //

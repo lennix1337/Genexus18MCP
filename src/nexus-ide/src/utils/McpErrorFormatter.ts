@@ -1,4 +1,5 @@
 type McpErrorPayload = {
+  code?: string;
   error?: string;
   status?: string;
   target?: string;
@@ -30,6 +31,7 @@ export function extractMcpError(rawError: unknown): McpErrorPayload {
   if (rawError && typeof rawError === "object") {
     const candidate = rawError as McpErrorPayload;
     if (
+      typeof candidate.code === "string" ||
       typeof candidate.error === "string" ||
       typeof candidate.details === "string" ||
       typeof candidate.target === "string"
@@ -51,7 +53,9 @@ export function extractMcpError(rawError: unknown): McpErrorPayload {
 
 export function formatMcpErrorMessage(prefix: string, rawError: unknown): string {
   const payload = extractMcpError(rawError);
-  const segments = [prefix, payload.error || "Unknown failure"];
+  const baseMessage = payload.error ||
+    (payload.code === "outcome_unknown" ? "Operation outcome is unknown" : "Unknown failure");
+  const segments = [prefix, baseMessage];
 
   if (payload.target) {
     segments.push(`Object: ${payload.target}`);
@@ -67,6 +71,10 @@ export function formatMcpErrorMessage(prefix: string, rawError: unknown): string
 
   if (payload.details) {
     segments.push(payload.details);
+  }
+
+  if (payload.code === "outcome_unknown") {
+    segments.push("Inspect the operation before retrying");
   }
 
   if (Array.isArray(payload.availableParts) && payload.availableParts.length > 0) {

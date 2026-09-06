@@ -727,6 +727,26 @@ function initializeExtension(
   };
 
   // Start Backend and register discovery tools
+  const startTrustedBackend = async (reason: string): Promise<void> => {
+    if (!BackendManager.isWorkspaceTrusted()) {
+      Logger.info(`[Nexus IDE] Workspace trust is required before starting the backend (${reason}).`);
+      return;
+    }
+
+    const started = await backendManager.start(provider, true);
+    if (!started) {
+      Logger.warn(`[Nexus IDE] Backend startup was skipped or aborted (${reason}).`);
+    }
+  };
+
+  if (!BackendManager.isWorkspaceTrusted()) {
+    context.subscriptions.push(
+      vscode.workspace.onDidGrantWorkspaceTrust(() => {
+        void startTrustedBackend("workspace trust granted");
+      }),
+    );
+  }
+
   backendManager
     .start(provider)
     .then(async (started) => {

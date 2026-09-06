@@ -109,7 +109,8 @@ namespace GxMcp.Worker.Services
                 case InspectionDepth.Context360:
                     return _analyzeService != null
                         ? _analyzeService.Get360Context(target, typeFilter,
-                            args["guid"]?.ToString(), args["entityKey"]?.ToString(), args["path"]?.ToString())
+                            args["guid"]?.ToString(), args["entityKey"]?.ToString(), args["path"]?.ToString(),
+                            args["maxBytes"]?.ToObject<int?>(), args["cursor"]?.ToString())
                         : _objectReader.Read(new ObjectReadRequest
                         {
                             Target = target,

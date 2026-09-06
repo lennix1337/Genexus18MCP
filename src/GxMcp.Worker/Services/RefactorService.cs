@@ -7,6 +7,7 @@ using Artech.Architecture.Common.Services;
 using Artech.Genexus.Common.Parts;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
+using GxMcp.Worker.Models;
 
 namespace GxMcp.Worker.Services
 {
@@ -91,25 +92,13 @@ namespace GxMcp.Worker.Services
                 if (action == "RenameAttribute") {
                     if (dryRun)
                     {
-                        // Count CalledBy edges to show what would be updated.
                         var index = _indexCacheService.GetIndex();
-                        int callerCount = 0;
-                        if (index != null && index.Objects.TryGetValue("Attribute:" + oldName, out var entry) && entry.CalledBy != null)
-                            callerCount = entry.CalledBy.Count;
                         return Models.McpResponse.Ok(
                             target: oldName,
                             code: "DryRun",
                             result: new JObject
                             {
-                                ["preview"] = new JObject
-                                {
-                                    ["wouldRename"] = new JArray(new JObject
-                                    {
-                                        ["from"] = oldName,
-                                        ["to"] = newName,
-                                        ["callerCount"] = callerCount
-                                    })
-                                }
+                                ["preview"] = BuildRenamePreview(index, oldName, newName, "Attribute")
                             });
                     }
                     return RenameAttribute(oldName, newName);
@@ -123,24 +112,12 @@ namespace GxMcp.Worker.Services
                         var obj = _objectService.FindObject(oldName, typeFilter);
                         string objType = obj?.TypeDescriptor?.Name;
                         var index = _indexCacheService.GetIndex();
-                        int callerCount = 0;
-                        if (obj != null && index != null && index.Objects.TryGetValue(objType + ":" + oldName, out var entry) && entry.CalledBy != null)
-                            callerCount = entry.CalledBy.Count;
                         return Models.McpResponse.Ok(
                             target: oldName,
                             code: "DryRun",
                             result: new JObject
                             {
-                                ["preview"] = new JObject
-                                {
-                                    ["wouldRename"] = new JArray(new JObject
-                                    {
-                                        ["from"] = oldName,
-                                        ["to"] = newName,
-                                        ["type"] = objType,
-                                        ["callerCount"] = callerCount
-                                    })
-                                }
+                                ["preview"] = BuildRenamePreview(index, oldName, newName, objType)
                             });
                     }
                     return RenameObject(oldName, newName, typeFilter);
@@ -166,6 +143,88 @@ namespace GxMcp.Worker.Services
                         why: "Confirm the target object exists and its parts are accessible before retrying.")),
                     target: target);
             }
+        }
+
+        private static JObject BuildRenamePreview(
+            SearchIndex index,
+            string oldName,
+            string newName,
+            string objectType)
+        {
+            var references = new JArray();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (index?.Objects != null)
+            {
+                foreach (var entry in index.Objects.Values)
+                {
+                    if (entry == null || string.IsNullOrEmpty(entry.Name)) continue;
+
+                    if (string.Equals(entry.Name, oldName, StringComparison.OrdinalIgnoreCase)
+                        && entry.CalledBy != null)
+                    {
+                        foreach (var caller in entry.CalledBy)
+                        {
+                            if (string.IsNullOrEmpty(caller)) continue;
+                            string key = caller + "|sdk";
+                            if (seen.Add(key))
+                            {
+                                references.Add(new JObject
+                                {
+                                    ["object"] = caller,
+                                    ["part"] = "Source",
+                                    ["source"] = "sdk",
+                                    ["location"] = "unknown"
+                                });
+                            }
+                        }
+                    }
+
+                    if (entry.Calls != null && entry.Calls.Any(c =>
+                        string.Equals(c, oldName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        string key = entry.Name + "|sdk";
+                        if (seen.Add(key))
+                        {
+                            references.Add(new JObject
+                            {
+                                ["object"] = entry.Name,
+                                ["part"] = "Source",
+                                ["source"] = "sdk",
+                                ["location"] = "unknown"
+                            });
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(entry.SourceSnippet))
+                    {
+                        foreach (var occurrence in SymbolRenameTokenizer.Find(entry.SourceSnippet, oldName))
+                        {
+                            string key = entry.Name + "|" + occurrence.Line + "|" + occurrence.Column;
+                            if (!seen.Add(key)) continue;
+                            references.Add(new JObject
+                            {
+                                ["object"] = entry.Name,
+                                ["part"] = "Source",
+                                ["source"] = "tokenizer",
+                                ["line"] = occurrence.Line,
+                                ["column"] = occurrence.Column,
+                                ["location"] = "known"
+                            });
+                        }
+                    }
+                }
+            }
+
+            return new JObject
+            {
+                ["from"] = oldName,
+                ["to"] = newName,
+                ["type"] = objectType,
+                ["references"] = references,
+                ["referenceCount"] = references.Count,
+                ["graphRevision"] = index?.GraphRevision ?? 0,
+                ["rewriteStrategy"] = "identifier-tokenizer-preserves-comments-and-strings"
+            };
         }
 
         private string WWPSetCondition(string target, string controlAttribute, string newConditionValue, string typeFilter)
@@ -571,8 +630,6 @@ namespace GxMcp.Worker.Services
             if (index != null && index.Objects.TryGetValue("Attribute:" + oldName, out var entry) && entry.CalledBy != null)
                 affectedObjects.AddRange(entry.CalledBy);
 
-            string pattern = @"(?i)\b" + System.Text.RegularExpressions.Regex.Escape(oldName) + @"\b";
-
             var patched = new List<string>();
             var failed = new List<JObject>();
             var patchedKbObjects = new List<KBObject>();
@@ -596,7 +653,7 @@ namespace GxMcp.Worker.Services
                                 if (part is ISource sourcePart) {
                                     string original = sourcePart.Source;
                                     if (!string.IsNullOrEmpty(original)) {
-                                        string updated = System.Text.RegularExpressions.Regex.Replace(original, pattern, newName);
+                                        string updated = SymbolRenameTokenizer.Rewrite(original, oldName, newName, out _);
                                         if (updated != original) { sourcePart.Source = updated; changed = true; }
                                     }
                                 }
@@ -696,8 +753,6 @@ namespace GxMcp.Worker.Services
             if (index != null && index.Objects.TryGetValue(objType + ":" + oldName, out var entry) && entry.CalledBy != null)
                 affectedObjects.AddRange(entry.CalledBy);
 
-            string pattern = @"(?i)\b" + System.Text.RegularExpressions.Regex.Escape(oldName) + @"\b";
-
             var patched = new List<string>();
             var failed = new List<JObject>();
             var patchedKbObjects = new List<KBObject>();
@@ -721,7 +776,7 @@ namespace GxMcp.Worker.Services
                                 if (part is ISource sourcePart) {
                                     string original = sourcePart.Source;
                                     if (!string.IsNullOrEmpty(original)) {
-                                        string updated = System.Text.RegularExpressions.Regex.Replace(original, pattern, newName);
+                                        string updated = SymbolRenameTokenizer.Rewrite(original, oldName, newName, out _);
                                         if (updated != original) { sourcePart.Source = updated; changed = true; }
                                     }
                                 }
@@ -799,14 +854,11 @@ namespace GxMcp.Worker.Services
                 if (v != null) { v.Name = cleanNew; changed = true; }
             }
 
-            string pattern = @"(?i)&" + System.Text.RegularExpressions.Regex.Escape(cleanOld) + @"\b";
-            string replacement = "&" + cleanNew;
-
             foreach (var part in obj.Parts.Cast<KBObjectPart>()) {
                 if (part is ISource sourcePart) {
                     string original = sourcePart.Source;
                     if (!string.IsNullOrEmpty(original)) {
-                        string updated = System.Text.RegularExpressions.Regex.Replace(original, pattern, replacement);
+                        string updated = SymbolRenameTokenizer.RewritePrefixed(original, cleanOld, cleanNew, out _);
                         if (updated != original) { sourcePart.Source = updated; changed = true; }
                     }
                 }

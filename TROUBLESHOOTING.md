@@ -125,7 +125,7 @@ If `doctor` passes but the client still doesn't see tools, the problem is the cl
 ### "Worker failed to start" / .NET 4.8 errors
 
 The MCP has two parts:
-- **Gateway** (.NET 8) — runs always
+- **Gateway** (.NET 10) — runs always
 - **Worker** (.NET Framework 4.8) — hosts the GeneXus SDK, spins up on first command
 
 The worker needs **.NET Framework 4.8** installed on Windows. It's bundled with Windows 10 (1903+) and Windows 11, but on Server SKUs or older installs you may need to install it manually: [.NET Framework 4.8 download](https://dotnet.microsoft.com/download/dotnet-framework/net48).

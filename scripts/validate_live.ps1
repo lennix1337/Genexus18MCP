@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$gw = 'C:\Projetos\Genexus18MCP\src\GxMcp.Gateway\bin\Debug\net8.0-windows\GxMcp.Gateway.exe'
+$gw = 'C:\Projetos\Genexus18MCP\src\GxMcp.Gateway\bin\Debug\net10.0-windows\GxMcp.Gateway.exe'
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $gw

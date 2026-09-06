@@ -11,10 +11,24 @@ const path = require('path');
 
 const pkgRoot = path.join(__dirname, '..');
 
+const packageVersion = (() => {
+  try {
+    return require(path.join(pkgRoot, 'package.json')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+const packageMajor = Number.parseInt(packageVersion.split('.')[0], 10) || 0;
+
 const required = [
   'publish/GxMcp.Gateway.exe',
   'publish/worker/GxMcp.Worker.exe',
+  'publish/tool_definitions.json',
 ];
+
+if (packageMajor >= 3) {
+  required.push('publish/gxmcp-manifest.json');
+}
 
 const missing = required.filter((rel) => {
   try {
@@ -25,7 +39,7 @@ const missing = required.filter((rel) => {
 });
 
 if (missing.length === 0) {
-  console.log('genexus-mcp: gateway + worker binaries verified.');
+  console.log(`genexus-mcp: Gateway, Worker, schema${packageMajor >= 3 ? ', and v3 manifest' : ''} verified.`);
   process.exit(0);
 }
 

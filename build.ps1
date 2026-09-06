@@ -2,7 +2,10 @@
 # ==========================================
 
 [CmdletBinding()]
-param()
+param(
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')]
+    [string]$Version
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
@@ -41,7 +44,7 @@ Get-CimInstance Win32_Process |
 # Verify prerequisites
 $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
 if (-not $dotnetCommand) {
-    Fail-Build ".NET SDK was not found in PATH. Install .NET 8 SDK before running build.ps1."
+        Fail-Build ".NET SDK was not found in PATH. Install .NET 10 SDK before running build.ps1."
 }
 
 $dotnetVersion = dotnet --version
@@ -110,10 +113,22 @@ if (Test-Path $publishDir) {
 
 Write-Host "[build] Building solutions..." -ForegroundColor Cyan
 
-# 2. Build Gateway (.NET 8)
+$versionArguments = @()
+if (-not [string]::IsNullOrWhiteSpace($Version)) {
+    $numericVersion = ([regex]::Match($Version, '^\d+\.\d+\.\d+')).Value
+    $versionArguments = @(
+        "-p:Version=$Version",
+        "-p:InformationalVersion=$Version",
+        "-p:AssemblyVersion=$numericVersion.0",
+        "-p:FileVersion=$numericVersion.0"
+    )
+    Write-Host "   > Stamping build version: $Version" -ForegroundColor Gray
+}
+
+# 2. Build Gateway (.NET 10)
 Write-Host "   > Building Gateway (Release)..."
 $tempGw = Join-Path $publishDir "temp_gw"
-Invoke-DotNet @("publish", $gatewayProject, "-c", "Release", "--nologo", "-o", $tempGw) "Gateway publish failed."
+Invoke-DotNet (@("publish", $gatewayProject, "-c", "Release", "--nologo", "-o", $tempGw) + $versionArguments) "Gateway publish failed."
 
 if (Test-Path $tempGw) {
     Copy-Item "$tempGw\*" "$publishDir" -Force -Recurse
@@ -121,14 +136,14 @@ if (Test-Path $tempGw) {
 }
 
 Write-Host "   > Building Gateway (Debug)..."
-Invoke-DotNet @("build", $gatewayProject, "-c", "Debug", "--nologo") "Gateway debug build failed."
+Invoke-DotNet (@("build", $gatewayProject, "-c", "Debug", "--nologo") + $versionArguments) "Gateway debug build failed."
 
 # 3. Build Worker (.NET Framework 4.8)
 Write-Host "   > Building Worker (Release)..."
-Invoke-DotNet @("build", $workerProject, "-c", "Release", "--nologo", "-p:GX_PATH=$gxPath") "Worker build failed."
+Invoke-DotNet (@("build", $workerProject, "-c", "Release", "--nologo", "-p:GX_PATH=$gxPath") + $versionArguments) "Worker build failed."
 
 Write-Host "   > Building Worker (Debug)..."
-Invoke-DotNet @("build", $workerProject, "-c", "Debug", "--nologo", "-p:GX_PATH=$gxPath") "Worker debug build failed."
+Invoke-DotNet (@("build", $workerProject, "-c", "Debug", "--nologo", "-p:GX_PATH=$gxPath") + $versionArguments) "Worker debug build failed."
 
 # 4. Copy Worker Binaries to Publish
 $workerPublishDir = Join-Path $publishDir "worker"
@@ -227,6 +242,24 @@ if (Test-Path "$publishDir\worker\search_index.json") {
 }
 if (Test-Path "$publishDir\worker\DataTracing.log") {
     Remove-Item "$publishDir\worker\DataTracing.log" -Force -ErrorAction SilentlyContinue
+}
+
+# 6.2 Generate a self-describing release manifest from the exact files that
+# will be shipped. The installer and CI validate these hashes before a v3
+# archive can replace an existing installation.
+Write-Host "   > Writing release manifest..."
+$manifestScript = Join-Path $root "scripts\write-release-manifest.ps1"
+$manifestVersion = if (-not [string]::IsNullOrWhiteSpace($Version)) { $Version } else { '2.57.0' }
+$manifestCsproj = Get-Content -LiteralPath $gatewayProject -Raw
+if ([string]::IsNullOrWhiteSpace($Version) -and $manifestCsproj -match '<Version>([^<]+)</Version>') {
+    $manifestVersion = $Matches[1]
+}
+& pwsh -NoProfile -File $manifestScript `
+    -PublishDirectory $publishDir `
+    -Version $manifestVersion `
+    -SourceRoot $root | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Fail-Build "Release manifest generation failed."
 }
 
 Write-Host "`n[build] Build complete." -ForegroundColor Green

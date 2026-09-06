@@ -78,6 +78,23 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ChangeSetPreviewAndValidateRemainReadOnlyForRecoveryGates()
+        {
+            Assert.True(Program.IsMutationPreview(new JObject
+            {
+                ["changeSet"] = new JObject { ["action"] = "preview" }
+            }));
+            Assert.True(Program.IsMutationPreview(new JObject
+            {
+                ["changeSet"] = new JObject { ["action"] = "validate" }
+            }));
+            Assert.False(Program.IsMutationPreview(new JObject
+            {
+                ["changeSet"] = new JObject { ["action"] = "apply" }
+            }));
+        }
+
+        [Fact]
         public void ShouldRunMutationAsync_RealEditRemainsAsyncWhenRequested()
         {
             Assert.True(Program.ShouldRunMutationAsync("genexus_edit", new JObject

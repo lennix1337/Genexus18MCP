@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Collections.Concurrent;
@@ -15,14 +16,43 @@ namespace GxMcp.Worker
 {
     class Program
     {
-        public static readonly BlockingCollection<string> CommandQueue = new BlockingCollection<string>();
-        public static readonly BlockingCollection<string> SdkCommandQueue = new BlockingCollection<string>();
+        public static readonly BlockingCollection<string> CommandQueue = new BlockingCollection<string>(ResolveQueueCapacity("GXMCP_COMMAND_QUEUE_CAPACITY", 256));
+        public static readonly BlockingCollection<string> SdkCommandQueue = new BlockingCollection<string>(ResolveQueueCapacity("GXMCP_SDK_COMMAND_QUEUE_CAPACITY", 64));
         public static readonly ConcurrentQueue<Action> BackgroundQueue = new ConcurrentQueue<Action>();
         // Plan 037: low-priority jobs that must run on the SAME STA thread as ordinary
         // dispatched commands (the sdkWorker/WinForms-bridge thread below), drained by
         // its poll timer only when no real command is pending. Used by KbWatcherService
         // so its SDK polling no longer touches the SDK from a second STA apartment.
-        public static readonly ConcurrentQueue<Action> SdkActionQueue = new ConcurrentQueue<Action>();
+        public static readonly BlockingCollection<Action> SdkActionQueue = new BlockingCollection<Action>(ResolveSdkActionCapacity());
+        private static int _sdkWorkerThreadId;
+        internal static readonly SdkExecutor SdkExecutor = new SdkExecutor(
+            () => Thread.CurrentThread.ManagedThreadId == Volatile.Read(ref _sdkWorkerThreadId),
+            action =>
+            {
+                if (!SdkActionQueue.TryAdd(action)) return false;
+                try
+                {
+                    if (_bridgeForm != null && _bridgeForm.IsHandleCreated)
+                        _bridgeForm.BeginInvoke((Action)DrainSdkCommands);
+                }
+                catch { }
+                return true;
+            },
+            ResolveSdkActionCapacity());
+
+        private static int ResolveSdkActionCapacity()
+        {
+            var raw = Environment.GetEnvironmentVariable("GXMCP_SDK_QUEUE_CAPACITY");
+            return int.TryParse(raw, out var value) && value > 0 && value <= 4096 ? value : 64;
+        }
+
+        internal static int ResolveQueueCapacity(string variable, int fallback)
+        {
+            var raw = Environment.GetEnvironmentVariable(variable);
+            return int.TryParse(raw, out var value) && value > 0 && value <= 4096 ? value : fallback;
+        }
+
+        internal static bool EnqueueSdkAction(Action action) => SdkExecutor.TryEnqueue(action);
 
         // FR#20 (v2.6.6 Stream B): soft-reload coordination. When a genexus_worker_reload
         // with mode=soft arrives, we flip this flag, drain the queues, persist
@@ -106,8 +136,12 @@ namespace GxMcp.Worker
             return 3000;
         }
 
-        private static readonly BlockingCollection<string> _outputQueue = new BlockingCollection<string>();
-        private static readonly BlockingCollection<string> _errorQueue = new BlockingCollection<string>();
+        // Output is bounded as well as input. A blocked/slow MCP client must not
+        // turn verbose SDK logging or a large response burst into an unbounded
+        // process-wide queue; QueueWriter applies normal producer backpressure
+        // while the dedicated writer drains it.
+        private static readonly BlockingCollection<string> _outputQueue = new BlockingCollection<string>(ResolveQueueCapacity("GXMCP_OUTPUT_QUEUE_CAPACITY", 256));
+        private static readonly BlockingCollection<string> _errorQueue = new BlockingCollection<string>(ResolveQueueCapacity("GXMCP_ERROR_QUEUE_CAPACITY", 256));
         private static CommandDispatcher _dispatcher;
         private static TextWriter _originalOut;
         private static TextWriter _originalError;
@@ -357,7 +391,10 @@ namespace GxMcp.Worker
                             WriteLine("{\"jsonrpc\":\"2.0\",\"result\":{\"status\":\"Ready\"},\"id\":\"heartbeat\"}");
                             if (!line.Contains("\"method\"")) continue;
                         }
-                        if (!string.IsNullOrWhiteSpace(line)) CommandQueue.Add(line);
+                        if (!string.IsNullOrWhiteSpace(line) && !CommandQueue.TryAdd(line))
+                        {
+                            SendQueueBusy(line, "main command queue");
+                        }
                     }
                     CommandQueue.CompleteAdding();
                 }) { IsBackground = true, Name = "HeartbeatReader" };
@@ -365,6 +402,7 @@ namespace GxMcp.Worker
 
                                 // DEDICATED SDK WORKER THREAD (STA with WinForms Bridge)
                 var sdkWorker = new Thread(() => {
+                    Volatile.Write(ref _sdkWorkerThreadId, Thread.CurrentThread.ManagedThreadId);
                     Logger.Info("SDK Worker Thread started (WinForms Bridge enabled).");
                     _bridgeForm = new Form { 
                         ShowInTaskbar = false, 
@@ -439,14 +477,20 @@ namespace GxMcp.Worker
                     Thread.Sleep(50);
                 }
                 Logger.Info("Worker shutting down safely.");
+                SdkActionQueue.CompleteAdding();
+                SdkExecutor.Dispose();
             } catch (Exception ex) {
                 Logger.Error($"Main FATAL: {ex.Message}");
             }
         }
 
-        private static void EnqueueSdkCommand(string line)
+        private static bool EnqueueSdkCommand(string line)
         {
-            SdkCommandQueue.Add(line);
+            if (!SdkCommandQueue.TryAdd(line))
+            {
+                SendQueueBusy(line, "SDK command queue");
+                return false;
+            }
             try
             {
                 if (_bridgeForm != null && _bridgeForm.IsHandleCreated)
@@ -455,6 +499,29 @@ namespace GxMcp.Worker
                 }
             }
             catch { }
+            return true;
+        }
+
+        private static void SendQueueBusy(string line, string queueName)
+        {
+            string idJson = "null";
+            try { idJson = JObject.Parse(line)["id"]?.ToString() ?? "null"; }
+            catch { }
+
+            string busy = GxMcp.Worker.Models.McpResponse.Err(
+                code: "WorkerBusy",
+                message: "The " + queueName + " is full; the request was not started.",
+                hint: "Retry after the active SDK work yields or cancel the running operation.",
+                retryAfterMs: 250,
+                errorExtra: new JObject
+                {
+                    ["queue"] = queueName,
+                    ["capacity"] = queueName == "SDK command queue" ? SdkCommandQueue.BoundedCapacity : CommandQueue.BoundedCapacity
+                });
+            SendResponse(busy, idJson);
+            Logger.Warn("[QUEUE-BUSY] " + queueName + " capacity="
+                + (queueName == "SDK command queue" ? SdkCommandQueue.BoundedCapacity : CommandQueue.BoundedCapacity)
+                + " id=" + idJson);
         }
 
         private static void DrainSdkCommands()
@@ -469,7 +536,7 @@ namespace GxMcp.Worker
                 catch (Exception ex) { Logger.Error("SDK Command Error: " + ex.Message); }
                 finally { _sdkBusy = 0; _sdkBusyOp = null; _sdkBusyOperationId = null; }
             }
-            while (SdkActionQueue.TryDequeue(out var job))
+            while (SdkActionQueue.TryTake(out var job))
             {
                 try { job(); }
                 catch (Exception ex) { Logger.Error("SDK Action Error: " + ex.Message); }
@@ -858,9 +925,23 @@ namespace GxMcp.Worker
                 idJson = obj["id"]?.ToString() ?? "null";
                 string method = obj["method"]?.ToString();
                 string correlationId = obj["params"]?["correlationId"]?.ToString() ?? "n/a";
+                long queueWaitMs = ComputeQueueWaitMs(obj["_meta"]?["queuedAtUtc"], DateTime.UtcNow);
                 Logger.Info($"[WORKER] Command: {method} ({idJson}) [cid:{correlationId}]");
+                var dispatchSw = Stopwatch.StartNew();
                 string result = _dispatcher.Dispatch(obj, line);
-                SendResponse(result, idJson);
+                dispatchSw.Stop();
+                // Keep phase timings in the response metadata so the Gateway can
+                // aggregate SDK cost separately from its own queue/transform cost.
+                // Dispatch includes the native SDK call and is therefore the only
+                // trustworthy SDK boundary available to the Worker without changing
+                // every service signature.
+                var telemetry = new JObject
+                {
+                    ["sdkMs"] = Math.Max(0L, dispatchSw.ElapsedMilliseconds),
+                    ["queueWaitMs"] = queueWaitMs,
+                    ["cacheOutcome"] = "unknown"
+                };
+                SendResponse(result, idJson, telemetry);
             } catch (Exception ex) when (GxMcp.Worker.Helpers.WorkerCrashGuard.IsCorruptedState(ex)) {
                 // Native/corrupted-state SDK crash: the heap may be inconsistent, so answer THIS
                 // call with a structured error and then exit — the gateway respawns a fresh worker
@@ -914,14 +995,65 @@ namespace GxMcp.Worker
             });
         }
 
-        private static void SendResponse(string result, string id)
+        private static void SendResponse(string result, string id, JObject telemetry = null)
         {
             try {
+                var transformSw = Stopwatch.StartNew();
                 object resultObj;
                 try { resultObj = JToken.Parse(result); } catch { resultObj = result; }
+                transformSw.Stop();
+
+                JObject resultObject = resultObj as JObject;
+                if (resultObject != null && telemetry != null)
+                {
+                    telemetry["transformMs"] = Math.Max(0L, transformSw.ElapsedMilliseconds);
+                    telemetry["serializeMs"] = 0L;
+                    telemetry["responseBytes"] = 0L;
+                    JObject meta = resultObject["_meta"] as JObject;
+                    if (meta == null)
+                    {
+                        meta = new JObject();
+                        resultObject["_meta"] = meta;
+                    }
+                    meta["telemetry"] = telemetry;
+                }
+
                 var response = new { jsonrpc = "2.0", result = resultObj, id = id };
-                WriteLine(JsonConvert.SerializeObject(response, Formatting.None));
+                var serializeSw = Stopwatch.StartNew();
+                string serialized = JsonConvert.SerializeObject(response, Formatting.None);
+                serializeSw.Stop();
+                if (resultObject != null && telemetry != null)
+                {
+                    telemetry["serializeMs"] = Math.Max(0L, serializeSw.ElapsedMilliseconds);
+                    telemetry["responseBytes"] = System.Text.Encoding.UTF8.GetByteCount(serialized);
+                    // Include the measured values in the final wire payload. The
+                    // second serialization is intentionally limited to instrumented
+                    // responses and keeps the phase contract self-describing.
+                    serialized = JsonConvert.SerializeObject(response, Formatting.None);
+                }
+                WriteLine(serialized);
             } catch (Exception ex) { Logger.Error("SendResponse Error: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// Computes the time a command spent in the Gateway/Worker queues from the
+        /// transport-only enqueue timestamp. Invalid or future timestamps are treated as
+        /// zero so telemetry can never turn into a request failure.
+        /// </summary>
+        internal static long ComputeQueueWaitMs(JToken queuedAtUtc, DateTime nowUtc)
+        {
+            if (queuedAtUtc == null || queuedAtUtc.Type == JTokenType.Null) return 0;
+            if (!DateTimeOffset.TryParse(
+                    queuedAtUtc.ToString(),
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var queued))
+                return 0;
+
+            double elapsed = (nowUtc.ToUniversalTime() - queued.UtcDateTime).TotalMilliseconds;
+            if (elapsed <= 0) return 0;
+            // A stale/replayed envelope must not produce unbounded bogus aggregates.
+            return Math.Min((long)Math.Round(elapsed), 24L * 60L * 60L * 1000L);
         }
 
         public static void SendNotification(string method, object @params)

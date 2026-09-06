@@ -980,6 +980,14 @@ namespace GxMcp.Gateway
                 ["suggestedNext"] = BuildSuggestedNextBlock(kbPath, kbExists, kbValid)
             };
 
+            // A post-timeout mutation is never retried implicitly. Surface the
+            // durable fence only when it needs attention so the first-turn
+            // whoami remains compact while still offering an inspect path.
+            var recovery = BuildMutationRecoveryBlock();
+            if (recovery["pendingCount"]?.ToObject<int>() > 0
+                || recovery["journalHealthy"]?.ToObject<bool>() == false)
+                payload["mutationRecovery"] = recovery;
+
             if (verbose)
             {
                 // Item 73: per-tool latency breakdown. In-memory, resets on gateway restart.
@@ -1061,6 +1069,32 @@ namespace GxMcp.Gateway
                 }
             }
             return payload;
+        }
+
+        private static JObject BuildMutationRecoveryBlock()
+        {
+            var registry = _mutationRecovery;
+            var block = new JObject
+            {
+                ["journalHealthy"] = registry.IsHealthy,
+                ["pendingCount"] = registry.Count,
+                ["automaticRetry"] = false,
+                ["hint"] = "Read each fenced object part before authorizing another mutation."
+            };
+            if (!registry.IsHealthy)
+                block["journalError"] = registry.JournalError;
+            if (registry.Count > 0)
+            {
+                block["pending"] = JArray.FromObject(registry.Pending.Select(item => new
+                {
+                    kb = item.KbAlias,
+                    target = item.Target,
+                    part = item.Part,
+                    operationId = item.OperationId,
+                    requiredAtUtc = item.RequiredAtUtc
+                }));
+            }
+            return block;
         }
 
         // v2.8.0 — skill catalog block. Mirrors SkillCatalog.All so the
@@ -1211,7 +1245,7 @@ namespace GxMcp.Gateway
                 // Phase 2 — memory orientation. Once per KB alias per gateway process
                 // lifetime (mirrors UpdateNotifier._triggered), nudge the agent to
                 // recall saved memories when the KB actually has some. Gateway reads
-                // the memory.jsonl straight off disk — it's a separate net8 assembly
+                // the memory.jsonl straight off disk — it's a separate Gateway assembly
                 // from the Worker, so it can't reuse MemoryService.
                 try
                 {

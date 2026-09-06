@@ -32,6 +32,14 @@ Sources: agent inventory of `src/GxMcp.Worker/Services` + `Helpers` (current cov
 
 Status legend: **✅ covered** · **🟡 partial** (hand-rolled / reflection / read-only / narrow) · **❌ gap** (no real coverage).
 
+The read-only `genexus_sdk_probe { mode: "capabilities" }` contract now exposes
+the current decision surface as `available_unverified`, `unavailable`, or
+`deferred`. A reflected type is evidence of a loaded signature only;
+`persistenceVerified=false` remains until a disposable fixture certifies the
+roundtrip. Business Components are intentionally `deferred` because their
+rules execute in a generated application runtime, outside the design-time SDK
+worker.
+
 ## Build status — 2026-07-09 batch (code done, live-test pending)
 
 Six IDE-parity tools built + integrated on local `main` (not pushed). Full build green; Gateway 548 + Worker 1234 tests pass; golden fixture regenerated (42 tools); schema budget 13300. Each uses the confirmed `Services.TryGetService<T>()` / static-Helper pattern with graceful `*Unavailable` fallback (never crashes the worker). **Input-construction feasibility gate passed for all — no WWP-style wall** (the SDK param objects are headless-constructible POCOs / static accessors, unlike WWP's obfuscated settings).

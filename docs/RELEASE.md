@@ -8,7 +8,7 @@ This document describes how `genexus-mcp` is published to npm. **Only the mainta
 
 ## Prerequisites (one-time)
 
-- Windows with **.NET 8 SDK**
+- Windows with **.NET 10 SDK** (the Worker still builds against .NET Framework 4.8)
 - **GeneXus 18** installed at `C:\Program Files (x86)\GeneXus\GeneXus18` (or override via `config.json`)
 - **GitHub CLI** authenticated: `gh auth status` must succeed
 - npm account is a maintainer of `genexus-mcp` (Trusted Publishing already configured for this repo + workflow)

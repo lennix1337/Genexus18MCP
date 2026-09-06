@@ -91,6 +91,39 @@ namespace GxMcp.Worker.Tests
             var obj = JObject.Parse(json);
             Assert.Equal(30, obj["result"]?["totalEstimatedSeconds"]?.ToObject<int>());
         }
+
+        [Fact]
+        public void GeneratePlan_RefusesAmbiguousTargetWithCandidates()
+        {
+            var entries = new[]
+            {
+                new SearchIndex.IndexEntry { Name = "Shared", Type = "Procedure", Guid = "p1" },
+                new SearchIndex.IndexEntry { Name = "Shared", Type = "WebPanel", Guid = "w1" }
+            };
+            var svc = BuildSvc(BuildIndex(entries));
+
+            var obj = JObject.Parse(svc.GeneratePlan("Shared", format: null, toolStatsP95: null, maxNodes: 100));
+
+            Assert.Equal("error", obj["status"]?.ToString());
+            Assert.Equal("BuildTargetAmbiguous", obj["error"]?["code"]?.ToString());
+            Assert.Equal(2, obj["candidates"]?.ToObject<JArray>()?.Count);
+        }
+
+        [Fact]
+        public void GeneratePlan_ReportsGraphRevisionAndCompleteness()
+        {
+            var entries = new[]
+            {
+                new SearchIndex.IndexEntry { Name = "Root", Type = "Procedure", Calls = new List<string> { "Child" } },
+                new SearchIndex.IndexEntry { Name = "Child", Type = "Procedure" }
+            };
+            var svc = BuildSvc(BuildIndex(entries));
+
+            var obj = JObject.Parse(svc.GeneratePlan("Root", format: null, toolStatsP95: null, maxNodes: 100));
+
+            Assert.True(obj["result"]?["graphRevision"]?.ToObject<long>() > 0);
+            Assert.True(obj["result"]?["graphComplete"]?.ToObject<bool>() == true);
+        }
     }
 
     // Wave-3 item 87 — dependency_heatmap composite scoring.

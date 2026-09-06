@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using System.Collections.Generic;
 using Xunit;
 
 namespace GxMcp.Gateway.Tests
@@ -28,6 +29,45 @@ namespace GxMcp.Gateway.Tests
         public void IsLoopbackBind_ClassifiesBindAddress(string? bind, bool expected)
         {
             Assert.Equal(expected, Program.IsLoopbackBind(bind!));
+        }
+
+        [Theory]
+        [InlineData("localhost", "127.0.0.1", true)]
+        [InlineData("127.0.0.1", "127.0.0.1", true)]
+        [InlineData("[::1]", "::1", true)]
+        [InlineData("::1", "::1", true)]
+        [InlineData("evil.example", "127.0.0.1", false)]
+        [InlineData("127.0.0.2", "127.0.0.1", false)]
+        [InlineData("", "127.0.0.1", false)]
+        public void IsLoopbackHostAllowed_RejectsDnsRebindingHost(string host, string bind, bool expected)
+        {
+            Assert.Equal(expected, Program.IsLoopbackHostAllowed(host, bind));
+        }
+
+        [Theory]
+        [InlineData(null, true)]
+        [InlineData("", true)]
+        [InlineData("http://localhost:3000", true)]
+        [InlineData("http://127.0.0.1:3000", true)]
+        [InlineData("http://[::1]:3000", true)]
+        [InlineData("https://evil.example", false)]
+        [InlineData("not-an-origin", false)]
+        public void IsOriginAllowed_UsesLoopbackAndExplicitAllowlist(string? origin, bool expected)
+        {
+            var config = new ServerConfig();
+            Assert.Equal(expected, Program.IsOriginAllowed(origin, config));
+        }
+
+        [Fact]
+        public void IsOriginAllowed_MatchesConfiguredOriginsCaseInsensitively()
+        {
+            var config = new ServerConfig
+            {
+                AllowedOrigins = new List<string> { "https://studio.example" }
+            };
+
+            Assert.True(Program.IsOriginAllowed("HTTPS://STUDIO.EXAMPLE", config));
+            Assert.False(Program.IsOriginAllowed("https://other.example", config));
         }
 
         // ── ConstantTimeEquals ───────────────────────────────────────────────

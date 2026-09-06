@@ -26,6 +26,10 @@
             "description": "mode=explain: legacy code snippet to carry through the compatibility envelope.",
             "type": "string"
           },
+          "cursor": {
+            "description": "mode=context: continuation cursor returned by a budgeted context page.",
+            "type": "string"
+          },
           "format": {
             "description": "mode=dependency_heatmap: ascii adds rendered bar chart.",
             "enum": [
@@ -37,6 +41,10 @@
           "kb": {
             "description": "KB alias.",
             "type": "string"
+          },
+          "maxBytes": {
+            "description": "mode=context: maximum UTF-8 bytes for the returned context bundle (bounded by the server).",
+            "type": "integer"
           },
           "mode": {
             "enum": [
@@ -1394,6 +1402,58 @@
             "description": "Optimistic concurrency: pass the versionToken from the genexus_read this edit is based on. If the object changed since (e.g. edited in the IDE), the write is refused with VersionConflict instead of overwriting the newer version. Omit to skip the check.",
             "type": "string"
           },
+          "changeSet": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "preview",
+                  "validate",
+                  "apply"
+                ],
+                "type": "string"
+              },
+              "baseRevision": {
+                "type": "string"
+              },
+              "changeSetId": {
+                "type": "string"
+              },
+              "changes": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "expectedVersion": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "part": {
+                      "enum": [
+                        "Source",
+                        "Rules",
+                        "Variables"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "action",
+              "changes"
+            ],
+            "type": "object"
+          },
           "concurrencyPolicy": {
             "default": "warn",
             "description": "warn (default) or fail_if_open if open in GeneXus IDE.",
@@ -1515,12 +1575,22 @@
             "type": "boolean"
           },
           "targets": {
+            "description": "Multi-target Source/Rules writes. Each target may include expectedVersion/baseVersion; all versions are checked before the first write.",
             "items": {
               "properties": {
+                "baseVersion": {
+                  "type": "string"
+                },
                 "content": {
                   "type": "string"
                 },
+                "expectedVersion": {
+                  "type": "string"
+                },
                 "name": {
+                  "type": "string"
+                },
+                "part": {
                   "type": "string"
                 }
               },
@@ -2536,7 +2606,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Build, validate, index, or poll the KB. action=specify runs a spec-check (Spec+Gen only, no Compile/deploy) returning spc*/gen* diagnostics for the target fast (catch spec errors without a full build). action=build with mode=compile_check spec+gen+compiles the target(s) PLUS their transitive callers and skips the KB-wide DeveloperMenu regen (the dominant build-all cost) -- a fast 'did my edit break the build?' check that requires a target. Long ops are async with operationId. dryRun=true (build/rebuild/index) returns the build plan or index plan without executing. Build results carry generateEvidence + effective_status=SucceededWithGaps when a Succeeded build emitted no fresh .cs (don't trust Status=Succeeded alone); a 2nd concurrent build is refused (BuildAlreadyRunning). See genexus://kb/tool-help/genexus_lifecycle for the build-evidence checklist, actions, and target formats.",
+      "description": "Build, validate, index, or poll the KB. action=specify runs a spec-check (Spec+Gen only, no Compile/deploy) returning spc*/gen* diagnostics for the target fast (catch spec errors without a full build). action=build with mode=compile_check spec+gen+compiles the target(s) PLUS their transitive callers and skips the KB-wide DeveloperMenu regen (the dominant build-all cost) -- a fast 'did my edit break the build?' check that requires a target. Long ops are async with operationId. dryRun=true (build/rebuild/index) returns the build plan or index plan without executing. Build results carry generateEvidence + effective_status=SucceededWithGaps when a Succeeded build emitted no fresh .cs (don't trust Status=Succeeded alone); a 2nd concurrent build is refused (BuildAlreadyRunning). See genexus://kb/tool-help/genexus_lifecycle for the build-evidence checklist, actions, and target formats. action=inspect returns redacted durable mutation state; action=reconcile closes an unknown fence only after an independent read and explicit confirmation, never replaying the write.",
       "inputSchema": {
         "examples": [
           {
@@ -2550,6 +2620,11 @@
             "action": "build",
             "mode": "compile_check",
             "target": "MyObject"
+          },
+          {
+            "action": "inspect",
+            "operationKey": "edit_20260905_01",
+            "operationTool": "genexus_edit"
           }
         ],
         "properties": {
@@ -2569,7 +2644,9 @@
               "status",
               "result",
               "snapshots-list",
-              "snapshots-restore"
+              "snapshots-restore",
+              "inspect",
+              "reconcile"
             ],
             "type": "string"
           },
@@ -2591,6 +2668,10 @@
           },
           "compact": {
             "description": "Status: counts + top-10 errors (default true).",
+            "type": "boolean"
+          },
+          "confirmed": {
+            "description": "reconcile: must be true after independently reading the affected target; this never authorizes a retry with the same key.",
             "type": "boolean"
           },
           "deploy": {
@@ -2646,6 +2727,25 @@
             "description": "build: Slack/Discord webhook URL to notify on terminal build failure.",
             "type": "string"
           },
+          "observedRevision": {
+            "description": "reconcile: revision/version observed by an independent read; must match the durable revision fence.",
+            "type": "string"
+          },
+          "observedTargetIds": {
+            "description": "reconcile: target names observed by an independent read; send one name as a single-item array. Must match the durable target fence.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "operationKey": {
+            "description": "inspect/reconcile: original idempotency key; journal lookup is hash-scoped to the resolved KB.",
+            "type": "string"
+          },
+          "operationTool": {
+            "description": "inspect/reconcile: canonical mutating tool that owns the idempotency key, e.g. genexus_edit.",
+            "type": "string"
+          },
           "page": {
             "description": "status/result: 1-based page number for paginated results.",
             "type": "integer"
@@ -2678,6 +2778,10 @@
             "description": "Object name(s), taskId, job_id, or op:<id>. Build accepts CSV ('Foo,Bar').",
             "type": "string"
           },
+          "verification": {
+            "description": "reconcile: short operator/model verification statement. Only a hash is persisted; source and KB content are never journaled.",
+            "type": "string"
+          },
           "wait": {
             "description": "Status block, 0-600s. With a build taskId (or since): event-driven, returns on change. On index status with no since: blocks until index is Ready.",
             "type": "integer"
@@ -2696,7 +2800,36 @@
         ],
         "type": "object"
       },
-      "name": "genexus_lifecycle"
+      "name": "genexus_lifecycle",
+      "outputSchema": {
+        "additionalProperties": true,
+        "description": "Structured lifecycle result. Action-specific fields remain additive; text content is preserved for legacy clients.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "isError": {
+            "type": "boolean"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "operationId": "<operation-id>",
+          "pollTarget": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -3517,14 +3650,25 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Dump SDK surface (types/methods/props) to docs/sdk-probe/. Use when hunting for entry points.",
+      "description": "Read the GeneXus SDK surface. mode=surface dumps types/methods/props to docs/sdk-probe/; mode=capabilities returns an in-memory capability matrix with honest signature-probe status.",
       "inputSchema": {
         "examples": [
-          {}
+          {},
+          {
+            "mode": "capabilities"
+          }
         ],
         "properties": {
+          "mode": {
+            "description": "surface (default) writes the diagnostic probe; capabilities is read-only and returns status/evidence.",
+            "enum": [
+              "surface",
+              "capabilities"
+            ],
+            "type": "string"
+          },
           "outputDir": {
-            "description": "Absolute path. Default <repo>/docs/sdk-probe/.",
+            "description": "Absolute path for mode=surface. Default <repo>/docs/sdk-probe/.",
             "type": "string"
           }
         },

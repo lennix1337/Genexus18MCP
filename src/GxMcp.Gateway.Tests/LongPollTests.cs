@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using GxMcp.Gateway;
 using Newtonsoft.Json.Linq;
@@ -72,6 +73,28 @@ public class LongPollTests
             $"Returned too early — elapsed {sw.ElapsedMilliseconds} ms, expected >= 150 ms");
         Assert.True(sw.ElapsedMilliseconds < 3000,
             $"Took too long — elapsed {sw.ElapsedMilliseconds} ms, expected < 3000 ms");
+    }
+
+    [Fact]
+    public async Task CancellationToken_ReturnsTypedRequestCancelledEnvelope()
+    {
+        var registry = MakeRegistry();
+        var job = registry.Start("s1", "build", 30);
+        using var cancellation = new CancellationTokenSource();
+
+        var pollTask = McpRouter.LongPollJob(
+            registry, job.Id, waitSeconds: 30,
+            cancellationToken: cancellation.Token);
+
+        await Task.Delay(100);
+        cancellation.Cancel();
+
+        var result = await pollTask;
+
+        Assert.Equal(-32800, result["error"]?["code"]?.ToObject<int>());
+        Assert.Equal("Request cancelled by client", result["error"]?["message"]?.ToString());
+        Assert.True(result["cancelled"]?.ToObject<bool>());
+        Assert.Equal(job.Id, result["job_id"]?.ToString());
     }
 
     [Fact]

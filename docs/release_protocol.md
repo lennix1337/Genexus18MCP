@@ -22,11 +22,18 @@ Use the one-shot script:
 ```
 
 It bumps versions, builds Gateway and Worker, creates the normalized
-`publish.zip` and checksum, commits/tags, and creates the GitHub release with
-the zip attached. Do not run `gh release create` manually: the release workflow
+`publish.zip`, embeds `gxmcp-manifest.json` with artifact hashes and protocol
+revisions, writes the checksum, commits/tags, and creates the GitHub release
+with the zip attached. Do not run `gh release create` manually: the release workflow
 requires `publish.zip` on the initial published event. The Worker needs the
 local GeneXus 18 SDK, so the release artifact must be built on Windows with
 GeneXus installed.
+
+Gateway, tests, and benchmarks build with the .NET 10 SDK; the Worker remains
+.NET Framework 4.8/x86 for the GeneXus SDK. The v3 corporate installer stages
+and probes an archive before swapping it into place, validates the manifest and
+checksum, preserves operator configuration, and retains the previous directory
+for rollback. Legacy releases keep an explicitly versioned compatibility path.
 
 Use `-DryRun` to rehearse the changelog, artifact, warning, and release-note
 checks without changing Git state or deleting existing package artifacts.
@@ -78,15 +85,20 @@ base repository by accident.
 
 The normal CI workflow does not have the proprietary GeneXus SDK or a KB. On a
 Windows machine with GeneXus 18 installed, run the live gate against the
-provided test KB (or another disposable KB):
+verified isolated synthetic KB. Provision and attest the fixture as described in
+[the live harness guide](live-kb-test-harness.md); a folder name alone is not
+evidence of isolation:
 
 ```powershell
-.\scripts\test-live.ps1 -KbPath 'C:\KBs\KBTeste' -RunBenchmark `
-  -BenchmarkOut "$env:TEMP\gxmcp-live-benchmark.json" -Iterations 12
+.\scripts\test-live.ps1 -KbPath $env:GXMCP_TEST_KB `
+  -FixtureManifest $env:GXMCP_TEST_FIXTURE -RunBenchmark `
+  -BenchmarkOut "$env:TEMP\gxmcp-live-benchmark.json" -Iterations 100
 ```
 
 The manual `Live KB Smoke` workflow runs the same gate only on a self-hosted
-Windows runner. WorkWithPlus-licensed tests remain opt-in through
+Windows runner and requires both KB path and fixture manifest inputs. Missing
+fixtures fail with `live=unavailable`; they never count as release validation.
+WorkWithPlus-licensed tests remain opt-in through
 `GXMCP_REQUIRE_WWP=1`.
 
 Compare benchmark runs only when both runs use the same KB, operation set,

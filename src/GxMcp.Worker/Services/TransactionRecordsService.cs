@@ -277,7 +277,8 @@ namespace GxMcp.Worker.Services
                         ["versionToken"] = ComputeVersionToken(metadata, finalFilters, persisted),
                         ["versionTokenKind"] = "read-only", ["writePreviewRequired"] = true,
                         ["matchedCount"] = persisted.Count, ["matchedCountExact"] = true,
-                        ["records"] = new JArray(persisted), ["keys"] = BuildKeys(metadata, persisted)
+                        ["records"] = new JArray(persisted), ["keys"] = BuildKeys(metadata, persisted),
+                        ["dataAccess"] = "typed_sql", ["businessRulesExecuted"] = false
                     });
             }
             catch (Exception ex)
@@ -563,7 +564,9 @@ namespace GxMcp.Worker.Services
                 ["truncated"] = truncated,
                 ["matchedCountExact"] = !truncated,
                 ["versionToken"] = ComputeVersionToken(metadata, filters, rows),
-                ["keys"] = BuildKeys(metadata, rows)
+                ["keys"] = BuildKeys(metadata, rows),
+                ["dataAccess"] = "typed_sql",
+                ["businessRulesExecuted"] = false
             };
         }
 
@@ -590,7 +593,9 @@ namespace GxMcp.Worker.Services
                 ["rereadConfirmed"] = false,
                 ["rollbackOnFailure"] = rollbackOnFailure,
                 ["diff"] = diff,
-                ["versionToken"] = version
+                ["versionToken"] = version,
+                ["dataAccess"] = "typed_sql",
+                ["businessRulesExecuted"] = false
             };
         }
 
@@ -1004,7 +1009,12 @@ namespace GxMcp.Worker.Services
         private static int TryInt(Func<object> getter) { try { return Convert.ToInt32(getter(), CultureInfo.InvariantCulture); } catch { return 0; } }
 
         private static string Error(string code, string message, string hint, string target = null, JObject extra = null)
-            => McpResponse.Err(code, message, hint, target: target, errorExtra: extra);
+        {
+            var metadata = extra == null ? new JObject() : (JObject)extra.DeepClone();
+            if (metadata["dataAccess"] == null) metadata["dataAccess"] = "typed_sql";
+            if (metadata["businessRulesExecuted"] == null) metadata["businessRulesExecuted"] = false;
+            return McpResponse.Err(code, message, hint, target: target, errorExtra: metadata);
+        }
 
         internal sealed class RecordOperationException : Exception
         {

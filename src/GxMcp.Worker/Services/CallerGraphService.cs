@@ -22,6 +22,22 @@ namespace GxMcp.Worker.Services
     public class CallerGraphService
     {
         private readonly IndexCacheService _index;
+        private readonly object _adjacencyGate = new object();
+        private SearchIndex _adjacencyIndex;
+        private long _adjacencyRevision = -1;
+        private GraphAdjacency _adjacency;
+
+        // The index already stores both directions of most SDK edges, but callers and
+        // callees are queried by name. Keeping a derived, immutable adjacency snapshot
+        // turns each query from an O(objects + source) scan into an O(degree) lookup.
+        // The snapshot is rebuilt only after IndexCacheService advances GraphRevision.
+        private sealed class GraphAdjacency
+        {
+            public readonly Dictionary<string, List<string>> Callers =
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, List<string>> Callees =
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        }
 
         public CallerGraphService(IndexCacheService index)
         {
@@ -46,35 +62,14 @@ namespace GxMcp.Worker.Services
             if (string.IsNullOrEmpty(targetName) || _index == null) return new List<string>();
             var idx = _index.GetIndex();
             if (idx == null) return new List<string>();
+            // A bare name is not a graph identity. If multiple typed entities
+            // share it, fail closed instead of merging unrelated caller sets.
+            if (FindEntriesByName(idx, targetName).Count != 1) return new List<string>();
 
-            var callers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // Single pass over the index. For the target entry itself, pull its
-            // pre-computed CalledBy (inverted-index fast path). For every other
-            // entry, apply the augmentation checks (regex over SourceSnippet and
-            // the entry's own Calls list) that catch callers the SDK reference
-            // walker missed or that CalledBy hasn't been populated for yet.
-            var pattern = new Regex(@"\b" + Regex.Escape(targetName) + @"\s*\(", RegexOptions.IgnoreCase);
-            foreach (var e in idx.Objects.Values)
-            {
-                if (e == null) continue;
-
-                if (string.Equals(e.Name, targetName, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (e.CalledBy != null)
-                        foreach (var c in e.CalledBy) callers.Add(c);
-                    continue;
-                }
-
-                if (!string.IsNullOrEmpty(e.SourceSnippet) && pattern.IsMatch(e.SourceSnippet))
-                    callers.Add(e.Name);
-
-                // Also honour the entry's own Calls list (forward edge).
-                if (e.Calls != null && e.Calls.Any(c => string.Equals(c, targetName, StringComparison.OrdinalIgnoreCase)))
-                    callers.Add(e.Name);
-            }
-
-            return callers.ToList();
+            var adjacency = GetAdjacency(idx);
+            if (!adjacency.Callers.TryGetValue(targetName, out var callers))
+                return new List<string>();
+            return new List<string>(callers);
         }
 
         // Direct callees of objectName. Uses the entry's Calls list (the unified
@@ -85,36 +80,108 @@ namespace GxMcp.Worker.Services
             if (string.IsNullOrEmpty(objectName) || _index == null) return new List<string>();
             var idx = _index.GetIndex();
             if (idx == null) return new List<string>();
+            if (FindEntriesByName(idx, objectName).Count != 1) return new List<string>();
 
-            var entry = idx.Objects.Values.FirstOrDefault(
-                v => v != null && string.Equals(v.Name, objectName, StringComparison.OrdinalIgnoreCase));
-            if (entry == null) return new List<string>();
+            var adjacency = GetAdjacency(idx);
+            if (!adjacency.Callees.TryGetValue(objectName, out var callees))
+                return new List<string>();
+            return new List<string>(callees);
+        }
 
-            var callees = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (entry.Calls != null)
+        private static List<SearchIndex.IndexEntry> FindEntriesByName(SearchIndex index, string name)
+        {
+            return index?.Objects?.Values
+                .Where(entry => entry != null
+                    && string.Equals(entry.Name, name, StringComparison.OrdinalIgnoreCase))
+                .ToList()
+                ?? new List<SearchIndex.IndexEntry>();
+        }
+
+        private GraphAdjacency GetAdjacency(SearchIndex index)
+        {
+            long revision = System.Threading.Interlocked.Read(ref index.GraphRevision);
+            var current = _adjacency;
+            if (ReferenceEquals(_adjacencyIndex, index) && current != null && _adjacencyRevision == revision)
+                return current;
+
+            lock (_adjacencyGate)
             {
-                foreach (var c in entry.Calls)
-                    if (!string.IsNullOrEmpty(c)) callees.Add(c);
+                revision = System.Threading.Interlocked.Read(ref index.GraphRevision);
+                if (ReferenceEquals(_adjacencyIndex, index) && _adjacency != null && _adjacencyRevision == revision)
+                    return _adjacency;
+
+                var rebuilt = BuildAdjacency(index);
+                _adjacencyIndex = index;
+                _adjacencyRevision = revision;
+                _adjacency = rebuilt;
+                return rebuilt;
+            }
+        }
+
+        private static GraphAdjacency BuildAdjacency(SearchIndex index)
+        {
+            var adjacency = new GraphAdjacency();
+            var knownNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var callerSets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var calleeSets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            if (index?.Objects == null) return adjacency;
+
+            foreach (var entry in index.Objects.Values)
+            {
+                if (entry != null && !string.IsNullOrEmpty(entry.Name)) knownNames.Add(entry.Name);
             }
 
-            // Fallback for objects whose Calls hasn't been populated yet: scan
-            // the snippet once for call-site identifiers (single regex pass,
-            // not one compiled regex per candidate object) and intersect with
-            // the set of known object names in the index.
-            if (callees.Count == 0 && !string.IsNullOrEmpty(entry.SourceSnippet))
+            foreach (var entry in index.Objects.Values)
             {
-                var calledIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (Match m in Regex.Matches(entry.SourceSnippet, @"\b(\w+)\s*\(", RegexOptions.IgnoreCase))
-                    calledIdentifiers.Add(m.Groups[1].Value);
+                if (entry == null || string.IsNullOrEmpty(entry.Name)) continue;
 
-                foreach (var other in idx.Objects.Values)
+                if (entry.CalledBy != null)
                 {
-                    if (other == null || other == entry || string.IsNullOrEmpty(other.Name)) continue;
-                    if (calledIdentifiers.Contains(other.Name)) callees.Add(other.Name);
+                    foreach (var caller in entry.CalledBy)
+                        AddEdge(callerSets, entry.Name, caller);
+                }
+
+                if (entry.Calls != null)
+                {
+                    foreach (var callee in entry.Calls)
+                    {
+                        AddEdge(calleeSets, entry.Name, callee);
+                        AddEdge(callerSets, callee, entry.Name);
+                    }
+                }
+
+                // Keep the old textual fallback semantics, but pay the regex cost once
+                // per entry instead of once per GetCallers target. Only identifiers that
+                // resolve to a known indexed object become graph edges.
+                if (!string.IsNullOrEmpty(entry.SourceSnippet))
+                {
+                    foreach (Match match in Regex.Matches(entry.SourceSnippet, @"\b(\w+)\s*\(", RegexOptions.IgnoreCase))
+                    {
+                        string called = match.Groups[1].Value;
+                        if (!knownNames.Contains(called)) continue;
+                        if (string.Equals(called, entry.Name, StringComparison.OrdinalIgnoreCase)) continue;
+                        AddEdge(calleeSets, entry.Name, called);
+                        AddEdge(callerSets, called, entry.Name);
+                    }
                 }
             }
 
-            return callees.ToList();
+            foreach (var pair in callerSets)
+                adjacency.Callers[pair.Key] = pair.Value.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var pair in calleeSets)
+                adjacency.Callees[pair.Key] = pair.Value.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList();
+            return adjacency;
+        }
+
+        private static void AddEdge(Dictionary<string, HashSet<string>> graph, string key, string value)
+        {
+            if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(value)) return;
+            if (!graph.TryGetValue(key, out var values))
+            {
+                values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                graph[key] = values;
+            }
+            values.Add(value);
         }
 
         // v2.6.6 Stream E (FR#8): when a Transaction has BC enabled the GeneXus

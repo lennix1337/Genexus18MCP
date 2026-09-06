@@ -1,3 +1,4 @@
+using System.Linq;
 using Xunit;
 
 namespace GxMcp.Gateway.Tests
@@ -43,6 +44,46 @@ namespace GxMcp.Gateway.Tests
         {
             var s = ToolLatencyStats.Summarize();
             Assert.Equal(0L, s["totalCalls"]!.ToObject<long>());
+        }
+
+        [Fact]
+        public void Record_ExposesPercentilesQueueWaitPayloadAndResultClass()
+        {
+            ToolLatencyStats.Record("genexus_read", 10, "success", queueWaitMs: 3, responseBytes: 120);
+            ToolLatencyStats.Record("genexus_read", 30, "error", queueWaitMs: 5, responseBytes: 240);
+            ToolLatencyStats.Record("genexus_read", 50, "timeout", queueWaitMs: 7, responseBytes: 0);
+
+            var s = ToolLatencyStats.Summarize();
+            Assert.Equal(5L, s["avgQueueWaitMs"]!.ToObject<long>());
+            var read = ((Newtonsoft.Json.Linq.JArray)s["byTool"]!).Single(t => t!["tool"]!.ToString() == "genexus_read");
+            Assert.Equal(30L, read["p50Ms"]!.ToObject<long>());
+            Assert.Equal(50L, read["p95Ms"]!.ToObject<long>());
+            Assert.Equal(120L, read["avgResponseBytes"]!.ToObject<long>());
+            Assert.Equal(1L, read["resultClasses"]!["timeout"]!.ToObject<long>());
+        }
+
+        [Fact]
+        public void Record_ExposesPhaseAndCacheBreakdown()
+        {
+            ToolLatencyStats.Record(
+                "genexus_read",
+                40,
+                "success",
+                queueWaitMs: 2,
+                responseBytes: 400,
+                startupMs: 10,
+                sdkMs: 20,
+                transformMs: 5,
+                serializeMs: 3,
+                cacheOutcome: "hit");
+
+            var summary = ToolLatencyStats.Summarize();
+            Assert.Equal(10L, summary["avgStartupMs"]!.ToObject<long>());
+            Assert.Equal(20L, summary["avgSdkMs"]!.ToObject<long>());
+            Assert.Equal(5L, summary["avgTransformMs"]!.ToObject<long>());
+            Assert.Equal(3L, summary["avgSerializeMs"]!.ToObject<long>());
+            var read = ((Newtonsoft.Json.Linq.JArray)summary["byTool"]!).Single(t => t!["tool"]!.ToString() == "genexus_read");
+            Assert.Equal(1L, read["cacheOutcomes"]!["hit"]!.ToObject<long>());
         }
     }
 

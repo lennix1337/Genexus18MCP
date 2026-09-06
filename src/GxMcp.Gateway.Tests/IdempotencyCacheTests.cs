@@ -8,6 +8,75 @@ namespace GxMcp.Gateway.Tests
     public class IdempotencyCacheTests
     {
         [Fact]
+        public async Task NonCacheableResult_DoesNotDetachWaitingCallerFromGate()
+        {
+            var cache = new IdempotencyCache(15, 1000);
+            var firstRelease = new TaskCompletionSource<JObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondRelease = new TaskCompletionSource<JObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = cache.GetOrCompute("kb1", "t", "k1", "h1", () => firstRelease.Task);
+            var second = cache.GetOrCompute("kb1", "t", "k1", "h1", () =>
+            {
+                secondStarted.SetResult(true);
+                return secondRelease.Task;
+            });
+            Task<JObject>? third = null;
+            int thirdCalls = 0;
+            try
+            {
+                firstRelease.SetException(new ErrorNotCacheable(new JObject { ["isError"] = true }));
+                await first;
+                await secondStarted.Task;
+                third = cache.GetOrCompute("kb1", "t", "k1", "h1", () =>
+                {
+                    thirdCalls++;
+                    return Task.FromResult(new JObject());
+                });
+                Assert.Equal(0, thirdCalls);
+                Assert.Equal(1, cache.GateCount);
+            }
+            finally
+            {
+                secondRelease.TrySetResult(new JObject { ["answer"] = 42 });
+                await second;
+                if (third != null) await third;
+            }
+            Assert.Equal(0, cache.GateCount);
+        }
+
+        [Fact]
+        public async Task GateTimeout_DoesNotExecuteDuplicate_OriginalRemainsReplayable()
+        {
+            var cache = new IdempotencyCache(15, 1000, System.TimeSpan.FromMilliseconds(50));
+            var release = new TaskCompletionSource<JObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var original = cache.GetOrCompute("kb1", "t", "k1", "h1", () => release.Task);
+            int duplicateCalls = 0;
+            try
+            {
+                var error = await Assert.ThrowsAsync<UsageException>(() =>
+                    cache.GetOrCompute("kb1", "t", "k1", "h1", () =>
+                    {
+                        duplicateCalls++;
+                        return Task.FromResult(new JObject());
+                    }));
+                Assert.Equal("idempotency_in_progress", error.Code);
+                Assert.Contains("still in progress", error.Message);
+                Assert.Equal(0, duplicateCalls);
+                Assert.False(original.IsCompleted);
+            }
+            finally
+            {
+                release.TrySetResult(JObject.Parse("{\"answer\":42}"));
+                await original;
+            }
+
+            var replay = await cache.GetOrCompute("kb1", "t", "k1", "h1",
+                () => throw new System.InvalidOperationException("Duplicate executed"));
+            Assert.Equal(42, (int)replay["answer"]!);
+            Assert.Equal(0, cache.GateCount);
+        }
+
+        [Fact]
         public void Miss_ReturnsNull()
         {
             var cache = new IdempotencyCache(ttlMinutes: 15, capacity: 1000);

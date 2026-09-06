@@ -83,6 +83,8 @@ Use:
 Automated smoke script:
 
 - `powershell -ExecutionPolicy Bypass -File scripts/mcp_smoke.ps1`
+- `python scripts/mcp-wire-conformance.py` exercises legacy HTTP, sessionless
+  2026 HTTP/SSE and stdio with request-id and Host/origin isolation checks.
 
 You can also stream status via SSE (`GET /mcp`) and listen for `notifications/message` entries emitted by the gateway.
 

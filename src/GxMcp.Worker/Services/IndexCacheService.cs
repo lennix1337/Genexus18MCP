@@ -382,6 +382,7 @@ namespace GxMcp.Worker.Services
                     }
                 }
                 idx.LastUpdated = DateTime.UtcNow;
+                idx.GraphRevision = 1;
                 _index = idx;
                 _initialized = true;
                 PrimeHierarchyCacheFromIndex(idx);
@@ -460,6 +461,29 @@ namespace GxMcp.Worker.Services
             {
                 Logger.Warn("[TryGetEntryByName] lookup failed for '" + name + "': " + ex.Message);
                 return null;
+            }
+        }
+
+        /// <summary>Returns every typed entry sharing a bare name.</summary>
+        public IReadOnlyList<SearchIndex.IndexEntry> FindEntriesByName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return Array.Empty<SearchIndex.IndexEntry>();
+            try
+            {
+                var idx = GetIndex();
+                if (idx?.Objects == null) return Array.Empty<SearchIndex.IndexEntry>();
+                if (idx.ByNameIndex != null && idx.ByNameIndex.TryGetValue(name, out var keys))
+                    return keys.Where(key => idx.Objects.TryGetValue(key, out var entry) && entry != null)
+                        .Select(key => idx.Objects[key]).ToList();
+                // Test/legacy snapshots may not carry derived indexes yet. Keep
+                // correctness while the next rebuild creates the multimap.
+                return idx.Objects.Values.Where(entry => entry != null
+                    && string.Equals(entry.Name, name, StringComparison.OrdinalIgnoreCase)).ToList();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[FindEntriesByName] lookup failed for '" + name + "': " + ex.Message);
+                return Array.Empty<SearchIndex.IndexEntry>();
             }
         }
 
@@ -606,6 +630,18 @@ namespace GxMcp.Worker.Services
             index.TypeIndex = typeIndex;
             index.DomainIndex = domainIndex;
             index.ByNameIndex = nameIndex;
+            if (index.GraphRevision <= 0)
+            {
+                index.GraphRevision = 1;
+            }
+        }
+
+        private static void TouchGraph(SearchIndex index)
+        {
+            if (index != null)
+            {
+                System.Threading.Interlocked.Increment(ref index.GraphRevision);
+            }
         }
 
         // Plan 002: maintain TypeIndex/DomainIndex in the same incremental hooks that
@@ -835,6 +871,7 @@ namespace GxMcp.Worker.Services
                 if (index.Objects.TryRemove(key, out var removed))
                 {
                     removedKey = key;
+                    TouchGraph(index);
                     if (index.ChildrenByParent != null) RemoveEntryFromParentIndex(index, removed);
                     if (Guid.TryParse(guid, out var g)) _hierarchyCache.TryRemove(g, out _);
                 }
@@ -1090,6 +1127,7 @@ namespace GxMcp.Worker.Services
             lock (_lock)
             {
                 BuildParentIndex(index);
+                TouchGraph(index);
                 _index = index;
             }
             MarkDirty();
@@ -1693,6 +1731,7 @@ namespace GxMcp.Worker.Services
 
             // Atomic update using ConcurrentDictionary
             index.Objects.AddOrUpdate(key, entry, (k, existing) => entry);
+            TouchGraph(index);
             if (index.ChildrenByParent != null)
             {
                 AddOrUpdateEntryInParentIndex(index, entry);
@@ -1895,7 +1934,7 @@ namespace GxMcp.Worker.Services
             // Plan 003: entry's own shard was marked already (or is marked below); target
             // shards touched via CalledBy were marked inline above / in the textual scan.
             // Only bump the generation here — precise per-shard marking already happened.
-            if (changed) { System.Threading.Interlocked.Increment(ref _dirtyGeneration); MarkShardDirty(GetEntryStorageKey(entry)); ScheduleThrottledFlush(); }
+            if (changed) { TouchGraph(index); System.Threading.Interlocked.Increment(ref _dirtyGeneration); MarkShardDirty(GetEntryStorageKey(entry)); ScheduleThrottledFlush(); }
         }
 
         // E4: resolve an edge target to its REAL storage key (the shape GetEntryStorageKey
@@ -2044,6 +2083,7 @@ namespace GxMcp.Worker.Services
                     if (index.Objects.TryRemove(pair.Key, out var removedEntry))
                     {
                         removed = true;
+                        TouchGraph(index);
                         removedKeys.Add(pair.Key);
                         // Surgical removal (mirrors RemoveEntryByGuid) — the previous
                         // implementation rebuilt the ENTIRE parent index via UpdateIndex
@@ -2164,6 +2204,7 @@ namespace GxMcp.Worker.Services
             if (any)
             {
                 idx.LastUpdated = DateTime.UtcNow;
+                TouchGraph(idx);
                 System.Threading.Interlocked.Increment(ref _dirtyGeneration);
             }
         }

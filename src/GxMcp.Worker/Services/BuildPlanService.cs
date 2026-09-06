@@ -70,6 +70,27 @@ namespace GxMcp.Worker.Services
                         "Rebuild the index so build plan can walk the callee graph.")));
             }
 
+            var requestedMatches = _indexCache.FindEntriesByName(target);
+            if (requestedMatches.Count > 1)
+            {
+                return McpResponse.Err(
+                    code: "BuildTargetAmbiguous",
+                    message: "The build target name resolves to more than one indexed object.",
+                    hint: "Pass a typed or module-qualified target before generating a build plan.",
+                    target: target,
+                    extra: new JObject
+                    {
+                        ["candidates"] = new JArray(requestedMatches.Select(e => new JObject
+                        {
+                            ["name"] = e.Name,
+                            ["type"] = e.Type,
+                            ["guid"] = e.Guid,
+                            ["path"] = e.Path,
+                            ["entityKey"] = e.EntityKey
+                        }))
+                    });
+            }
+
             // Walk callees breadth-first. We deliberately mirror the build-order
             // semantics of `genexus_lifecycle build includeCallees=transitive`.
             var nodes = new List<JObject>();
@@ -93,6 +114,27 @@ namespace GxMcp.Worker.Services
             {
                 string current = queue.Dequeue();
                 if (!seen.Add(current)) continue;
+
+                var currentMatches = _indexCache.FindEntriesByName(current);
+                if (currentMatches.Count > 1)
+                {
+                    return McpResponse.Err(
+                        code: "BuildDependencyAmbiguous",
+                        message: "A callee name resolves to more than one indexed object.",
+                        hint: "Provide a type or module-qualified identity for the dependency before building.",
+                        target: current,
+                        extra: new JObject
+                        {
+                            ["candidates"] = new JArray(currentMatches.Select(e => new JObject
+                            {
+                                ["name"] = e.Name,
+                                ["type"] = e.Type,
+                                ["guid"] = e.Guid,
+                                ["path"] = e.Path,
+                                ["entityKey"] = e.EntityKey
+                            }))
+                        });
+                }
 
                 byName.TryGetValue(current, out var entry);
                 string typeName = entry?.Type ?? "Unknown";
@@ -125,6 +167,8 @@ namespace GxMcp.Worker.Services
                 ["edges"] = new JArray(edges.Cast<JToken>().ToArray()),
                 ["totalEstimatedSeconds"] = totalEstimatedSec,
                 ["truncated"] = truncated,
+                ["graphRevision"] = idx.GraphRevision,
+                ["graphComplete"] = !truncated,
                 ["note"] = "estimatedSeconds derived from per-type defaults; pass toolStatsP95={tool: ms} to override per node."
             };
 

@@ -53,7 +53,7 @@ The table below is the machine-checkable action contract for every umbrella tool
 | --- | --- | --- |
 | `genexus_data_view` | `inspect`, `dry_run` | `create`, `update`, `delete` |
 | `genexus_recipe` | `list`, `describe`, `suggest_macro` | `crystallize` |
-| `genexus_lifecycle` | `reorg_preview`, `validate`, `validate-kb`, `status`, `result`, `snapshots-list` | `build`, `cancel`, `specify`, `rebuild`, `reorg`, `sync`, `index`, `snapshots-restore` |
+| `genexus_lifecycle` | `inspect`, `reorg_preview`, `status`, `result`, `snapshots-list` | `build`, `cancel`, `reconcile`, `specify`, `validate`, `validate-kb`, `rebuild`, `reorg`, `sync`, `index`, `snapshots-restore` |
 | `genexus_refactor` | — | `RenameAttribute`, `RenameVariable`, `RenameObject`, `ExtractProcedure`, `ExtractSubroutine`, `WWPSetCondition` |
 | `genexus_gam` | `status` | `define_api`, `deploy` |
 | `genexus_properties` | `get` | `set`, `move` |
@@ -156,7 +156,7 @@ semantics documented in #65, and the homonym-routing behavior tracked in #34.
 | `genexus://objects/{name}/indexes` | active | Visual indexes for Transaction/Table objects |
 | `genexus://objects/{name}/logic-structure` | active | Logical structure for Transaction/Table objects |
 | `genexus://attributes/{name}` | active | Attribute metadata |
-| resource subscriptions | partial | Subscription capability is advertised and notifications are emitted through the SSE session stream |
+| resource subscriptions | partial | Legacy `resources/subscribe` remains session-scoped over GET/SSE; modern 2026 clients can use bounded POST `subscriptions/listen` with opt-in list/resource filters and per-stream subscription ids. Resource notifications now carry `kbAlias`, `cacheRevision`, and a KB-qualified `resourceUri`; full wire/reconnect coverage remains pending. |
 
 ## Prompts
 
@@ -187,6 +187,7 @@ semantics documented in #65, and the homonym-routing behavior tracked in #34.
 | tools list changed notification | active | Emitted through the HTTP SSE session stream |
 | resources list changed notification | active | Emitted through the HTTP SSE session stream |
 | resource updated notification | active | Emitted through the HTTP SSE session stream |
+| modern subscriptions/listen | partial | Acknowledgement and filtered SSE delivery are implemented; stream capacity/queue limits, disconnect cleanup, and KB/revision-qualified resource metadata are enforced. Full wire/reconnect coverage remains pending. |
 
 Operational notes:
 - `genexus_lifecycle(action='status'|'result', target='op:<operationId>')` resolves gateway-tracked MCP operations.

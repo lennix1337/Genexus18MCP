@@ -54,6 +54,12 @@ namespace GxMcp.Gateway
                         Log($"[Gateway] Removed {stalePending} stale pending worker request(s).");
                     }
 
+                    int staleLongPolls = CleanupStalePendingLongPolls(DateTime.UtcNow - _pendingRequestRetention);
+                    if (staleLongPolls > 0)
+                    {
+                        Log($"[Gateway] Cancelled {staleLongPolls} stale lifecycle long-poll(s).");
+                    }
+
                     // Plan 036: sweep _jobs first, then prune each session's seen-set
                     // against the now-reduced _jobs so retained ids can't reference
                     // already-swept jobs.
@@ -126,7 +132,18 @@ namespace GxMcp.Gateway
 
                     foreach (var session in _httpSessions.ActiveSessions)
                     {
+                        if (!ShouldDeliverNotificationToSession(method, payload, session))
+                            continue;
                         QueueSessionMessage(session, json);
+                    }
+
+                    // Modern 2026 subscriptions/listen streams are independent
+                    // transport handles. Each stream applies its own notification
+                    // filter and adds its subscription id in-band; never enqueue
+                    // the shared legacy envelope directly into a modern stream.
+                    foreach (var subscription in _modernSubscriptions.Active)
+                    {
+                        subscription.TryQueue(method, payload);
                     }
                 } catch (Exception ex) {
                     Log($"[Broadcast] Error: {ex.Message}");
@@ -176,32 +193,129 @@ namespace GxMcp.Gateway
             return false;
         }
 
-        private static void BroadcastToolsListChanged(string reason)
+        private static bool ShouldDeliverNotificationToSession(string method, object? payload, HttpSessionState session)
         {
-            BroadcastNotification("notifications/tools/list_changed", new
+            if (!string.Equals(method, "notifications/resources/updated", StringComparison.Ordinal))
+                return true;
+
+            try
             {
-                reason,
-                timestamp = DateTime.UtcNow
-            });
+                var obj = payload as JObject ?? (payload == null ? null : JObject.FromObject(payload));
+                foreach (var candidate in new[]
+                {
+                    obj?["resourceUri"]?.ToString()?.Trim(),
+                    obj?["uri"]?.ToString()?.Trim()
+                })
+                {
+                    if (!string.IsNullOrWhiteSpace(candidate)
+                        && McpSubscriptionProtocol.IsSubscribed(session, candidate))
+                        return true;
+                }
+
+                return false;
+            }
+            catch
+            {
+                // A malformed resource event must never become a broadcast.
+                return false;
+            }
         }
 
-        private static void BroadcastResourcesListChanged(string reason)
+        private static void BroadcastToolsListChanged(
+            string reason,
+            string? kbAlias = null,
+            long? cacheRevision = null)
         {
-            BroadcastNotification("notifications/resources/list_changed", new
-            {
-                reason,
-                timestamp = DateTime.UtcNow
-            });
+            kbAlias ??= GetCurrentKb()?.NormalizedAlias;
+            BroadcastNotification(
+                "notifications/tools/list_changed",
+                BuildScopedNotificationPayload(reason, kbAlias, cacheRevision, uri: null));
         }
 
-        private static void BroadcastResourceUpdated(string uri, string reason)
+        private static void BroadcastResourcesListChanged(
+            string reason,
+            string? kbAlias = null,
+            long? cacheRevision = null)
         {
-            BroadcastNotification("notifications/resources/updated", new
+            kbAlias ??= GetCurrentKb()?.NormalizedAlias;
+            BroadcastNotification(
+                "notifications/resources/list_changed",
+                BuildScopedNotificationPayload(reason, kbAlias, cacheRevision, uri: null));
+        }
+
+        private static void BroadcastResourceUpdated(
+            string uri,
+            string reason,
+            string? kbAlias = null,
+            long? cacheRevision = null)
+        {
+            kbAlias ??= GetCurrentKb()?.NormalizedAlias;
+            BroadcastNotification(
+                "notifications/resources/updated",
+                BuildScopedNotificationPayload(reason, kbAlias, cacheRevision, uri));
+        }
+
+        /// <summary>
+        /// Adds a stable KB identity and the cache generation observed by the
+        /// notification. The legacy <c>uri</c> remains unchanged for existing
+        /// subscribers; <c>resourceUri</c> is the scoped form that prevents an
+        /// update from one open KB being mistaken for the same-named resource in
+        /// another KB. Revisions are metadata rather than a URI query parameter so
+        /// a subscription survives a later mutation while still letting a client
+        /// reject an event based on an older snapshot.
+        /// </summary>
+        private static JObject BuildScopedNotificationPayload(
+            string reason,
+            string? kbAlias,
+            long? cacheRevision,
+            string? uri)
+        {
+            var payload = new JObject
             {
-                uri,
-                reason,
-                timestamp = DateTime.UtcNow
-            });
+                ["reason"] = reason ?? string.Empty,
+                ["timestamp"] = DateTime.UtcNow
+            };
+
+            string? normalizedAlias = string.IsNullOrWhiteSpace(kbAlias)
+                ? null
+                : kbAlias.Trim().ToLowerInvariant();
+            if (!string.IsNullOrWhiteSpace(normalizedAlias))
+            {
+                payload["kbAlias"] = normalizedAlias;
+                payload["cacheRevision"] = cacheRevision ?? _semanticCache.GetRevision(normalizedAlias!);
+            }
+
+            if (!string.IsNullOrWhiteSpace(uri))
+            {
+                payload["uri"] = uri.Trim();
+                if (!string.IsNullOrWhiteSpace(normalizedAlias))
+                    payload["resourceUri"] = BuildScopedResourceUri(normalizedAlias!, uri.Trim());
+            }
+
+            return payload;
+        }
+
+        internal static string BuildScopedResourceUri(string kbAlias, string uri)
+        {
+            if (string.IsNullOrWhiteSpace(kbAlias) || string.IsNullOrWhiteSpace(uri)) return uri ?? string.Empty;
+
+            string alias = Uri.EscapeDataString(kbAlias.Trim().ToLowerInvariant());
+            string trimmedUri = uri.Trim();
+            string scopedPrefix = "genexus://kb/" + alias + "/";
+            if (trimmedUri.StartsWith(scopedPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string remainder = trimmedUri.Substring(scopedPrefix.Length);
+                if (remainder.StartsWith("objects/", StringComparison.OrdinalIgnoreCase)
+                    || remainder.StartsWith("attributes/", StringComparison.OrdinalIgnoreCase)
+                    || remainder.StartsWith("kb/", StringComparison.OrdinalIgnoreCase))
+                    return trimmedUri;
+            }
+
+            const string schemePrefix = "genexus://";
+            if (trimmedUri.StartsWith(schemePrefix, StringComparison.OrdinalIgnoreCase))
+                return schemePrefix + "kb/" + alias + "/" + trimmedUri.Substring(schemePrefix.Length).TrimStart('/');
+
+            return schemePrefix + "kb/" + alias + "/" + trimmedUri.TrimStart('/');
         }
     }
 }

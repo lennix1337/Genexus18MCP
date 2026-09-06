@@ -197,17 +197,26 @@ namespace GxMcp.Gateway.Tests
         public void Dispose()
         {
             if (_process == null) return;
+            StopOwnedProcess(_process);
+        }
+
+        internal static void StopOwnedProcess(Process process)
+        {
             try
             {
-                _process.StandardInput.Close();
+                process.StandardInput.Close();
                 // 2s grace lets the worker release the KB lock + drain its
                 // EditSnapshotStore writes. 500ms was too aggressive — the
                 // shared SDK state outlived the kill and crashed the next
                 // spawn on rapid test-class cycles.
-                if (!_process.WaitForExit(2000)) _process.Kill();
+                if (!process.WaitForExit(2000))
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
             }
             catch { }
-            _process.Dispose();
+            process.Dispose();
         }
     }
 }

@@ -126,6 +126,16 @@ namespace GxMcp.Gateway.Routers
 
                 case "genexus_edit":
                 {
+                    if (args?["changeSet"] is JObject)
+                    {
+                        return new {
+                            module = "Mutation",
+                            action = "ChangeSet",
+                            target = target,
+                            @params = args
+                        };
+                    }
+
                     if (args?["changes"] != null)
                         throw new UsageException("usage_error", "argument 'changes' removed in v2.0.0; use 'targets' instead");
 
@@ -140,7 +150,8 @@ namespace GxMcp.Gateway.Routers
                             module = "Batch",
                             action = "MultiEdit",
                             items = (JArray)targetsTokEdit!,
-                            dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false
+                            dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
+                            rollbackOnFailure = args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true
                         };
                     }
 

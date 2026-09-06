@@ -25,7 +25,7 @@ namespace GxMcp.Gateway
         private static readonly System.Threading.CancellationTokenSource _gatewayLifetime =
             new System.Threading.CancellationTokenSource();
 
-        private static bool IsOriginAllowed(string? origin, ServerConfig? serverConfig)
+        internal static bool IsOriginAllowed(string? origin, ServerConfig? serverConfig)
         {
             if (string.IsNullOrWhiteSpace(origin)) return true;
 
@@ -36,6 +36,26 @@ namespace GxMcp.Gateway
             if (allowedOrigins == null || allowedOrigins.Count == 0) return false;
 
             return allowedOrigins.Any(allowed => string.Equals(allowed, origin, StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static bool IsLoopbackHostAllowed(string? host, string? bindAddress)
+        {
+            string normalizedHost = (host ?? string.Empty).Trim().TrimEnd('.');
+            if (normalizedHost.Length == 0) return false;
+
+            if (string.Equals(normalizedHost, "localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalizedHost, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalizedHost, "::1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalizedHost, "[::1]", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            string normalizedBind = (bindAddress ?? string.Empty).Trim().TrimEnd('.');
+            return normalizedBind.Length > 0
+                && !string.Equals(normalizedBind, "0.0.0.0", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(normalizedBind, "::", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(normalizedHost, normalizedBind, StringComparison.OrdinalIgnoreCase);
         }
 
         // P5: SSE delivery via bounded channels instead of polling
@@ -51,6 +71,11 @@ namespace GxMcp.Gateway
         // ends: DELETE /mcp or the orphan sweep in CreateHttpSession.
         private static readonly ConcurrentDictionary<string, Channel<string>> _sseChannels =
             new ConcurrentDictionary<string, Channel<string>>(StringComparer.Ordinal);
+        // Modern 2026 subscriptions/listen streams are transport-scoped and do
+        // not use MCP-Session-Id. Keep their handles separate from legacy HTTP
+        // sessions so reconnects cannot inherit another client's subscriptions.
+        private static readonly McpModernSubscriptionRegistry _modernSubscriptions =
+            new McpModernSubscriptionRegistry();
 
         private static Channel<string> GetOrAddSseChannel(string sessionId)
         {
@@ -199,6 +224,125 @@ namespace GxMcp.Gateway
             return Results.Empty;
         }
 
+        private static async Task<IResult> HandleModernSubscriptionListen(
+            HttpContext context,
+            JObject requestObj)
+        {
+            if (!_modernSubscriptions.TryOpen(requestObj, out var subscription, out var error))
+            {
+                return Results.Content(
+                    (error ?? new JObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = requestObj["id"]?.DeepClone() ?? JValue.CreateNull(),
+                        ["error"] = new JObject
+                        {
+                            ["code"] = -32025,
+                            ["message"] = "The subscription stream could not be allocated."
+                        }
+                    }).ToString(Formatting.None),
+                    "application/json; charset=utf-8",
+                    Encoding.UTF8,
+                    StatusCodes.Status429TooManyRequests);
+            }
+
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.Headers["Content-Type"] = "text/event-stream";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Connection"] = "keep-alive";
+            context.Response.Headers["X-Accel-Buffering"] = "no";
+            context.Response.Headers["MCP-Protocol-Version"] = McpRouter.ModernProtocolVersion;
+
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+            using var writeLock = new SemaphoreSlim(1, 1);
+            try
+            {
+                var acknowledgement = new JObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["method"] = "notifications/subscriptions/acknowledged",
+                    ["params"] = new JObject
+                    {
+                        ["notifications"] = subscription!.GrantedNotifications,
+                        ["_meta"] = new JObject
+                        {
+                            ["io.modelcontextprotocol/subscriptionId"] = subscription.Id
+                        }
+                    }
+                };
+                await WriteModernSubscriptionEvent(
+                    context,
+                    acknowledgement.ToString(Formatting.None),
+                    writeLock,
+                    linkedCts.Token);
+
+                long lastWriteTicks = DateTime.UtcNow.Ticks;
+                Task keepalive = Task.Run(async () =>
+                {
+                    while (!linkedCts.Token.IsCancellationRequested)
+                    {
+                        await Task.Delay(SseKeepaliveInterval, linkedCts.Token);
+                        if (DateTime.UtcNow.Ticks - Interlocked.Read(ref lastWriteTicks) < SseKeepaliveInterval.Ticks)
+                            continue;
+
+                        await writeLock.WaitAsync(linkedCts.Token);
+                        try
+                        {
+                            await context.Response.WriteAsync(": keepalive\n\n", linkedCts.Token);
+                            await context.Response.Body.FlushAsync(linkedCts.Token);
+                        }
+                        finally { writeLock.Release(); }
+                        Interlocked.Exchange(ref lastWriteTicks, DateTime.UtcNow.Ticks);
+                    }
+                }, linkedCts.Token);
+
+                try
+                {
+                    while (true)
+                    {
+                        string payload = await subscription.Reader.ReadAsync(context.RequestAborted);
+                        await WriteModernSubscriptionEvent(context, payload, writeLock, linkedCts.Token);
+                        Interlocked.Exchange(ref lastWriteTicks, DateTime.UtcNow.Ticks);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (ChannelClosedException) { }
+                finally
+                {
+                    linkedCts.Cancel();
+                    try { await keepalive; }
+                    catch (OperationCanceledException) { }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Log($"[HTTP] Modern subscriptions/listen stream error for {subscription!.Id}: {ex.Message}");
+            }
+            finally
+            {
+                _modernSubscriptions.Remove(subscription!.Id, out _);
+            }
+
+            return Results.Empty;
+        }
+
+        private static async Task WriteModernSubscriptionEvent(
+            HttpContext context,
+            string payload,
+            SemaphoreSlim writeLock,
+            CancellationToken cancellationToken)
+        {
+            string encodedPayload = payload.Replace("\r", "").Replace("\n", "\ndata: ");
+            await writeLock.WaitAsync(cancellationToken);
+            try
+            {
+                await context.Response.WriteAsync($"event: message\ndata: {encodedPayload}\n\n", cancellationToken);
+                await context.Response.Body.FlushAsync(cancellationToken);
+            }
+            finally { writeLock.Release(); }
+        }
+
         // Plan 014: sensitive-key substrings (case-insensitive). Values under a
         // matching key — and any nested object/array value, sensitive or not — are
         // masked before the inbound request is summarized to the durable gateway log.
@@ -243,11 +387,27 @@ namespace GxMcp.Gateway
             }, statusCode: error.StatusCode);
         }
 
-        private static async Task<IResult> HandleJsonRpcHttpRequest(HttpRequest request)
+        internal static async Task<IResult> HandleJsonRpcHttpRequest(HttpRequest request)
         {
             var headerError = McpHttpProtocol.ValidatePostHeaders(request);
             if (headerError != null)
                 return Results.Json(new { error = headerError.Value.Message }, statusCode: headerError.Value.StatusCode);
+
+            var bodyLengthError = McpHttpProtocol.ValidateBodyLength(request.ContentLength);
+            if (bodyLengthError != null)
+            {
+                return Results.Json(new JObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = JValue.CreateNull(),
+                    ["error"] = new JObject
+                    {
+                        ["code"] = bodyLengthError.Value.JsonRpcCode,
+                        ["message"] = bodyLengthError.Value.Message,
+                        ["data"] = bodyLengthError.Value.Data?.DeepClone()
+                    }
+                }, statusCode: bodyLengthError.Value.StatusCode);
+            }
 
             using (var reader = new StreamReader(request.Body))
             {
@@ -299,16 +459,42 @@ namespace GxMcp.Gateway
                     string method = requestObj["method"]?.ToString() ?? "unknown";
                     Log($"[HTTP] Received {method} (ID: {id}) - Args: {RedactBodyForLog(requestObj)}");
 
+                    string? modernClientId = modern ? McpHttpProtocol.GetModernClientId(request) : null;
+                    bool taskScopeEnabled = !modern || modernClientId != null;
                     string httpSessionId = modern
-                        ? "http-modern"
+                        ? modernClientId == null
+                            ? $"http-modern-unscoped:{Guid.NewGuid():N}"
+                            : $"http-modern:{modernClientId}"
                         : session?.Id ?? request.Headers["MCP-Session-Id"].FirstOrDefault() ?? "http";
+
+                    // Streamable HTTP is sessionless in the modern contract. A
+                    // cancellation notification sent by a later POST has no
+                    // transport identity that can safely own an earlier request;
+                    // treating the shared pseudo-session as an owner would let
+                    // clients with the same JSON-RPC id cancel one another. The
+                    // modern binding uses response-stream closure for cancellation,
+                    // so accept and ignore this notification here.
+                    if (modern && McpHttpProtocol.IsCancellationNotification(requestObj))
+                    {
+                        Log($"[HTTP] Ignoring sessionless modern cancellation notification for id={id}.");
+                        return Results.StatusCode(StatusCodes.Status202Accepted);
+                    }
+
+                    if (modern && McpModernSubscriptionProtocol.IsListenRequest(requestObj))
+                    {
+                        Log($"[HTTP] Opening modern subscriptions/listen stream for {id}.");
+                        return await HandleModernSubscriptionListen(request.HttpContext, requestObj);
+                    }
+
                     // The 2026-07-28 transport is explicitly sessionless. Do not
                     // reuse a shared server-side KB selection between independent
                     // modern clients; they use explicit kb or the persisted fallback.
                     var response = await ProcessMcpRequest(
                         requestObj,
                         httpSessionId,
-                        sessionContextEnabled: !modern);
+                        sessionContextEnabled: !modern,
+                        transportCancellation: request.HttpContext.RequestAborted,
+                        taskScopeEnabled: taskScopeEnabled);
 
                     bool notification = requestObj["id"] == null
                         || requestObj["id"]!.Type == JTokenType.Null;
@@ -428,7 +614,7 @@ namespace GxMcp.Gateway
             builder.WebHost.UseUrls($"http://{bindAddress}:{serverConfig.HttpPort}");
             // P4: MCP payloads are small JSON-RPC envelopes; cap request bodies
             // explicitly at 2MB instead of relying on Kestrel's ~30MB default.
-            builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 2 * 1024 * 1024);
+            builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = McpHttpProtocol.MaxRequestBodyBytes);
             builder.Logging.ClearProviders();
             builder.Services.AddResponseCompression(options => { options.EnableForHttps = true; });
             var app = builder.Build();
@@ -450,6 +636,13 @@ namespace GxMcp.Gateway
             {
                 if (context.Request.Path.StartsWithSegments("/mcp"))
                 {
+                    if (loopbackBind && !IsLoopbackHostAllowed(context.Request.Host.Host, serverConfig.BindAddress))
+                    {
+                        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                        await context.Response.WriteAsync("Host not allowed for loopback MCP binding.");
+                        return;
+                    }
+
                     string? origin = context.Request.Headers["Origin"].FirstOrDefault();
                     if (!IsOriginAllowed(origin, serverConfig))
                     {

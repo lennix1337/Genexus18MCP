@@ -95,5 +95,52 @@ namespace GxMcp.Gateway.Tests
             Assert.Null(first["meta"]);
             Assert.True((bool)second["meta"]!["idempotent"]!);
         }
+
+        [Fact]
+        public async Task LegacyAlias_UsesCanonicalMutationPolicy()
+        {
+            var calls = 0;
+            var middleware = new IdempotencyMiddleware(new IdempotencyCache(15, 1000), kbPath: "kb1");
+
+            Task<JObject> Inner(JObject req)
+            {
+                calls++;
+                return Task.FromResult(JObject.Parse("{\"isError\":false,\"data\":{\"id\":1}}"));
+            }
+
+            var req = JObject.Parse(
+                "{\"name\":\"genexus_import_object\",\"arguments\":{\"name\":\"X\",\"inputPath\":\"x.txt\",\"idempotencyKey\":\"k1\"}}");
+            var first = await middleware.Invoke(req, Inner);
+            var canonical = JObject.Parse(
+                "{\"name\":\"genexus_io\",\"arguments\":{\"action\":\"import_part\",\"name\":\"X\",\"inputPath\":\"x.txt\",\"idempotencyKey\":\"k1\"}}");
+            var second = await middleware.Invoke(canonical, Inner);
+
+            Assert.Equal(1, calls);
+            Assert.Null(first["meta"]);
+            Assert.True((bool)second["meta"]!["idempotent"]!);
+        }
+
+        [Fact]
+        public async Task RuntimeModelAndEnvironmentBindTheOperationKey()
+        {
+            var cache = new IdempotencyCache(15, 1000);
+            var first = new IdempotencyMiddleware(cache, "kb1", "model-a", "development");
+            var second = new IdempotencyMiddleware(cache, "kb1", "model-a", "production");
+            int calls = 0;
+
+            Task<JObject> Inner(JObject req)
+            {
+                calls++;
+                return Task.FromResult(JObject.Parse("{\"isError\":false,\"data\":{}}"));
+            }
+
+            var request = JObject.Parse(
+                "{\"name\":\"genexus_edit\",\"arguments\":{\"name\":\"Customer\",\"content\":\"x\",\"idempotencyKey\":\"context-key\"}}");
+
+            await first.Invoke(request, Inner);
+            await Assert.ThrowsAsync<IdempotencyConflictException>(() => second.Invoke(request, Inner));
+
+            Assert.Equal(1, calls);
+        }
     }
 }

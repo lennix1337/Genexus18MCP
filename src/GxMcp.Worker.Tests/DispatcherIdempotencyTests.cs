@@ -81,6 +81,36 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void MultiEditTargets_UsesMutationEngineVersionFence()
+        {
+            var dispatcher = CommandDispatcher.Instance;
+            var rpc = new JObject
+            {
+                ["method"] = "batch",
+                ["action"] = "MultiEdit",
+                ["params"] = new JObject
+                {
+                    ["items"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["name"] = "NoSuchObject",
+                            ["part"] = "Source",
+                            ["content"] = "updated",
+                            ["expectedVersion"] = "stale"
+                        }
+                    },
+                    ["rollbackOnFailure"] = true
+                }
+            };
+
+            var response = JObject.Parse(dispatcher.Dispatch(rpc.ToString(Newtonsoft.Json.Formatting.None)));
+
+            Assert.Equal("error", response["status"]?.ToString());
+            Assert.Equal("ConcurrencyStateUnavailable", response["error"]?["code"]?.ToString());
+        }
+
+        [Fact]
         public void DifferentRequestIds_SuccessEnvelopes_CacheSeparately()
         {
             // A5: erros não são cacheados; a separação por id vale para

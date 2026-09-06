@@ -15,6 +15,7 @@ namespace GxMcp.Worker.Services
 
         private readonly CommandHandlerRegistry _registry;
         private readonly MutationEngine _mutationEngine;
+        private readonly ChangeSetService _changeSetService;
         private readonly CompilationPipeline _compilationPipeline;
         private readonly ObjectInspectionModule _objectInspectionModule;
         private readonly KbService _kbService;
@@ -165,6 +166,7 @@ namespace GxMcp.Worker.Services
         private readonly ApiIntrospectService _apiIntrospectService;
         // genexus_profile: runtime profiler XML bridge (file-only ingest v1).
         private readonly ProfileService _profileService;
+        private readonly SdkProbeService _sdkProbeService;
         // issue #60 — save+specify in one call. Runs the inline Specify pass after a
         // successful write when validationMode="specify", surfacing structured diagnostics
         // and (optionally) rolling back on failure.
@@ -299,6 +301,7 @@ namespace GxMcp.Worker.Services
             _apiIntrospectService = new ApiIntrospectService(_kbService, _objectService, _indexCacheService);
             _typeIntrospectService = new TypeIntrospectService(_kbService, _objectService);
             _profileService = new ProfileService();
+            _sdkProbeService = new SdkProbeService();
 
             // Phase 2: Late Linking
             _kbService.SetBuildService(_buildService);
@@ -314,6 +317,7 @@ namespace GxMcp.Worker.Services
             _linterService.SetWriteService(_writeService);
 
             _mutationEngine = new MutationEngine(_writeService, _patchService, _objectService);
+            _changeSetService = new ChangeSetService(_mutationEngine);
             _compilationPipeline = new CompilationPipeline(_buildService, _kbService);
             _objectInspectionModule = new ObjectInspectionModule(_objectService, _analyzeService, _kbService, _batchService);
             _commandTable = BuildCommandTable();
@@ -734,6 +738,7 @@ namespace GxMcp.Worker.Services
                 ["dataview"] = Handle_DataView,
                 ["generatorreference"] = Handle_GeneratorReference,
                 ["write"] = Handle_Write,
+                ["mutation"] = Handle_Mutation,
                 ["editandbuild"] = Handle_EditAndBuild,
                 ["semanticops"] = Handle_SemanticOps,
                 ["jsonpatch"] = Handle_JsonPatch,
@@ -1145,7 +1150,49 @@ namespace GxMcp.Worker.Services
                 args?["part"]?.ToString() ?? "Source",
                 args?["parts"] as JArray);
             if (action == "BatchEdit") return _batchService.BatchEdit(target, args?["changes"] as JArray);
-            if (action == "MultiEdit") return _batchService.MultiEdit(args?["items"] as JArray);
+            if (action == "MultiEdit")
+            {
+                var items = args?["items"] as JArray;
+                if (items == null || items.Count == 0)
+                    return _batchService.MultiEdit(items);
+
+                // `genexus_edit.targets[]` is the public multi-target contract.
+                // Route it through the authoritative mutation engine so every
+                // target receives the same preflight version fence, persistence
+                // readback, and compensating rollback receipt as direct edits.
+                // The legacy MultiEdit code path remains available for callers
+                // that use the internal batch action with nested `changes`.
+                var mutationArgs = new JObject
+                {
+                    ["targets"] = items,
+                    ["dryRun"] = args?["dryRun"]?.ToObject<bool?>() ?? false,
+                    ["rollbackOnFailure"] = args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true
+                };
+                string mutationResponse = _mutationEngine.Mutate("xml", null, mutationArgs);
+                try
+                {
+                    var envelope = JObject.Parse(mutationResponse);
+                    if (string.Equals(envelope["status"]?.ToString(), "ok", StringComparison.OrdinalIgnoreCase))
+                    {
+                        envelope["code"] = "MultiEditCompleted";
+                        if (envelope["result"] is JObject result)
+                        {
+                            result["objectCount"] = items
+                                .OfType<JObject>()
+                                .Select(item => item["name"]?.ToString() ?? item["target"]?.ToString())
+                                .Where(name => !string.IsNullOrWhiteSpace(name))
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .Count();
+                            result["totalChanges"] = items.Count;
+                        }
+                    }
+                    return envelope.ToString(Newtonsoft.Json.Formatting.None);
+                }
+                catch
+                {
+                    return mutationResponse;
+                }
+            }
             if (action == "Process") return _batchService.ProcessBatch(args?["batchAction"]?.ToString(), target, payload);
             return null;
         }
@@ -1418,6 +1465,13 @@ namespace GxMcp.Worker.Services
             return null;
         }
 
+        private string Handle_Mutation(JObject request, string method, string action, string target, string payload, JObject args)
+        {
+            if (string.Equals(action, "ChangeSet", StringComparison.OrdinalIgnoreCase))
+                return _changeSetService.Run(args ?? new JObject());
+            return null;
+        }
+
         private string Handle_Write(JObject request, string method, string action, string target, string payload, JObject args)
         {
             if (action == "AddVariable")
@@ -1647,7 +1701,8 @@ namespace GxMcp.Worker.Services
             }
             if (action == "GetParameters") return _analyzeService.GetSignature(target, analyzeType);
             if (action == "Get360Context" || action == "GetContext") return _analyzeService.Get360Context(target, analyzeType,
-                args?["guid"]?.ToString(), args?["entityKey"]?.ToString(), args?["path"]?.ToString());
+                args?["guid"]?.ToString(), args?["entityKey"]?.ToString(), args?["path"]?.ToString(),
+                args?["maxBytes"]?.ToObject<int?>(), args?["cursor"]?.ToString());
             if (action == "GetHierarchy") return _analyzeService.GetHierarchy(target, analyzeType);
             if (action == "GetDataContext") return _dataInsightService.GetDataContext(target);
             if (action == "GetConversionContext")
@@ -1803,6 +1858,20 @@ namespace GxMcp.Worker.Services
 
         private string Handle_SdkProbe(JObject request, string method, string action, string target, string payload, JObject args)
         {
+            if (action == "Capabilities")
+            {
+                try
+                {
+                    return Models.McpResponse.Ok(
+                        code: "SdkCapabilitiesRead",
+                        result: JObject.Parse(_sdkProbeService.Capabilities()));
+                }
+                catch (Exception ex)
+                {
+                    return Models.McpResponse.Err(code: "SdkCapabilitiesError", message: ex.Message,
+                        hint: "The capability probe is read-only; inspect the worker SDK load diagnostics and retry.");
+                }
+            }
             if (action == "Run")
             {
                 try

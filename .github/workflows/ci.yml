@@ -18,12 +18,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup .NET
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
       - name: Cache VS Code test runtime
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -34,7 +34,7 @@ jobs:
             nexus-ide-vscode-${{ runner.os }}-
 
       - name: Install npm deps
-        run: npm install
+        run: npm ci
 
       - name: CLI tests
         run: npm test
@@ -48,6 +48,8 @@ jobs:
           $scriptPaths = @(
             'scripts/pr-preflight.ps1',
             'scripts/pr-push.ps1',
+            'scripts/install.ps1',
+            'scripts/install-transaction.ps1',
             'scripts/test-live.ps1',
             'scripts/check-build-warning-baseline.ps1'
           )
@@ -61,7 +63,34 @@ jobs:
             }
           }
           ./scripts/check-build-warning-baseline.ps1 -ValidateOnly
+          ./scripts/tests/test-live.test.ps1
+          ./scripts/tests/install-contract.tests.ps1
           python -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/bench-live-http.py').read_text(encoding='utf-8')); print('benchmark-python: valid')"
+          if ($LASTEXITCODE -ne 0) { throw 'Benchmark Python syntax validation failed.' }
+          python -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/validate-v3-plan.py').read_text(encoding='utf-8')); print('v3-plan-python: valid')"
+          if ($LASTEXITCODE -ne 0) { throw 'v3 plan Python syntax validation failed.' }
+          python scripts/validate-v3-evaluation.py
+          if ($LASTEXITCODE -ne 0) { throw 'v3 evaluation corpus validation failed.' }
+          python scripts/validate-v3-evaluation.py tests/agent-evals/corpus.json
+          if ($LASTEXITCODE -ne 0) { throw 'v3 agent replay corpus validation failed.' }
+          python scripts/validate-v3-plan.py
+          if ($LASTEXITCODE -ne 0) { throw 'v3 execution plan validation failed.' }
+          python scripts/validate-tool-contracts.py
+          if ($LASTEXITCODE -ne 0) { throw 'tool contract validation failed.' }
+
+      - name: Benchmark gate regression tests
+        shell: pwsh
+        run: |
+          python --version
+          if ($LASTEXITCODE -ne 0) { throw 'Python from the Windows runner image is required.' }
+          python -m unittest discover -s scripts/tests -p "test_bench_live_http.py" -v
+          if ($LASTEXITCODE -ne 0) { throw 'Benchmark gate regression tests failed.' }
+          python -m unittest discover -s scripts/tests -p "test_validate_v3_evaluation.py" -v
+          if ($LASTEXITCODE -ne 0) { throw 'v3 evaluation corpus tests failed.' }
+          python -m unittest discover -s scripts/tests -p "test_validate_v3_plan.py" -v
+          if ($LASTEXITCODE -ne 0) { throw 'v3 execution plan tests failed.' }
+          python -m unittest discover -s scripts/tests -p "test_validate_tool_contracts.py" -v
+          if ($LASTEXITCODE -ne 0) { throw 'tool contract tests failed.' }
 
       - name: Install Nexus IDE deps
         working-directory: src/nexus-ide
@@ -96,7 +125,7 @@ jobs:
         shell: pwsh
         run: ./scripts/mcp_llm_contract_smoke.ps1
 
-      # Contract test: the gateway builds without the GeneXus SDK (net8.0-windows, no
+      # Contract test: the gateway builds without the GeneXus SDK (net10.0-windows, no
       # Artech refs), so this runs on CI. It launches a real gateway in-process and runs
       # scripts/mcp_smoke.ps1 unmodified against it — pinning first-party diagnostic
       # scripts to the gateway's HTTP protocol contract (the v2.38.0-v2.45.1 406 drift).

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
@@ -13,7 +15,7 @@ namespace GxMcp.Gateway
         {
             _kbResolver = new KbResolver(config);
             _workerPool = new WorkerPool(config);
-            _workerPool.OnRpcResponse += HandleWorkerResponse;
+            _workerPool.OnRpcResponseWithContext += HandleWorkerResponse;
             _workerPool.OnWorkerExited += (kb, stopReason) => {
                 string alias = kb.NormalizedAlias;
                 int aborted = 0;
@@ -180,13 +182,87 @@ namespace GxMcp.Gateway
                 }
             }
             // Clear cache on KB change
-            _semanticCache.Clear();
+            _semanticCache.InvalidateScope(string.Empty);
+            System.Threading.Interlocked.Increment(ref SemanticCacheEpoch);
             StartWorker(config);
             BroadcastToolsListChanged("worker_restarted");
             BroadcastResourcesListChanged("worker_restarted");
         }
 
-        private static void HandleWorkerResponse(string json, JObject? val)
+        internal static JObject RewriteProgressTokenForClient(JObject workerEnvelope, JToken clientProgressToken)
+        {
+            if (workerEnvelope == null) throw new ArgumentNullException(nameof(workerEnvelope));
+            if (clientProgressToken == null || clientProgressToken.Type == JTokenType.Null)
+                throw new ArgumentException("A client progress token is required.", nameof(clientProgressToken));
+
+            var routed = (JObject)workerEnvelope.DeepClone();
+            var parameters = routed["params"] as JObject;
+            if (parameters == null)
+            {
+                parameters = new JObject();
+                routed["params"] = parameters;
+            }
+            parameters.Remove("progressToken");
+            parameters.Add(new JProperty("progressToken", clientProgressToken.DeepClone()));
+            return routed;
+        }
+
+        internal static bool IsProgressSessionBound(string? sessionId)
+        {
+            return !string.IsNullOrWhiteSpace(sessionId)
+                && !string.Equals(sessionId, "http-modern", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static PendingWorkerRequest? FindPendingForOperation(string operationId)
+        {
+            if (string.IsNullOrWhiteSpace(operationId)) return null;
+
+            PendingWorkerRequest? match = null;
+            foreach (var pending in _pendingRequests.Values)
+            {
+                if (!string.Equals(pending.OperationId, operationId, StringComparison.Ordinal))
+                    continue;
+                if (match == null || pending.CreatedAtUtc > match.CreatedAtUtc)
+                    match = pending;
+            }
+            return match;
+        }
+
+        private static void RouteWorkerProgress(JObject workerEnvelope, string operationId, PendingWorkerRequest pending)
+        {
+            JToken? clientToken = pending.ClientProgressToken;
+            if (clientToken == null || clientToken.Type == JTokenType.Null)
+            {
+                // A client has to opt in to progress. Internal operation ids are
+                // deliberately never exposed as an unsolicited client token.
+                Log($"[Gateway] Dropped progress for operation '{operationId}' because the client supplied no progressToken.");
+                return;
+            }
+
+            var routed = RewriteProgressTokenForClient(workerEnvelope, clientToken);
+            string json = routed.ToString(Formatting.None);
+            if (string.Equals(pending.McpSessionId, "stdio", StringComparison.OrdinalIgnoreCase))
+            {
+                EmitStdioNotification(json);
+                return;
+            }
+
+            // The modern 2026 sessionless POST transport has no server-owned
+            // session or response stream for unsolicited worker frames. Drop the
+            // frame rather than routing it through a process-wide pseudo-session.
+            if (!IsProgressSessionBound(pending.McpSessionId))
+            {
+                Log($"[Gateway] Dropped progress for operation '{operationId}' without a session-bound transport.");
+                return;
+            }
+
+            if (_httpSessions.TryGet(pending.McpSessionId, out var session) && session != null)
+                QueueSessionMessage(session, json);
+            else
+                Log($"[Gateway] Dropped progress for operation '{operationId}' because its owning session expired.");
+        }
+
+        private static void HandleWorkerResponse(string json, JObject? val, string? workerAlias = null)
         {
             try {
                 // PERFORMANCE (perf-review): `val` is the parsed envelope WorkerProcess
@@ -209,13 +285,21 @@ namespace GxMcp.Gateway
                         var p = val["params"];
                         string name = p?["name"]?.ToString() ?? "unknown";
                         Log($"[Gateway] Notification from Worker: Resource {name} updated externally.");
-                        BroadcastResourceUpdated($"genexus://objects/{name}", "external_kb_change");
+                        BroadcastResourceUpdated(
+                            $"genexus://objects/{name}",
+                            "external_kb_change",
+                            workerAlias,
+                            string.IsNullOrWhiteSpace(workerAlias)
+                                ? (long?)null
+                                : _semanticCache.GetRevision(workerAlias!));
                     }
                     else if (method == "notifications/progress" || method == "notifications/message")
                     {
                         // A4: correlate the frame to its tracked operation (the worker
-                        // command's progressToken is the operationId) and bump UpdatedAtUtc
-                        // so a status poll shows live progress instead of a frozen timestamp.
+                        // command's private progressToken is the operationId) and bump
+                        // UpdatedAtUtc so a status poll shows live progress instead of a
+                        // frozen timestamp. The client-facing token is restored below from
+                        // the pending request context; the private operation id never leaks.
                         if (method == "notifications/progress")
                         {
                             var pp = val["params"];
@@ -235,6 +319,16 @@ namespace GxMcp.Gateway
                                 Log($"[Gateway] Dropped stale/unknown progress token '{opId}' (op not active) — not relayed to client.");
                                 return;
                             }
+
+                            var pendingProgress = FindPendingForOperation(opId);
+                            if (pendingProgress == null)
+                            {
+                                Log($"[Gateway] Dropped progress token '{opId}' because no pending request context remains.");
+                                return;
+                            }
+
+                            RouteWorkerProgress(val, opId, pendingProgress);
+                            return;
                         }
                         if (ShouldForwardNotificationToStdio(method, val["params"]))
                         {
@@ -257,6 +351,7 @@ namespace GxMcp.Gateway
                     // PERF: hand the parsed envelope to the caller so SendWorkerCommandAsync
                     // doesn't JObject.Parse the raw json a third time.
                     pending.ParsedResponse = val;
+                    pending.ResponseBytes = Encoding.UTF8.GetByteCount(json);
                     pending.CompletionSource.TrySetResult(json);
                     if (!string.IsNullOrWhiteSpace(pending.OperationId))
                     {
@@ -278,17 +373,50 @@ namespace GxMcp.Gateway
         // Records end-to-end tool latency (from just before the worker send to the response)
         // into ToolLatencyStats and emits one [TOOL-LATENCY] log line. Cold-start is already
         // awaited before CreatedAtUtc is stamped, so this measures real tool cost, not boot.
-        private static void RecordToolLatency(string toolName, DateTime createdAtUtc)
+        private static void RecordToolLatency(
+            string toolName,
+            DateTime createdAtUtc,
+            DateTime requestStartedAtUtc,
+            JObject? response,
+            long responseBytes,
+            string? resultClassOverride = null,
+            long startupMs = 0,
+            long transformMs = 0,
+            string? cacheOutcome = null)
         {
             try
             {
                 double ms = (DateTime.UtcNow - createdAtUtc).TotalMilliseconds;
-                ToolLatencyStats.Record(toolName, ms);
+                long queueWaitMs = Math.Max(0, (long)(createdAtUtc - requestStartedAtUtc).TotalMilliseconds);
+                string resultClass = resultClassOverride ?? (response?["error"] != null ? "error" : "success");
+                JObject? telemetry = response?["result"]?["_meta"]?["telemetry"] as JObject
+                    ?? response?["_meta"]?["telemetry"] as JObject;
+                long sdkMs = telemetry?["sdkMs"]?.ToObject<long?>() ?? 0;
+                long workerTransformMs = telemetry?["transformMs"]?.ToObject<long?>() ?? 0;
+                long serializeMs = telemetry?["serializeMs"]?.ToObject<long?>() ?? 0;
+                ToolLatencyStats.Record(
+                    toolName,
+                    ms,
+                    resultClass,
+                    queueWaitMs,
+                    Math.Max(0, responseBytes),
+                    startupMs,
+                    sdkMs,
+                    Math.Max(workerTransformMs, transformMs),
+                    serializeMs,
+                    cacheOutcome);
                 // PERF: per-request instrumentation line — gated so high-throughput
                 // pipelines can drop the DateTime formatting + lock + disk write per call.
-                if (_verboseRequestLogs) Log($"[TOOL-LATENCY] tool={toolName} ms={(long)ms}");
+                if (_verboseRequestLogs) Log($"[TOOL-LATENCY] tool={toolName} ms={(long)ms} queueWaitMs={queueWaitMs} startupMs={startupMs} sdkMs={sdkMs} transformMs={Math.Max(workerTransformMs, transformMs)} serializeMs={serializeMs} result={resultClass} cache={cacheOutcome ?? "unknown"} responseBytes={responseBytes}");
             }
             catch { /* instrumentation must never break the call */ }
+        }
+
+        private static string? ReadCacheOutcome(JObject? response)
+        {
+            if (response == null) return null;
+            return response["_meta"]?["cacheOutcome"]?.ToString()
+                ?? response["result"]?["_meta"]?["cacheOutcome"]?.ToString();
         }
 
         internal static JObject BuildWorkerRpcRequest(JObject workerCommand, string requestId, string? operationId = null)
@@ -318,13 +446,16 @@ namespace GxMcp.Gateway
                 ["params"] = workerCommand
             };
 
-            if (!string.IsNullOrWhiteSpace(operationId))
+            // Carry an enqueue timestamp through the pipe so the Worker can report the
+            // time spent waiting behind the bounded command/STA queues. This is telemetry
+            // only: it never participates in routing, timeout decisions, or payload hashes.
+            var meta = new JObject
             {
-                rpc["_meta"] = new JObject
-                {
-                    ["progressToken"] = operationId
-                };
-            }
+                ["queuedAtUtc"] = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)
+            };
+            if (!string.IsNullOrWhiteSpace(operationId))
+                meta["progressToken"] = operationId;
+            rpc["_meta"] = meta;
 
             return rpc;
         }
@@ -392,7 +523,9 @@ namespace GxMcp.Gateway
             JToken? progressToken = null,
             Func<JObject, Task>? heartbeat = null,
             string? operationIdentity = null,
-            string? mcpRequestId = null)
+            string? mcpRequestId = null,
+            JToken? mcpRequestIdToken = null,
+            string? mcpSessionId = null)
         {
             string requestId = Guid.NewGuid().ToString();
             string correlationId = Guid.NewGuid().ToString("N");
@@ -423,6 +556,9 @@ namespace GxMcp.Gateway
             // once to the replacement instead of surfacing the transient error (which
             // forced the user to manually /mcp reconnect and re-issue).
             int workerAttempt = 0;
+            DateTime requestStartedAtUtc = DateTime.UtcNow;
+            long startupWaitMs = 0;
+            PendingWorkerRequest? lastPending = null;
             while (true)
             {
                 workerAttempt++;
@@ -437,8 +573,11 @@ namespace GxMcp.Gateway
                 // forever; on cap we proceed and let the normal op timeout apply.
                 if (!worker.IsSdkReady)
                 {
+                    var startupSw = System.Diagnostics.Stopwatch.StartNew();
                     bool ready = await McpRouter.AwaitWithHeartbeat(
                         worker.SdkReadyTask, WorkerSdkReadyCeilingMs, progressToken, heartbeat, $"{toolName} (worker starting)");
+                    startupSw.Stop();
+                    startupWaitMs += Math.Max(0L, startupSw.ElapsedMilliseconds);
                     if (!ready)
                         Log($"[Gateway] worker not SDK-ready after {WorkerSdkReadyCeilingMs}ms for tool {toolName}; proceeding — op timeout applies.");
                 }
@@ -451,8 +590,15 @@ namespace GxMcp.Gateway
                     OperationId = operationId,
                     CreatedAtUtc = DateTime.UtcNow,
                     WorkerAlias = worker.Kb?.NormalizedAlias,
-                    McpRequestId = mcpRequestId
+                    McpRequestId = mcpRequestId,
+                    McpRequestIdToken = mcpRequestIdToken?.DeepClone(),
+                    McpSessionId = mcpSessionId ?? "stdio",
+                    ClientProgressToken = progressToken?.DeepClone(),
+                    KbAlias = worker.Kb?.NormalizedAlias,
+                    RequestStartedAtUtc = requestStartedAtUtc,
+                    StartupWaitMs = startupWaitMs
                 };
+                lastPending = pending;
                 _pendingRequests[attemptRequestId] = pending;
                 // A worker-crash retry mints a fresh attemptRequestId; the worker's completion
                 // comes back keyed by it, so link it to the operation or CompleteFromWorker misses
@@ -484,8 +630,23 @@ namespace GxMcp.Gateway
                     {
                         workerErrorObjNoTimeout["correlationId"] = correlationId;
                     }
-                    RecordToolLatency(toolName, pending.CreatedAtUtc);
-                    return onSuccess(workerResponse);
+                    var transformSwNoTimeout = System.Diagnostics.Stopwatch.StartNew();
+                    var transformedNoTimeout = onSuccess(workerResponse);
+                    transformSwNoTimeout.Stop();
+                    long transformedBytesNoTimeout = transformedNoTimeout == null
+                        ? pending.ResponseBytes
+                        : Encoding.UTF8.GetByteCount(transformedNoTimeout.ToString(Newtonsoft.Json.Formatting.None));
+                    RecordToolLatency(
+                        toolName,
+                        pending.CreatedAtUtc,
+                        pending.RequestStartedAtUtc,
+                        workerResponse,
+                        transformedBytesNoTimeout,
+                        resultClassOverride: null,
+                        startupMs: pending.StartupWaitMs,
+                        transformMs: transformSwNoTimeout.ElapsedMilliseconds,
+                        cacheOutcome: ReadCacheOutcome(transformedNoTimeout));
+                    return transformedNoTimeout;
                 }
 
                 // MCP-spec keepalive for long synchronous tool calls: while waiting on the
@@ -527,8 +688,23 @@ namespace GxMcp.Gateway
                     {
                         workerErrorObj["correlationId"] = correlationId;
                     }
-                    RecordToolLatency(toolName, pending.CreatedAtUtc);
-                    return onSuccess(workerResponse);
+                    var transformSw = System.Diagnostics.Stopwatch.StartNew();
+                    var transformed = onSuccess(workerResponse);
+                    transformSw.Stop();
+                    long transformedBytes = transformed == null
+                        ? pending.ResponseBytes
+                        : Encoding.UTF8.GetByteCount(transformed.ToString(Newtonsoft.Json.Formatting.None));
+                    RecordToolLatency(
+                        toolName,
+                        pending.CreatedAtUtc,
+                        pending.RequestStartedAtUtc,
+                        workerResponse,
+                        transformedBytes,
+                        resultClassOverride: null,
+                        startupMs: pending.StartupWaitMs,
+                        transformMs: transformSw.ElapsedMilliseconds,
+                        cacheOutcome: ReadCacheOutcome(transformed));
+                    return transformed;
                 }
                 break; // timeout — fall through to the timeout handling below
             }
@@ -553,6 +729,17 @@ namespace GxMcp.Gateway
             }
 
             Log($"{timeoutLogMessage} (operationId={operationId ?? "n/a"}, correlationId={correlationId})");
+            if (lastPending != null)
+            {
+                RecordToolLatency(
+                    toolName,
+                    lastPending.CreatedAtUtc,
+                    lastPending.RequestStartedAtUtc,
+                    null,
+                    lastPending.ResponseBytes,
+                    "timeout",
+                    lastPending.StartupWaitMs);
+            }
             return onTimeout(operationId, correlationId);
         }
 
@@ -711,7 +898,11 @@ namespace GxMcp.Gateway
         internal static bool IsMutationPreview(JObject? args)
         {
             if (args == null) return false;
-            return args["dryRun"]?.ToObject<bool?>() == true
+            var changeSet = args["changeSet"] as JObject;
+            string? changeSetAction = changeSet?["action"]?.ToString();
+            return string.Equals(changeSetAction, "preview", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(changeSetAction, "validate", StringComparison.OrdinalIgnoreCase)
+                   || args["dryRun"]?.ToObject<bool?>() == true
                    || string.Equals(args["validate"]?.ToString(), "only", StringComparison.OrdinalIgnoreCase)
                    || string.Equals(args["validate"]?.ToString(), "validate-only", StringComparison.OrdinalIgnoreCase);
         }

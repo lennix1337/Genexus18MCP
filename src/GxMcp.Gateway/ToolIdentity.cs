@@ -7,12 +7,11 @@ using Newtonsoft.Json.Linq;
 namespace GxMcp.Gateway
 {
     /// <summary>
-    /// Plan 046 spike prototype — NOT wired into NextLegalActionsBuilder,
-    /// ToolHelpCatalog, or DidYouMean. Proves that a single tool-identity
-    /// registry can answer "what's the canonical name / actions / is this a
-    /// known tool" purely by projecting <c>tool_definitions.json</c> and
-    /// <see cref="McpRouter.TryRewriteLegacyTool"/> — no independently
-    /// maintained tool list of its own. See docs/tool-identity-registry.md.
+    /// Single tool-identity registry for canonical names, action projections
+    /// and legacy aliases. It projects <c>tool_definitions.json</c> and
+    /// <see cref="McpRouter.TryRewriteLegacyTool"/> without maintaining a
+    /// second list. OperationClassifier and NextLegalActionsBuilder consume
+    /// this registry before applying cache, retry or follow-up policy.
     /// </summary>
     internal static class ToolIdentity
     {

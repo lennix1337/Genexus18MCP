@@ -6,7 +6,7 @@
 #   .\scripts\release.ps1 major          # 2.1.2 -> 3.0.0
 #   .\scripts\release.ps1 -NoBump        # publish whatever version is already in package.json
 #
-# Pre-reqs: .NET 8 SDK, GeneXus 18 installed, `gh auth status` ok,
+# Pre-reqs: .NET 10 SDK, GeneXus 18 installed, `gh auth status` ok,
 # clean working tree, on main branch.
 
 [CmdletBinding()]

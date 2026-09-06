@@ -49,22 +49,29 @@ function Check-Prerequisites {
 
     $missing = New-Object System.Collections.Generic.List[string]
 
-    # .NET 8 SDK
+    # .NET 10 SDK (Gateway target; Worker remains .NET Framework 4.8)
     $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
     if (-not $dotnet) {
-        Write-Warn ".NET SDK not found. Gateway build requires .NET 8 SDK."
-        Write-Host "    Download from: https://dotnet.microsoft.com/download/dotnet/8.0" -ForegroundColor Gray
-        $missing.Add(".NET 8 SDK")
+        Write-Warn ".NET SDK not found. Gateway build requires .NET 10 SDK."
+        Write-Host "    Download from: https://dotnet.microsoft.com/download/dotnet/10.0" -ForegroundColor Gray
+        $missing.Add(".NET 10 SDK")
     } else {
         $version = dotnet --version
-        Write-Ok ".NET SDK found: $version"
+        $major = 0
+        [void][int]::TryParse(($version -split '\.')[0], [ref]$major)
+        if ($major -lt 10) {
+            Write-Warn ".NET SDK $version found, but Gateway v3 requires .NET 10 SDK."
+            $missing.Add(".NET 10 SDK (found $version)")
+        } else {
+            Write-Ok ".NET SDK found: $version"
+        }
     }
 
     # Node.js (needed for AI client MCP registration via the genexus-mcp CLI)
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) {
         if (-not $SkipClientConfig) {
-            Write-Warn "Node.js not found. AI client registration requires Node.js 18+."
+            Write-Warn "Node.js not found. AI client registration requires Node.js 22+."
             Write-Host "    Download from: https://nodejs.org/" -ForegroundColor Gray
             Write-Warn "Build will still proceed; pass -SkipClientConfig to register clients manually later."
         } else {

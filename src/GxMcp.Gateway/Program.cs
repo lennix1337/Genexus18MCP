@@ -46,6 +46,30 @@ namespace GxMcp.Gateway
         // per-request KB alias for AutoTypeInjector.CompleteName, same pattern as the two above.
         internal static KbHandle? GetCurrentKb() => _currentKb.Value;
 
+        internal static string? ResolveConfiguredKbAlias(Configuration config, string? kbPath)
+        {
+            if (config?.Environment?.KBs == null || string.IsNullOrWhiteSpace(kbPath)) return null;
+            try
+            {
+                string normalizedPath = Path.GetFullPath(kbPath.Trim())
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var entry = config.Environment.KBs.FirstOrDefault(candidate =>
+                {
+                    if (candidate == null || string.IsNullOrWhiteSpace(candidate.Alias)
+                        || string.IsNullOrWhiteSpace(candidate.Path)) return false;
+                    try
+                    {
+                        string candidatePath = Path.GetFullPath(candidate.Path.Trim())
+                            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                        return string.Equals(candidatePath, normalizedPath, StringComparison.OrdinalIgnoreCase);
+                    }
+                    catch { return false; }
+                });
+                return entry?.Alias?.Trim().ToLowerInvariant();
+            }
+            catch { return null; }
+        }
+
         // Tools that are not KB-scoped: routed by the gateway itself or operate on global state.
         // Must mirror the exclusion list in tool_definitions.json (no `kb` param on these).
         private static readonly HashSet<string> _metaTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -71,6 +95,24 @@ namespace GxMcp.Gateway
             /// notifications/cancelled carries THIS id, not the gateway-generated key of _pendingRequests,
             /// so the cancel handler needs the bridge to find what to abort.</summary>
             public string? McpRequestId { get; init; }
+            /// <summary>Exact JSON-RPC id token; numeric 1 and string "1" are distinct.</summary>
+            public JToken? McpRequestIdToken { get; init; }
+            /// <summary>Transport/session scope that owns this request.</summary>
+            public string McpSessionId { get; init; } = "stdio";
+            /// <summary>
+            /// The progress token supplied by the MCP client. The worker receives a
+            /// private operation id for correlation, but that id must never replace
+            /// this token on the client-facing wire.
+            /// </summary>
+            public JToken? ClientProgressToken { get; init; }
+            /// <summary>Resolved KB used by the worker request, for diagnostics and routing audits.</summary>
+            public string? KbAlias { get; init; }
+            /// <summary>Timestamp before worker acquisition/readiness wait.</summary>
+            public DateTime RequestStartedAtUtc { get; init; } = DateTime.UtcNow;
+            /// <summary>Time spent waiting for the Worker SDK-ready boundary.</summary>
+            public long StartupWaitMs { get; init; }
+            /// <summary>UTF-8 bytes in the raw worker response envelope.</summary>
+            public long ResponseBytes { get; set; }
             // PERFORMANCE (perf-review): parsed response envelope. WorkerProcess already
             // parses every line to route it (notifications vs responses + in-flight
             // bookkeeping); HandleWorkerResponse stashes the JObject here so the await
@@ -80,17 +122,120 @@ namespace GxMcp.Gateway
             public JObject? ParsedResponse { get; set; }
         }
 
+        /// <summary>
+        /// A lifecycle status long-poll is owned by the MCP request that opened it,
+        /// but it does not go through the worker pending-request table. Keep a
+        /// separate, short-lived cancellation bridge so a later
+        /// notifications/cancelled frame can interrupt that wait without allowing
+        /// another session or a different JSON-RPC id type to cancel it.
+        /// </summary>
+        private sealed class PendingLongPollRequest
+        {
+            public CancellationTokenSource CancellationSource { get; init; } = new CancellationTokenSource();
+            public JToken? McpRequestIdToken { get; init; }
+            public string McpSessionId { get; init; } = "stdio";
+            public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
+        }
+
         private static ConcurrentDictionary<string, PendingWorkerRequest> _pendingRequests = new ConcurrentDictionary<string, PendingWorkerRequest>();
+        private static ConcurrentDictionary<string, PendingLongPollRequest> _pendingLongPollRequests = new ConcurrentDictionary<string, PendingLongPollRequest>();
+
+        internal static bool RequestIdentityMatches(string pendingSessionId, JToken? pendingRequestId, string cancellationSessionId, JToken? cancelledRequestId)
+        {
+            return string.Equals(pendingSessionId ?? "stdio", cancellationSessionId ?? "stdio", StringComparison.Ordinal)
+                && pendingRequestId != null && cancelledRequestId != null
+                && JToken.DeepEquals(pendingRequestId, cancelledRequestId);
+        }
+
+        private static string RegisterPendingLongPoll(
+            string sessionId,
+            JToken? requestId,
+            CancellationToken transportCancellation,
+            out CancellationToken cancellationToken)
+        {
+            var source = transportCancellation.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(transportCancellation)
+                : new CancellationTokenSource();
+            var pending = new PendingLongPollRequest
+            {
+                McpSessionId = sessionId ?? "stdio",
+                McpRequestIdToken = requestId?.DeepClone(),
+                CancellationSource = source
+            };
+            string key = Guid.NewGuid().ToString("N");
+            _pendingLongPollRequests[key] = pending;
+            cancellationToken = pending.CancellationSource.Token;
+            return key;
+        }
+
+        private static void UnregisterPendingLongPoll(string key)
+        {
+            if (_pendingLongPollRequests.TryRemove(key, out var pending))
+            {
+                pending.CancellationSource.Dispose();
+            }
+        }
+
+        private static int CancelPendingLongPolls(string sessionId, JToken cancelledRequestId)
+        {
+            int cancelled = 0;
+            foreach (var kvp in _pendingLongPollRequests.ToArray())
+            {
+                if (!RequestIdentityMatches(
+                        kvp.Value.McpSessionId,
+                        kvp.Value.McpRequestIdToken,
+                        sessionId,
+                        cancelledRequestId))
+                {
+                    continue;
+                }
+
+                if (_pendingLongPollRequests.TryGetValue(kvp.Key, out var pending)
+                    && !pending.CancellationSource.IsCancellationRequested)
+                {
+                    try { pending.CancellationSource.Cancel(); }
+                    catch (ObjectDisposedException) { }
+                    cancelled++;
+                }
+            }
+
+            return cancelled;
+        }
+
+        private static int CleanupStalePendingLongPolls(DateTime cutoff)
+        {
+            int removed = 0;
+            foreach (var kvp in _pendingLongPollRequests.ToArray())
+            {
+                if (kvp.Value.CreatedAtUtc > cutoff
+                    || !_pendingLongPollRequests.TryRemove(kvp.Key, out var pending))
+                {
+                    continue;
+                }
+
+                try { pending.CancellationSource.Cancel(); }
+                catch (ObjectDisposedException) { }
+                removed++;
+            }
+
+            return removed;
+        }
         private static readonly SemanticCacheStore _semanticCache = new SemanticCacheStore();
-        // C1 (race fix): bumped on every semantic-cache invalidation (Clear). In-flight reads
-        // capture the epoch before dispatching to the worker and must skip the cache store
-        // when it moved on — otherwise a read completing after a mutation would repopulate
-        // the cache with its pre-mutation envelope.
+        // C1 (race fix): bumped for global/unknown semantic-cache invalidations. In-flight
+        // reads capture the epoch before dispatching to the worker and must skip the cache
+        // store when it moved on — otherwise a read completing after a mutation would
+        // repopulate the cache with its pre-mutation envelope. Per-KB invalidations use
+        // SemanticCacheStore generations so unrelated KBs keep their warm entries.
         internal static int SemanticCacheEpoch;
         private static HttpSessionRegistry _httpSessions = new HttpSessionRegistry(TimeSpan.FromMinutes(10));
-        private static IdempotencyCache _idempotencyCache = new IdempotencyCache(15, 1000);
+        private static IdempotencyCache _idempotencyCache = new IdempotencyCache(
+            15,
+            1000,
+            TimeSpan.FromSeconds(30),
+            Path.Combine(AppContext.BaseDirectory, "state", "mutation-operations.json"));
         private static readonly OperationTracker _operationTracker = new OperationTracker(TimeSpan.FromMinutes(60));
-        private static readonly MutationRecoveryRegistry _mutationRecovery = new MutationRecoveryRegistry();
+        private static readonly MutationRecoveryRegistry _mutationRecovery =
+            new MutationRecoveryRegistry(Path.Combine(AppContext.BaseDirectory, "state", "mutation-recovery.json"));
         internal static OperationTracker OperationTracker => _operationTracker;
 
         // User-macro storage: <configRoot>/recipes/user-macros/<name>.json.
@@ -423,7 +568,7 @@ namespace GxMcp.Gateway
                 try { File.AppendAllText("gateway_panic.log", msg); } catch { }
             };
 
-            // Register encoding provider for Windows-1252 support in .NET 8
+            // Register encoding provider for Windows-1252 support in .NET 10
             System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
             try
@@ -539,7 +684,9 @@ namespace GxMcp.Gateway
             _httpSessions = new HttpSessionRegistry(TimeSpan.FromMinutes(config.Server?.SessionIdleTimeoutMinutes ?? 10));
             _idempotencyCache = new IdempotencyCache(
                 config.Server?.IdempotencyTtlMinutes ?? 15,
-                config.Server?.IdempotencyCacheSize ?? 1000);
+                config.Server?.IdempotencyCacheSize ?? 1000,
+                TimeSpan.FromSeconds(30),
+                Path.Combine(AppContext.BaseDirectory, "state", "mutation-operations.json"));
             
             // Subscribing to Configuration Changes
             Configuration.OnConfigurationChanged += (newConfig) => {
@@ -596,6 +743,7 @@ namespace GxMcp.Gateway
                 try
                 {
                     string mirrorPath = Path.Combine(config.Environment.KBPath, ".gx_mirror");
+                    string? watchedKbAlias = ResolveConfiguredKbAlias(config, config.Environment.KBPath);
                     if (!Directory.Exists(mirrorPath)) Directory.CreateDirectory(mirrorPath);
                     _gxMirrorWatcher = new FileSystemWatcher(mirrorPath)
                     {
@@ -613,9 +761,16 @@ namespace GxMcp.Gateway
                             {
                                 try
                                 {
-                                    Log("[Cache] Invalidation triggered by external change.");
-                                    _semanticCache.Clear();
-                                    BroadcastResourceUpdated("genexus://objects", "external_kb_change");
+                                    string scope = watchedKbAlias ?? string.Empty;
+                                    Log($"[Cache] Invalidation triggered by external change for scope '{scope}'.");
+                                    _semanticCache.InvalidateScope(scope);
+                                    if (string.IsNullOrWhiteSpace(scope))
+                                        System.Threading.Interlocked.Increment(ref SemanticCacheEpoch);
+                                    BroadcastResourceUpdated(
+                                        "genexus://objects",
+                                        "external_kb_change",
+                                        scope,
+                                        _semanticCache.GetRevision(scope));
                                 }
                                 catch (Exception exInval) { Log($"[Cache] Invalidation error: {exInval.Message}"); }
                             }, null, 300, System.Threading.Timeout.Infinite);

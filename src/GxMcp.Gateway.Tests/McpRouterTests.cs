@@ -58,6 +58,10 @@ namespace GxMcp.Gateway.Tests
             Assert.Contains(McpRouter.ModernProtocolVersion, versions!.Values<string>());
             Assert.Contains(McpRouter.SupportedProtocolVersion, versions.Values<string>());
             Assert.Equal("genexus-mcp-server", result["_meta"]?["io.modelcontextprotocol/serverInfo"]?["name"]?.ToString());
+            Assert.NotNull(result["capabilities"]?["extensions"]?["io.modelcontextprotocol/tasks"]);
+            Assert.True(result["capabilities"]?["tools"]?["listChanged"]?.Value<bool>());
+            Assert.True(result["capabilities"]?["resources"]?["listChanged"]?.Value<bool>());
+            Assert.True(result["capabilities"]?["resources"]?["subscribe"]?.Value<bool>());
             Assert.True(result["ttlMs"]!.Value<int>() > 0);
         }
 
@@ -318,6 +322,20 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ConvertResourceCall_ShouldMapPerKbCapabilitiesResource()
+        {
+            var request = JObject.Parse(
+                """{"jsonrpc":"2.0","id":"1","method":"resources/read","params":{"uri":"genexus://kb/capabilities"}}"""
+            );
+
+            var result = JObject.FromObject(McpRouter.ConvertResourceCall(request)!);
+
+            Assert.Equal("SdkProbe", result["module"]?.ToString());
+            Assert.Equal("Capabilities", result["action"]?.ToString());
+            Assert.Equal("_self", result["target"]?.ToString());
+        }
+
+        [Fact]
         public void ConvertResourceCall_ShouldMapLogicStructureResource()
         {
             var request = JObject.Parse(
@@ -346,6 +364,33 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("ExtractSource", json["action"]?.ToString());
             Assert.Equal("ControleExtensaoHoras", json["target"]?.ToString());
             Assert.Equal("PatternInstance", json["part"]?.ToString());
+        }
+
+        [Fact]
+        public void ConvertResourceCall_ShouldUnscopeKbQualifiedObjectResource()
+        {
+            var request = JObject.Parse(
+                """{"jsonrpc":"2.0","id":"1","method":"resources/read","params":{"uri":"genexus://kb/sales/objects/Customer/logic-structure"}}"""
+            );
+
+            var result = JObject.FromObject(McpRouter.ConvertResourceCall(request)!);
+
+            Assert.Equal("Structure", result["module"]?.ToString());
+            Assert.Equal("GetLogicStructure", result["action"]?.ToString());
+            Assert.Equal("Customer", result["target"]?.ToString());
+            Assert.True(McpRouter.TryGetScopedResourceKb(request, out var kbAlias));
+            Assert.Equal("sales", kbAlias);
+        }
+
+        [Fact]
+        public void TryGetScopedResourceKb_DoesNotTreatLegacySkillUriAsScoped()
+        {
+            var request = JObject.Parse(
+                """{"jsonrpc":"2.0","id":"1","method":"resources/read","params":{"uri":"genexus://kb/skills/navigation"}}"""
+            );
+
+            Assert.False(McpRouter.TryGetScopedResourceKb(request, out var kbAlias));
+            Assert.Null(kbAlias);
         }
 
         [Fact]

@@ -6,6 +6,77 @@ namespace GxMcp.Gateway.Tests
 {
     public class OperationClassifierTests
     {
+        [Fact]
+        public void DescribePublishesOneConservativePolicyForCacheAndRetry()
+        {
+            var read = OperationClassifier.Describe("genexus_query", new JObject());
+            Assert.Equal("kb.read", read.Effects);
+            Assert.Equal("safe", read.Retry);
+            Assert.Equal("semantic", read.Cache);
+
+            var write = OperationClassifier.Describe("genexus_structure",
+                new JObject { ["action"] = "update_visual", ["dryRun"] = false });
+            Assert.Equal(OperationClassifier.OperationKind.Mutating, write.Kind);
+            Assert.Equal("operation_key", write.Retry);
+            Assert.Equal("never", write.Cache);
+            Assert.True(write.PreviewSupported);
+
+            var legacyWrite = OperationClassifier.Describe("genexus_edit", new JObject());
+            Assert.Equal(OperationClassifier.OperationKind.Mutating, legacyWrite.Kind);
+            Assert.Equal("operation_key", legacyWrite.Retry);
+
+            var unknown = OperationClassifier.Describe("genexus_structure", new JObject { ["action"] = "typo" });
+            Assert.Equal(OperationClassifier.OperationKind.Unknown, unknown.Kind);
+            Assert.Equal("never", unknown.Retry);
+        }
+
+        [Theory]
+        [InlineData("genexus_navigation", "view")]
+        [InlineData("genexus_db", "sample_data")]
+        [InlineData("genexus_import_object", null)]
+        [InlineData("genexus_create_object", null)]
+        public void MutationCandidate_UsesCanonicalActionsAndAliases(string toolName, string? action)
+        {
+            var args = new JObject();
+            if (action != null) args["action"] = action;
+            Assert.True(OperationClassifier.IsMutationCandidate(toolName, args));
+        }
+
+        [Theory]
+        [InlineData("genexus_import_object", "genexus_io", "import_part", true)]
+        [InlineData("genexus_export_object", "genexus_io", "export_part", true)]
+        [InlineData("genexus_history", "genexus_versioning", "history_save", true)]
+        [InlineData("genexus_db_optimize", "genexus_db", "optimize_report", false)]
+        [InlineData("genexus_edit_form", "genexus_edit_form", "", true)]
+        public void Describe_RewritesLegacyAliasesBeforeApplyingPolicy(
+            string alias, string canonical, string action, bool expectedMutation)
+        {
+            var described = OperationClassifier.Describe(alias, new JObject
+            {
+                ["action"] = alias == "genexus_history" ? "save" :
+                    alias == "genexus_db_optimize" ? "report" : null
+            });
+
+            Assert.Equal(canonical, described.CanonicalName);
+            var normalized = OperationClassifier.NormalizeArguments(alias, new JObject
+            {
+                ["action"] = alias == "genexus_history" ? "save" :
+                    alias == "genexus_db_optimize" ? "report" : null
+            }, out _);
+            if (!string.IsNullOrEmpty(action))
+                Assert.Equal(action, normalized["action"]?.ToString());
+            Assert.Equal(expectedMutation,
+                described.Kind == OperationClassifier.OperationKind.Mutating);
+        }
+
+        [Fact]
+        public void MutationCandidate_PreservesPreviewAsAnOuterFence()
+        {
+            Assert.False(OperationClassifier.IsMutationCandidate("genexus_db",
+                new JObject { ["action"] = "records_insert", ["dryRun"] = true }));
+            Assert.True(OperationClassifier.IsMutationCandidate("genexus_browser",
+                new JObject { ["action"] = "preview", ["buildFirst"] = true }));
+        }
         [Theory]
         [InlineData("genexus_query")]
         [InlineData("genexus_list_objects")]
@@ -18,6 +89,51 @@ namespace GxMcp.Gateway.Tests
         public void PureReadTools_ClassifiedAsReadOnly(string toolName)
         {
             Assert.True(OperationClassifier.IsReadOnly(toolName, new JObject()));
+        }
+
+        [Fact]
+        public void ActionlessPublishedToolsUseExplicitModePolicies()
+        {
+            Assert.Equal(OperationClassifier.OperationKind.ReadOnly,
+                OperationClassifier.ClassifyTool("genexus_compare", new JObject()));
+            Assert.Equal(OperationClassifier.OperationKind.ReadOnly,
+                OperationClassifier.ClassifyTool("genexus_format", new JObject()));
+
+            Assert.Equal(OperationClassifier.OperationKind.ReadOnly,
+                OperationClassifier.ClassifyTool("genexus_sdk_probe",
+                    new JObject { ["mode"] = "capabilities" }));
+            Assert.Equal(OperationClassifier.OperationKind.Mutating,
+                OperationClassifier.ClassifyTool("genexus_sdk_probe", new JObject()));
+
+            Assert.Equal(OperationClassifier.OperationKind.ReadOnly,
+                OperationClassifier.ClassifyTool("genexus_run_object",
+                    new JObject { ["dryRun"] = true }));
+            Assert.Equal(OperationClassifier.OperationKind.Mutating,
+                OperationClassifier.ClassifyTool("genexus_run_object", new JObject()));
+
+            Assert.Equal(OperationClassifier.OperationKind.ReadOnly,
+                OperationClassifier.ClassifyTool("genexus_merge", new JObject()));
+            Assert.Equal(OperationClassifier.OperationKind.Mutating,
+                OperationClassifier.ClassifyTool("genexus_merge",
+                    new JObject { ["dryRun"] = false }));
+        }
+
+        [Fact]
+        public void ModeDependentPoliciesExposeEffectsAndCloseRetryOnWrites()
+        {
+            var surface = OperationClassifier.Describe("genexus_sdk_probe", new JObject());
+            Assert.Equal(OperationClassifier.OperationKind.Mutating, surface.Kind);
+            Assert.Equal("file.write", surface.Effects);
+            Assert.Equal("worker", surface.Execution);
+            Assert.Equal("operation_key", surface.Retry);
+            Assert.Equal("never", surface.Cache);
+            Assert.Contains("files", surface.Invalidation);
+
+            var recovery = OperationClassifier.Describe("genexus_connection_recover", new JObject());
+            Assert.Equal("process.write", recovery.Effects);
+            Assert.Equal("gateway", recovery.Execution);
+            Assert.Equal("operation_key", recovery.Retry);
+            Assert.Contains("sessions", recovery.Invalidation);
         }
 
         [Fact]

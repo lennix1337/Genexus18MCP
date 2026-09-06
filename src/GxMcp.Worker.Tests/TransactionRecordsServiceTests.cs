@@ -527,6 +527,8 @@ namespace GxMcp.Worker.Tests
             Assert.Null(result["records"][0]["Stamp"]);
             Assert.Equal("read-only", result["versionTokenKind"].Value<string>());
             Assert.True(result["writePreviewRequired"].Value<bool>());
+            Assert.Equal("typed_sql", result["dataAccess"].Value<string>());
+            Assert.False(result["businessRulesExecuted"].Value<bool>());
             Assert.Equal(count, f.Db.SelectedRows);
             Error(f.Write("UpdateRecords", Update(), result["versionToken"].Value<string>()), "DryRunRequired");
             Assert.Equal(0, f.Db.Writes);

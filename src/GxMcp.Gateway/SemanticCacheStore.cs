@@ -26,6 +26,14 @@ namespace GxMcp.Gateway
         // Last-access timestamp per key, driven by NextStamp(). Kept separate so
         // the cached envelope itself stays a plain JObject.
         private readonly ConcurrentDictionary<string, long> _lastAccess = new ConcurrentDictionary<string, long>();
+        // Absolute creation timestamp per key. Recency is deliberately separate:
+        // a hot entry may move in the LRU order, but a hit must never extend its
+        // freshness window indefinitely.
+        private readonly ConcurrentDictionary<string, long> _createdAt = new ConcurrentDictionary<string, long>();
+        // A mutation advances only the affected KB generation. Reads that started
+        // against an older generation cannot repopulate the cache after the write.
+        private readonly ConcurrentDictionary<string, long> _scopeRevisions = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        private readonly Func<long> _clock;
         private readonly int _maxEntries;
         private readonly TimeSpan _ttl;
         // Logical clock: TickCount64 alone has 1ms resolution, so several accesses
@@ -40,9 +48,17 @@ namespace GxMcp.Gateway
 
         // Test seam: lets unit tests drive eviction/TTL deterministically.
         internal SemanticCacheStore(int maxEntries, TimeSpan ttl)
+            : this(maxEntries, ttl, () => Environment.TickCount64)
+        {
+        }
+
+        // Test seam: inject a monotonic millisecond clock so absolute-expiry and
+        // generation races can be asserted without sleeping.
+        internal SemanticCacheStore(int maxEntries, TimeSpan ttl, Func<long> clock)
         {
             _maxEntries = maxEntries > 0 ? maxEntries : DefaultMaxEntries;
             _ttl = ttl;
+            _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         }
 
         public int MaxEntries => _maxEntries;
@@ -71,6 +87,8 @@ namespace GxMcp.Gateway
             SweepExpired();
 
             _entries[key] = value;
+            long now = _clock();
+            _createdAt[key] = now;
             _lastAccess[key] = NextStamp();
 
             EvictBeyondCap();
@@ -80,34 +98,91 @@ namespace GxMcp.Gateway
         {
             _entries.Clear();
             _lastAccess.Clear();
+            _createdAt.Clear();
+            _scopeRevisions.Clear();
+        }
+
+        /// <summary>Returns the current generation for one KB scope.</summary>
+        public long GetRevision(string kbScope)
+        {
+            string scope = NormalizeScope(kbScope);
+            return _scopeRevisions.TryGetValue(scope, out var revision) ? revision : 0L;
         }
 
         /// <summary>
-        /// Target-scoped invalidation: drop only entries whose cached args mention
-        /// <paramref name="targetObject"/>. A mutation on object X keeps every cached
-        /// read of object Y valid — measured on a real KB, a full Clear() after each
-        /// write threw away unrelated warm reads and forced a ~10x slower re-read
-        /// (9ms cache hit vs 98ms worker round-trip).
-        /// Keys are "{kbAlias}|{tool}:{args-json}", so a substring match on the args
-        /// JSON finds reads that referenced the target (name/target/targets fields).
-        /// Conservative by design: anything ambiguous should call <see cref="Clear"/>
-        /// instead. Returns the number of entries removed.
+        /// Invalidates all reads for one KB and advances its generation. The
+        /// returned revision is the value callers should capture for a new read.
+        /// </summary>
+        public long InvalidateScope(string kbScope)
+            => InvalidateScope(kbScope, out _);
+
+        public long InvalidateScope(string kbScope, out int removed)
+        {
+            string scope = NormalizeScope(kbScope);
+            long revision = _scopeRevisions.AddOrUpdate(scope, 1L, (_, current) => checked(current + 1L));
+            if (string.IsNullOrWhiteSpace(scope))
+            {
+                removed = _entries.Count;
+                Clear();
+                // Clear() removes the revision map, so restore the incremented
+                // empty-scope generation for callers that captured it.
+                _scopeRevisions[scope] = revision;
+            }
+            else
+            {
+                removed = ClearScopeEntries(scope);
+            }
+            return revision;
+        }
+
+        /// <summary>Clear only entries belonging to one KB scope.</summary>
+        public int ClearScope(string kbScope)
+        {
+            string scope = NormalizeScope(kbScope);
+            if (string.IsNullOrWhiteSpace(scope)) return 0;
+            _scopeRevisions.AddOrUpdate(scope, 1L, (_, current) => checked(current + 1L));
+            return ClearScopeEntries(scope);
+        }
+
+        private int ClearScopeEntries(string scope)
+        {
+            int removed = 0;
+            foreach (var key in _entries.Keys.ToArray())
+            {
+                if (key.StartsWith(scope + "|", StringComparison.Ordinal) && RemoveEntry(key)) removed++;
+            }
+            return removed;
+        }
+
+        /// <summary>
+        /// Invalidate derived reads within the affected KB: collections and dependency
+        /// analyses can change even when their arguments don't name the mutated object.
+        /// Only direct source reads of unrelated objects survive until dependency tags
+        /// can prove that broader cached results remain valid.
         /// </summary>
         public int RemoveByTarget(string kbScope, string targetObject)
         {
             if (string.IsNullOrWhiteSpace(targetObject)) return 0;
+            string scope = NormalizeScope(kbScope);
+            if (string.IsNullOrWhiteSpace(scope)) return 0;
 
             // Word-boundary-ish match on the quoted JSON value so "Cliente" does not
             // match "ClienteId" / "MeuCliente" inside args JSON.
-            string needle = "\"" + targetObject + "\"";
+            string needle = Newtonsoft.Json.JsonConvert.SerializeObject(targetObject);
             int removed = 0;
             foreach (var key in _entries.Keys.ToArray())
             {
-                if (!key.StartsWith(kbScope + "|", StringComparison.Ordinal)) continue;
-                int argsStart = key.IndexOf(':', kbScope.Length + 2);
-                if (argsStart < 0) continue;
+                if (!key.StartsWith(scope + "|", StringComparison.Ordinal)) continue;
+                int argsStart = key.IndexOf(':', scope.Length + 2);
+                if (argsStart < 0)
+                {
+                    if (RemoveEntry(key)) removed++;
+                    continue;
+                }
+                string tool = key.Substring(scope.Length + 1, argsStart - scope.Length - 1);
                 string argsJson = key.Substring(argsStart + 1);
-                if (argsJson.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0
+                if ((!string.Equals(tool, "genexus_read", StringComparison.OrdinalIgnoreCase)
+                     || argsJson.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
                     && RemoveEntry(key))
                 {
                     removed++;
@@ -118,8 +193,8 @@ namespace GxMcp.Gateway
 
         private bool IsExpired(string key)
         {
-            if (!_lastAccess.TryGetValue(key, out var lastSeen)) return true;
-            return TimeSpan.FromMilliseconds(Environment.TickCount64 - lastSeen) > _ttl;
+            if (!_createdAt.TryGetValue(key, out var createdAt)) return true;
+            return TimeSpan.FromMilliseconds(_clock() - createdAt) >= _ttl;
         }
 
         /// <summary>
@@ -129,7 +204,7 @@ namespace GxMcp.Gateway
         /// </summary>
         private long NextStamp()
         {
-            long ticks = Environment.TickCount64;
+            long ticks = _clock();
             long prev = Interlocked.Read(ref _lastStamp);
             while (true)
             {
@@ -172,8 +247,12 @@ namespace GxMcp.Gateway
         private bool RemoveEntry(string key)
         {
             _lastAccess.TryRemove(key, out _);
+            _createdAt.TryRemove(key, out _);
             return _entries.TryRemove(key, out _);
         }
+
+        private static string NormalizeScope(string? scope)
+            => (scope ?? string.Empty).Trim().ToLowerInvariant();
 
         private static int ResolveMaxEntriesFromEnv()
         {

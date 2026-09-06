@@ -209,9 +209,9 @@ namespace GxMcp.Gateway.Tests
         // BaseOutputPath (scripts/coverage/collect.ps1 redirects to .test-bin/gateway).
         private static System.Collections.Generic.IEnumerable<string> gatewayExeCandidates(string repoRoot)
         {
-            yield return Path.Combine(repoRoot, "src", "GxMcp.Gateway", "bin", "Debug", "net8.0-windows", "GxMcp.Gateway.exe");
-            yield return Path.Combine(repoRoot, "src", "GxMcp.Gateway", "bin", "Release", "net8.0-windows", "GxMcp.Gateway.exe");
-            yield return Path.Combine(repoRoot, ".test-bin", "gateway", "Debug", "net8.0-windows", "GxMcp.Gateway.exe");
+            yield return Path.Combine(repoRoot, "src", "GxMcp.Gateway", "bin", "Debug", "net10.0-windows", "GxMcp.Gateway.exe");
+            yield return Path.Combine(repoRoot, "src", "GxMcp.Gateway", "bin", "Release", "net10.0-windows", "GxMcp.Gateway.exe");
+            yield return Path.Combine(repoRoot, ".test-bin", "gateway", "Debug", "net10.0-windows", "GxMcp.Gateway.exe");
         }
 
         private static string FindGatewayExe(string repoRoot)

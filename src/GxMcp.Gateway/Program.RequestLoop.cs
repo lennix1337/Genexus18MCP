@@ -23,6 +23,34 @@ namespace GxMcp.Gateway
 {
     partial class Program
     {
+        /// <summary>
+        /// Carries the caller's stable operation identity into the Worker RPC.
+        /// The Gateway journal remains the durable fence; the Worker identity is
+        /// a second in-process guard for retries that arrive after a transport
+        /// timeout but before the first response reaches the client.
+        /// </summary>
+        internal static void AttachClientRequestIdentity(JObject workerCommand, JObject? toolArgs)
+        {
+            if (workerCommand == null || toolArgs == null) return;
+
+            string? identity = toolArgs["clientRequestId"]?.ToString();
+            if (string.IsNullOrWhiteSpace(identity))
+                identity = toolArgs["idempotencyKey"]?.ToString();
+            if (string.IsNullOrWhiteSpace(identity)) return;
+
+            var workerParams = workerCommand["params"] as JObject;
+            if (workerParams == null)
+            {
+                workerParams = new JObject();
+                workerCommand["params"] = workerParams;
+            }
+
+            // A router/adapter may already have bound a stronger identity. Do
+            // not silently replace it with a client argument.
+            if (string.IsNullOrWhiteSpace(workerParams["clientRequestId"]?.ToString()))
+                workerParams["clientRequestId"] = identity;
+        }
+
         internal static bool UpsertKbCatalogEntry(JObject environment, string alias, string path)
         {
             if (environment == null) throw new ArgumentNullException(nameof(environment));
@@ -86,11 +114,19 @@ namespace GxMcp.Gateway
         internal static async Task<JObject?> ProcessMcpRequest(
             JObject request,
             string sessionId = "stdio",
-            bool sessionContextEnabled = true)
+            bool sessionContextEnabled = true,
+            CancellationToken transportCancellation = default,
+            bool taskScopeEnabled = true)
         {
             string? method = request["method"]?.ToString();
             var idToken = request["id"];
             _currentKb.Value = null;
+
+            // Resource subscriptions are stateful protocol operations. Route them
+            // before McpRouter's static discovery handler so an ACK is only issued
+            // after the URI is validated and attached to the creating HTTP session.
+            var subscriptionResponse = McpSubscriptionProtocol.Handle(request, sessionId, _httpSessions);
+            if (subscriptionResponse != null) return subscriptionResponse;
 
             // Protocol-level methods and gateway-owned resources must not depend on
             // KB resolution. This keeps initialize/discovery usable before any KB
@@ -124,6 +160,12 @@ namespace GxMcp.Gateway
                 }
                 return new JObject { ["jsonrpc"] = "2.0", ["id"] = idToken?.DeepClone(), ["result"] = JToken.FromObject(mcpResponse) };
             }
+
+            // MCP tasks extension: route task handles before KB resolution. This keeps
+            // status/cancel responsive while the worker is saturated and enforces the
+            // creating session as the task's ownership boundary.
+            var taskResponse = McpTasksProtocol.Handle(request, sessionId, JobRegistry, taskScopeEnabled);
+            if (taskResponse != null) return taskResponse;
 
             // Reject removed tools early with JSON-RPC -32601 + structured `data`.
             // This is gateway-owned and must not require a KB just to explain that
@@ -182,6 +224,14 @@ namespace GxMcp.Gateway
                             kbArg = argsObj?["kb"]?.ToString();
                             // Strip `kb` from worker-bound args (worker is single-KB scoped).
                             argsObj?.Remove("kb");
+                        }
+                        else if (string.Equals(method, "resources/read", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // A modern subscription can return a KB-qualified
+                            // `resourceUri`. Resolve that alias explicitly so a
+                            // same-named resource in another open KB is never read
+                            // by fallback selection.
+                            McpRouter.TryGetScopedResourceKb(request, out kbArg);
                         }
                         string? sessionDefaultAlias = null;
                         bool sessionContextInitialized = sessionContextEnabled
@@ -467,7 +517,8 @@ namespace GxMcp.Gateway
                                 _workerPool.StopAll();
                             }
                         }
-                        _semanticCache.Clear();
+                        _semanticCache.InvalidateScope(string.Empty);
+                        System.Threading.Interlocked.Increment(ref SemanticCacheEpoch);
                         StartWorker(_activeConfig);
                         var readyAliases = new JArray();
                         var failedAliases = new JArray();
@@ -585,8 +636,14 @@ namespace GxMcp.Gateway
                                 newWorker.SdkReadyTask, timeoutMs: 180_000,
                                 progressToken: null, heartbeat: null,
                                 toolName: "worker_reload").ConfigureAwait(false);
-                            BroadcastToolsListChanged("worker_reloaded_soft");
-                            BroadcastResourcesListChanged("worker_reloaded_soft");
+                            BroadcastToolsListChanged(
+                                "worker_reloaded_soft",
+                                reloadKb.NormalizedAlias,
+                                _semanticCache.GetRevision(reloadKb.NormalizedAlias));
+                            BroadcastResourcesListChanged(
+                                "worker_reloaded_soft",
+                                reloadKb.NormalizedAlias,
+                                _semanticCache.GetRevision(reloadKb.NormalizedAlias));
                             return BuildToolTextResponse(idToken,
                                 new JObject
                                 {
@@ -1040,7 +1097,8 @@ namespace GxMcp.Gateway
                             {
                                 _workerPool.StopAll(WorkerStopReason.Wedged);
                             }
-                            _semanticCache.Clear();
+                            _semanticCache.InvalidateScope(string.Empty);
+                            System.Threading.Interlocked.Increment(ref SemanticCacheEpoch);
 
                             var restored = new JArray();
                             var failed = new JArray();
@@ -1272,6 +1330,77 @@ namespace GxMcp.Gateway
                 {
                     string? lifecycleAction = args?["action"]?.ToString();
                     string? lifecycleTarget = args?["target"]?.ToString();
+
+                    // Durable mutation recovery is intentionally Gateway-local. After a
+                    // restart the Worker cannot safely infer whether a timed-out write
+                    // committed, so inspect/reconcile expose only the redacted journal
+                    // state and require an explicit verification before closing a fence.
+                    if (string.Equals(lifecycleAction, "inspect", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(lifecycleAction, "reconcile", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            string operationKey = args?["operationKey"]?.ToString()
+                                ?? args?["idempotencyKey"]?.ToString()
+                                ?? string.Empty;
+                            string operationTool = args?["operationTool"]?.ToString()
+                                ?? args?["tool"]?.ToString()
+                                ?? string.Empty;
+                            if (string.IsNullOrWhiteSpace(operationKey) || string.IsNullOrWhiteSpace(operationTool))
+                                throw new UsageException("usage_error", "action=inspect|reconcile requires operationKey and operationTool.");
+                            IdempotencyMiddleware.ValidateKey(operationKey);
+
+                            string? requestedKb = args?["kb"]?.ToString();
+                            string journalKbPath = !string.IsNullOrWhiteSpace(requestedKb)
+                                ? (ResolveKbPath(requestedKb) ?? throw new UsageException("kb_not_found", "The requested kb alias/path could not be resolved."))
+                                : (_currentKb.Value?.Path ?? _activeConfig?.Environment?.KBPath ?? string.Empty);
+                            if (string.IsNullOrWhiteSpace(journalKbPath))
+                                throw new UsageException("no_active_kb", "Open or select a KB before inspecting durable operations.");
+
+                            JObject operationPayload;
+                            if (string.Equals(lifecycleAction, "inspect", StringComparison.OrdinalIgnoreCase))
+                            {
+                                operationPayload = _idempotencyCache.InspectOperation(journalKbPath, operationTool, operationKey);
+                            }
+                            else
+                            {
+                                bool confirmed = args?["confirmed"]?.ToObject<bool?>() == true;
+                                string verification = args?["verification"]?.ToString()
+                                    ?? args?["verificationToken"]?.ToString()
+                                    ?? string.Empty;
+                                if (!confirmed || string.IsNullOrWhiteSpace(verification))
+                                    throw new UsageException("verification_required", "Reconcile requires confirmed=true and a non-empty verification statement after an independent genexus_read.");
+                                JToken? observedTargets = args?["observedTargetIds"]
+                                    ?? args?["targetIds"];
+                                string? observedRevision = args?["observedRevision"]?.ToString()
+                                    ?? args?["revision"]?.ToString();
+                                var observedEvidence = MutationOperationEvidence.FromObserved(observedTargets, observedRevision);
+                                operationPayload = _idempotencyCache.ReconcileOperation(
+                                    journalKbPath,
+                                    operationTool,
+                                    operationKey,
+                                    verification,
+                                    observedEvidence);
+                            }
+
+                            bool recoveryError = string.Equals(operationPayload["status"]?.ToString(), "Blocked", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(operationPayload["status"]?.ToString(), "Rejected", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(operationPayload["status"]?.ToString(), "NotFound", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(operationPayload["code"]?.ToString(), "operation_journal_unavailable", StringComparison.OrdinalIgnoreCase);
+                            return BuildToolTextResponse(idToken, operationPayload, isError: recoveryError, toolName: toolName, toolArgs: args, payloadOwned: true);
+                        }
+                        catch (UsageException ux)
+                        {
+                            var usagePayload = new JObject
+                            {
+                                ["status"] = "Error",
+                                ["code"] = ux.Code,
+                                ["message"] = ux.Message
+                            };
+                            return BuildToolTextResponse(idToken, usagePayload, isError: true, toolName: toolName, toolArgs: args, payloadOwned: true);
+                        }
+                    }
+
                     if ((string.Equals(lifecycleAction, "status", StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(lifecycleAction, "result", StringComparison.OrdinalIgnoreCase)) &&
                         !string.IsNullOrWhiteSpace(lifecycleTarget) &&
@@ -1501,10 +1630,24 @@ namespace GxMcp.Gateway
                                 int waitSeconds = Math.Min(Math.Max(args?["wait_seconds"]?.ToObject<int?>() ?? 0, 0), McpRouter.MaxLongPollSeconds);
                                 var clientProgressToken = (request["params"] as JObject)?["_meta"]?["progressToken"];
                                 bool hasProgressToken = clientProgressToken != null && clientProgressToken.Type != JTokenType.Null;
-                                JObject pollResult = await McpRouter.LongPollJob(
-                                    JobRegistry, jobId, waitSeconds,
-                                    progressToken: clientProgressToken,
-                                    heartbeat: hasProgressToken ? (n => TryWriteStdout(n.ToString(Formatting.None))) : null);
+                                string pendingLongPollKey = RegisterPendingLongPoll(
+                                    sessionId,
+                                    idToken,
+                                    transportCancellation,
+                                    out var longPollCancellationToken);
+                                JObject pollResult;
+                                try
+                                {
+                                    pollResult = await McpRouter.LongPollJob(
+                                        JobRegistry, jobId, waitSeconds,
+                                        progressToken: clientProgressToken,
+                                        heartbeat: hasProgressToken ? (n => TryWriteStdout(n.ToString(Formatting.None))) : null,
+                                        cancellationToken: longPollCancellationToken);
+                                }
+                                finally
+                                {
+                                    UnregisterPendingLongPoll(pendingLongPollKey);
+                                }
                                 bool isError = pollResult["error"] != null;
                                 // Friction 2026-05-22 item 10: a "Build succeeded: 0w/0e/exit=0"
                                 // result was previously dropped onto an <e>error{}> envelope when
@@ -1551,7 +1694,19 @@ namespace GxMcp.Gateway
                 // Idempotency middleware wraps the rest of the tool dispatch
                 // Scope cache by the resolved KB so independent KBs don't share idempotency.
                 string activeKbPath = _currentKb.Value?.Path ?? _activeConfig?.Environment?.KBPath ?? "";
-                var idempotencyMiddleware = new IdempotencyMiddleware(_idempotencyCache, activeKbPath);
+                string? idempotencyModelScope = null;
+                string? idempotencyEnvironmentScope = null;
+                var idempotencyKb = _currentKb.Value;
+                if (idempotencyKb?.IsEnvCacheFresh == true)
+                {
+                    idempotencyModelScope = idempotencyKb.ActiveEnvironmentVersion;
+                    idempotencyEnvironmentScope = idempotencyKb.ActiveEnvironment;
+                }
+                var idempotencyMiddleware = new IdempotencyMiddleware(
+                    _idempotencyCache,
+                    activeKbPath,
+                    idempotencyModelScope,
+                    idempotencyEnvironmentScope);
                 var toolCallParams = request["params"] as JObject ?? new JObject();
 
                 // Inner dispatch: returns { isError, content } (tool result payload, no JSON-RPC envelope)
@@ -1570,36 +1725,56 @@ namespace GxMcp.Gateway
                     bool isMutating = IsMutatingTool(tName, tArgs);
                     if (isMutating
                         && !IsMutationPreview(tArgs)
-                        && _mutationRecovery.TryGet(kbScope, tArgs?["name"]?.ToString(), out var recoveryRequirement))
+                        && !_mutationRecovery.IsHealthy)
                     {
                         return BuildToolResultContent(
-                            MutationRecoveryRegistry.BuildBlockedEnvelope(recoveryRequirement),
+                            MutationRecoveryRegistry.BuildJournalBlockedEnvelope(_mutationRecovery.JournalError),
                             isError: true,
                             toolName: tName,
                             toolArgs: tArgs);
                     }
-                    if (isMutating)
+                    if (isMutating && !IsMutationPreview(tArgs))
                     {
-                        // Granular invalidation: when the mutation names an object, drop
-                        // only cached reads that referenced it and keep unrelated warm
-                        // reads (9ms cache hit vs 98ms worker re-read, measured). Fall
-                        // back to a full clear for KB-wide mutations (rename across KB,
-                        // import, reorg, ...) or when no target can be extracted —
-                        // correctness first: a kept stale entry is worse than a lost hit.
-                        string? mutationTarget = ExtractMutationTarget(tName, tArgs);
-                        if (mutationTarget != null)
+                        RecoveryRequirement? recoveryRequirement = null;
+                        foreach (string recoveryTarget in EnumerateMutationTargets(tName, tArgs))
                         {
-                            int removed = _semanticCache.RemoveByTarget(kbScope, mutationTarget);
-                            if (_verboseRequestLogs) Log($"[Cache] Targeted invalidation '{mutationTarget}' by {tName}: {removed} entr(y|ies) dropped");
+                            if (_mutationRecovery.TryGet(kbScope, recoveryTarget, out var found))
+                            {
+                                recoveryRequirement = found;
+                                break;
+                            }
                         }
-                        else
+                        if (recoveryRequirement != null)
                         {
-                            if (_verboseRequestLogs) Log($"[Cache] Invalidation triggered by {tName}");
-                            _semanticCache.Clear();
+                            return BuildToolResultContent(
+                                MutationRecoveryRegistry.BuildBlockedEnvelope(recoveryRequirement),
+                                isError: true,
+                                toolName: tName,
+                                toolArgs: tArgs);
                         }
-                        System.Threading.Interlocked.Increment(ref SemanticCacheEpoch);
-                        BroadcastResourcesListChanged($"cache_invalidated:{tName}");
-                        BroadcastResourceUpdated("genexus://objects", $"tool:{tName}");
+                    }
+                    if (isMutating && !IsMutationPreview(tArgs))
+                    {
+                        // A confirmed or uncertain mutation invalidates the entire
+                        // affected KB generation. Object names in request arguments
+                        // do not describe the population returned by list/query reads,
+                        // so substring invalidation can preserve stale collections.
+                        // The generation fence below still lets unrelated KBs retain
+                        // their warm entries and blocks in-flight old reads.
+                        long revision = _semanticCache.InvalidateScope(kbScope, out int removed);
+                        if (_verboseRequestLogs)
+                            Log($"[Cache] Generation invalidation for '{kbScope}' by {tName}: revision={revision}, {removed} entr(y|ies) dropped");
+                        // Per-KB generations fence related in-flight reads without
+                        // invalidating warm entries (or writes) for unrelated KBs.
+                        // Only an unknown/global scope needs the process-wide epoch.
+                        if (string.IsNullOrWhiteSpace(kbScope))
+                            System.Threading.Interlocked.Increment(ref SemanticCacheEpoch);
+                        BroadcastResourcesListChanged($"cache_invalidated:{tName}", kbScope, revision);
+                        BroadcastResourceUpdated(
+                            "genexus://objects",
+                            $"tool:{tName}",
+                            kbScope,
+                            revision);
                     }
 
                     // 2. SEMANTIC CACHE: Try to get from cache for classifier-approved
@@ -1627,12 +1802,30 @@ namespace GxMcp.Gateway
                     // (guaranteed miss) and live tools never read from it, so for those
                     // the key — and the expensive payload ToString for genexus_edit/write
                     // — is pure waste.
-                    string? cKey = CreateSemanticCacheKey(kbScope, tName, tArgs, isMutating, isLiveTool);
+                    long cacheRevisionAtDispatch = _semanticCache.GetRevision(kbScope);
+                    string? modelScope = null;
+                    string? environmentScope = null;
+                    var currentKbForCache = _currentKb.Value;
+                    if (currentKbForCache?.IsEnvCacheFresh == true)
+                    {
+                        modelScope = currentKbForCache.ActiveEnvironmentVersion;
+                        environmentScope = currentKbForCache.ActiveEnvironment;
+                    }
+                    string? cKey = CreateSemanticCacheKey(
+                        kbScope, tName, tArgs, isMutating, isLiveTool,
+                        cacheRevisionAtDispatch, modelScope, environmentScope);
                     if (cKey != null && _semanticCache.TryGet(cKey, out var cachedResponse))
                     {
                         if (_verboseRequestLogs) Log($"[Cache] HIT for {tName}");
                         var cached = cachedResponse["result"] as JObject;
-                        if (cached != null) return (JObject)cached.DeepClone();
+                        if (cached != null)
+                        {
+                            var hit = (JObject)cached.DeepClone();
+                            var hitMeta = hit["_meta"] as JObject ?? new JObject();
+                            hit["_meta"] = hitMeta;
+                            hitMeta["cacheOutcome"] = "hit";
+                            return hit;
+                        }
                     }
 
                     // Rebuild full request so ConvertToolCall works
@@ -2000,10 +2193,24 @@ namespace GxMcp.Gateway
                                 int blockingCap = tArgs?["wait_seconds"]?.ToObject<int?>() ?? McpRouter.MaxLongPollSeconds;
                                 var clientProgressToken = (request["params"] as JObject)?["_meta"]?["progressToken"];
                                 bool hasProgressToken = clientProgressToken != null && clientProgressToken.Type != JTokenType.Null;
-                                JObject pollResult = await McpRouter.LongPollJob(
-                                    JobRegistry, job.Id, blockingCap,
-                                    progressToken: clientProgressToken,
-                                    heartbeat: hasProgressToken ? (n => TryWriteStdout(n.ToString(Formatting.None))) : null);
+                                string pendingLongPollKey = RegisterPendingLongPoll(
+                                    sessionId,
+                                    idToken,
+                                    transportCancellation,
+                                    out var longPollCancellationToken);
+                                JObject pollResult;
+                                try
+                                {
+                                    pollResult = await McpRouter.LongPollJob(
+                                        JobRegistry, job.Id, blockingCap,
+                                        progressToken: clientProgressToken,
+                                        heartbeat: hasProgressToken ? (n => TryWriteStdout(n.ToString(Formatting.None))) : null,
+                                        cancellationToken: longPollCancellationToken);
+                                }
+                                finally
+                                {
+                                    UnregisterPendingLongPoll(pendingLongPollKey);
+                                }
                                 // Classify the terminal status so the MCP envelope's isError
                                 // matches the build outcome. LongPollJob surfaces JobEntry.Status
                                 // which is one of: running, succeeded, failed, cancelled.
@@ -2048,6 +2255,12 @@ namespace GxMcp.Gateway
 
                             // Return immediately with job_id
                             var asyncResponse = BuildAsyncLifecycleAcceptedPayload(job, lcAction);
+                            if (McpTasksProtocol.SupportsTasks(request))
+                            {
+                                return McpTasksProtocol.BuildCreateTaskResult(
+                                    job,
+                                    asyncResponse["hint"]?.ToString() ?? "Build accepted; poll tasks/get for completion.");
+                            }
                             return BuildToolResultContent(asyncResponse, false, tName, tArgs);
                         }
                         // else: UseSync == true → fall through to the normal synchronous dispatch below
@@ -2109,6 +2322,7 @@ namespace GxMcp.Gateway
                     }
 
                     workerCmd["client"] = "mcp";
+                    AttachClientRequestIdentity(workerCmd, tArgs);
                     int timeoutMs = GetToolTimeoutMs(tName, tArgs);
 
                     // async=true on edit/variable tools → fire-and-forget; result piggybacks via _meta.background_jobs.
@@ -2243,6 +2457,12 @@ namespace GxMcp.Gateway
                                                 || string.Equals(tName, "genexus_modify_variable", StringComparison.OrdinalIgnoreCase)
                             ? BuildAsyncVariableAcceptedPayload(editJob)
                             : BuildAsyncEditAcceptedPayload(editJob));
+                        if (McpTasksProtocol.SupportsTasks(request))
+                        {
+                            return McpTasksProtocol.BuildCreateTaskResult(
+                                editJob,
+                                asyncEditResponse["hint"]?.ToString() ?? "Operation accepted; poll tasks/get for completion.");
+                        }
                         return BuildToolResultContent(asyncEditResponse, false, tName, tArgs);
                     }
 
@@ -2357,6 +2577,12 @@ namespace GxMcp.Gateway
                             // attached without cloning the entire response tree.
                             DetachResponsePayload(resultObj, finalResult);
                             var toolResult = BuildToolResultContent(finalResult, isErr, tName, tArgs, payloadOwned: true);
+                            if (cKey != null)
+                            {
+                                var cacheMeta = toolResult["_meta"] as JObject ?? new JObject();
+                                toolResult["_meta"] = cacheMeta;
+                                cacheMeta["cacheOutcome"] = "miss";
+                            }
 
                             // v2.3.8 (post-self-review) — don't cache transient envelopes.
                             // A "Reindexing"/"IndexCold"/"Timeout"/"Cancelled"/"BuildPlanTooLarge"
@@ -2384,7 +2610,8 @@ namespace GxMcp.Gateway
                             // C1 (race fix): if a mutation invalidated the cache while this read
                             // was in flight, the pre-mutation envelope must not be stored.
                             if (!isErr && !isTransient && !isLiveTool && cKey != null
-                                && System.Threading.Volatile.Read(ref SemanticCacheEpoch) == cacheEpochAtDispatch)
+                                && System.Threading.Volatile.Read(ref SemanticCacheEpoch) == cacheEpochAtDispatch
+                                && _semanticCache.GetRevision(kbScope) == cacheRevisionAtDispatch)
                             {
                                 // Store full envelope in semantic cache (rebuilt on hit above)
                                 _semanticCache.Set(cKey, new JObject
@@ -2447,7 +2674,9 @@ namespace GxMcp.Gateway
                         // E9: bind this worker request to the MCP client request id so
                         // notifications/cancelled can find and abort it (the _pendingRequests
                         // key is a gateway GUID, invisible to the client).
-                        mcpRequestId: idToken?.ToString());
+                        mcpRequestId: idToken?.ToString(),
+                        mcpRequestIdToken: idToken,
+                        mcpSessionId: sessionId);
 
                     // apply_pattern { validate: true } — post-apply build of the
                     // generated host so the LLM sees compile failures in a single
@@ -2720,7 +2949,7 @@ namespace GxMcp.Gateway
                     int aborted = 0;
                     foreach (var kvp in _pendingRequests.ToArray())
                     {
-                        if (!string.Equals(kvp.Value.McpRequestId, cancelled, StringComparison.Ordinal))
+                        if (!RequestIdentityMatches(kvp.Value.McpSessionId, kvp.Value.McpRequestIdToken, sessionId, cancelledId))
                             continue;
                         if (_pendingRequests.TryRemove(kvp.Key, out var pending))
                         {
@@ -2739,6 +2968,10 @@ namespace GxMcp.Gateway
                     }
                     if (aborted > 0)
                         Log($"[Protocol] notifications/cancelled aborted {aborted} pending worker request(s) for requestId={cancelled}.");
+
+                    int abortedLongPolls = CancelPendingLongPolls(sessionId, cancelledId);
+                    if (abortedLongPolls > 0)
+                        Log($"[Protocol] notifications/cancelled aborted {abortedLongPolls} pending lifecycle long-poll(s) for requestId={cancelled}.");
                 }
                 return null;
             }

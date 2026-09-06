@@ -4,13 +4,54 @@ import { GxShadowService } from "../gxShadowService";
 import { DEFAULT_MCP_PORT } from "../constants";
 import { Logger } from "../utils/Logger";
 
-const MCP_PROTOCOL_VERSION = "2025-11-25";
+const LEGACY_MCP_PROTOCOL_VERSION = "2025-11-25";
+const MODERN_MCP_PROTOCOL_VERSION = "2026-07-28";
 const SLOW_REQUEST_MS = 1200;
+const FALLBACK_CLIENT_VERSION = "0.0.0";
+
+/**
+ * Raised when a mutating tool may have reached the Gateway but its response
+ * was lost. Callers must inspect the operation before offering a reapply; the
+ * client deliberately never retries this error with a fresh request id.
+ */
+export class GxMcpOutcomeUnknownError extends Error {
+  public readonly code = "outcome_unknown";
+  public readonly toolName: string;
+  public readonly operationKey?: string;
+  public readonly retryAllowed = false;
+
+  constructor(toolName: string, operationKey: string | undefined, cause: unknown) {
+    const keySuffix = operationKey ? ` (operation ${operationKey})` : "";
+    super(`MCP mutation outcome is unknown for ${toolName}${keySuffix}; inspect before retrying.`);
+    this.name = "GxMcpOutcomeUnknownError";
+    this.toolName = toolName;
+    this.operationKey = operationKey;
+    if (cause instanceof Error && cause.stack) {
+      this.stack = `${this.stack}\nCaused by: ${cause.stack}`;
+    }
+  }
+}
+
+// This allowlist is intentionally conservative. A tool not listed here is
+// treated as a possible mutation, even when its name sounds read-only.
+const SAFE_RETRY_TOOL_NAMES = new Set([
+  "genexus_analyze",
+  "genexus_list_objects",
+  "genexus_query",
+  "genexus_read",
+  "genexus_whoami",
+]);
 
 export class GxGatewayClient {
   private _baseUrl = `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`;
   private _mcpSessionId?: string;
+  private _mcpProtocolVersion?: string;
+  private _modernProtocol = false;
+  private _protocolNegotiation?: Promise<void>;
   private _shadowService?: GxShadowService;
+  private readonly _requestIdPrefix = `nexus-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  private readonly _modernClientId = `${this._requestIdPrefix}-client`;
+  private _requestSequence = 0;
   private static readonly statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
   private static activeRequests = 0;
 
@@ -35,28 +76,79 @@ export class GxGatewayClient {
   }
 
   async initializeMcpSession(customTimeout?: number, signal?: AbortSignal): Promise<string> {
+    if (this._modernProtocol) {
+      return "";
+    }
     if (this._mcpSessionId) {
       return this._mcpSessionId;
+    }
+
+    if (this._protocolNegotiation) {
+      await this._protocolNegotiation;
+      return this._modernProtocol ? "" : this._mcpSessionId ?? "";
+    }
+
+    this._protocolNegotiation = this.negotiateProtocol(customTimeout, signal);
+    try {
+      await this._protocolNegotiation;
+    } finally {
+      this._protocolNegotiation = undefined;
+    }
+    return this._modernProtocol ? "" : this._mcpSessionId ?? "";
+  }
+
+  private async negotiateProtocol(customTimeout?: number, signal?: AbortSignal): Promise<void> {
+    // 2026-07-28 is sessionless. Probe it first so the extension consumes the
+    // same transport contract as modern MCP clients; older gateways answer
+    // with method-not-found/unsupported-version and fall through to initialize.
+    try {
+      const modernResponse = await this.postRawJsonRpc(
+        this.mcpBaseUrl,
+        {
+          jsonrpc: "2.0",
+          id: this.nextRequestId("server_discover"),
+          method: "server/discover",
+          params: { _meta: this.modernRequestMeta() },
+        },
+        customTimeout,
+        this.modernHeaders("server/discover"),
+        signal,
+      );
+      const discovered = this.unwrapGatewayResponse(modernResponse.body);
+      const supportedVersions = Array.isArray(discovered?.supportedVersions)
+        ? discovered.supportedVersions
+        : [];
+      if (modernResponse.statusCode >= 200 && modernResponse.statusCode < 300 &&
+          supportedVersions.includes(MODERN_MCP_PROTOCOL_VERSION)) {
+        this._modernProtocol = true;
+        this._mcpProtocolVersion = MODERN_MCP_PROTOCOL_VERSION;
+        return;
+      }
+    } catch (error) {
+      if (this.isAbortError(error)) {
+        throw error;
+      }
+      Logger.debug(`[GxGateway] Modern MCP discovery unavailable; falling back to legacy session: ${String(error)}`);
     }
 
     const response = await this.postRawJsonRpc(
       this.mcpBaseUrl,
       {
         jsonrpc: "2.0",
-        id: "initialize",
+        id: this.nextRequestId("initialize"),
         method: "initialize",
         params: {
-          protocolVersion: MCP_PROTOCOL_VERSION,
+          protocolVersion: LEGACY_MCP_PROTOCOL_VERSION,
           capabilities: {},
           clientInfo: {
             name: "nexus-ide",
-            version: "1.0.0",
+            version: this.clientVersion(),
           },
         },
       },
       customTimeout,
       {
-        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+        "MCP-Protocol-Version": LEGACY_MCP_PROTOCOL_VERSION,
       },
       signal,
     );
@@ -67,40 +159,74 @@ export class GxGatewayClient {
     }
 
     this._mcpSessionId = Array.isArray(sessionId) ? sessionId[0] : sessionId;
-    return this._mcpSessionId;
+    this._mcpProtocolVersion = response.headers["mcp-protocol-version"]?.toString() ||
+      LEGACY_MCP_PROTOCOL_VERSION;
+
+    // The legacy handshake is complete only after the client notification. The
+    // gateway acknowledges it with 204/202 and no JSON body; keeping this on the
+    // same session prevents the first real call from racing initialization.
+    await this.postRawJsonRpc(
+      this.mcpBaseUrl,
+      {
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      },
+      customTimeout,
+      {
+        "MCP-Protocol-Version": this._mcpProtocolVersion,
+        "MCP-Session-Id": this._mcpSessionId,
+      },
+      signal,
+    );
+    return;
   }
 
   async callMcp(method: string, params?: any, customTimeout?: number, signal?: AbortSignal): Promise<any> {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
+      let requestAttempted = false;
       try {
         const sessionId = await this.initializeMcpSession(customTimeout, signal);
+        requestAttempted = true;
+        const modern = this._modernProtocol;
+        const request = {
+          jsonrpc: "2.0",
+          id: this.nextRequestId(method),
+          method,
+          params: modern ? this.withModernRequestMeta(params) : params,
+        };
         const response = await this.postRawJsonRpc(
           this.mcpBaseUrl,
-          {
-            jsonrpc: "2.0",
-            id: `${method}-${Date.now()}`,
-            method,
-            params,
-          },
+          request,
           customTimeout,
-          {
-            "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-            "MCP-Session-Id": sessionId,
-          },
+          modern
+            ? this.modernHeaders(method, request.params)
+            : {
+              "MCP-Protocol-Version": this._mcpProtocolVersion ?? LEGACY_MCP_PROTOCOL_VERSION,
+              "MCP-Session-Id": sessionId,
+            },
           signal,
         );
 
         const unwrapped = this.unwrapGatewayResponse(response.body);
-        if (this.isExpiredSessionResponse(unwrapped) && attempt < 3) {
+        if (this.isExpiredSessionResponse(unwrapped)) {
           this.resetMcpSession();
-          continue;
+          if ((method !== "tools/call" || this.isSafeToolCall(params)) && attempt < 3) continue;
         }
 
         return unwrapped;
       } catch (error) {
         lastError = error;
+        // A lost response cannot tell us whether the SDK committed a tool call.
+        // Reconnect on the next explicit call, but never replay this attempt.
+        if (method === "tools/call" && requestAttempted) {
+          if (!this.isSafeToolCall(params) || !this.isRetriableTransportError(error)) {
+            this.resetMcpSession();
+            throw this.toOutcomeUnknownError(params, error);
+          }
+        }
         if (this.isAbortError(error) || !this.isRetriableTransportError(error) || attempt === 3) {
           throw error;
         }
@@ -150,6 +276,56 @@ export class GxGatewayClient {
       },
       customTimeout,
       signal,
+    );
+  }
+
+  /**
+   * Read the durable Gateway journal for a mutation whose response was lost.
+   * This call is intentionally separate from reapply helpers: inspection is
+   * safe, while a caller must independently verify the target before closing
+   * the fence with reconcileMcpOperation.
+   */
+  async inspectMcpOperation(
+    operationTool: string,
+    operationKey: string,
+    kb?: string,
+    customTimeout?: number,
+  ): Promise<any> {
+    return this.callMcpTool(
+      "genexus_lifecycle",
+      {
+        action: "inspect",
+        operationTool,
+        operationKey,
+        ...(kb ? { kb } : {}),
+      },
+      customTimeout,
+    );
+  }
+
+  /**
+   * Close an unknown-operation fence after the caller has read the affected
+   * object and supplied a concise verification statement. The Gateway stores
+   * only a hash and still requires a fresh key for any later write.
+   */
+  async reconcileMcpOperation(
+    operationTool: string,
+    operationKey: string,
+    verification: string,
+    kb?: string,
+    customTimeout?: number,
+  ): Promise<any> {
+    return this.callMcpTool(
+      "genexus_lifecycle",
+      {
+        action: "reconcile",
+        operationTool,
+        operationKey,
+        verification,
+        confirmed: true,
+        ...(kb ? { kb } : {}),
+      },
+      customTimeout,
     );
   }
 
@@ -223,6 +399,62 @@ export class GxGatewayClient {
 
   private resetMcpSession(): void {
     this._mcpSessionId = undefined;
+    if (!this._modernProtocol) {
+      this._mcpProtocolVersion = undefined;
+    }
+  }
+
+  private modernRequestMeta(): Record<string, unknown> {
+    return {
+      "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+  }
+
+  private withModernRequestMeta(params: any): any {
+    const source = params && typeof params === "object" && !Array.isArray(params)
+      ? params
+      : {};
+    const existingMeta = source._meta && typeof source._meta === "object" && !Array.isArray(source._meta)
+      ? source._meta
+      : {};
+    return {
+      ...source,
+      _meta: {
+        ...this.modernRequestMeta(),
+        ...existingMeta,
+      },
+    };
+  }
+
+  private modernHeaders(method: string, params?: any): Record<string, string> {
+    const headers: Record<string, string> = {
+      "MCP-Protocol-Version": MODERN_MCP_PROTOCOL_VERSION,
+      "Mcp-Method": method,
+      "Mcp-Client-Id": this._modernClientId,
+    };
+    const name = params?.name ?? params?.uri ?? params?.taskId;
+    if (typeof name === "string" && name.length > 0) {
+      headers["Mcp-Name"] = name;
+    }
+    return headers;
+  }
+
+  private nextRequestId(method: string): string {
+    this._requestSequence += 1;
+    return `${this._requestIdPrefix}-${method.replace(/[^a-zA-Z0-9_-]/g, "_")}-${this._requestSequence}`;
+  }
+
+  private clientVersion(): string {
+    try {
+      const extension = vscode.extensions.getExtension("lennix1337.nexus-ide");
+      const version = extension?.packageJSON?.version;
+      return typeof version === "string" && version.trim().length > 0
+        ? version
+        : FALLBACK_CLIENT_VERSION;
+    } catch {
+      return FALLBACK_CLIENT_VERSION;
+    }
   }
 
   private isExpiredSessionResponse(payload: unknown): boolean {
@@ -250,6 +482,25 @@ export class GxGatewayClient {
       lowered.includes("connect econnrefused");
   }
 
+  private isSafeToolCall(params: any): boolean {
+    const toolName = params && typeof params.name === "string" ? params.name : "";
+    if (toolName === "genexus_lifecycle") {
+      const action = params?.arguments?.action;
+      return action === "inspect" || action === "status" || action === "result" || action === "snapshots-list";
+    }
+    return SAFE_RETRY_TOOL_NAMES.has(toolName);
+  }
+
+  private toOutcomeUnknownError(params: any, cause: unknown): Error {
+    const toolName = params && typeof params.name === "string" ? params.name : "unknown";
+    const args = params?.arguments;
+    const operationKey = args && typeof args === "object"
+      ? (typeof args.operationKey === "string" ? args.operationKey :
+        typeof args.idempotencyKey === "string" ? args.idempotencyKey : undefined)
+      : undefined;
+    return new GxMcpOutcomeUnknownError(toolName, operationKey, cause);
+  }
+
   private async delay(ms: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -260,7 +511,7 @@ export class GxGatewayClient {
     customTimeout?: number,
     extraHeaders?: Record<string, string>,
     signal?: AbortSignal,
-  ): Promise<{ body: string; headers: http.IncomingHttpHeaders }> {
+  ): Promise<{ body: string; headers: http.IncomingHttpHeaders; statusCode: number }> {
     return new Promise((resolve, reject) => {
       const requestLabel = this.describeCommand(command);
       const startedAt = Date.now();
@@ -311,6 +562,7 @@ export class GxGatewayClient {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              "Accept": "application/json, text/event-stream",
               "Content-Length": Buffer.byteLength(data),
               ...(extraHeaders ?? {}),
             },
@@ -329,7 +581,17 @@ export class GxGatewayClient {
                 cleanupAbortListener();
                 this.finishTrackedRequest(requestLabel, startedAt, `HTTP ${res.statusCode}`);
               }
-              resolve({ body, headers: res.headers });
+              resolve({ body, headers: res.headers, statusCode: res.statusCode ?? 0 });
+            });
+            // A peer can close a response before emitting `end` (for example a
+            // gateway restart during a notification). Ensure the request
+            // accounting and promise settle exactly once in that case.
+            res.on("close", () => {
+              if (finished) return;
+              failRequest(
+                new Error("MCP response closed before completion."),
+                "response_closed",
+              );
             });
           },
         );

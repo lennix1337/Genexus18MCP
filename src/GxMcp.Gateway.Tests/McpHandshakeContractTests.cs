@@ -90,6 +90,19 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ToolsList_LifecycleShouldDeclareCompatibleStructuredOutputSchema()
+        {
+            var tools = Dispatch("tools/list")["tools"] as JArray;
+            Assert.NotNull(tools);
+
+            var lifecycle = Assert.Single(tools!, tool =>
+                string.Equals(tool["name"]?.ToString(), "genexus_lifecycle", StringComparison.Ordinal));
+            Assert.Equal("object", lifecycle["outputSchema"]?["type"]?.ToString());
+            Assert.True(lifecycle["outputSchema"]?["additionalProperties"]?.Value<bool>() == true);
+            Assert.Equal("string", lifecycle["outputSchema"]?["properties"]?["status"]?["type"]?.ToString());
+        }
+
+        [Fact]
         public void ToolsList_ShouldBeDeterministicallySortedByName()
         {
             var tools = Dispatch("tools/list")["tools"] as JArray;
@@ -115,6 +128,7 @@ namespace GxMcp.Gateway.Tests
             Assert.Contains("genexus://kb/llm-playbook", uris);
             Assert.Contains("genexus://kb/index-status", uris);
             Assert.Contains("genexus://kb/health", uris);
+            Assert.Contains("genexus://kb/capabilities", uris);
         }
 
         [Fact]

@@ -51,6 +51,14 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void Sdk_probe_capabilities_route_is_read_only()
+        {
+            AssertRoute(
+                new OperationsRouter().ConvertToolCall("genexus_sdk_probe", JObject.Parse("{mode:'capabilities'}")),
+                "SdkProbe", "Capabilities");
+        }
+
+        [Fact]
         public void Delete_object_forwards_typed_atomic_safety_contract()
         {
             var converted = new OperationsRouter().ConvertToolCall("genexus_delete_object", JObject.Parse(@"{

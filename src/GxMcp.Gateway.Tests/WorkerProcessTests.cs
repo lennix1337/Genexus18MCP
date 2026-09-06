@@ -137,5 +137,17 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(-32000, parsed["error"]?["code"]?.Value<int>());
             Assert.Contains("command send failed", parsed["error"]?["message"]?.ToString());
         }
+
+        [Fact]
+        public void EmitSendFailure_WithContext_ReportsOwningKbAlias()
+        {
+            var worker = NewWorker();
+            string? alias = null;
+            worker.OnRpcResponseWithContext += (_, _, workerAlias) => alias = workerAlias;
+
+            worker.EmitSendFailure("42", "Worker for KB 'test' pipe unavailable after 30s wait.");
+
+            Assert.Equal("test", alias);
+        }
     }
 }

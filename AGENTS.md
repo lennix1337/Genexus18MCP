@@ -14,7 +14,7 @@ use the same SDK paths as the IDE.
 MCP client (Claude/Cursor/…)
    │ stdio JSON-RPC
    ▼
-GxMcp.Gateway (net8.0-windows, one per client)
+GxMcp.Gateway (net10.0-windows, one per client)
    │ pipes JSON-RPC to a worker
    ▼
 GxMcp.Worker (net48 STA, one per opened KB)
@@ -23,7 +23,7 @@ GxMcp.Worker (net48 STA, one per opened KB)
 GeneXus 18 SDK → Knowledge Base on disk
 ```
 
-- Gateway: `src/GxMcp.Gateway/`; owns the worker pool and routes MCP tools.
+- Gateway: `src/GxMcp.Gateway/` (`net10.0-windows`); owns the worker pool and routes MCP tools.
 - Worker: `src/GxMcp.Worker/`; hosts the COM-flavoured SDK on an STA thread.
 - CLI: `cli/run.js`, `cli/index.js`, and `cli/lib/config.js`; configures MCP
   clients, forwards stdio, and ships the Windows launcher diagnostics.

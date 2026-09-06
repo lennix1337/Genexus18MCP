@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Helpers
@@ -21,7 +22,8 @@ namespace GxMcp.Worker.Helpers
     public static class IdempotencyCache
     {
         private static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(5);
-        private static readonly TimeSpan InflightWaitBudget = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan DefaultInflightWaitBudget = TimeSpan.FromMinutes(5);
+        private static TimeSpan _inflightWaitBudget = DefaultInflightWaitBudget;
         private const int MaxEntries = 500;
 
         private static readonly ConcurrentDictionary<string, Entry> _entries =
@@ -34,8 +36,8 @@ namespace GxMcp.Worker.Helpers
         // re-executing. Eliminates the brief race window where a fast LLM
         // retry could double-apply during the original call's still-in-flight
         // window.
-        private static readonly ConcurrentDictionary<string, System.Threading.ManualResetEventSlim> _inflight =
-            new ConcurrentDictionary<string, System.Threading.ManualResetEventSlim>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _inflight =
+            new ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.Ordinal);
 
         private sealed class Entry
         {
@@ -62,7 +64,8 @@ namespace GxMcp.Worker.Helpers
             // they release it (via Store) or the budget elapses.
             if (_inflight.TryGetValue(clientRequestId, out var signal))
             {
-                signal.Wait(InflightWaitBudget);
+                if (!signal.Task.Wait(_inflightWaitBudget))
+                    return "{\"status\":\"error\",\"code\":\"idempotency_in_progress\",\"message\":\"An operation with this clientRequestId is still in progress; retry with the same payload later.\"}";
                 if (TryHit(clientRequestId, out hit)) return hit;
             }
             return null;
@@ -89,7 +92,7 @@ namespace GxMcp.Worker.Helpers
         public static void BeginInflight(string clientRequestId)
         {
             if (string.IsNullOrWhiteSpace(clientRequestId)) return;
-            _inflight.GetOrAdd(clientRequestId, _ => new System.Threading.ManualResetEventSlim(false));
+            _inflight.GetOrAdd(clientRequestId, _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
         }
 
         /// <summary>
@@ -103,8 +106,7 @@ namespace GxMcp.Worker.Helpers
             if (string.IsNullOrWhiteSpace(clientRequestId)) return;
             if (_inflight.TryRemove(clientRequestId, out var signal))
             {
-                signal.Set();
-                signal.Dispose();
+                signal.TrySetResult(false);
             }
         }
 
@@ -133,8 +135,7 @@ namespace GxMcp.Worker.Helpers
             // Release any in-flight waiters now that the result is cached.
             if (_inflight.TryRemove(clientRequestId, out var signal))
             {
-                signal.Set();
-                signal.Dispose();
+                signal.TrySetResult(true);
             }
         }
 
@@ -146,11 +147,16 @@ namespace GxMcp.Worker.Helpers
             {
                 if (_inflight.TryRemove(kv.Key, out var sig))
                 {
-                    sig.Set();
-                    sig.Dispose();
+                    sig.TrySetResult(false);
                 }
             }
         }
+
+        internal static void SetInflightWaitBudgetForTests(TimeSpan budget)
+            => _inflightWaitBudget = budget;
+
+        internal static void ResetInflightWaitBudgetForTests()
+            => _inflightWaitBudget = DefaultInflightWaitBudget;
 
         /// <summary>For tests: current entry count.</summary>
         public static int Count => _entries.Count;

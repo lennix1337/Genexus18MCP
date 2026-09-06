@@ -19,8 +19,8 @@ The extension talks to the local GeneXus MCP gateway at `/mcp`.
 Core flow:
 
 1. start or reuse the local gateway lease for the current `port + KB + installation + shadow` identity
-2. initialize an MCP session
-3. discover tools/resources/prompts
+2. probe `server/discover` and use the sessionless 2026-07-28 transport when advertised; otherwise initialize the legacy session transport
+3. discover tools/resources/prompts with the negotiated protocol metadata
 4. drive the virtual filesystem and editor providers through MCP
 
 ## Quick Start
@@ -47,6 +47,14 @@ Each recovery rotates `gateway_debug.log` and `worker_debug.log` into `.prev.log
 `F5` now runs the repository `build.ps1` before launching, so the debug host, `publish/start_mcp.bat`, and the extension backend fallback all receive the same freshly built gateway/worker artifacts.
 
 The gateway stays warm by default. The worker is lazy and exits after `Server.WorkerIdleTimeoutMinutes` of inactivity, so a healthy gateway no longer implies a permanently resident worker process.
+
+Mutation responses are handled conservatively. If a transport loss happens
+after a potentially mutating `tools/call` was sent, the client raises
+`outcome_unknown` and preserves the supplied `idempotencyKey`/operation key;
+it never retries that call with a new request ID. Use the Gateway lifecycle
+`inspect` flow, independently read the affected object, and then call
+`reconcile` with explicit confirmation before starting any new operation.
+Transient retries are limited to an explicit read-only allowlist.
 
 ## Testing
 
@@ -78,7 +86,7 @@ the coverage this protects.
 ## Requirements
 
 - GeneXus 18
-- .NET 8 SDK
+- .NET 10 SDK (Worker SDK remains .NET Framework 4.8)
 - local Knowledge Base configured in the repository root [`config.json`](../../config.json)
 
 ## Configuration

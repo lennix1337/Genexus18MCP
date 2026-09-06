@@ -37,6 +37,8 @@ namespace GxMcp.Gateway
                 "- `index` — rebuilds the search index. Pass `force=true` to ignore the on-disk cache.\n" +
                 "- `status` — accepts either a `taskId` or `job_id` via `target`; pass `wait_seconds > 0` to long-poll up to 600s.\n" +
                 "- `result` — fetch the completion payload of a finished operation.\n" +
+                "- `inspect` — read the redacted durable mutation journal for an operation key after a lost response; it never replays the write.\n" +
+                "- `reconcile` — close an unknown mutation fence only after an independent read and explicit `confirmed: true` verification; use a fresh key for any later write.\n" +
                 "- `stop-worker` — gracefully recycle the worker process for the active KB.\n\n" +
                 "## target format\n" +
                 "- Build/validate: object name(s), comma- or semicolon-separated.\n" +

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
@@ -350,10 +351,14 @@ namespace GxMcp.Gateway
                 ["supportedVersions"] = new JArray(KnownProtocolVersions),
                 ["capabilities"] = new JObject
                 {
-                    ["tools"] = new JObject(),
-                    ["resources"] = new JObject(),
-                    ["prompts"] = new JObject(),
-                    ["completion"] = new JObject()
+                    ["tools"] = new JObject { ["listChanged"] = true },
+                    ["resources"] = new JObject { ["listChanged"] = true, ["subscribe"] = true },
+                    ["prompts"] = new JObject { ["listChanged"] = false },
+                    ["completion"] = new JObject(),
+                    ["extensions"] = new JObject
+                    {
+                        ["io.modelcontextprotocol/tasks"] = new JObject()
+                    }
                 },
                 ["_meta"] = new JObject
                 {
@@ -548,6 +553,7 @@ namespace GxMcp.Gateway
             {
                 new { uri = "genexus://kb/index-status", name = "KB Index Status", description = "Current indexing status for the active Knowledge Base." },
                 new { uri = "genexus://kb/health", name = "Gateway Health Report", description = "Health report for the GeneXus MCP worker and gateway." },
+                new { uri = "genexus://kb/capabilities", name = "GeneXus SDK Capabilities", description = "Capability evidence for the active KB and installed GeneXus SDK; availability is queried explicitly and is not hidden in tools/list." },
                 new { uri = "genexus://kb/agent-playbook", name = "GeneXus Agent Playbook", description = "Recommended MCP workflow to operate this GeneXus server in an agent-native, Git-friendly way." },
                 new { uri = "genexus://kb/llm-playbook", name = "LLM CLI+MCP Playbook", description = "Protocol-first guide for choosing CLI vs MCP, token-efficient calls, and timeout/lifecycle handling." },
                 new { uri = "genexus://objects", name = "GeneXus Objects Index", description = "Browsable index of all objects in the KB." },
@@ -943,7 +949,8 @@ namespace GxMcp.Gateway
 
         private static object? BuildStaticResourceResponse(JObject request)
         {
-            string uri = request["params"]?["uri"]?.ToString() ?? string.Empty;
+            string requestedUri = request["params"]?["uri"]?.ToString() ?? string.Empty;
+            string uri = UnscopeResourceUri(requestedUri, out _);
 
             if (string.Equals(uri, "genexus://kb/health", StringComparison.OrdinalIgnoreCase))
             {
@@ -1159,11 +1166,12 @@ namespace GxMcp.Gateway
 
         public static object? ConvertResourceCall(JObject request)
         {
-            string uri = request["params"]?["uri"]?.ToString() ?? "";
+            string uri = UnscopeResourceUri(request["params"]?["uri"]?.ToString() ?? "", out _);
             if (string.IsNullOrEmpty(uri)) return null;
 
             if (uri == "genexus://kb/index-status") return new { module = "KB", action = "GetIndexStatus" };
             if (uri == "genexus://kb/health") return new { module = "Health", action = "GetReport" };
+            if (uri == "genexus://kb/capabilities") return new { module = "SdkProbe", action = "Capabilities", target = "_self" };
             if (uri == "genexus://objects") return new { module = "Search", action = "Query", target = "", limit = 200 };
             if (uri == "genexus://attributes") return new { module = "Search", action = "Query", target = "type:Attribute", limit = 200 };
 
@@ -1177,6 +1185,42 @@ namespace GxMcp.Gateway
             }
 
             return null;
+        }
+
+        internal static bool TryGetScopedResourceKb(JObject request, out string? kbAlias)
+        {
+            string uri = request["params"]?["uri"]?.ToString() ?? string.Empty;
+            UnscopeResourceUri(uri, out kbAlias);
+            return !string.IsNullOrWhiteSpace(kbAlias);
+        }
+
+        private static string UnscopeResourceUri(string uri, out string? kbAlias)
+        {
+            kbAlias = null;
+            string trimmed = (uri ?? string.Empty).Trim();
+            const string prefix = "genexus://kb/";
+            if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return trimmed;
+
+            string remainder = trimmed.Substring(prefix.Length);
+            int separator = remainder.IndexOf('/');
+            if (separator <= 0 || separator == remainder.Length - 1) return trimmed;
+
+            string candidateAlias = remainder.Substring(0, separator);
+            string scopedResource = remainder.Substring(separator + 1);
+            int rootSeparator = scopedResource.IndexOf('/');
+            string root = rootSeparator < 0 ? scopedResource : scopedResource.Substring(0, rootSeparator);
+            // `genexus://kb/skills/...` and the other existing KB resources are
+            // already unscoped legacy URIs. Only recognize the roots emitted by
+            // BuildScopedResourceUri so a skill named `foo` cannot be mistaken for
+            // a KB alias.
+            if (!string.Equals(root, "objects", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(root, "attributes", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(root, "kb", StringComparison.OrdinalIgnoreCase))
+                return trimmed;
+
+            try { kbAlias = Uri.UnescapeDataString(candidateAlias); }
+            catch { kbAlias = candidateAlias; }
+            return "genexus://" + scopedResource;
         }
 
         private static bool TryReadObjectResource(string uri, out object? resourceCall)
@@ -2027,6 +2071,8 @@ namespace GxMcp.Gateway
         ///   <item>When no <paramref name="progressToken"/> is available the effective wait is capped at
         ///         <see cref="SafeLongPollSecondsWithoutProgress"/> regardless of the requested
         ///         <paramref name="waitSeconds"/> — callers re-poll to cover longer waits.</item>
+        ///   <item>When <paramref name="cancellationToken"/> is signalled, returns a typed
+        ///         request-cancelled envelope instead of waiting until the poll deadline.</item>
         /// </list>
         /// </summary>
         internal static async Task<JObject> LongPollJob(
@@ -2034,7 +2080,8 @@ namespace GxMcp.Gateway
             string jobId,
             int waitSeconds,
             JToken? progressToken = null,
-            Func<JObject, Task>? heartbeat = null)
+            Func<JObject, Task>? heartbeat = null,
+            CancellationToken cancellationToken = default)
         {
             // Clamp wait_seconds to [0, MaxLongPollSeconds]
             int requestedWaitSeconds = Math.Min(Math.Max(waitSeconds, 0), MaxLongPollSeconds);
@@ -2056,6 +2103,11 @@ namespace GxMcp.Gateway
 
             do
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return BuildRequestCancelledEnvelope(jobId);
+                }
+
                 job = registry.Get(jobId);
                 if (job == null || job.Status != "running" || effectiveWaitSeconds == 0)
                     break;
@@ -2080,7 +2132,14 @@ namespace GxMcp.Gateway
                     nextHeartbeatAt = DateTime.UtcNow.AddSeconds(HeartbeatIntervalSeconds);
                 }
 
-                await Task.Delay(250).ConfigureAwait(false);
+                try
+                {
+                    await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return BuildRequestCancelledEnvelope(jobId);
+                }
             }
             while (DateTime.UtcNow < deadline);
 
@@ -2113,6 +2172,20 @@ namespace GxMcp.Gateway
             }
 
             return envelope;
+        }
+
+        private static JObject BuildRequestCancelledEnvelope(string jobId)
+        {
+            return new JObject
+            {
+                ["error"] = new JObject
+                {
+                    ["code"] = -32800,
+                    ["message"] = "Request cancelled by client"
+                },
+                ["cancelled"] = true,
+                ["job_id"] = jobId
+            };
         }
 
         // v2.6.4 (#18): lifecycle action=result for op:<id> reads the stored

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -8,6 +9,24 @@ namespace GxMcp.Gateway.Tests
     // whose args JSON references the mutated object, keeping unrelated warm reads.
     public class SemanticCacheGranularInvalidationTests
     {
+        [Theory]
+        [InlineData("genexus_list_objects")]
+        [InlineData("genexus_query")]
+        [InlineData("genexus_search_source")]
+        [InlineData("genexus_analyze")]
+        public void RemoveByTarget_InvalidatesCollectionAndDependencyReadsWithinKb(string tool)
+        {
+            var store = new SemanticCacheStore(64, TimeSpan.FromMinutes(30));
+            var affected = Key("kb1", tool, "{\"name\":\"Other\",\"limit\":10}");
+            var otherKb = Key("kb2", tool, "{\"limit\":10}");
+            store.Set(affected, new JObject());
+            store.Set(otherKb, new JObject());
+
+            Assert.Equal(1, store.RemoveByTarget("kb1", "Cliente"));
+            Assert.False(store.TryGet(affected, out _));
+            Assert.True(store.TryGet(otherKb, out _));
+        }
+
         private static string Key(string kb, string tool, string argsJson)
             => $"{kb}|{tool}:{argsJson}";
 
@@ -53,6 +72,18 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(0, store.RemoveByTarget("kb1", null!));
         }
 
+        [Fact]
+        public void ClearScope_DoesNotEvictOtherKnowledgeBases()
+        {
+            var store = new SemanticCacheStore(64, TimeSpan.FromMinutes(30));
+            store.Set(Key("kb1", "genexus_query", "{\"query\":\"A\"}"), new JObject());
+            store.Set(Key("kb2", "genexus_query", "{\"query\":\"A\"}"), new JObject());
+
+            Assert.Equal(1, store.ClearScope("kb1"));
+            Assert.False(store.TryGet(Key("kb1", "genexus_query", "{\"query\":\"A\"}"), out _));
+            Assert.True(store.TryGet(Key("kb2", "genexus_query", "{\"query\":\"A\"}"), out _));
+        }
+
         [Theory]
         [InlineData("genexus_rename_across_kb")]
         [InlineData("genexus_kb_import")]
@@ -76,6 +107,25 @@ namespace GxMcp.Gateway.Tests
         {
             Assert.Null(Program.ExtractMutationTarget(
                 "genexus_write", new JObject { ["targets"] = new JArray("A", "B") }));
+        }
+
+        [Fact]
+        public void EnumerateMutationTargets_CoversMultiTargetAndChangeSetShapes()
+        {
+            var targets = Program.EnumerateMutationTargets("genexus_edit", new JObject
+            {
+                ["targets"] = new JArray(
+                    new JObject { ["name"] = "TrnA" },
+                    new JObject { ["target"] = "TrnB" }),
+                ["changeSet"] = new JObject
+                {
+                    ["changes"] = new JArray(
+                        new JObject { ["name"] = "TrnB" },
+                        new JObject { ["target"] = "TrnC" })
+                }
+            }).ToArray();
+
+            Assert.Equal(new[] { "TrnA", "TrnB", "TrnC" }, targets);
         }
     }
 }

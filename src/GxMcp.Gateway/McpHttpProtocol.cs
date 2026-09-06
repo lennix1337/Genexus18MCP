@@ -11,9 +11,17 @@ namespace GxMcp.Gateway
 
     internal static class McpHttpProtocol
     {
+        internal const int MaxRequestBodyBytes = 2 * 1024 * 1024;
+        internal const string ModernClientIdHeader = "Mcp-Client-Id";
+
         public static bool IsInitializeRequest(JObject requestObj)
         {
             return string.Equals(requestObj["method"]?.ToString(), "initialize", StringComparison.Ordinal);
+        }
+
+        internal static bool IsCancellationNotification(JObject requestObj)
+        {
+            return string.Equals(requestObj?["method"]?.ToString(), "notifications/cancelled", StringComparison.Ordinal);
         }
 
         public static bool IsModernRequest(HttpRequest request, JObject requestObj)
@@ -102,7 +110,38 @@ namespace GxMcp.Gateway
                 return parameters?["uri"]?.ToString();
             }
 
+            if (string.Equals(method, "resources/subscribe", StringComparison.Ordinal)
+                || string.Equals(method, "resources/unsubscribe", StringComparison.Ordinal))
+            {
+                return parameters?["uri"]?.ToString();
+            }
+
+            if (string.Equals(method, "tasks/get", StringComparison.Ordinal) ||
+                string.Equals(method, "tasks/update", StringComparison.Ordinal) ||
+                string.Equals(method, "tasks/cancel", StringComparison.Ordinal))
+            {
+                return parameters?["taskId"]?.ToString();
+            }
+
             return null;
+        }
+
+        /// <summary>
+        /// Returns the stable client identity used to scope sessionless task
+        /// handles. The identity is deliberately explicit: a TCP connection is
+        /// not a reliable client boundary for HTTP clients that reconnect or
+        /// use a proxy.
+        /// </summary>
+        internal static string? GetModernClientId(HttpRequest request)
+        {
+            string? value = request.Headers[ModernClientIdHeader].FirstOrDefault()?.Trim();
+            if (string.IsNullOrWhiteSpace(value) || value.Length > 128) return null;
+            foreach (char ch in value)
+            {
+                if (!(char.IsLetterOrDigit(ch) || ch == '.' || ch == '_' || ch == '-' || ch == '~'))
+                    return null;
+            }
+            return value;
         }
 
         internal static string EncodeHeaderValue(string value)
@@ -165,6 +204,20 @@ namespace GxMcp.Gateway
             {
                 return new McpHttpError(StatusCodes.Status406NotAcceptable,
                     "MCP POST requests must accept both application/json and text/event-stream.");
+            }
+
+            return null;
+        }
+
+        internal static McpHttpError? ValidateBodyLength(long? contentLength)
+        {
+            if (contentLength.HasValue && contentLength.Value > MaxRequestBodyBytes)
+            {
+                return new McpHttpError(
+                    StatusCodes.Status413PayloadTooLarge,
+                    $"MCP request body exceeds the {MaxRequestBodyBytes} byte limit.",
+                    -32600,
+                    new JObject { ["maxBytes"] = MaxRequestBodyBytes });
             }
 
             return null;

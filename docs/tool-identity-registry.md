@@ -1,9 +1,10 @@
-# Tool identity registry (spike)
+# Tool identity registry
 
-> Design doc for Plan 046. Answers: is a single tool-identity registry worth
-> building, and what should its API look like? No production code is rewired
-> by this doc — see `src/GxMcp.Gateway/ToolIdentity.cs` for a non-wired
-> prototype proving the queries below are answerable from real data.
+> Design doc for Plans 046 and 075. The registry answers the identity/action
+> queries below from the canonical schema and legacy rewrite table. The
+> cache-invalidation gate now consumes its explicit mutation projection for
+> recognized actions and aliases; compatibility branches remain for tools that
+> have not yet been migrated.
 
 ## 1. The drift surface (inventory)
 
@@ -111,28 +112,24 @@ from the plan:
 - `IsKnownTool("genexus_create")` and `IsKnownTool("genexus_create_object")` are both true
 
 All pass against the live data (see verification log at the bottom of this
-doc). Nothing in `NextLegalActionsBuilder`, `ToolHelpCatalog`, or
-`DidYouMean` was modified — `ToolIdentity` is unreferenced by production code.
+doc). `OperationClassifier` owns the explicit action/actionless/mode policy and
+`Program.IsMutatingTool` delegates to it, so a newly classified write cannot
+depend on a substring match to invalidate semantic cache state. The
+`NextLegalActionsBuilder` canonicalizes aliases before selecting a follow-up,
+and `ToolHelpCatalog.Get` resolves legacy aliases to canonical help entries.
 
-## 4. Migration proposal (follow-up plan sketch)
+## 4. Remaining migration proposal (follow-up plan sketch)
 
 A follow-up plan ("047: migrate catalogs onto ToolIdentity", not written here)
 would:
 
-1. **`NextLegalActionsBuilder`**: replace the `_readOnlyTools` `HashSet` with
-   a filter over `ToolIdentity.CanonicalToolNames` (or keep an explicit
-   allowlist but assert in a test that every entry `ToolIdentity.IsKnownTool`s
-   true); replace the legacy-name cases in the `switch` (e.g. the
-   `genexus_create_object` case becomes `toolName == "genexus_create" &&
-   args["action"]?.ToString() == "object"`) so suggestions fire for the
-   umbrella name + action combination instead of the dead legacy name.
-2. **`ToolHelpCatalog`**: re-key `_helpTexts` by canonical name
-   (`genexus_create_object` → `genexus_create`, `genexus_db_optimize` →
-   `genexus_db`), and where a legacy key's help text was action-specific,
-   fold it into the canonical tool's entry with an `## action=object` style
-   subsection, or split into a nested `Dictionary<string, Dictionary<string,
-   string>>` keyed `[tool][action]` if per-action granularity is wanted (open
-   question below).
+1. **`NextLegalActionsBuilder`** is migrated: it canonicalizes aliases and
+   dispatches only canonical tool/action pairs. The remaining work is to move
+   response-shape-specific suggestions into a data file only if that proves
+   useful; the current builders intentionally inspect payload fields.
+2. **`ToolHelpCatalog`** is already keyed canonically and resolves aliases at
+   lookup time. The remaining work is per-action help granularity, not name
+   identity.
 3. **`DidYouMean`**: give the tool-name-typo path (wherever "unknown tool"
    errors are raised, e.g. `Program.RequestLoop.cs`) a candidate list of
    `ToolIdentity.CanonicalToolNames` so a call to a misspelled tool gets a
@@ -189,16 +186,16 @@ would:
 ## 5. Verification log
 
 ```
-$ dotnet build src\GxMcp.Gateway\GxMcp.Gateway.csproj -v:minimal
-Build succeeded. 0 Erro(s)
+$ dotnet build src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj --no-restore -v:q
+Build succeeded. 0 Warning(s), 0 Error(s)
 
-$ dotnet test src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj --filter "FullyQualifiedName~ToolIdentity" -v:minimal
-Aprovado! - Com falha: 0, Aprovado: 3, Ignorado: 0, Total: 3
+$ dotnet test src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj --no-build --filter "FullyQualifiedName~ToolIdentity|FullyQualifiedName~OperationContractCoverage|FullyQualifiedName~OperationClassifier|FullyQualifiedName~IdempotencyMiddleware" -v:q
+Passed! - Failed: 0, Passed: 57, Skipped: 0, Total: 57
 
-$ dotnet test src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj -v:minimal
-Aprovado! - Com falha: 0, Aprovado: 681, Ignorado: 7, Total: 688
+$ dotnet test Genexus18MCP.sln --no-restore -v:q
+Worker: Passed 2301, Skipped 4, Total 2305; Gateway: Passed 1395, Skipped 10, Total 1405.
 ```
 
-(The 7 skips are the pre-existing `E2ELiveSmokeTests` that require a live KB
-worker; unrelated to this spike.) Numbers captured at the commit that adds
-this doc + the prototype.
+The skipped cases are environment-gated live SDK/KB scenarios; the live gate
+remains unavailable without the fixture variables described in the harness
+documentation.

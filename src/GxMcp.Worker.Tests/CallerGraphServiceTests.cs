@@ -336,5 +336,33 @@ namespace GxMcp.Worker.Tests
             Assert.DoesNotContain("Unrelated", callees);
             Assert.Single(callees);
         }
+
+        [Fact]
+        public void AdjacencySnapshot_RebuildsAfterIndexRevision()
+        {
+            var entries = new List<SearchIndex.IndexEntry>
+            {
+                new SearchIndex.IndexEntry { Name = "Caller", Type = "Procedure",
+                    Calls = new List<string> { "First" }, CalledBy = new List<string>() },
+                new SearchIndex.IndexEntry { Name = "First", Type = "Procedure",
+                    Calls = new List<string>(), CalledBy = new List<string>() },
+                new SearchIndex.IndexEntry { Name = "Second", Type = "Procedure",
+                    Calls = new List<string>(), CalledBy = new List<string>() }
+            };
+            var idx = new IndexCacheService();
+            idx.LoadFromEntries(entries);
+            var svc = new CallerGraphService(idx);
+
+            Assert.Contains("First", svc.GetCallees("Caller"));
+            Assert.DoesNotContain("Second", svc.GetCallees("Caller"));
+
+            var current = idx.GetIndex();
+            current.Objects["Procedure:Caller"].Calls = new List<string> { "Second" };
+            idx.UpdateIndex(current);
+
+            var afterRevision = svc.GetCallees("Caller");
+            Assert.Contains("Second", afterRevision);
+            Assert.DoesNotContain("First", afterRevision);
+        }
     }
 }

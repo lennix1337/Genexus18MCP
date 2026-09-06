@@ -59,6 +59,7 @@ namespace GxMcp.Worker.Services
 
         private readonly UIService _uiService;
         private readonly NavigationService _navigationService;
+        private readonly ContextBundleService _contextBundleService = new ContextBundleService();
 
         // v2.3.8 (Task 1.4): unified graph navigation. ImpactAnalysis used to
         // run an inline BFS over CalledBy here; it now delegates to
@@ -1543,7 +1544,8 @@ namespace GxMcp.Worker.Services
         /// structures of referenced SDTs + top callers in a single roundtrip.
         /// </summary>
         public string Get360Context(string target, string typeFilter = null,
-            string guid = null, string entityKey = null, string path = null)
+            string guid = null, string entityKey = null, string path = null,
+            int? maxBytes = null, string cursor = null)
         {
             try
             {
@@ -1694,7 +1696,8 @@ namespace GxMcp.Worker.Services
                 result["referencedSDTs"] = referencedSDTs;
                 result["callers"] = callers;
 
-                return Models.McpResponse.Ok(target: obj.Name, code: "360ContextRead", result: result);
+                string envelope = Models.McpResponse.Ok(target: obj.Name, code: "360ContextRead", result: result);
+                return _contextBundleService.Apply(envelope, obj.Name, maxBytes, cursor);
             }
             catch (Exception ex)
             {

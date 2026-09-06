@@ -161,7 +161,14 @@ namespace GxMcp.Gateway.Tests
             //   2026-09-04 (PR #133 typed Transaction records): 25000 → 25500 for
             //   records_query/records_insert/records_update schemas and their safety
             //   contract. Measured ~25165; ~335 headroom.
-            Assert.True(approxTokens < 25500, $"tool_definitions.json is ~{approxTokens} tokens; budget 25500.");
+            //   2026-09-05 (v3 change sets): 25500 → 25600 for the explicit
+            //   genexus_edit changeSet preview/validate/apply contract.
+            //   2026-09-05 (durable operation recovery): 25600 → 25850 for
+            //   lifecycle inspect/reconcile fields that expose redacted journal
+            //   state without replaying writes. Measured ~25763 tokens.
+            //   2026-09-06 (lifecycle structured output): 25850 → 26000 for the
+            //   additive outputSchema contract; text content remains compatible.
+            Assert.True(approxTokens < 26000, $"tool_definitions.json is ~{approxTokens} tokens; budget 26000.");
         }
     }
 }

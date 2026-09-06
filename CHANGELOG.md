@@ -2,14 +2,355 @@
 
 ## Unreleased
 
+- Changed: Nexus IDE now negotiates the 2026-07-28 sessionless MCP transport through `server/discover`, sends the required per-request metadata and routing headers, and falls back to the legacy initialize/initialized session when the gateway does not advertise the modern revision. Handshake and request IDs are unique per client instance.
+- Added: a dependency-free tool contract gate validates every published input schema, required field, enum and executable example, including negative assertions for invalid actions and extra properties.
+- Changed: semantic graph lookups now fail closed for homonymous bare names and retain revision-aware cycle/adjacency coverage; callers must resolve a typed or otherwise unique identity before graph traversal.
+- Fixed: property writes resolve the SDK descriptor and reject read-only properties or invalid typed values before opening a transaction; dedicated Domain, nullable and Data Provider output adapters remain in control of their typed paths.
+
+- **Lifecycle validation is classified as an operation.** `genexus_lifecycle`
+  `validate` and `validate-kb` now use the same mutating policy as their
+  dispatcher path, so cache invalidation and retry safety cannot claim that
+  validation is a pure read.
+- **Mutation fences bind runtime context.** Durable idempotency records now
+  hash model and environment identities alongside targets and revisions;
+  reconciliation rejects a changed runtime context without persisting its raw
+  identifiers.
+- **Worker retries keep the caller's operation identity.** Gateway tool
+  dispatch now forwards `clientRequestId` (or the explicit idempotency key)
+  into the Worker command while preserving adapter-bound identities, closing
+  the second idempotency guard after a transport timeout.
+- **SDK affinity has a nominal regression oracle.** The Worker test suite now
+  exercises reentrant gate ownership, fail-fast admission from another thread,
+  and single-owner callback execution through `SdkExecutor`.
+- **Live fixture provenance fails closed.** The live harness now compares the
+  declared `.gxw` (with GeneXus-owned version fields normalized) and
+  `knowledgebase.connection` SHA-256 values before a run, preventing metadata
+  rewrites from mixing benchmark revisions.
+- **Release artifacts carry a verified manifest.** Builds now emit
+  `gxmcp-manifest.json` with the runtime matrix, supported MCP revisions, source
+  commit, schema hash, and SHA-256/size metadata for the Gateway, Worker, schema
+  and optional Nexus VSIX.
+- **Release validation uses one artifact contract.** The maintainer release,
+  RC builder, CI and transactional installer now share the manifest writer and
+  reject runtime drift, schema hash mismatches, duplicate paths and incomplete
+  provenance before replacing an installation.
+- **Operation inventory is executable.** A deterministic inventory projects all
+  50 published tools and 226 actions from `OperationClassifier` and fails closed
+  when a new schema action lacks an explicit effect, retry, cache or invalidation
+  policy.
+- **Dual transport conformance is runnable.** `scripts/mcp-wire-conformance.py`
+  now exercises legacy sessions, sessionless 2026 discovery/tasks, subscription
+  acknowledgements, Host/origin guards and concurrent stdio IDs against the
+  packaged Gateway.
+- **Wire conformance covers slow consumers and reconnects.** The modern smoke
+  keeps an SSE subscription open while issuing an independent request, verifies
+  the request is not blocked, closes the stream, and opens a fresh subscription
+  handle. The probe includes the required per-request metadata and fails closed
+  on a transport error.
+- **3.0 integration evidence is consolidated.**
+  `docs/v3-integration-evidence-2026-09-06.md` records the fresh Gateway,
+  Worker, CLI, Nexus, contract, wire, live-KB, benchmark and release-candidate
+  gates, plus the external prerequisites deliberately kept outside supported
+  capabilities.
+- **Release-ready plan statuses require evidence.**
+  `validate-v3-plan.py --require-ready` now rejects a `VERIFIED_INTEGRATED`
+  package without its report, artifact list and explicit external gates.
+- **The release workflow enforces the integrated plan gate.**
+  A publish job now runs `validate-v3-plan.py --require-ready` after verifying
+  the staged manifest and before npm publication.
+- **Sessionless task ownership fails closed.** Modern HTTP tasks now require a
+  stable `Mcp-Client-Id` header, and the Nexus client sends one per instance;
+  requests without an explicit scope cannot read or cancel another client's
+  task. The dual-transport conformance harness now verifies both the missing
+  scope rejection and the scoped task lookup path.
+- **Release provenance rejects dirty candidates.** Manifest generation marks a
+  dirty checkout as `working-tree`, while release verification requires a real
+  committed source identifier. The release workflow now passes the package
+  version to that verifier without shell escaping the Actions expression.
+- **Background task cancellation is atomic.** `Complete` and `Cancel` now
+  serialize their running-to-terminal transition under the job lock, so a
+  completion cannot be overwritten by a concurrent cancellation.
+
 ### Internal
 
+- **Contrato único de operações.** Todos os 50 tools publicados agora têm uma
+  política explícita de leitura, mutação ou modo condicional. Cache, retry,
+  invalidação e sugestões de próximos passos canonicalizam aliases pelo
+  mesmo registro; classificações por substring foram removidas e efeitos
+  externos de recovery, reload, testes, execução e probe de superfície ficam
+  fechados para retry/cache sem chave idempotente.
+
+- **Cache por geração de KB.** Leituras semânticas agora usam argumentos
+  canonicalizados, geração independente por KB e identidade de ambiente/modelo
+  quando disponível. Mutações invalidam a geração inteira da KB sem descartar o
+  cache de outras KBs, leituras em voo não repovoam uma geração antiga e o TTL
+  absoluto impede que hits contínuos mantenham uma resposta stale viva para
+  sempre; previews não invalidam o cache. Eventos do `.gx_mirror` resolvem o
+  alias configurado quando possível e usam invalidação global somente quando a
+  identidade da KB não pode ser provada.
+
+- **Limite de corpo MCP explícito.** O Gateway valida `Content-Length` antes de
+  desserializar o POST e devolve `413 Payload Too Large` com erro JSON-RPC
+  determinístico acima de 2 MiB; o limite do Kestrel usa a mesma constante.
+
+- **Shutdown seguro do executor STA.** Callbacks SDK ainda pendentes recebem
+  `ObjectDisposedException` e não iniciam trabalho depois do descarte; slots são
+  liberados mesmo quando o post falha ou a fila é encerrada.
+- **Cancelamento de espera STA.** Cancelar uma invocação depois do enqueue agora
+  libera o slot imediatamente, completa a tarefa como cancelada e impede que o
+  callback atrasado entre no SDK; a chamada seguinte pode ser admitida antes da
+  drenagem da fila antiga.
+
+- **MCP tasks extension contract.** Modern requests that declare
+  `io.modelcontextprotocol/tasks` now receive durable `resultType:"task"`
+  handles for asynchronous tools. `tasks/get` returns the standard
+  `resultType:"complete"` task state, update/cancel are acknowledgement-only,
+  task status timestamps are persisted, and cross-session handles fail closed;
+  legacy lifecycle/job envelopes remain unchanged.
+
+- **Progress routing isolation.** Pending Gateway requests now retain the
+  originating transport, KB alias, and client progress token. Worker progress
+  is correlated with the private operation id, rewritten with the original
+  JSON-RPC token, and delivered only to the owning stdio or legacy HTTP
+  session; sessionless modern requests never receive a process-wide unsolicited
+  frame. Modern `notifications/cancelled` POSTs are accepted without touching
+  a prior request because stream closure is the only unambiguous cancellation
+  owner on that transport; closing a modern response stream now propagates its
+  request-aborted token into lifecycle long-polls.
+
+- **Legacy long-poll cancellation.** Lifecycle status waits now register their
+  exact request id and owning HTTP session, so `notifications/cancelled` aborts
+  the matching wait and returns `-32800` without cancelling a parallel request
+  from another session or an id with a different JSON type.
+
+- **Bounded Worker output queues.** stdout and stderr buffering now use the
+  same validated capacity policy as command queues, with environment overrides
+  and producer backpressure so slow clients cannot grow diagnostic memory
+  without a bound.
+
+- **Nexus trust side-effect gate.** Backend startup already refuses untrusted
+  workspaces; configuration persistence now happens only after an explicit
+  start is authorized, so a background `autoStart=false` probe cannot rewrite
+  the shared Gateway configuration.
+
+- **Mutation evidence fences** — keyed mutation journal entries now bind to
+  hash-only target identities and base revisions inferred from mutation
+  arguments. Reconciliation can require matching `observedTargetIds` and
+  `observedRevision`, refusing a changed target before the unknown fence is
+  closed.
+
+- **Session-scoped resource subscriptions** — `resources/subscribe` and
+  `resources/unsubscribe` now validate absolute URIs, persist state only on the
+  creating legacy HTTP session, and filter resource-update notifications before
+  SSE delivery. The sessionless 2026 transport rejects the legacy methods
+  instead of creating a process-wide subscription that could cross KB clients.
+- **Modern subscription streams** — 2026-07-28 clients can use
+  `subscriptions/listen` over a long-lived POST SSE response. The Gateway sends
+  an acknowledgement with a per-stream subscription id, applies opt-in filters
+  for list/resource notifications, caps concurrent streams and queued events,
+  and removes the handle when the response disconnects. Resource updates retain
+  the legacy URI and add KB alias, cache generation, and a KB-qualified URI so
+  same-named objects from separate KBs cannot be conflated; reads of the scoped
+  URI route back to that explicit KB. Legacy sessions keep their existing
+  GET/SSE subscription behavior.
+
+- **Loopback Host hardening.** `/mcp` now rejects non-loopback `Host` values when
+  bound to loopback, closing the browser DNS-rebinding path while leaving
+  explicitly token-protected non-loopback deployments unchanged.
+- **Queue phase telemetry.** Gateway requests now carry an enqueue timestamp and the Worker reports bounded queue wait time alongside SDK, transform, serialization, and response-size timings; malformed telemetry fails closed without affecting the call.
+
+- **Bounded context bundles.** `genexus_analyze` `mode=context` now emits a
+  stable SHA-256 revision, an explicit UTF-8 byte budget, item-boundary cursors,
+  and addressable `genexus_read` hints for large object parts. Oversized context
+  is marked partial instead of silently cutting JSON or source content.
+- **Typed SQL semantics.** Transaction record envelopes now identify the
+  `typed_sql` adapter and explicitly report `businessRulesExecuted=false`, so
+  callers cannot mistake metadata-driven datastore access for a Business
+  Component execution.
+- **SDK capability evidence.** `genexus_sdk_probe { mode: "capabilities" }`
+  now publishes signature-probe status and evidence without presenting a
+  reflected type as verified authoring or persistence support.
+- **V3 runtime baseline.** Moved the Gateway, contract tests, and benchmarks to
+  `net10.0-windows`, kept the GeneXus Worker on `net48`/x86, and raised the CLI
+  minimum to Node 22 with CI and release jobs running Node 24. Development
+  launchers and smoke-test discovery now resolve the .NET 10 output path.
 - **Executable quality gates.** Added fork-safe PR preflight/push helpers,
   an isolated live-KB smoke runner and workflow, a machine-readable
   build-warning baseline, performance-regression thresholds, and
   non-destructive release dry-runs.
+- **Evaluation corpus gate.** Added a dependency-free validator and regression
+  tests for the 15-scenario v3 evaluation manifest, including required
+  success/cold-warm measurement contracts and unique scenario identifiers.
+- **Deterministic agent replay manifest.** Materialized the 15-scenario corpus
+  under `tests/agent-evals/corpus.json` with a revisioned synthetic-fixture
+  contract and an explicit boundary that model-backed evaluation has not run.
+- **Execution-plan gate.** Added a dependency-free validator for the v3
+  package manifest, including declared statuses, unknown dependencies, cycles,
+  and an explicit strict mode that refuses release readiness until every
+  package is `VERIFIED_INTEGRATED`.
+- **Change-set schema budget.** Raised the discovery schema budget from 25,500
+  to 25,600 tokens to carry the explicit `genexus_edit.changeSet` contract;
+  the new block remains bounded to existing Source/Rules/Variables parts.
+- **Durable operation recovery surface.** Added Gateway-local
+  `genexus_lifecycle action=inspect|reconcile` for redacted journal inspection and
+  explicit post-read reconciliation. Reconciliation records only a verification
+  hash and never replays an uncertain mutation with the old key.
+- **Per-KB capability resource.** Added `genexus://kb/capabilities`, backed by
+  the read-only SDK capability probe, so discovery stays deterministic while
+  capability evidence remains scoped to an explicitly selected KB.
+- **Agent replay safety gate.** Added a provider-neutral validator for completed
+  E01–E15 reports. It rejects skipped scenarios, invalid calls, unintended
+  effects, blind retries after unknown outcomes, fixture-revision mismatches,
+  and source/secret telemetry leakage without executing a model or KB.
+- **Lifecycle structured output contract.** `genexus_lifecycle` now advertises
+  a permissive additive `outputSchema` that matches its object-shaped
+  `structuredContent`; text content remains available for legacy clients.
 
 ### Fixed
+
+- **Live gate alias consistency.** `test-live.ps1` now passes the same isolated
+  fixture alias to the HTTP benchmark that it writes into `GX_CONFIG_PATH`,
+  preventing duplicate KB opens from blocking `genexus_list_objects` during the
+  formal performance gate.
+
+- **Lifecycle recovery contract parity.** The new `inspect` and `reconcile`
+  actions are now present in the operation classifier, help resource, and
+  capability inventory, preventing schema discovery from advertising an
+  unclassified action.
+
+- **Operation journal survives Gateway reconfiguration.** Runtime cache
+  reinitialization now keeps the durable mutation journal path, so a restart or
+  config reload cannot silently downgrade idempotency protection to memory-only.
+
+- **Mutation correctness.** Duplicate calls no longer execute outside the
+  idempotency gate after a timeout, and waiting callers retain one shared gate.
+  Object mutations also invalidate collection and dependency cache entries in
+  the affected KB, preserving unrelated direct reads and other KBs.
+- **MCP request and task isolation.** Cancellation now matches the exact JSON-RPC
+  id token and owning session, and tasks/get, tasks/update, and tasks/cancel are
+  backed by session-scoped background jobs. Modern task requests require the
+  declared `io.modelcontextprotocol/tasks` extension, expose MCP task status
+  values, use task IDs for HTTP routing headers, and reject cancellation after
+  a terminal state.
+- **Operation policy registry.** Cache and idempotency decisions now consume a
+  shared conservative contract for effects, retry safety, cacheability, and
+  preview support.
+- **Operation contract coverage guard.** Every published action and help
+  catalog key is now checked against the canonical tool identity registry and
+  action classifier, so discovery cannot silently ship an unclassified
+  operation or orphaned help entry.
+- **Canonical mutation projection.** Semantic-cache invalidation now consumes
+  the explicit action/legacy-alias classifier before its compatibility fallback;
+  recognized writes no longer depend on a tool-name substring to be observed,
+  and idempotency keys use the same canonical tool/action identity across
+  legacy aliases and umbrella tools.
+- **STA SDK admission.** Watcher work now enters a bounded executor on the
+  existing SDK bridge, supports reentrant calls and pre-start cancellation, and
+  reports a typed busy condition instead of growing an unbounded action queue.
+  Main and STA command queues now have bounded, configurable admission and
+  return `WorkerBusy` with retry metadata when saturated.
+- **Worker idempotency timeout.** A duplicate mutation that outlives the
+  in-flight wait budget now receives `idempotency_in_progress` and cannot start
+  a second SDK operation. Completion signals are safe when the original call
+  finishes or aborts concurrently.
+- **Durable mutation recovery fence.** Post-timeout write requirements are
+  journaled atomically in Gateway state and reloaded after restart; a confirmed
+  read removes the journal entry, while stale entries expire automatically.
+- **Fail-closed recovery journal.** The mutation recovery journal now carries a
+  versioned, bounded envelope, keeps independent fences per KB/object/part, and
+  blocks new writes when the persisted file is truncated, corrupt, or cannot be
+  durably replaced.
+- **Restart-safe idempotency fence.** Keyed mutations now persist only a scoped
+  identity/payload hash and lifecycle state. A completed or interrupted entry
+  cannot be replayed blindly after Gateway restart; payloads, source, and KB
+  paths are not written to the journal.
+- **Fail-closed operation journal.** The keyed-mutation journal now uses a
+  bounded versioned envelope and refuses new writes when its state is corrupt,
+  truncated, oversized, or cannot be atomically persisted.
+- **Build target safety.** Bare names that resolve to more than one typed index
+  entry now fail closed with `BuildTargetAmbiguous` instead of silently picking
+  the last indexed object.
+- **Live harness isolation.** Live runs require an explicitly identified
+  synthetic fixture with database-isolation evidence. The harness uses its own
+  configuration and only cleans up processes descended from its gateway.
+- **Live harness regression test.** The PowerShell fixture-rejection test now
+  captures the expected native stderr without treating it as an unhandled test
+  failure, so the seven assertions run and report their result consistently.
+- **Reliable live benchmark failures.** Failed MCP/worker responses no longer
+  count as successful latency samples. Reports include success/failure/skip
+  counts, and regression gates reject missing baselines, invalid metrics,
+  missing operations, and skipped dry-run targets. Both p50 and p95 regressions
+  are gated.
+- **Comparable benchmark populations.** Live benchmark reports now retain
+  successful response-byte percentiles and explicit fixture/revision,
+  generator, cache, concurrency, iteration, and operation metadata. A
+  regression comparison fails closed when the baseline population or payload
+  metrics are missing or differ.
+- **Live benchmark wire-shape parity.** Benchmark validation now accepts the
+  statusless structured envelopes emitted by `whoami`, list/query, inspect and
+  read, the capitalized lifecycle status, and nested source-search hits. Read
+  targets are selected from source-backed object types and probed once before
+  measurement, so folders/modules and unresolved index entries cannot be
+  counted as successful latency samples.
+- **Live fixture provenance.** The isolated live harness now requires a fixture
+  revision and generator identity and forwards both into benchmark population
+  metadata, preventing a baseline from being compared across different SDK or
+  seed states.
+- **Nexus workspace trust.** The IDE now blocks Gateway startup and persisted
+  KB/install configuration writes in untrusted workspaces, advertises limited
+  untrusted support, and retries startup after trust is granted.
+- **Nexus MCP transport.** The reference client now completes the legacy
+  `initialized` handshake, sends the required JSON/SSE `Accept` contract,
+  derives its client version from the extension manifest, and allocates
+  collision-resistant request IDs while preserving effect-aware retry rules.
+- **Nexus unknown-outcome contract.** Lost responses from potentially mutating
+  tools now raise a typed `outcome_unknown` error carrying the supplied
+  operation/idempotency key; only an explicit allowlist of read-only tools may
+  retry a transient transport failure.
+- **Runtime and telemetry baseline.** Gateway, tests, and benchmarks now target
+  .NET 10 while the SDK Worker remains .NET Framework 4.8/x86. Gateway latency
+  summaries expose bounded p50/p95 samples, queue wait, response bytes, and
+  success/error/timeout classes without recording KB content.
+- **End-to-end phase telemetry.** Tool measurements now separate SDK dispatch,
+  startup wait, queue wait, gateway transformation, serialization, response
+  size, cache outcome, and result class. The `Genexus.Mcp.Gateway` ActivitySource
+  and Meter are available to opt-in listeners without adding request or KB data
+  to metric labels.
+- **Call graph adjacency cache.** Direct callers/callees now read from a
+  revisioned reverse/forward adjacency snapshot. SDK edges and textual fallback
+  calls are indexed once per graph revision, preserving deterministic ordering
+  while removing a full KB scan from every graph query; an SDK-free BenchmarkDotNet
+  harness records rebuild versus lookup cost at 1k/10k/50k nodes and runs
+  in-process so repository worktrees cannot make benchmark project discovery
+  ambiguous.
+- **Mutation rollback evidence.** Multi-object compensation now checks each
+  rollback response and re-reads every restored part before reporting
+  `rolledBack=true`; uncertain or failed verification is exposed as
+  `indeterminate` or `partial`. Successful multi-target results carry a
+  per-target saved/verified receipt; previews expose content versions and refuse
+  stale or unreadable per-target `expectedVersion` values before any write.
+- **Semantic rename guard.** Attribute/object and variable caller rewrites now
+  use an identifier tokenizer that skips comments, strings, and larger symbol
+  names. Rename previews expose graph revision, source provenance, and known
+  line/column references instead of only a caller count.
+- **Multi-target edit contract.** `genexus_edit.targets[]` now documents
+  optional `part`, `expectedVersion`, and `baseVersion` fields, and the
+  executed `MultiEdit` route delegates to the MutationEngine so clients get the
+  preflight version fence and per-target rollback receipt instead of a legacy
+  batch write that could bypass them.
+- **Recovery fence coverage.** Post-timeout write fences now cover every target
+  in multi-target edits and explicit change sets; a pending fence on any object
+  blocks the whole mutation before dispatch.
+- **Build plan identity guard.** `genexus_build_plan` now fails closed for
+  ambiguous target or callee names, returns typed candidates, and records the
+  graph revision and completeness flag used to derive the plan.
+- **Explicit change sets.** `genexus_edit.changeSet` now supports a bounded
+  `preview` → `validate` → `apply` flow for existing Source/Rules/Variables
+  parts. Apply requires the returned change-set ID and aggregate base revision,
+  re-reads the same targets, and returns the MutationEngine verification receipt.
+- **Change-set failure atomicity.** Change-set apply responses now derive their
+  `atomicity` value from the actual compensation outcome, so partial or
+  indeterminate rollback cannot be reported as fully compensated.
 
 - **Live contract parity.** Declared the `genexus_analyze` explain payload in
   the source and discovery schemas, and skip navigation live coverage only

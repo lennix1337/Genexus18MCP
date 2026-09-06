@@ -498,7 +498,7 @@ When the pool is full and no Worker is idle, the server returns `KB_POOL_FULL` â
 
 ```mermaid
 graph LR
-    A[AI Client / Nexus-IDE] -->|MCP stdio or HTTP /mcp| B[Gateway .NET 8]
+    A[AI Client / Nexus-IDE] -->|MCP stdio or HTTP /mcp| B[Gateway .NET 10]
     B -->|JSON-RPC over process boundary| C[Worker .NET Framework 4.8]
     C -->|Native SDK| D[GeneXus KB]
 ```

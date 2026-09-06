@@ -98,11 +98,50 @@ namespace GxMcp.Gateway
 
     internal sealed class HttpSessionState
     {
+        private readonly object _subscriptionLock = new object();
+
         public string Id { get; set; } = "";
         public string ProtocolVersion { get; set; } = McpRouter.SupportedProtocolVersion;
         public DateTime CreatedUtc { get; set; }
         public DateTime LastSeenUtc { get; set; }
         public string? ActiveKbAlias { get; set; }
         public Queue<string> PendingMessages { get; } = new Queue<string>();
+
+        /// <summary>
+        /// Resource subscriptions are scoped to this HTTP session. The gateway
+        /// never keeps a process-wide subscription set because that would allow
+        /// one client to observe another client's KB/resource stream.
+        /// </summary>
+        private readonly HashSet<string> _subscribedResources =
+            new HashSet<string>(StringComparer.Ordinal);
+
+        public bool SubscribeResource(string uri)
+        {
+            if (string.IsNullOrWhiteSpace(uri)) return false;
+            lock (_subscriptionLock) return _subscribedResources.Add(uri.Trim());
+        }
+
+        public bool UnsubscribeResource(string uri)
+        {
+            if (string.IsNullOrWhiteSpace(uri)) return false;
+            lock (_subscriptionLock) return _subscribedResources.Remove(uri.Trim());
+        }
+
+        public bool IsSubscribedToResource(string uri)
+        {
+            if (string.IsNullOrWhiteSpace(uri)) return false;
+            lock (_subscriptionLock) return _subscribedResources.Contains(uri.Trim());
+        }
+
+        public IReadOnlyCollection<string> SubscribedResources
+        {
+            get
+            {
+                lock (_subscriptionLock)
+                {
+                    return _subscribedResources.ToArray();
+                }
+            }
+        }
     }
 }

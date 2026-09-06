@@ -16,6 +16,19 @@ import {
  * lifecycle is NOT exercised here (per plan 051 scope: pure-ish parts only).
  */
 suite("BackendManager path resolution + lease logic", () => {
+  test("workspace trust blocks side effects only when VS Code explicitly reports false", () => {
+    assert.strictEqual(BackendManager.canStartWorkspace(false), false);
+    assert.strictEqual(BackendManager.canStartWorkspace(true), true);
+    assert.strictEqual(BackendManager.canStartWorkspace(undefined), true);
+  });
+
+  test("runtime config is persisted only for an explicitly authorized start", () => {
+    assert.strictEqual(BackendManager.shouldPersistRuntimeConfig(false, false), false);
+    assert.strictEqual(BackendManager.shouldPersistRuntimeConfig(false, undefined), false);
+    assert.strictEqual(BackendManager.shouldPersistRuntimeConfig(true, false), true);
+    assert.strictEqual(BackendManager.shouldPersistRuntimeConfig(false, true), true);
+  });
+
   function makeContext(
     extensionPath: string,
     extensionMode: vscode.ExtensionMode = vscode.ExtensionMode.Production,
@@ -29,7 +42,7 @@ suite("BackendManager path resolution + lease logic", () => {
       const extensionDir = path.join(tempRoot, "extension");
       fs.mkdirSync(extensionDir, { recursive: true });
 
-      const devGatewayDir = path.join(tempRoot, "GxMcp.Gateway", "bin", "Debug", "net8.0-windows");
+      const devGatewayDir = path.join(tempRoot, "GxMcp.Gateway", "bin", "Debug", "net10.0-windows");
       fs.mkdirSync(devGatewayDir, { recursive: true });
       fs.writeFileSync(path.join(devGatewayDir, "GxMcp.Gateway.exe"), "");
 
@@ -75,7 +88,7 @@ suite("BackendManager path resolution + lease logic", () => {
       // A dev gateway build AND a publish dir both exist alongside the
       // packaged extension - a packaged (Production-mode) install must
       // never resolve to either of these dev-tree paths.
-      const devGatewayDir = path.join(tempRoot, "GxMcp.Gateway", "bin", "Debug", "net8.0-windows");
+      const devGatewayDir = path.join(tempRoot, "GxMcp.Gateway", "bin", "Debug", "net10.0-windows");
       fs.mkdirSync(devGatewayDir, { recursive: true });
       fs.writeFileSync(path.join(devGatewayDir, "GxMcp.Gateway.exe"), "");
 

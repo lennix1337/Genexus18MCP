@@ -44,7 +44,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for Trusted Publishing
@@ -131,6 +131,15 @@ jobs:
           test -f publish/worker/GxMcp.Worker.exe || { echo "::error::worker/GxMcp.Worker.exe missing in publish.zip"; exit 1; }
           # Task 4: assert tool_definitions.json is present (version consistency validated by release.ps1)
           test -f publish/tool_definitions.json || { echo "::error::publish/tool_definitions.json missing in publish.zip — rebuild with release.ps1"; exit 1; }
+          test -f publish/gxmcp-manifest.json || { echo "::error::gxmcp-manifest.json missing in publish.zip — rebuild with release.ps1"; exit 1; }
+
+      - name: Verify release manifest artifacts
+        if: steps.npm_check.outputs.already_published == 'false'
+        run: python scripts/verify-release-manifest.py publish --version "${{ steps.pkg.outputs.version }}"
+
+      - name: Require all v3 plans to be integrated
+        if: steps.npm_check.outputs.already_published == 'false'
+        run: python scripts/validate-v3-plan.py --require-ready
 
       - name: Install dependencies
         if: steps.npm_check.outputs.already_published == 'false'

@@ -1,0 +1,583 @@
+{
+  "schemaVersion": "genexus-v3-plan/1",
+  "plannedAt": "2026-09-05",
+  "baseCommit": "b3d20f731d47d2e0ae20c179ac0776a047763ade",
+  "sourceVersion": "2.57.0",
+  "program": "plans/073-v3-programa.md",
+  "purpose": "implementation_authorized",
+  "states": [
+    "PLANNED",
+    "IN_PROGRESS",
+    "READY_FOR_REVIEW",
+    "VERIFIED_INTEGRATED",
+    "BLOCKED"
+  ],
+  "integrationPolicy": {
+    "maxSuggestedExecutors": 3,
+    "oneWriterPerFile": true,
+    "sharedContractOwner": "integrator",
+    "releaseRequiresExplicitUserRequest": true
+  },
+  "packages": [
+    {
+      "id": 74,
+      "file": "plans/074-v3-baseline-confiavel.md",
+      "title": "Baseline de correção, SDK real e performance",
+      "priority": "P0",
+      "effort": "L · 4–7 dias de engenharia",
+      "risk": "MED · harness live pode tocar KB/processos; isolamento é condição de entrada",
+      "dependsOn": [],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_core_with_explicit_live_fixture_gates",
+      "scope": [
+        "scripts/bench-live-http.py",
+        "scripts/test-live.ps1",
+        "scripts/mcp_llm_contract_smoke.ps1",
+        "src/GxMcp.Gateway.Tests/E2ELiveSmokeTests.cs",
+        "src/GxMcp.Worker.Tests/PatternApplyServiceTests.cs",
+        "src/GxMcp.Worker.Tests/PatternParityHarnessTests.cs",
+        "scripts/tests/test_bench_live_http.py (novo)",
+        "docs/live-kb-test-harness.md (novo)"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "docs/live-kb-test-harness.md",
+          "scratchpad/kbteste.fixture.json",
+          "scratchpad/live-kbteste-formal-warm100-r9.json",
+          "scratchpad/live-kbteste-formal-warm100-current-20260906.json"
+        ],
+        "externalGates": [
+          "WWP pattern parity and three-size multi-KB baseline require external fixtures/runtime"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 75,
+      "file": "plans/075-v3-contratos-operacoes.md",
+      "title": "Registro único de operações e contratos verificáveis",
+      "priority": "P0",
+      "effort": "L · 8–12 dias",
+      "risk": "HIGH · schemas públicos e roteamento transversal",
+      "dependsOn": [
+        74
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_contracts_with_generated_inventory",
+      "scope": [
+        "src/GxMcp.Gateway/tool_definitions.json",
+        "src/GxMcp.Gateway/ToolIdentity.cs",
+        "src/GxMcp.Gateway/OperationClassifier.cs",
+        "src/GxMcp.Gateway/GatewayArgsValidator.cs",
+        "src/GxMcp.Gateway/ToolSchemaCompatibility.cs",
+        "src/GxMcp.Gateway/Program.ToolPayload.cs",
+        "src/GxMcp.Gateway/IdempotencyMiddleware.cs",
+        "src/GxMcp.Gateway/ToolHelpCatalog.cs",
+        "src/GxMcp.Gateway/NextLegalActionsBuilder.cs",
+        "src/GxMcp.Gateway.Tests/OperationContractCoverageTests.cs (novo)",
+        "src/GxMcp.Gateway.Tests/Fixtures/Contract/Discovery/tools-list.response.json",
+        "docs/tool-identity-registry.md"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "docs/operation-contract-inventory.json",
+          "scripts/validate-tool-contracts.py",
+          "src/GxMcp.Gateway.Tests/OperationContractCoverageTests.cs"
+        ],
+        "externalGates": [
+          "Full per-handler SDK execution matrix remains a maintenance expansion; unclassified operations fail closed"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 76,
+      "file": "plans/076-v3-mcp-isolamento-tasks.md",
+      "title": "Conformidade MCP, isolamento de clientes e tasks",
+      "priority": "P0",
+      "effort": "L · 10–15 dias",
+      "risk": "HIGH · concorrência, transporte e protocolo",
+      "dependsOn": [
+        75
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_dual_transport_with_wire_gate",
+      "scope": [
+        "src/GxMcp.Gateway/Program.cs",
+        "src/GxMcp.Gateway/Program.Http.cs",
+        "src/GxMcp.Gateway/Program.RequestLoop.cs",
+        "src/GxMcp.Gateway/Program.Notifications.cs",
+        "src/GxMcp.Gateway/Program.WorkerLifecycle.cs",
+        "src/GxMcp.Gateway/McpRouter.cs",
+        "src/GxMcp.Gateway/McpHttpProtocol.cs",
+        "src/GxMcp.Gateway/McpSubscriptionProtocol.cs",
+        "src/GxMcp.Gateway/HttpSessionRegistry.cs",
+        "src/GxMcp.Gateway/BackgroundJobRegistry.cs",
+        "src/GxMcp.Gateway.Tests/RequestIsolationTests.cs (novo)",
+        "src/GxMcp.Gateway.Tests/McpTasksContractTests.cs (novo)",
+        "src/GxMcp.Gateway.Tests/McpSubscriptionContractTests.cs (novo)",
+        "docs/technical_architecture.md"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "scripts/mcp-wire-conformance.py",
+          "src/GxMcp.Gateway.Tests/RequestIsolationTests.cs",
+          "src/GxMcp.Gateway.Tests/McpModernSubscriptionContractTests.cs"
+        ],
+        "externalGates": [
+          "Long-running client cancellation against a real SDK operation remains covered by the live fixture gate"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 77,
+      "file": "plans/077-v3-executor-sdk.md",
+      "title": "Executor GeneXus com afinidade e filas limitadas",
+      "priority": "P0",
+      "effort": "L · 10–20 dias",
+      "risk": "HIGH · afinidade SDK, reentrância e deadlocks",
+      "dependsOn": [
+        74,
+        75
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_sta_executor_core_with_sdk_live_gate",
+      "scope": [
+        "src/GxMcp.Worker/Program.cs",
+        "src/GxMcp.Worker/Services/CommandDispatcher.cs",
+        "src/GxMcp.Worker/Services/SdkGate.cs",
+        "src/GxMcp.Worker/Services/KbService.cs",
+        "src/GxMcp.Worker/Services/KbWatcherService.cs",
+        "src/GxMcp.Worker/Services/IndexCacheService.cs",
+        "src/GxMcp.Worker/Services/EnrichmentQueue.cs",
+        "src/GxMcp.Worker/Services/SdkExecutor.cs (novo)",
+        "src/GxMcp.Worker.Tests/SdkExecutorTests.cs (novo)",
+        "src/GxMcp.Worker.Tests/SdkAffinityTests.cs (novo)"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "src/GxMcp.Worker/Services/SdkExecutor.cs",
+          "src/GxMcp.Worker.Tests/SdkExecutorTests.cs",
+          "src/GxMcp.Worker.Tests/SdkAffinityTests.cs"
+        ],
+        "externalGates": [
+          "Complete SDK entry-point inventory and 1/2/4/8-client load require an instrumented licensed fixture"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 78,
+      "file": "plans/078-v3-cache-revisoes.md",
+      "title": "Cache coerente por revisão de KB e dependências",
+      "priority": "P0",
+      "effort": "L · 5–8 dias",
+      "risk": "MED · frescor versus hit rate",
+      "dependsOn": [
+        75
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_revisioned_cache_with_external_event_gate",
+      "scope": [
+        "src/GxMcp.Gateway/SemanticCacheStore.cs",
+        "src/GxMcp.Gateway/Program.ToolPayload.cs",
+        "src/GxMcp.Gateway/Program.RequestLoop.cs",
+        "src/GxMcp.Gateway/Program.WorkerLifecycle.cs",
+        "src/GxMcp.Gateway/Program.KbContext.cs",
+        "src/GxMcp.Gateway.Tests/SemanticCacheInvalidationTests.cs",
+        "src/GxMcp.Gateway.Tests/SemanticCacheGranularInvalidationTests.cs",
+        "src/GxMcp.Gateway.Tests/CacheRevisionTests.cs (novo)"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "src/GxMcp.Gateway/SemanticCacheStore.cs",
+          "src/GxMcp.Gateway.Tests/CacheRevisionTests.cs",
+          "src/GxMcp.Gateway.Tests/SemanticCacheInvalidationTests.cs"
+        ],
+        "externalGates": [
+          "Two-KB read-after-write and all external import/restore producers require independent fixtures"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 79,
+      "file": "plans/079-v3-mutacoes-recuperaveis.md",
+      "title": "Operações idempotentes, mudanças compostas e recuperação verificável",
+      "priority": "P0",
+      "effort": "L · 12–20 dias",
+      "risk": "HIGH · integridade de dados e recuperação após crash",
+      "dependsOn": [
+        75,
+        77,
+        78
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_recoverable_mutations_with_restart_gate",
+      "scope": [
+        "src/GxMcp.Gateway/IdempotencyCache.cs",
+        "src/GxMcp.Gateway/IdempotencyMiddleware.cs",
+        "src/GxMcp.Gateway/MutationOperationJournal.cs",
+        "src/GxMcp.Gateway/MutationRecoveryRegistry.cs",
+        "src/GxMcp.Gateway/Routers/ObjectRouter.cs",
+        "src/GxMcp.Gateway/tool_definitions.json",
+        "src/GxMcp.Gateway/BackgroundJobRegistry.cs",
+        "src/GxMcp.Worker/Services/MutationEngine.cs",
+        "src/GxMcp.Worker/Services/AtomicCreateService.cs",
+        "src/GxMcp.Worker/Services/AtomicAuthoringService.cs",
+        "src/GxMcp.Worker/Helpers/WritePipeline.cs",
+        "src/GxMcp.Worker/Helpers/IdempotencyCache.cs",
+        "src/GxMcp.Worker/Services/CommandDispatcher.cs",
+        "src/GxMcp.Worker.Tests/DispatcherIdempotencyTests.cs",
+        "src/GxMcp.Worker.Tests/IdempotencyInflightTests.cs",
+        "src/GxMcp.Gateway.Tests/OperationLedgerTests.cs (novo)",
+        "src/GxMcp.Gateway.Tests/MutationOperationJournalTests.cs (novo)",
+        "src/GxMcp.Gateway.Tests/ChangeSetRoutingTests.cs (novo)",
+        "src/GxMcp.Gateway.Tests/Fixtures/Contract/Discovery/tools-list.response.json",
+        "src/GxMcp.Worker.Tests/MutationRecoveryTests.cs (novo)",
+        "src/GxMcp.Worker/Services/ChangeSetService.cs (novo)",
+        "src/GxMcp.Worker.Tests/ChangeSetServiceTests.cs (novo)",
+        "docs/change-set-contract.md (novo)"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "docs/change-set-contract.md",
+          "src/GxMcp.Gateway/MutationOperationJournal.cs",
+          "src/GxMcp.Gateway.Tests/MutationOperationJournalTests.cs",
+          "src/GxMcp.Worker/Services/ChangeSetService.cs"
+        ],
+        "externalGates": [
+          "Crash/restart reconcile is deterministic in tests; process-crash and SDK reread certification remain pre-GA gates"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 80,
+      "file": "plans/080-v3-grafo-build-refactor.md",
+      "title": "Grafo semântico, refatoração segura e build incremental comprovado",
+      "priority": "P1",
+      "effort": "L · 15–25 dias",
+      "risk": "HIGH · referências falsas ou omitidas podem quebrar código gerado",
+      "dependsOn": [
+        74,
+        77,
+        78,
+        79
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_revisioned_graph_with_benchmark_gate",
+      "scope": [
+        "src/GxMcp.Worker/Models/SearchIndex.cs",
+        "src/GxMcp.Worker/Services/CallerGraphService.cs",
+        "src/GxMcp.Worker/Services/IndexCacheService.cs",
+        "src/GxMcp.Worker/Services/IndexStorageEngine.cs",
+        "src/GxMcp.Worker/Services/BuildPlanService.cs",
+        "src/GxMcp.Worker/Services/DefaultFastIncrementalDecision.cs",
+        "src/GxMcp.Worker/Services/BuildService.cs",
+        "src/GxMcp.Worker/Services/EditAndBuildOrchestrator.cs",
+        "src/GxMcp.Worker/Services/RefactorService.cs",
+        "src/GxMcp.Worker/Services/SymbolRenameTokenizer.cs (novo)",
+        "src/GxMcp.Worker.Tests/SemanticGraphTests.cs (novo)",
+        "src/GxMcp.Worker.Tests/RefactorSemanticSafetyTests.cs (novo)",
+        "src/GxMcp.Benchmarks/SemanticGraphBenchmarks.cs (novo)"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "src/GxMcp.Worker/Services/CallerGraphService.cs",
+          "src/GxMcp.Worker.Tests/SemanticGraphTests.cs",
+          "src/GxMcp.Benchmarks/SemanticGraphBenchmarks.cs"
+        ],
+        "externalGates": [
+          "Generated-code provenance/type identity coverage remains an external KB corpus expansion"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 81,
+      "file": "plans/081-v3-genexus-authoring-paridade.md",
+      "title": "Authoring GeneXus orientado a capacidades e paridade",
+      "priority": "P1",
+      "effort": "L · 10–20 dias; traduções/WWP avançado dependem de spike",
+      "risk": "HIGH · APIs opcionais e persistência em partes heterogêneas",
+      "dependsOn": [
+        74,
+        75,
+        77,
+        79
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_capability_safe_authoring_with_pattern_gate",
+      "scope": [
+        "src/GxMcp.Worker/Services/SdkSurfaceProbe.cs",
+        "src/GxMcp.Worker/Services/SdkProbeService.cs",
+        "src/GxMcp.Worker/Helpers/SdkServiceResolver.cs",
+        "src/GxMcp.Worker/Services/PropertyService.cs",
+        "src/GxMcp.Worker/Services/PatternEngineAdapter.cs",
+        "src/GxMcp.Worker/Services/PatternApplyService.cs",
+        "src/GxMcp.Worker/Services/PatternParityHarness.cs",
+        "src/GxMcp.Worker/Services/TranslationsService.cs",
+        "src/GxMcp.Worker/Services/LayoutService.VisualContext.cs",
+        "src/GxMcp.Worker.Tests/SdkCapabilityContractTests.cs (novo)",
+        "src/GxMcp.Worker.Tests/TranslationsServiceTests.cs",
+        "docs/sdk_coverage_gap_matrix.md",
+        "docs/sdk_endpoints_roadmap.md"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "docs/sdk_coverage_gap_matrix.md",
+          "src/GxMcp.Worker.Tests/SdkCapabilityContractTests.cs",
+          "src/GxMcp.Worker.Tests/PropertyServiceResolverTests.cs"
+        ],
+        "externalGates": [
+          "WWP and IDE-baseline pattern parity, plus translation roundtrip, require installed optional SDK surfaces"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 82,
+      "file": "plans/082-v3-contexto-observabilidade-avaliacoes.md",
+      "title": "Contexto eficiente, observabilidade e avaliação de agentes",
+      "priority": "P1",
+      "effort": "L · 6–10 dias",
+      "risk": "MED · contexto desatualizado, payload e privacidade",
+      "dependsOn": [
+        74,
+        75,
+        76,
+        78
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_context_and_deterministic_evaluation_with_model_gate",
+      "scope": [
+        "src/GxMcp.Gateway/ToolProfileFilter.cs",
+        "src/GxMcp.Gateway/McpRouter.cs",
+        "src/GxMcp.Gateway/ToolLatencyStats.cs",
+        "src/GxMcp.Gateway/OperationTracker.cs",
+        "src/GxMcp.Gateway/Program.ToolPayload.cs",
+        "src/GxMcp.Gateway/ResponseSizeGuard.cs",
+        "src/GxMcp.Worker/Services/OrientService.cs",
+        "src/GxMcp.Worker/Services/ContextBundleService.cs (novo)",
+        "src/GxMcp.Gateway.Tests/ContextBundleContractTests.cs (novo)",
+        "plans/v3-evaluation-corpus.json",
+        "tests/agent-evals/corpus.json (novo replay determinístico)",
+        "scripts/validate-v3-evaluation.py",
+        "scripts/tests/test_validate_v3_evaluation.py",
+        "scripts/validate-agent-replay.py",
+        "scripts/tests/test_validate_agent_replay.py",
+        "docs/agent-evals.md",
+        "docs/environment_variables.md"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "docs/agent-evals.md",
+          "plans/v3-evaluation-corpus.json",
+          "scripts/validate-agent-replay.py"
+        ],
+        "externalGates": [
+          "Model-backed replay and token-success measurement remain explicitly not executed"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 83,
+      "file": "plans/083-v3-dados-business-components.md",
+      "title": "Dados tipados e Business Components com semântica explícita",
+      "priority": "P2 · direção de produto, spike primeiro",
+      "effort": "L · 5–8 dias de spike; implementação posterior estimada em 10–20 dias",
+      "risk": "HIGH · dados de aplicação, regras e runtime distinto",
+      "dependsOn": [
+        74,
+        75,
+        79,
+        81
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "validated_design_decision_plus_sql_semantics",
+      "scope": [
+        "src/GxMcp.Worker/Services/TransactionRecordsService.cs",
+        "src/GxMcp.Worker.Tests/TransactionRecordsServiceTests.cs",
+        "src/GxMcp.Worker.Tests/TransactionRecordsFakeDatabase.cs",
+        "docs/transaction-records.md",
+        "docs/business-component-adapter.md (novo)",
+        "src/GxMcp.Gateway.Tests/BusinessComponentContractTests.cs (novo, apenas contrato após spike)"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "docs/business-component-adapter.md",
+          "docs/transaction-records.md"
+        ],
+        "externalGates": [
+          "Business Component adapter remains deferred because no authorized application/runtime exists"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 84,
+      "file": "plans/084-v3-runtime-distribuicao.md",
+      "title": "Runtime suportado e atualização transacional verificável",
+      "priority": "P1",
+      "effort": "L · 8–14 dias",
+      "risk": "HIGH · distribuição e instalação existentes",
+      "dependsOn": [
+        74,
+        75
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_reproducible_distribution_with_release_candidate",
+      "scope": [
+        "src/GxMcp.Gateway/GxMcp.Gateway.csproj",
+        "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj",
+        "src/GxMcp.Benchmarks/GxMcp.Benchmarks.csproj",
+        "package.json",
+        "package-lock.json",
+        "src/nexus-ide/package.json",
+        "src/nexus-ide/package-lock.json",
+        "install.ps1",
+        "build.ps1",
+        "scripts/install.ps1",
+        "release.ps1",
+        "cli/lib/config.js",
+        "cli/lib/update-check.js",
+        "cli/run.test.js",
+        "scripts/verify-install.js",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "scripts/tests/install-contract.tests.ps1 (novo)"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "scratchpad/release-candidate-rc1/gxmcp-manifest.json",
+          "scripts/verify-release-manifest.py",
+          "scripts/tests/install-contract.tests.ps1"
+        ],
+        "externalGates": [
+          "Publishing, signing and final source version bump require maintainer authorization"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 85,
+      "file": "plans/085-v3-nexus-cliente-referencia.md",
+      "title": "Nexus IDE como cliente de referência confiável",
+      "priority": "P1",
+      "effort": "L · 7–12 dias",
+      "risk": "HIGH · cliente pode repetir mutações e escrever configuração compartilhada",
+      "dependsOn": [
+        75,
+        76,
+        79
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_reference_client_core_with_vscode_runner_gate",
+      "scope": [
+        "src/nexus-ide/package.json",
+        "src/nexus-ide/src/infra/GxGatewayClient.ts",
+        "src/nexus-ide/src/managers/BackendManager.ts",
+        "src/nexus-ide/src/managers/SyncManager.ts",
+        "src/nexus-ide/src/extension.ts",
+        "src/nexus-ide/src/test/suite/gxGatewayClient.test.ts",
+        "src/nexus-ide/src/test/suite/workspaceTrust.test.ts (novo)",
+        "src/nexus-ide/src/test/suite/operationRecovery.test.ts (novo)",
+        "src/nexus-ide/README.md"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "src/nexus-ide/src/infra/GxGatewayClient.ts",
+          "src/nexus-ide/src/test/suite/gxGatewayClient.test.ts",
+          "src/nexus-ide/README.md"
+        ],
+        "externalGates": [
+          "VS Code interactive trusted/untrusted UX and live VSIX flow require the VS Code runner"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    },
+    {
+      "id": 86,
+      "file": "plans/086-v3-aceite-migracao-v3.md",
+      "title": "Integração, migração e gates de lançamento 3.0",
+      "priority": "P0 · gate final",
+      "effort": "L · 5–10 dias de integração, além dos pacotes",
+      "risk": "HIGH · coordenação e regressão entre componentes",
+      "dependsOn": [
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85
+      ],
+      "status": "VERIFIED_INTEGRATED",
+      "completionKind": "verified_integration_gate_with_explicit_pre_ga_external_gates",
+      "scope": [
+        "scripts/test-live.ps1",
+        "scripts/coverage/collect.ps1",
+        "scripts/coverage/assert-threshold.ps1",
+        "scripts/mcp_llm_contract_smoke.ps1",
+        "scripts/pr-preflight.ps1",
+        "scripts/check-build-warning-baseline.ps1",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "docs/technical_architecture.md",
+        "docs/llm_cli_mcp_playbook.md",
+        "docs/migration-3.0.md (novo)",
+        "scripts/validate-v3-plan.py (novo)",
+        "scripts/tests/test_validate_v3_plan.py (novo)",
+        "README.md",
+        "CHANGELOG.md",
+        "plans/README.md"
+      ],
+      "integrationEvidence": {
+        "report": "docs/v3-integration-evidence-2026-09-06.md",
+        "artifacts": [
+          "docs/v3-integration-evidence-2026-09-06.md",
+          "docs/migration-3.0.md",
+          "scratchpad/release-candidate-rc1/"
+        ],
+        "externalGates": [
+          "Multi-KB, WWP, model replay, VS Code live, two rollback cycles and 8h soak remain pre-GA gates"
+        ],
+        "releaseAuthorization": "not_granted"
+      }
+    }
+  ],
+  "integratedAt": "2026-09-06",
+  "integrationReport": "docs/v3-integration-evidence-2026-09-06.md"
+}

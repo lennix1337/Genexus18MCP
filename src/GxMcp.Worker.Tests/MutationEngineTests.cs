@@ -121,15 +121,223 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("Obj1", rolledBack[1]);
         }
 
+        [Fact]
+        public void MutationEngine_RollbackRequiresReadbackConfirmation()
+        {
+            int reads = 0;
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) => target == "FailObj"
+                    ? new JObject { ["status"] = "Error", ["message"] = "Simulated disk failure" }.ToString()
+                    : new JObject { ["status"] = "Success" }.ToString(),
+                rollback: (target, args) => new JObject { ["status"] = "Success" }.ToString(),
+                read: (target, part) => reads++ == 0 ? "original-content" : "post-write-content");
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject { ["target"] = "Obj1", ["part"] = "Source", ["content"] = "Code1" },
+                    new JObject { ["target"] = "FailObj", ["part"] = "Source", ["content"] = "CodeFail" }
+                },
+                RollbackOnFailure = true
+            });
+
+            Assert.False(res.RolledBack);
+            Assert.Equal("indeterminate", res.RollbackOutcome);
+            var envelope = JObject.Parse(res.ResponseJson);
+            Assert.Equal("indeterminate", envelope["rollback"]?["outcome"]?.ToString());
+        }
+
+        [Fact]
+        public void MutationEngine_MultiObjectVersionConflictWritesNothing()
+        {
+            int writes = 0;
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) =>
+                {
+                    writes++;
+                    return new JObject { ["status"] = "Success" }.ToString();
+                },
+                read: (target, part) => "CurrentSource");
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject
+                    {
+                        ["target"] = "Obj1", ["part"] = "Source", ["content"] = "Code1",
+                        ["expectedVersion"] = "stale"
+                    }
+                }
+            });
+
+            Assert.False(res.Success);
+            Assert.Equal("ConcurrencyConflict", res.ErrorCode);
+            Assert.Equal(0, writes);
+        }
+
+        [Fact]
+        public void MutationEngine_SingleExpectedVersionFailsClosedWhenCurrentStateCannotBeRead()
+        {
+            int writes = 0;
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) =>
+                {
+                    writes++;
+                    return new JObject { ["status"] = "Success" }.ToString();
+                },
+                read: (target, part) => null);
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Target = "Obj1",
+                Part = "Source",
+                Content = "Updated",
+                ExpectedVersion = "v1"
+            });
+
+            Assert.False(res.Success);
+            Assert.Equal("ConcurrencyStateUnavailable", res.ErrorCode);
+            Assert.Equal(0, writes);
+        }
+
+        [Fact]
+        public void MutationEngine_MultiObjectExpectedVersionFailsClosedWhenCurrentStateCannotBeRead()
+        {
+            int writes = 0;
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) =>
+                {
+                    writes++;
+                    return new JObject { ["status"] = "Success" }.ToString();
+                },
+                read: (target, part) => null);
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject
+                    {
+                        ["target"] = "Obj1",
+                        ["part"] = "Source",
+                        ["content"] = "Updated",
+                        ["baseVersion"] = "v1"
+                    }
+                }
+            });
+
+            Assert.False(res.Success);
+            Assert.Equal("ConcurrencyStateUnavailable", res.ErrorCode);
+            Assert.Equal(0, writes);
+        }
+
+        [Fact]
+        public void MutationEngine_PreviewReportsVersionCheck()
+        {
+            const string current = "CurrentSource";
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) => new JObject { ["status"] = "Success" }.ToString(),
+                read: (target, part) => current);
+            var engine = new MutationEngine(mockWriter);
+            var version = ComputeVersionToken(current);
+
+            var plan = engine.Plan(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject
+                    {
+                        ["target"] = "Obj1",
+                        ["part"] = "Source",
+                        ["content"] = "Updated",
+                        ["expectedVersion"] = version
+                    }
+                }
+            });
+
+            Assert.Equal(version, plan.Mutations[0]["currentVersion"]?.ToString());
+            Assert.Equal("match", plan.Mutations[0]["versionCheck"]?.ToString());
+        }
+
+        [Fact]
+        public void MutationEngine_PreviewMarksStaleVersionInvalid()
+        {
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) => new JObject { ["status"] = "Success" }.ToString(),
+                read: (target, part) => "CurrentSource");
+            var engine = new MutationEngine(mockWriter);
+
+            var plan = engine.Plan(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject
+                    {
+                        ["target"] = "Obj1",
+                        ["part"] = "Source",
+                        ["content"] = "Updated",
+                        ["expectedVersion"] = "stale"
+                    }
+                }
+            });
+
+            Assert.False(plan.IsValid);
+            Assert.Contains("version conflict", plan.ValidationErrors[0], StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MutationEngine_MultiObjectSuccessReturnsPerTargetVerification()
+        {
+            var current = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Obj1"] = "Original1",
+                ["Obj2"] = "Original2"
+            };
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) =>
+                {
+                    current[target] = args["content"]?.ToString() ?? string.Empty;
+                    return new JObject { ["status"] = "Success" }.ToString();
+                },
+                read: (target, part) => current.TryGetValue(target, out var value) ? value : null);
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject { ["target"] = "Obj1", ["part"] = "Source", ["content"] = "Updated1" },
+                    new JObject { ["target"] = "Obj2", ["part"] = "Source", ["content"] = "Updated2" }
+                }
+            });
+
+            Assert.True(res.Success);
+            var result = JObject.Parse(res.ResponseJson)["result"];
+            Assert.Equal("confirmed", result?["outcome"]?.ToString());
+            Assert.Equal(2, result?["targets"]?.ToObject<JArray>()?.Count);
+            Assert.All(result?["targets"] as JArray ?? new JArray(), target => Assert.True(target["verified"]?.ToObject<bool>()));
+        }
+
         private class DelegateSdkObjectWriter : ISdkObjectWriter
         {
             private readonly Func<string, JObject, string> _write;
             private readonly Func<string, JObject, string> _rollback;
+            private readonly Func<string, string, string> _read;
 
-            public DelegateSdkObjectWriter(Func<string, JObject, string> write, Func<string, JObject, string> rollback = null)
+            public DelegateSdkObjectWriter(
+                Func<string, JObject, string> write,
+                Func<string, JObject, string> rollback = null,
+                Func<string, string, string> read = null)
             {
                 _write = write;
                 _rollback = rollback ?? write;
+                _read = read ?? ((target, part) => "OriginalSource");
             }
 
             public string WriteObject(string target, JObject args)
@@ -141,7 +349,16 @@ namespace GxMcp.Worker.Tests
             public string ApplySemanticOps(JObject args) => new JObject { ["status"] = "Success" }.ToString();
             public string ApplyJsonPatch(JObject args) => new JObject { ["status"] = "Success" }.ToString();
             public string BulkWrite(JObject args) => new JObject { ["status"] = "Success" }.ToString();
-            public string ReadObjectSource(string target, string part) => "OriginalSource";
+            public string ReadObjectSource(string target, string part) => _read(target, part);
+        }
+
+        private static string ComputeVersionToken(string content)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(content));
+                return BitConverter.ToString(hash).Replace("-", string.Empty).Substring(0, 16);
+            }
         }
     }
 }

@@ -50,6 +50,7 @@ namespace GxMcp.Gateway
 
         // (raw string + already-parsed JObject) — see WorkerProcess.OnRpcResponse.
         public event Action<string, JObject>? OnRpcResponse;
+        public event Action<string, JObject, string?>? OnRpcResponseWithContext;
         public event Action<KbHandle, WorkerStopReason>? OnWorkerExited;
 
         // Plan 031: test-only seam. When set, SpawnWorkerAsync uses this instead of
@@ -229,6 +230,8 @@ namespace GxMcp.Gateway
                     ? SpawnFactoryForTest(handle)
                     : new WorkerProcess(_config, handle);
                 worker.OnRpcResponse += (json, parsed) => OnRpcResponse?.Invoke(json, parsed);
+                worker.OnRpcResponseWithContext += (json, parsed, alias) =>
+                    OnRpcResponseWithContext?.Invoke(json, parsed, alias);
                 var capturedHandle = handle;
                 worker.OnWorkerExited += (reason) =>
                 {

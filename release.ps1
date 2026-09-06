@@ -428,6 +428,9 @@ if (-not $SkipBuild) {
         if (-not (Test-Path $vsixPath)) {
             Fail "Expected VSIX not found at $vsixPath after vsce package."
         }
+        # Keep the extension in the same publish directory so the manifest,
+        # archive and VSIX all describe one reproducible build.
+        Copy-Item -LiteralPath $vsixPath -Destination (Join-Path $publishDir 'nexus-ide.vsix') -Force
         Ok "nexus-ide-$Version.vsix packaged."
     } else {
         Write-Host "    $ npx --yes @vscode/vsce package --no-dependencies -o $vsixPath  (cwd: $extDir)" -ForegroundColor DarkGray
@@ -495,6 +498,27 @@ if (-not $DryRun) {
 } else {
     Ok "[dry-run] would validate exe version stamps against $Version"
 }
+
+# -- 4c. Write a machine-readable manifest into publish/ ------------------
+# Corporate installers validate this manifest inside publish.zip before any
+# existing installation is moved. The shared writer keeps local candidate and
+# maintainer release manifests identical, including the packaged VSIX hash.
+Step "Writing release manifest"
+Invoke-Cmd 'pwsh' @(
+    '-NoProfile',
+    '-File', (Join-Path $root 'scripts\write-release-manifest.ps1'),
+    '-PublishDirectory', $publishDir,
+    '-Version', $Version,
+    '-SourceRoot', $root
+)
+Ok "gxmcp-manifest.json written for $Version."
+Step "Verifying release manifest"
+Invoke-Cmd 'python' @(
+    (Join-Path $root 'scripts\verify-release-manifest.py'),
+    $publishDir,
+    '--version', $Version
+)
+Ok "Release manifest artifacts verified."
 
 # -- 5. Zip publish/ -> publish.zip -----------------------------------------
 Step "Packing publish.zip"

@@ -1,6 +1,6 @@
 import * as assert from "assert";
 import * as http from "http";
-import { GxGatewayClient } from "../../infra/GxGatewayClient";
+import { GxGatewayClient, GxMcpOutcomeUnknownError } from "../../infra/GxGatewayClient";
 
 /**
  * Characterization tests for GxGatewayClient's pure parsing/unwrap helpers and
@@ -11,6 +11,183 @@ import { GxGatewayClient } from "../../infra/GxGatewayClient";
  * network I/O leaving the machine.
  */
 suite("GxGatewayClient", () => {
+  for (const method of ["tools/call", "tools/list"]) {
+    for (const failure of ["dropped response", "expired session"]) {
+    test(`${method} uses a safe retry policy after ${failure}`, async () => {
+      let calls = 0;
+      const server = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", c => body += c);
+        req.on("end", () => {
+          const command = JSON.parse(body);
+          if (command.method === "initialize") {
+            res.setHeader("mcp-session-id", "retry-policy-session");
+            res.end(JSON.stringify({ result: {} }));
+            return;
+          }
+          if (command.method === "server/discover") {
+            res.end(JSON.stringify({ result: { supportedVersions: ["2025-11-25"] } }));
+            return;
+          }
+          if (command.method === "notifications/initialized") {
+            res.writeHead(202).end();
+            return;
+          }
+          calls++;
+          if (calls === 1 && failure === "dropped response") req.socket.destroy();
+          else if (calls === 1) res.end(JSON.stringify({ result: { error: "unknown or expired mcp session" } }));
+          else res.end(JSON.stringify({ result: { ok: true } }));
+        });
+      });
+      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+      try {
+        const address = server.address() as import("net").AddressInfo;
+        const client = new GxGatewayClient(`http://127.0.0.1:${address.port}/mcp`);
+        if (method === "tools/call") {
+          if (failure === "dropped response") {
+            await assert.rejects(
+              () => client.callMcpTool("genexus_edit", { idempotencyKey: "edit-123" }, 2000),
+              (error: unknown) => {
+                assert.ok(error instanceof GxMcpOutcomeUnknownError);
+                assert.strictEqual(error.code, "outcome_unknown");
+                assert.strictEqual(error.toolName, "genexus_edit");
+                assert.strictEqual(error.operationKey, "edit-123");
+                assert.strictEqual(error.retryAllowed, false);
+                return true;
+              },
+            );
+          } else {
+            assert.deepStrictEqual(await client.callMcpTool("genexus_edit", {}, 2000),
+              { error: "unknown or expired mcp session" });
+          }
+          assert.strictEqual(calls, 1, "a lost response must not repeat a potentially committed mutation");
+        } else {
+          assert.deepStrictEqual(await client.callMcp(method, undefined, 2000), { ok: true });
+          assert.strictEqual(calls, 2, "safe discovery should retain transport recovery");
+        }
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    });
+    }
+  }
+
+  test("retries a dropped response for an explicitly safe read tool", async () => {
+    let calls = 0;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => body += chunk);
+      req.on("end", () => {
+        const command = JSON.parse(body);
+        if (command.method === "initialize") {
+          res.setHeader("mcp-session-id", "read-retry-session");
+          res.end(JSON.stringify({ result: {} }));
+          return;
+        }
+        if (command.method === "notifications/initialized") {
+          res.writeHead(202).end();
+          return;
+        }
+        calls++;
+        if (calls === 1) {
+          req.socket.destroy();
+          return;
+        }
+        res.end(JSON.stringify({ result: { ok: true } }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address() as import("net").AddressInfo;
+      const client = new GxGatewayClient(`http://127.0.0.1:${address.port}/mcp`);
+      assert.deepStrictEqual(
+        await client.callMcpTool("genexus_read", { name: "ProcedureA" }, 2000),
+        { ok: true },
+      );
+      assert.strictEqual(calls, 2);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  test("retries an expired session for an explicitly safe read tool", async () => {
+    let calls = 0;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => body += chunk);
+      req.on("end", () => {
+        const command = JSON.parse(body);
+        if (command.method === "initialize") {
+          res.setHeader("mcp-session-id", `read-expired-${calls}`);
+          res.end(JSON.stringify({ result: {} }));
+          return;
+        }
+        if (command.method === "notifications/initialized") {
+          res.writeHead(202).end();
+          return;
+        }
+        calls++;
+        if (calls === 1) {
+          res.end(JSON.stringify({ result: { error: "unknown or expired mcp session" } }));
+          return;
+        }
+        res.end(JSON.stringify({ result: { ok: true } }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address() as import("net").AddressInfo;
+      const client = new GxGatewayClient(`http://127.0.0.1:${address.port}/mcp`);
+      assert.deepStrictEqual(
+        await client.callMcpTool("genexus_read", { name: "ProcedureA" }, 2000),
+        { ok: true },
+      );
+      assert.strictEqual(calls, 2);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  test("operation recovery helpers send inspect and explicit reconcile actions", async () => {
+    const commands: any[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => body += chunk);
+      req.on("end", () => {
+        const command = JSON.parse(body);
+        commands.push(command);
+        if (command.method === "initialize") {
+          res.setHeader("mcp-session-id", "recovery-session");
+          res.end(JSON.stringify({ result: {} }));
+          return;
+        }
+        if (command.method === "notifications/initialized") {
+          res.writeHead(202).end();
+          return;
+        }
+        res.end(JSON.stringify({ result: { status: "ok" } }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address() as import("net").AddressInfo;
+      const client = new GxGatewayClient(`http://127.0.0.1:${address.port}/mcp`);
+      await client.inspectMcpOperation("genexus_edit", "edit-123", "dev", 2000);
+      await client.reconcileMcpOperation("genexus_edit", "edit-123", "readback matches", "dev", 2000);
+      const toolCalls = commands.filter((command) => command.method === "tools/call");
+      assert.deepStrictEqual(toolCalls.map((command) => command.params.arguments), [
+        { action: "inspect", operationTool: "genexus_edit", operationKey: "edit-123", kb: "dev" },
+        { action: "reconcile", operationTool: "genexus_edit", operationKey: "edit-123", verification: "readback matches", confirmed: true, kb: "dev" },
+      ]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   function makeClient(baseUrl: string): GxGatewayClient {
     return new GxGatewayClient(baseUrl);
   }
@@ -104,8 +281,13 @@ suite("GxGatewayClient", () => {
     const server = http.createServer((req, res) => {
       let body = "";
       req.on("data", (c) => (body += c));
-      req.on("end", () => {
-        res.setHeader("mcp-session-id", "session-abc");
+        req.on("end", () => {
+          const command = body ? JSON.parse(body) : undefined;
+          if (command?.method === "notifications/initialized") {
+            res.writeHead(202).end();
+            return;
+          }
+          res.setHeader("mcp-session-id", "session-abc");
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ result: { ok: true } }));
       });
@@ -125,6 +307,67 @@ suite("GxGatewayClient", () => {
       assert.strictEqual(sessionIdAgain, "session-abc");
     } finally {
       server.close();
+    }
+  });
+
+  test("negotiates the sessionless 2026 transport and sends per-request metadata", async () => {
+    const commands: any[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => body += chunk);
+      req.on("end", () => {
+        const command = body ? JSON.parse(body) : undefined;
+        commands.push({ command, headers: req.headers });
+        res.setHeader("Content-Type", "application/json");
+        if (command?.method === "server/discover") {
+          res.end(JSON.stringify({
+            jsonrpc: "2.0",
+            id: command.id,
+            result: { supportedVersions: ["2025-11-25", "2026-07-28"] },
+          }));
+          return;
+        }
+        if (command?.method === "tools/list") {
+          res.end(JSON.stringify({
+            jsonrpc: "2.0",
+            id: command.id,
+            result: { tools: [{ name: "genexus_read" }] },
+          }));
+          return;
+        }
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: command?.id ?? null, result: {} }));
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address() as import("net").AddressInfo;
+      const client = new GxGatewayClient(`http://127.0.0.1:${address.port}/mcp`);
+      assert.strictEqual(await client.initializeMcpSession(2000), "");
+      assert.deepStrictEqual(await client.callMcp("tools/list", undefined, 2000), {
+        tools: [{ name: "genexus_read" }],
+      });
+
+      assert.deepStrictEqual(commands.map((entry) => entry.command.method), [
+        "server/discover",
+        "tools/list",
+      ]);
+      const modernCall = commands[1];
+      assert.strictEqual(modernCall.headers["mcp-protocol-version"], "2026-07-28");
+      assert.strictEqual(modernCall.headers["mcp-method"], "tools/list");
+      assert.match(modernCall.headers["mcp-client-id"], /^nexus-\d+-[a-z0-9]+-client$/);
+      assert.strictEqual(
+        modernCall.command.params._meta["io.modelcontextprotocol/protocolVersion"],
+        "2026-07-28",
+      );
+      assert.deepStrictEqual(
+        modernCall.command.params._meta["io.modelcontextprotocol/clientCapabilities"],
+        {},
+      );
+      assert.notStrictEqual(commands[0].command.id, modernCall.command.id);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
@@ -164,6 +407,10 @@ suite("GxGatewayClient", () => {
         if (parsed.method === "initialize") {
           res.setHeader("mcp-session-id", `session-${callCount}`);
           res.end(JSON.stringify({ result: { ok: true } }));
+          return;
+        }
+        if (parsed.method === "notifications/initialized") {
+          res.writeHead(202).end();
           return;
         }
 
@@ -223,6 +470,7 @@ suite("GxGatewayClient", () => {
       const port = typeof address === "object" && address ? address.port : 0;
       const client = new GxGatewayClient(`http://127.0.0.1:${port}`);
       const controller = new AbortController();
+      const baselineActiveRequests = (client as any).constructor.activeRequests;
 
       const started = Date.now();
       const pending = assert.rejects(() =>
@@ -235,8 +483,8 @@ suite("GxGatewayClient", () => {
       assert.ok(elapsed < 5000, `expected prompt rejection on abort, took ${elapsed}ms`);
       assert.strictEqual(
         (client as any).constructor.activeRequests,
-        0,
-        "activeRequests must settle back to 0 after an aborted request",
+        baselineActiveRequests,
+        "an aborted request must not leave an extra active request behind",
       );
     } finally {
       server.close();
@@ -254,6 +502,10 @@ suite("GxGatewayClient", () => {
         if (parsed.method === "initialize") {
           res.setHeader("mcp-session-id", "session-abort-test");
           res.end(JSON.stringify({ result: { ok: true } }));
+          return;
+        }
+        if (parsed.method === "notifications/initialized") {
+          res.writeHead(202).end();
           return;
         }
         requestCount++;

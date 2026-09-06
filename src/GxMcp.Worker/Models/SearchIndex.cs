@@ -10,6 +10,13 @@ namespace GxMcp.Worker.Models
         public ConcurrentDictionary<string, IndexEntry> Objects { get; set; } = new ConcurrentDictionary<string, IndexEntry>(StringComparer.OrdinalIgnoreCase);
         public DateTime LastUpdated { get; set; }
 
+        // Derived graph consumers (CallerGraphService) use this monotonic revision
+        // to publish a stable adjacency snapshot without rescanning the entire KB on
+        // every callers/callees request. It is deliberately not persisted: a hydrated
+        // index rebuilds its derived state and starts a fresh in-memory generation.
+        [JsonIgnore]
+        public long GraphRevision;
+
         [JsonIgnore]
         public ConcurrentDictionary<string, List<IndexEntry>> ChildrenByParent { get; set; }
 

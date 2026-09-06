@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\\..")
-$gatewayDir = Join-Path $repoRoot "src\\GxMcp.Gateway\\bin\\Debug\\net8.0-windows"
+$gatewayDir = Join-Path $repoRoot "src\\GxMcp.Gateway\\bin\\Debug\\net10.0-windows"
 $gatewayExe = Join-Path $gatewayDir "GxMcp.Gateway.exe"
 $configPath = if ($ConfigPath) { $ConfigPath } elseif ($env:GX_CONFIG_PATH) { $env:GX_CONFIG_PATH } else { Join-Path $repoRoot "config.json" }
 $gatewayLogPath = Join-Path $gatewayDir "gateway_debug.log"

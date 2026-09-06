@@ -135,6 +135,7 @@ namespace GxMcp.Worker.Services
         public string ErrorMessage { get; set; }
         public JObject Plan { get; set; }
         public bool RolledBack { get; set; }
+        public string RollbackOutcome { get; set; }
         public string DiagnosticDeltaPath { get; set; }
 
         public static MutationResult FromJson(string json)
@@ -225,26 +226,40 @@ namespace GxMcp.Worker.Services
                     string t = item["target"]?.ToString() ?? item["name"]?.ToString();
                     string p = item["part"]?.ToString() ?? "Source";
                     string c = item["content"]?.ToString() ?? item["source"]?.ToString();
-                    plan.Mutations.Add(new JObject
-                    {
-                        ["target"] = t,
-                        ["part"] = p,
-                        ["hasChanges"] = true
-                    });
+                    string expected = item["expectedVersion"]?.ToString() ?? item["baseVersion"]?.ToString();
+                    var preview = BuildMutationPreview(t, p, c, expected);
+                    plan.Mutations.Add(preview);
+                    AddVersionValidation(plan, preview, expected);
                 }
             }
             else
             {
                 plan.TotalObjects = 1;
-                plan.Mutations.Add(new JObject
-                {
-                    ["target"] = request.Target,
-                    ["part"] = request.Part ?? "Source",
-                    ["hasChanges"] = true
-                });
+                var preview = BuildMutationPreview(
+                    request.Target,
+                    request.Part ?? "Source",
+                    request.Content,
+                    request.ExpectedVersion);
+                plan.Mutations.Add(preview);
+                AddVersionValidation(plan, preview, request.ExpectedVersion);
             }
 
             return plan;
+        }
+
+        private static void AddVersionValidation(MutationPlan plan, JObject preview, string expectedVersion)
+        {
+            if (plan == null || preview == null || string.IsNullOrWhiteSpace(expectedVersion)) return;
+            string check = preview["versionCheck"]?.ToString();
+            if (string.Equals(check, "match", StringComparison.OrdinalIgnoreCase)) return;
+
+            plan.IsValid = false;
+            string target = preview["target"]?.ToString() ?? "target";
+            string part = preview["part"]?.ToString() ?? "Source";
+            string reason = string.Equals(check, "conflict", StringComparison.OrdinalIgnoreCase)
+                ? "version conflict"
+                : "current version unavailable";
+            plan.ValidationErrors.Add($"{target} ({part}): {reason}; no write is authorized.");
         }
 
         public MutationResult Execute(MutationRequest request)
@@ -270,6 +285,9 @@ namespace GxMcp.Worker.Services
 
             if (request.Targets != null && request.Targets.Count > 0)
             {
+                var versionConflict = ValidateTargetVersions(request.Targets);
+                if (versionConflict != null) return versionConflict;
+
                 foreach (JObject item in request.Targets)
                 {
                     string targetName = item["target"]?.ToString() ?? item["name"]?.ToString();
@@ -296,7 +314,14 @@ namespace GxMcp.Worker.Services
                     ? request.CurrentVersionResolver(request.Target, request.Part)
                     : ResolveCurrentVersion(request.Target, request.Part);
 
-                if (!string.IsNullOrEmpty(currentVersion) && !string.Equals(currentVersion, request.ExpectedVersion, StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrEmpty(currentVersion))
+                {
+                    return MutationResult.Error(
+                        "ConcurrencyStateUnavailable",
+                        $"The current version of {request.Target} ({request.Part ?? "Source"}) could not be read; no write was attempted.");
+                }
+
+                if (!string.Equals(currentVersion, request.ExpectedVersion, StringComparison.OrdinalIgnoreCase))
                 {
                     return MutationResult.Error(
                         "ConcurrencyConflict",
@@ -475,22 +500,37 @@ namespace GxMcp.Worker.Services
                     break;
                 }
 
+                string persisted = _writer?.ReadObjectSource(target, part);
                 applied.Add(new AppliedTargetRecord
                 {
                     Target = target,
                     Part = part,
-                    OriginalContent = original
+                    OriginalContent = original,
+                    RequestedContent = content,
+                    Saved = true,
+                    Verified = persisted != null && string.Equals(persisted, content, StringComparison.Ordinal)
                 });
             }
 
             if (anyFailed)
             {
                 bool rolledBack = false;
+                bool rollbackIndeterminate = false;
+                bool rollbackFailed = false;
+                int rollbackAttempts = 0;
+                var rollbackTargets = new JArray();
                 if (request.RollbackOnFailure && applied.Count > 0)
                 {
                     applied.Reverse();
                     foreach (var record in applied)
                     {
+                        rollbackAttempts++;
+                        var targetRollback = new JObject
+                        {
+                            ["target"] = record.Target,
+                            ["part"] = record.Part,
+                            ["attempted"] = true
+                        };
                         try
                         {
                             var rollbackArgs = new JObject
@@ -499,15 +539,51 @@ namespace GxMcp.Worker.Services
                                 ["content"] = record.OriginalContent ?? string.Empty,
                                 ["isRollback"] = true
                             };
-                            _writer?.WriteObject(record.Target, rollbackArgs);
+                            string rollbackJson = _writer?.WriteObject(record.Target, rollbackArgs);
+                            if (!IsSuccessResponse(rollbackJson))
+                            {
+                                rollbackFailed = true;
+                                targetRollback["outcome"] = "write_failed";
+                                rollbackTargets.Add(targetRollback);
+                                continue;
+                            }
+
+                            string restored = _writer?.ReadObjectSource(record.Target, record.Part);
+                            if (restored == null || !string.Equals(restored, record.OriginalContent, StringComparison.Ordinal))
+                            {
+                                rollbackIndeterminate = true;
+                                targetRollback["outcome"] = "indeterminate";
+                                targetRollback["verified"] = false;
+                            }
+                            else
+                            {
+                                targetRollback["outcome"] = "confirmed";
+                                targetRollback["verified"] = true;
+                            }
                         }
                         catch (Exception ex)
                         {
+                            rollbackFailed = true;
+                            targetRollback["outcome"] = "write_failed";
                             Logger.Error($"[MUTATION-ENGINE] Compensation rollback failure on {record.Target}: {ex.Message}");
                         }
+                        rollbackTargets.Add(targetRollback);
                     }
-                    rolledBack = true;
+                    rolledBack = rollbackAttempts > 0 && !rollbackFailed && !rollbackIndeterminate;
                 }
+
+                string rollbackOutcome = !request.RollbackOnFailure || applied.Count == 0
+                    ? "not_attempted"
+                    : rolledBack ? "confirmed"
+                    : rollbackIndeterminate ? "indeterminate" : "partial";
+                var rollback = new JObject
+                {
+                    ["attempted"] = rollbackAttempts > 0,
+                    ["outcome"] = rollbackOutcome,
+                    ["confirmed"] = rolledBack,
+                    ["targetCount"] = rollbackAttempts,
+                    ["targets"] = rollbackTargets
+                };
 
                 return new MutationResult
                 {
@@ -515,13 +591,23 @@ namespace GxMcp.Worker.Services
                     ErrorCode = "MutationFailed",
                     ErrorMessage = failureError,
                     RolledBack = rolledBack,
-                    ResponseJson = McpResponse.Err("MutationFailed", failureError)
+                    RollbackOutcome = rollbackOutcome,
+                    ResponseJson = McpResponse.Err("MutationFailed", failureError,
+                        extra: new JObject { ["rolledBack"] = rolledBack, ["rollback"] = rollback })
                 };
             }
 
             var successResult = new JObject
             {
-                ["totalObjects"] = applied.Count
+                ["totalObjects"] = applied.Count,
+                ["outcome"] = applied.All(item => item.Verified) ? "confirmed" : "saved_unverified",
+                ["targets"] = new JArray(applied.Select(item => new JObject
+                {
+                    ["target"] = item.Target,
+                    ["part"] = item.Part,
+                    ["saved"] = item.Saved,
+                    ["verified"] = item.Verified
+                }))
             };
 
             return new MutationResult
@@ -543,11 +629,108 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private JObject BuildMutationPreview(string target, string part, string desiredContent, string expectedVersion = null)
+        {
+            var preview = new JObject
+            {
+                ["target"] = target,
+                ["part"] = part,
+                ["hasChanges"] = true,
+                ["verification"] = "unavailable"
+            };
+
+            if (!string.IsNullOrWhiteSpace(expectedVersion))
+                preview["expectedVersion"] = expectedVersion;
+
+            if (_writer == null || string.IsNullOrWhiteSpace(target)) return preview;
+            string current = null;
+            try { current = _writer.ReadObjectSource(target, part); } catch { }
+            if (current == null)
+            {
+                if (!string.IsNullOrWhiteSpace(expectedVersion))
+                    preview["versionCheck"] = "unavailable";
+                return preview;
+            }
+
+            preview["verification"] = "readable";
+            preview["currentVersion"] = ComputeVersionToken(current);
+            if (!string.IsNullOrWhiteSpace(expectedVersion))
+                preview["versionCheck"] = string.Equals(
+                    expectedVersion,
+                    preview["currentVersion"]?.ToString(),
+                    StringComparison.OrdinalIgnoreCase)
+                    ? "match"
+                    : "conflict";
+            if (desiredContent != null)
+            {
+                preview["requestedVersion"] = ComputeVersionToken(desiredContent);
+                preview["hasChanges"] = !string.Equals(current, desiredContent, StringComparison.Ordinal);
+                preview["currentLength"] = current.Length;
+                preview["requestedLength"] = desiredContent.Length;
+            }
+            return preview;
+        }
+
+        private MutationResult ValidateTargetVersions(JArray targets)
+        {
+            if (targets == null) return null;
+            foreach (JObject item in targets)
+            {
+                string expected = item["expectedVersion"]?.ToString() ?? item["baseVersion"]?.ToString();
+                if (string.IsNullOrWhiteSpace(expected)) continue;
+
+                string target = item["target"]?.ToString() ?? item["name"]?.ToString();
+                string part = item["part"]?.ToString() ?? "Source";
+                string current = null;
+                try { current = _writer.ReadObjectSource(target, part); } catch { }
+                string currentVersion = current == null ? null : ComputeVersionToken(current);
+                if (_writer == null || string.IsNullOrEmpty(currentVersion))
+                {
+                    return MutationResult.Error(
+                        "ConcurrencyStateUnavailable",
+                        $"The current version of {target} ({part}) could not be read; no write was attempted.");
+                }
+
+                if (!string.Equals(currentVersion, expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    return MutationResult.Error(
+                        "ConcurrencyConflict",
+                        $"Expected version '{expected}' does not match current version '{currentVersion}' of {target}.");
+                }
+            }
+            return null;
+        }
+
+        private static bool IsSuccessResponse(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return false;
+            try
+            {
+                var obj = JObject.Parse(json);
+                string status = obj["status"]?.ToString();
+                return string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        private static string ComputeVersionToken(string content)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(content ?? string.Empty));
+                return BitConverter.ToString(hash).Replace("-", string.Empty).Substring(0, 16);
+            }
+        }
+
         private sealed class AppliedTargetRecord
         {
             public string Target { get; set; }
             public string Part { get; set; }
             public string OriginalContent { get; set; }
+            public string RequestedContent { get; set; }
+            public bool Saved { get; set; }
+            public bool Verified { get; set; }
         }
     }
 }

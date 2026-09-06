@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -254,6 +255,51 @@ namespace GxMcp.Gateway
             return null;
         }
 
+        /// <summary>
+        /// Enumerates every object named by a mutating payload. Recovery fences
+        /// must cover multi-target edits and explicit change sets as well as the
+        /// legacy single-name shape; returning duplicates is intentionally
+        /// avoided so one fence produces one deterministic block.
+        /// </summary>
+        internal static IEnumerable<string> EnumerateMutationTargets(string toolName, JObject? args)
+        {
+            if (args == null) yield break;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void Add(string? value)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) seen.Add(value.Trim());
+            }
+
+            Add(args["name"]?.ToString());
+            Add(args["target"]?.ToString());
+
+            if (args["targets"] is JArray targets)
+            {
+                foreach (var token in targets)
+                {
+                    if (token is JObject item)
+                    {
+                        Add(item["name"]?.ToString());
+                        Add(item["target"]?.ToString());
+                    }
+                    else Add(token?.ToString());
+                }
+            }
+
+            if (args["changeSet"] is JObject changeSet)
+            {
+                var changes = changeSet["changes"] as JArray ?? changeSet["targets"] as JArray;
+                foreach (var token in changes?.OfType<JObject>() ?? Enumerable.Empty<JObject>())
+                {
+                    Add(token["name"]?.ToString());
+                    Add(token["target"]?.ToString());
+                }
+            }
+
+            foreach (string target in seen) yield return target;
+        }
+
         // Semantic-cache invalidation gate: returns true when a tool call may
         // change KB object state, so DispatchCore can clear _semanticCache before
         // (and only before) a mutation. A MISS here means the next identical read
@@ -287,178 +333,68 @@ namespace GxMcp.Gateway
         // invalidation list does not know about them yet.
         internal static string? CreateSemanticCacheKey(string kbScope, string toolName,
             JObject? args, bool isMutating, bool isLiveTool)
-            => isMutating || isLiveTool || !OperationClassifier.IsReadOnly(toolName, args)
-                || IsTransactionRecordOperation(toolName, args)
-                ? null : $"{kbScope}|{toolName}:{args?.ToString(Newtonsoft.Json.Formatting.None)}";
+        {
+            if (isMutating || isLiveTool
+                || OperationClassifier.Describe(toolName, args).Kind != OperationClassifier.OperationKind.ReadOnly
+                || IsTransactionRecordOperation(toolName, args))
+                return null;
+            return $"{kbScope}|{toolName}:{args?.ToString(Newtonsoft.Json.Formatting.None)}";
+        }
+
+        /// <summary>
+        /// Builds a deterministic semantic-cache key. The legacy overload above
+        /// preserves the pre-v3 shape for callers that only need the classifier;
+        /// the dispatch path supplies a KB generation and optional model/environment
+        /// identity so equivalent JSON with different property order shares a key.
+        /// </summary>
+        internal static string? CreateSemanticCacheKey(string kbScope, string toolName,
+            JObject? args, bool isMutating, bool isLiveTool, long cacheRevision,
+            string? modelScope, string? environmentScope)
+        {
+            if (isMutating || isLiveTool
+                || OperationClassifier.Describe(toolName, args).Kind != OperationClassifier.OperationKind.ReadOnly
+                || IsTransactionRecordOperation(toolName, args))
+                return null;
+
+            var canonicalArgs = CanonicalizeJson(args ?? new JObject());
+            string normalizedKb = (kbScope ?? string.Empty).Trim().ToLowerInvariant();
+            string normalizedTool = (toolName ?? string.Empty).Trim().ToLowerInvariant();
+            string model = CanonicalizeScopePart(modelScope);
+            string environment = CanonicalizeScopePart(environmentScope);
+
+            return $"{normalizedKb}|{normalizedTool}:{canonicalArgs.ToString(Newtonsoft.Json.Formatting.None)}"
+                + $"|rev={cacheRevision}|model={model}|env={environment}";
+        }
+
+        /// <summary>Sorts object properties recursively while preserving array order.</summary>
+        internal static JToken CanonicalizeJson(JToken token)
+        {
+            if (token is JObject obj)
+            {
+                var sorted = new JObject();
+                foreach (var property in obj.Properties().OrderBy(p => p.Name, StringComparer.Ordinal))
+                    sorted.Add(property.Name, CanonicalizeJson(property.Value));
+                return sorted;
+            }
+
+            if (token is JArray array)
+            {
+                var sorted = new JArray();
+                foreach (var item in array)
+                    sorted.Add(CanonicalizeJson(item));
+                return sorted;
+            }
+
+            return token.DeepClone();
+        }
+
+        private static string CanonicalizeScopePart(string? value)
+            => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant();
 
         internal static bool IsMutatingTool(string toolName, JObject? args)
         {
-            if (string.IsNullOrWhiteSpace(toolName)) return false;
-
-            if (string.Equals(toolName, "genexus_import_object", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(toolName, "genexus_delete_object", StringComparison.OrdinalIgnoreCase) ||
-                (string.Equals(toolName, "genexus_data_view", StringComparison.OrdinalIgnoreCase) &&
-                    IsDataViewMutation(args)) ||
-                string.Equals(toolName, "genexus_rename_across_kb", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(toolName, "genexus_apply_pattern", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(toolName, "genexus_kb_import", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(toolName, "genexus_save_as", StringComparison.OrdinalIgnoreCase)) // clones parts into a new object
-            {
-                return true;
-            }
-
-            if (toolName.Contains("write", StringComparison.OrdinalIgnoreCase) ||
-                toolName.Contains("edit", StringComparison.OrdinalIgnoreCase) ||
-                toolName.Contains("patch", StringComparison.OrdinalIgnoreCase) ||
-                toolName.Contains("create", StringComparison.OrdinalIgnoreCase) ||
-                toolName.Contains("refactor", StringComparison.OrdinalIgnoreCase) ||
-                toolName.Contains("variable", StringComparison.OrdinalIgnoreCase) || // genexus_variable (add/delete/modify)
-                toolName.Contains("add_variable", StringComparison.OrdinalIgnoreCase) ||
-                toolName.Contains("modify_variable", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            if (string.Equals(toolName, "genexus_properties", StringComparison.OrdinalIgnoreCase))
-            {
-                // set = scalar property write; move = reparent (Folder/Module placement).
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "set", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "move", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_generator_reference", StringComparison.OrdinalIgnoreCase))
-            {
-                if (args?["dryRun"]?.ToObject<bool?>() == true) return false;
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "add", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "remove", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_api", StringComparison.OrdinalIgnoreCase))
-            {
-                string? action = args?["action"]?.ToString();
-                if (!string.Equals(action, "routes_clone", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(action, "routes_update", StringComparison.OrdinalIgnoreCase)) return false;
-                // The API route contract defaults dryRun=true; only an explicit false writes.
-                return args?["dryRun"]?.ToObject<bool?>() == false;
-            }
-
-            if (string.Equals(toolName, "genexus_kb", StringComparison.OrdinalIgnoreCase))
-            {
-                // Switching the SDK's active environment changes where subsequent
-                // builds and generated-artifact reads are resolved.
-                return string.Equals(args?["action"]?.ToString(), "set_environment", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_asset", StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Equals(args?["action"]?.ToString(), "write", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_history", StringComparison.OrdinalIgnoreCase))
-            {
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "save", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "restore", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_transfer", StringComparison.OrdinalIgnoreCase))
-            {
-                // import applies an XPZ into the KB; export writes an XPZ artifact.
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "export", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(action, "import", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase))
-            {
-                if (IsTransactionRecordOperation(toolName, args))
-                    return !string.Equals(args?["action"]?.ToString(), "records_query", StringComparison.OrdinalIgnoreCase)
-                        && args?["dryRun"]?.ToObject<bool?>() == false;
-                // translations_import writes translated strings into object parts and
-                // sample_data writes test rows into the DB — both mutate state that the
-                // (cacheable) db analysis reads report on. All other actions
-                // (drift/optimize/sql/types/reorg_*) are read-only analysis.
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "translations_import", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "sample_data", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_gxserver", StringComparison.OrdinalIgnoreCase))
-            {
-                // commit/update/lock/resolve apply server state to the KB; pipeline_run/abort
-                // drive CI runs. The reads (status/pending/conflicts/...) are never cached
-                // anyway, but these WRITES change object parts and must drop cached reads.
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "commit", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "update", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "lock", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "resolve", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "pipeline_run", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "pipeline_abort", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_structure", StringComparison.OrdinalIgnoreCase))
-            {
-                // Every non-get action mutates the structure/indexes.
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "update_visual", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "create_index", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "drop_index", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "set_attribute", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "remove_attribute", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "set_level", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "set_domain", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "update_group", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "move_attribute", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_layout", StringComparison.OrdinalIgnoreCase))
-            {
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "set_property", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "set_properties", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "rename_printblock", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "add_printblock", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "delete_printblock", StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (string.Equals(toolName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase))
-            {
-                // status/result/cancel/reorg_preview are reads (and status/result/cancel are
-                // already excluded from the semantic cache as live tools). Everything else
-                // writes build/spec artefacts or the index.
-                string? action = args?["action"]?.ToString();
-                return string.Equals(action, "build", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "rebuild", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "specify", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "validate", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "validate-kb", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "sync", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "index", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "reorg", StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(action, "snapshots-restore", StringComparison.OrdinalIgnoreCase);
-            }
-
-            // Keep cache invalidation aligned with the action contract for umbrella
-            // tools whose side effects are not covered by the historical branches
-            // above (navigation cache refresh, document/recipe files, browser
-            // baselines/builds, and remaining typed action tools).
-            if (OperationClassifier.ActionTools.Contains(toolName)
-                && !string.IsNullOrWhiteSpace(args?["action"]?.ToString()))
-                return !OperationClassifier.IsReadOnly(toolName, args);
-
-            return false;
-        }
-
-        private static bool IsDataViewMutation(JObject? args)
-        {
-            if (args?["dryRun"]?.ToObject<bool?>() == true) return false;
-            string? action = args?["action"]?.ToString();
-            return string.Equals(action, "create", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(action, "update", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(action, "delete", StringComparison.OrdinalIgnoreCase);
+            return !string.IsNullOrWhiteSpace(toolName)
+                && OperationClassifier.IsMutationCandidate(toolName, args);
         }
 
         // Items 54/55/56: resolve a "KB ref" argument that may be either an alias

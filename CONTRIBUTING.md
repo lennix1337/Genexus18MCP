@@ -6,9 +6,9 @@ Thanks for looking at the code. This is a solo project that I maintain in spare 
 
 A two-process MCP server:
 
-- **Gateway** (`src/GxMcp.Gateway`, .NET 8) — speaks MCP over stdio, hot-reloads `config.json`, brokers calls to the worker.
+- **Gateway** (`src/GxMcp.Gateway`, .NET 10) — speaks MCP over stdio, hot-reloads `config.json`, brokers calls to the worker.
 - **Worker** (`src/GxMcp.Worker`, .NET Framework 4.8, x86, STA) — hosts the native GeneXus 18 SDK (`Artech.*` DLLs). Has to be .NET 4.8 + STA because the SDK won't run otherwise.
-- **CLI** (`cli/`, Node 18+) — the `npx genexus-mcp` entry point: `init`, `doctor`, `axi`, update check.
+- **CLI** (`cli/`, Node 22+) — the `npx genexus-mcp` entry point: `init`, `doctor`, `axi`, update check.
 
 The Worker references DLLs from `C:\Program Files (x86)\GeneXus\GeneXus18`. **You can't build it without GeneXus 18 installed locally** — see [`docs/RELEASE.md`](docs/RELEASE.md) for why CI hosted runners can't build the .NET side.
 

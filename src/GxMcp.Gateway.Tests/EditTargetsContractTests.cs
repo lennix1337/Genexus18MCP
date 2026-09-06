@@ -58,7 +58,7 @@ namespace GxMcp.Gateway.Tests
         public void Edit_AcceptsTargetsPlural_OfEditRequests()
         {
             var router = new ObjectRouter();
-            var args = JObject.Parse("""{"targets":[{"name":"A","content":"x"},{"name":"B","content":"y"}]}""");
+            var args = JObject.Parse("""{"targets":[{"name":"A","content":"x"},{"name":"B","content":"y"}],"rollbackOnFailure":false}""");
 
             var msg = router.ConvertToolCall("genexus_edit", args);
 
@@ -66,6 +66,7 @@ namespace GxMcp.Gateway.Tests
             var obj = JObject.FromObject(msg!);
             Assert.Equal("Batch", obj["module"]?.ToString());
             Assert.Equal("MultiEdit", obj["action"]?.ToString());
+            Assert.False(obj["rollbackOnFailure"]?.ToObject<bool>());
         }
 
         [Fact]

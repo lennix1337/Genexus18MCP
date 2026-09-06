@@ -122,8 +122,8 @@ namespace GxMcp.Worker.Services
         {
             using (var done = new ManualResetEventSlim(false))
             {
-                Program.SdkActionQueue.Enqueue(() =>
-                {
+            bool queued = Program.EnqueueSdkAction(() =>
+            {
                     try
                     {
                         var kb = _kbService.GetKB();
@@ -141,12 +141,16 @@ namespace GxMcp.Worker.Services
                     {
                         try { done.Set(); } catch { }
                     }
-                });
+            });
+            if (!queued)
+            {
+                Logger.Warn("[Watcher] SDK action queue is full; skipping this tick until the next poll.");
+            }
 
                 // Bounded wait: if the dispatcher STA thread is busy with a long-running
                 // command, don't block this thread forever — the queued job still runs
                 // and completes on its own; the next tick is simply posted a cycle later.
-                done.Wait(15000);
+                if (queued) done.Wait(15000);
             }
         }
 

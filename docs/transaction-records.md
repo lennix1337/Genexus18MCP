@@ -6,6 +6,11 @@ The `genexus_db` umbrella exposes three root-level Transaction record actions:
 - `records_insert` previews or inserts one row.
 - `records_update` previews or updates one primary-keyed row.
 
+Every response identifies the adapter as `dataAccess="typed_sql"` and sets
+`businessRulesExecuted=false`. The adapter validates GeneXus metadata and
+transaction safety, but it does not execute a generated Business Component,
+Transaction rules, defaults, or application triggers as GeneXus logic.
+
 The adapter obtains the table name, root attributes, types, lengths, decimals,
 and primary key from the SDK Transaction structure. Attribute names are resolved
 against that metadata and values are sent as database parameters; callers cannot

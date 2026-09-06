@@ -45,7 +45,43 @@ namespace GxMcp.Gateway
             "genexus_whoami",
             "genexus_doctor",
             "genexus_search_source",
+            "genexus_compare",
+            "genexus_format",
             "genexus_logs" // legacy alias
+        };
+
+        private static readonly HashSet<string> KnownMutatingTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "genexus_edit", "genexus_create_object", "genexus_delete_object", "genexus_refactor",
+            "genexus_forge", "genexus_import_object", "genexus_test",
+            "genexus_connection_recover", "genexus_worker_reload"
+        };
+
+        // Published tools without an action property still need a typed policy.
+        // These entries are intentionally explicit: a tool name must never be
+        // classified by a substring such as "edit" or "create".
+        private static readonly HashSet<string> ModeDependentTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "genexus_sdk_probe",
+            "genexus_run_object",
+            "genexus_merge"
+        };
+
+        // Legacy tools without an action field still need an explicit policy while
+        // their callers migrate to an umbrella contract. Keep this set finite and
+        // named; substring checks belong only in the compatibility fallback.
+        private static readonly HashSet<string> NameOnlyMutatingTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "genexus_edit_form",
+            "genexus_edit_and_build",
+            "genexus_bulk_edit",
+            "genexus_create",
+            "genexus_variable",
+            "genexus_sd_panel_create",
+            "genexus_sd_panel_edit",
+            "genexus_rename_across_kb",
+            "genexus_kb_import",
+            "genexus_apply_pattern"
         };
 
         private static readonly Dictionary<string, ActionContract> ActionContracts =
@@ -58,8 +94,8 @@ namespace GxMcp.Gateway
                     readOnly: new[] { "list", "describe", "suggest_macro" },
                     mutating: new[] { "crystallize" }),
                 ["genexus_lifecycle"] = Contract(
-                    readOnly: new[] { "reorg_preview", "validate", "validate-kb", "status", "result", "snapshots-list" },
-                    mutating: new[] { "build", "cancel", "specify", "rebuild", "reorg", "sync", "index", "snapshots-restore" }),
+                    readOnly: new[] { "reorg_preview", "status", "result", "snapshots-list", "inspect" },
+                    mutating: new[] { "build", "cancel", "specify", "validate", "validate-kb", "rebuild", "reorg", "sync", "index", "snapshots-restore", "reconcile" }),
                 ["genexus_refactor"] = Contract(
                     readOnly: Array.Empty<string>(),
                     mutating: new[] { "RenameAttribute", "RenameVariable", "RenameObject", "ExtractProcedure", "ExtractSubroutine", "WWPSetCondition" }),
@@ -247,28 +283,236 @@ namespace GxMcp.Gateway
             return OperationKind.Unknown;
         }
 
+        /// <summary>
+        /// Classifies both action-bearing and action-less published tools from
+        /// the same registry used by cache, retry and invalidation callers.
+        /// A mode-dependent operation returns Unknown for an unsupported mode so
+        /// retry/cache policy fails closed instead of guessing.
+        /// </summary>
+        internal static OperationKind ClassifyTool(string? toolName, JObject? args)
+        {
+            if (string.IsNullOrWhiteSpace(toolName)) return OperationKind.Unknown;
+
+            var effectiveArgs = NormalizeArguments(toolName, args, out var canonical);
+            return ClassifyCanonicalTool(canonical, effectiveArgs);
+        }
+
+        private static OperationKind ClassifyCanonicalTool(string toolName, JObject args)
+        {
+            if (ModeDependentTools.Contains(toolName))
+            {
+                if (string.Equals(toolName, "genexus_sdk_probe", StringComparison.OrdinalIgnoreCase))
+                {
+                    string? mode = args["mode"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(mode) || string.Equals(mode, "surface", StringComparison.OrdinalIgnoreCase))
+                        return OperationKind.Mutating; // surface writes the diagnostic dump
+                    if (string.Equals(mode, "capabilities", StringComparison.OrdinalIgnoreCase))
+                        return OperationKind.ReadOnly;
+                    return OperationKind.Unknown;
+                }
+
+                if (string.Equals(toolName, "genexus_run_object", StringComparison.OrdinalIgnoreCase))
+                {
+                    return args["dryRun"]?.ToObject<bool?>() == true
+                        ? OperationKind.ReadOnly
+                        : OperationKind.Mutating; // normal mode may perform GAM login/network I/O
+                }
+
+                if (string.Equals(toolName, "genexus_merge", StringComparison.OrdinalIgnoreCase))
+                {
+                    return args["dryRun"]?.ToObject<bool?>() == false
+                        ? OperationKind.Mutating
+                        : OperationKind.ReadOnly; // the published default is dryRun=true
+                }
+            }
+
+            string? action = args["action"]?.ToString();
+            var actionKind = ClassifyAction(toolName, action);
+            if (actionKind != OperationKind.Unknown) return actionKind;
+
+            if (PureReadOnlyTools.Contains(toolName)) return OperationKind.ReadOnly;
+            if (KnownMutatingTools.Contains(toolName) || NameOnlyMutatingTools.Contains(toolName))
+                return OperationKind.Mutating;
+
+            return OperationKind.Unknown;
+        }
+
         public static bool IsReadOnly(string? toolName, JObject? args)
         {
             if (string.IsNullOrWhiteSpace(toolName)) return false;
 
-            if (PureReadOnlyTools.Contains(toolName)) return true;
+            var effectiveArgs = NormalizeArguments(toolName, args, out var canonical);
+            var toolKind = ClassifyCanonicalTool(canonical, effectiveArgs);
+            if (toolKind == OperationKind.ReadOnly
+                && !IsActionMutationPreview(canonical, effectiveArgs))
+                return !HasKnownSideEffects(canonical, effectiveArgs["action"]?.ToString(), effectiveArgs);
 
-            string? action = args?["action"]?.ToString();
-            var kind = ClassifyAction(toolName, action);
-            if (kind == OperationKind.ReadOnly)
-                return !HasKnownSideEffects(toolName, action, args);
-            if (kind != OperationKind.Mutating) return false;
+            if (toolKind != OperationKind.Mutating) return false;
+            return IsActionMutationPreview(canonical, effectiveArgs);
+        }
 
-            string key = toolName + ":" + action;
-            bool dryRun = args?["dryRun"]?.ToObject<bool?>() == true
-                || (args?["dryRun"] == null && IsDefaultDryRunRecordAction(toolName, action));
-            return dryRun && DryRunCapableActions.Contains(key);
+        /// <summary>
+        /// Returns true when the canonical contract already proves that a call
+        /// is a mutation. This is deliberately narrower than the legacy cache
+        /// gate: callers can keep their compatibility fallback for tools that
+        /// have not been moved into the registry yet.
+        /// </summary>
+        internal static bool IsMutationCandidate(string? toolName, JObject? args)
+        {
+            if (string.IsNullOrWhiteSpace(toolName)) return false;
+
+            var effectiveArgs = NormalizeArguments(toolName, args, out var effectiveTool);
+
+            var kind = ClassifyCanonicalTool(effectiveTool, effectiveArgs);
+            if (kind == OperationKind.Unknown && effectiveArgs["action"] != null)
+            {
+                var normalizedArgs = (JObject)effectiveArgs.DeepClone();
+                normalizedArgs["action"] = NormalizeActionToken(
+                    effectiveTool, effectiveArgs["action"]?.ToString());
+                kind = ClassifyCanonicalTool(effectiveTool, normalizedArgs);
+            }
+            if (kind == OperationKind.Mutating)
+                return !IsActionMutationPreview(effectiveTool, effectiveArgs);
+
+            // A read-labelled browser preview can still build or write a
+            // screenshot baseline. Reuse the same side-effect predicate used by
+            // IsReadOnly so both consumers agree on that exception.
+            return kind == OperationKind.ReadOnly
+                && HasKnownSideEffects(effectiveTool, effectiveArgs["action"]?.ToString(), effectiveArgs);
+        }
+
+        internal sealed class OperationContract
+        {
+            public string CanonicalName { get; init; } = string.Empty;
+            public OperationKind Kind { get; init; }
+            public string Effects { get; init; } = "unknown";
+            public string Execution { get; init; } = "unknown";
+            public string Retry { get; init; } = "never";
+            public string Cache { get; init; } = "never";
+            public IReadOnlyList<string> Invalidation { get; init; } = Array.Empty<string>();
+            public bool PreviewSupported { get; init; }
+        }
+
+        /// <summary>Single policy projection consumed by cache/retry/preview callers.</summary>
+        internal static OperationContract Describe(string toolName, JObject? args)
+        {
+            var effectiveArgs = NormalizeArguments(toolName, args, out var canonical);
+            OperationKind kind = ClassifyCanonicalTool(canonical, effectiveArgs);
+            if (kind == OperationKind.ReadOnly
+                && HasKnownSideEffects(canonical, effectiveArgs["action"]?.ToString(), effectiveArgs))
+                kind = OperationKind.Unknown;
+            if (kind == OperationKind.Mutating && IsActionMutationPreview(canonical, effectiveArgs))
+                kind = OperationKind.ReadOnly;
+            return new OperationContract
+            {
+                CanonicalName = canonical,
+                Kind = kind,
+                Effects = EffectsFor(canonical, kind),
+                Execution = ExecutionFor(canonical, kind),
+                Retry = kind == OperationKind.ReadOnly ? "safe" : kind == OperationKind.Mutating ? "operation_key" : "never",
+                Cache = kind == OperationKind.ReadOnly ? "semantic" : "never",
+                Invalidation = InvalidationFor(canonical, kind),
+                PreviewSupported = IsActionPreviewSupported(canonical, effectiveArgs)
+            };
+        }
+
+        private static bool IsActionMutationPreview(string toolName, JObject args)
+        {
+            string? action = args["action"]?.ToString();
+            if (string.IsNullOrWhiteSpace(action)) return false;
+
+            bool dryRun = args["dryRun"]?.ToObject<bool?>() == true
+                || (args["dryRun"] == null && IsDefaultDryRunRecordAction(toolName, action));
+            return ClassifyAction(toolName, action) == OperationKind.Mutating
+                && dryRun
+                && DryRunCapableActions.Contains(toolName + ":" + action);
+        }
+
+        private static bool IsActionPreviewSupported(string toolName, JObject args)
+        {
+            string? action = args["action"]?.ToString();
+            return !string.IsNullOrWhiteSpace(action)
+                && DryRunCapableActions.Contains(toolName + ":" + action);
+        }
+
+        private static string EffectsFor(string toolName, OperationKind kind)
+        {
+            if (kind == OperationKind.Unknown) return "unknown";
+            if (kind == OperationKind.ReadOnly) return "kb.read";
+            if (string.Equals(toolName, "genexus_connection_recover", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(toolName, "genexus_worker_reload", StringComparison.OrdinalIgnoreCase))
+                return "process.write";
+            if (string.Equals(toolName, "genexus_test", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(toolName, "genexus_run_object", StringComparison.OrdinalIgnoreCase))
+                return "external.execute";
+            if (string.Equals(toolName, "genexus_sdk_probe", StringComparison.OrdinalIgnoreCase))
+                return "file.write";
+            return "kb.write";
+        }
+
+        private static string ExecutionFor(string toolName, OperationKind kind)
+        {
+            if (kind == OperationKind.Unknown) return "unknown";
+            if (string.Equals(toolName, "genexus_connection_recover", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(toolName, "genexus_worker_reload", StringComparison.OrdinalIgnoreCase))
+                return "gateway";
+            return "worker";
+        }
+
+        private static IReadOnlyList<string> InvalidationFor(string toolName, OperationKind kind)
+        {
+            if (kind == OperationKind.ReadOnly || kind == OperationKind.Unknown)
+                return Array.Empty<string>();
+            if (string.Equals(toolName, "genexus_connection_recover", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(toolName, "genexus_worker_reload", StringComparison.OrdinalIgnoreCase))
+                return new[] { "process", "sessions" };
+            if (string.Equals(toolName, "genexus_sdk_probe", StringComparison.OrdinalIgnoreCase))
+                return new[] { "files" };
+            if (string.Equals(toolName, "genexus_test", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(toolName, "genexus_run_object", StringComparison.OrdinalIgnoreCase))
+                return new[] { "external" };
+            return new[] { "kb", "dependents", "collections" };
+        }
+
+        /// <summary>
+        /// Applies the published legacy rewrite table to a cloned argument bag
+        /// and returns the canonical tool name used for policy/cache identity.
+        /// The caller's request is never mutated.
+        /// </summary>
+        internal static JObject NormalizeArguments(
+            string toolName, JObject? args, out string canonicalTool)
+        {
+            var effectiveArgs = args == null ? new JObject() : (JObject)args.DeepClone();
+            string effectiveTool = toolName;
+            if (McpRouter.TryRewriteLegacyTool(toolName, effectiveArgs, out var rewrittenTool, out var rewrittenArgs))
+            {
+                effectiveTool = rewrittenTool;
+                effectiveArgs = rewrittenArgs;
+            }
+
+            canonicalTool = ToolIdentity.ResolveCanonical(effectiveTool);
+            return effectiveArgs;
         }
 
         private static bool IsDefaultDryRunRecordAction(string toolName, string? action)
-            => string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase)
-                && (string.Equals(action, "records_insert", StringComparison.Ordinal)
-                    || string.Equals(action, "records_update", StringComparison.Ordinal));
+            => (string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase)
+                    && (string.Equals(action, "records_insert", StringComparison.Ordinal)
+                        || string.Equals(action, "records_update", StringComparison.Ordinal)))
+                || (string.Equals(toolName, "genexus_api", StringComparison.OrdinalIgnoreCase)
+                    && (string.Equals(action, "routes_clone", StringComparison.Ordinal)
+                        || string.Equals(action, "routes_update", StringComparison.Ordinal)));
+
+        private static string? NormalizeActionToken(string toolName, string? action)
+        {
+            if (string.IsNullOrWhiteSpace(action) || !ActionContracts.TryGetValue(toolName, out var contract))
+                return action;
+
+            return contract.ReadOnly.FirstOrDefault(value =>
+                       string.Equals(value, action, StringComparison.OrdinalIgnoreCase))
+                ?? contract.Mutating.FirstOrDefault(value =>
+                       string.Equals(value, action, StringComparison.OrdinalIgnoreCase))
+                ?? action;
+        }
 
         private static bool HasKnownSideEffects(string toolName, string? action, JObject? args)
         {

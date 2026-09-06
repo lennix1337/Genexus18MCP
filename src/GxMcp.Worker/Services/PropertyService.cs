@@ -166,6 +166,17 @@ namespace GxMcp.Worker.Services
                     if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
                 }
 
+                string propertyValidation = ValidatePropertyWrite(container, propName, value);
+                if (propertyValidation != null)
+                    return Models.McpResponse.Err(
+                        code: propertyValidation.StartsWith("PropertyReadOnly", StringComparison.Ordinal)
+                            ? "PropertyReadOnly"
+                            : propertyValidation.StartsWith("PropertyNotFound", StringComparison.Ordinal)
+                                ? "PropertyNotFound"
+                                : "InvalidPropertyValue",
+                        message: propertyValidation,
+                        target: target);
+
                 string beforeVal = null;
                 using (var trans = obj.Model.KB.BeginTransaction())
                 {
@@ -262,6 +273,10 @@ namespace GxMcp.Worker.Services
                             if (IsNonScalarProperty(propName))
                                 throw new InvalidOperationException($"'{propName}' is a structured property and cannot be set as a scalar string.");
 
+                            string propertyValidation = ValidatePropertyWrite(container, propName, val);
+                            if (propertyValidation != null)
+                                throw new InvalidOperationException(propertyValidation);
+
                             string before = TryReadPropertyString(container, propName);
                             if (before != null) beforeValues[propName] = before;
 
@@ -312,8 +327,83 @@ namespace GxMcp.Worker.Services
             {
                 string pName = p.Name;
                 string pVal = p.Value?.ToString();
+                string propertyValidation = ValidatePropertyWrite(targetContainer, pName, pVal);
+                if (propertyValidation != null) throw new InvalidOperationException(propertyValidation);
                 ApplyPropertyValue(targetContainer, pName, pVal, null, obj);
             }
+        }
+
+        /// <summary>
+        /// Resolve a property descriptor before opening an SDK transaction. This
+        /// keeps read-only properties and malformed scalar values at zero saves;
+        /// the older setter path only discovered both failures after invoking SDK
+        /// conversion and could return an opaque error envelope.
+        /// </summary>
+        internal static string ValidatePropertyWrite(dynamic container, string propName, string rawValue)
+        {
+            if (container == null || string.IsNullOrWhiteSpace(propName))
+                return "PropertyNotFound: a property name is required.";
+            // These names have dedicated typed SDK adapters below and are not
+            // scalar descriptor conversions.
+            if (IsDomainPropertyName(propName)
+                || IsNullablePropertyName(propName)
+                || string.Equals(propName.Trim(), "OutputSDT", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            dynamic descriptor = null;
+            bool enumerated = false;
+            try
+            {
+                foreach (dynamic property in container.Properties)
+                {
+                    enumerated = true;
+                    string name = null;
+                    try { name = property.Name?.ToString(); } catch { }
+                    if (string.Equals(name, propName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        descriptor = property;
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+                // Some SDK bags expose only SetPropertyValue and no enumerable
+                // descriptor collection. Leave those to the proven setter path.
+                return null;
+            }
+
+            if (descriptor == null)
+                return enumerated ? $"PropertyNotFound: '{propName}' is not exposed by this object or control." : null;
+
+            try
+            {
+                if (descriptor.Definition?.ReadOnly == true)
+                    return $"PropertyReadOnly: '{propName}' is read-only for this object or control.";
+            }
+            catch { }
+
+            Type targetType = null;
+            try
+            {
+                if (descriptor.Definition?.Type is Type definitionType) targetType = definitionType;
+            }
+            catch { }
+            if (targetType == null)
+            {
+                try
+                {
+                    object current = descriptor.Value;
+                    if (current != null) targetType = current.GetType();
+                }
+                catch { }
+            }
+
+            if (targetType != null && targetType != typeof(string)
+                && !TryConvertToType(rawValue, targetType, out _))
+                return $"InvalidPropertyValue: '{rawValue}' cannot be converted to {targetType.Name} for '{propName}'.";
+
+            return null;
         }
 
         // issue #59 — re-read the property from a freshly-resolved object after the SDK

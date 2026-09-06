@@ -9,27 +9,66 @@ namespace GxMcp.Gateway
 {
     public sealed class IdempotencyCache
     {
-        // PERFORMANCE (G-A2): SemaphoreSlim.WaitAsync used to block indefinitely. If a worker
-        // hung inside factory(), every subsequent caller for the same key starved until the
-        // TTL fired (up to 65 minutes). Bound the wait at 30 seconds and fall back to running
-        // factory() without the gate — best-effort idempotency beats a deadlock.
-        private static readonly TimeSpan GateAcquisitionTimeout = TimeSpan.FromSeconds(30);
+        private readonly TimeSpan _gateAcquisitionTimeout;
 
         private readonly TimeSpan _ttl;
         private readonly int _capacity;
+        private readonly MutationOperationJournal? _journal;
         private readonly ConcurrentDictionary<string, KbBucket> _buckets = new ConcurrentDictionary<string, KbBucket>();
-        private readonly ConcurrentDictionary<(string, string, string), SemaphoreSlim> _gates =
-            new ConcurrentDictionary<(string, string, string), SemaphoreSlim>();
+        private readonly object _gateLock = new object();
+        private readonly Dictionary<(string, string, string), GateEntry> _gates =
+            new Dictionary<(string, string, string), GateEntry>();
 
         public IdempotencyCache(int ttlMinutes, int capacity)
+            : this(ttlMinutes, capacity, TimeSpan.FromSeconds(30), null) { }
+
+        internal IdempotencyCache(int ttlMinutes, int capacity, TimeSpan gateAcquisitionTimeout)
+            : this(ttlMinutes, capacity, gateAcquisitionTimeout, null) { }
+
+        internal IdempotencyCache(int ttlMinutes, int capacity, TimeSpan gateAcquisitionTimeout, string? journalPath)
         {
+            _gateAcquisitionTimeout = gateAcquisitionTimeout;
             _ttl = TimeSpan.FromMinutes(ttlMinutes);
             _capacity = capacity;
+            _journal = string.IsNullOrWhiteSpace(journalPath) ? null : new MutationOperationJournal(journalPath);
         }
 
         // Plan 028: test-only visibility into gate accumulation (InternalsVisibleTo
         // GxMcp.Gateway.Tests is already configured in the csproj).
-        internal int GateCount => _gates.Count;
+        internal int GateCount { get { lock (_gateLock) return _gates.Count; } }
+
+        internal JObject InspectOperation(string kbPath, string tool, string key)
+        {
+            if (_journal == null)
+            {
+                return new JObject
+                {
+                    ["journalHealthy"] = false,
+                    ["code"] = "operation_journal_disabled",
+                    ["message"] = "This Gateway instance has no durable operation journal configured."
+                };
+            }
+            return _journal.Inspect(kbPath, tool, key);
+        }
+
+        internal JObject ReconcileOperation(
+            string kbPath,
+            string tool,
+            string key,
+            string verification,
+            MutationOperationEvidence? observedEvidence = null)
+        {
+            if (_journal == null)
+            {
+                return new JObject
+                {
+                    ["status"] = "Blocked",
+                    ["code"] = "operation_journal_disabled",
+                    ["message"] = "This Gateway instance has no durable operation journal configured; no state changed."
+                };
+            }
+            return _journal.Reconcile(kbPath, tool, key, verification, observedEvidence);
+        }
 
         public bool TryGet(string kbPath, string tool, string key,
                            string payloadHash, out JObject? cached)
@@ -48,63 +87,85 @@ namespace GxMcp.Gateway
 
         public async Task<JObject> GetOrCompute(
             string kbPath, string tool, string key, string payloadHash,
-            Func<Task<JObject>> factory)
+            Func<Task<JObject>> factory,
+            MutationOperationEvidence? evidence = null)
         {
             if (TryGet(kbPath, tool, key, payloadHash, out var cached))
                 return cached!;
 
-            var gate = _gates.GetOrAdd((kbPath, tool, key), _ => new SemaphoreSlim(1, 1));
-            bool gateAcquired = await gate.WaitAsync(GateAcquisitionTimeout).ConfigureAwait(false);
-            if (!gateAcquired)
+            var gateKey = (kbPath, tool, key);
+            GateEntry gate;
+            lock (_gateLock)
             {
-                // PERFORMANCE (G-A2): gate held by a stuck factory. Log once and execute without
-                // the gate so this caller still gets a response. We deliberately do NOT Put the
-                // result, otherwise two parallel factories could race on the cache.
-                try { Program.Log($"[Gateway] idempotency gate timeout tool={tool} key={key}"); } catch { }
-                try
-                {
-                    return await factory().ConfigureAwait(false);
-                }
-                catch (ErrorNotCacheable ex)
-                {
-                    return ex.Result;
-                }
+                if (!_gates.TryGetValue(gateKey, out gate!))
+                    _gates.Add(gateKey, gate = new GateEntry());
+                gate.Users++;
             }
 
+            bool gateAcquired = false;
             try
             {
+                gateAcquired = await gate.Semaphore.WaitAsync(_gateAcquisitionTimeout).ConfigureAwait(false);
+                if (!gateAcquired)
+                    throw new UsageException("idempotency_in_progress",
+                        "An operation with this idempotency key is still in progress. " +
+                        "This request was not executed; retry with the same key and payload to retrieve its result.");
+
                 if (TryGet(kbPath, tool, key, payloadHash, out cached))
                     return cached!;
+                if (_journal != null)
+                {
+                    switch (_journal.Begin(kbPath, tool, key, payloadHash, evidence))
+                    {
+                        case MutationOperationJournal.BeginResult.Conflict:
+                            throw new IdempotencyConflictException(
+                                $"idempotency key '{key}' reused with different payload");
+                        case MutationOperationJournal.BeginResult.Completed:
+                        case MutationOperationJournal.BeginResult.UnknownAfterRestart:
+                            throw new UsageException(
+                                "operation_unknown",
+                                "A previous process may have committed this mutation, but its response is unavailable. " +
+                                "Inspect the affected target before retrying with a new authorization.");
+                        case MutationOperationJournal.BeginResult.JournalUnavailable:
+                            throw new UsageException(
+                                "operation_journal_unavailable",
+                                "The durable mutation journal is unavailable or corrupt; this write was not executed. " +
+                                "Repair the Gateway state journal and inspect the target before retrying.");
+                    }
+                }
                 try
                 {
                     var result = await factory().ConfigureAwait(false);
                     Put(kbPath, tool, key, payloadHash, result);
+                    _journal?.Complete(kbPath, tool, key, payloadHash);
                     return result;
                 }
                 catch (ErrorNotCacheable ex)
                 {
+                    _journal?.Fail(kbPath, tool, key, payloadHash);
                     return ex.Result;
                 }
             }
             finally
             {
-                gate.Release();
-                // Plan 028: once released and uncontended, evict the gate so _gates
-                // doesn't grow without bound for every distinct client-supplied key.
-                // CurrentCount == 1 means fully released and idle (no waiters holding
-                // it back down to 0). Value-matching TryRemove only removes the
-                // instance we actually hold, so a concurrent GetOrAdd that already
-                // returned this same instance is unaffected, and a replacement
-                // instance installed by a racing caller is never clobbered.
-                // Deliberately do NOT Dispose() the removed gate: between our
-                // CurrentCount check and TryRemove, another caller could have already
-                // GetOrAdd'd this same instance and be inside WaitAsync — disposing it
-                // would throw ObjectDisposedException on that caller's later Release().
-                // This semaphore is only ever used via WaitAsync/Release, never
-                // AvailableWaitHandle, so it allocates no OS wait handle and skipping
-                // Dispose() loses nothing; the GC reclaims it once unreferenced.
-                _gates.TryRemove(new KeyValuePair<(string, string, string), SemaphoreSlim>((kbPath, tool, key), gate));
+                if (gateAcquired) gate.Semaphore.Release();
+                // Retain one shared gate while any owner or waiter can still use it.
+                // Registration and last-user eviction must be atomic with each other.
+                lock (_gateLock)
+                {
+                    if (--gate.Users == 0)
+                    {
+                        _gates.Remove(gateKey);
+                        gate.Semaphore.Dispose();
+                    }
+                }
             }
+        }
+
+        private sealed class GateEntry
+        {
+            public readonly SemaphoreSlim Semaphore = new SemaphoreSlim(1, 1);
+            public int Users;
         }
 
         // PERFORMANCE (G-M4): KbBucket now shards its state across N independent LRU slots.

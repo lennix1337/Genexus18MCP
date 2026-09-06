@@ -764,6 +764,7 @@ namespace GxMcp.Worker.Services
         {
             public List<string> Expanded { get; set; } = new List<string>();
             public List<string> Skipped { get; set; } = new List<string>();
+            public List<string> AmbiguousTargets { get; set; } = new List<string>();
             public bool Truncated { get; set; }
             public int NodeCap { get; set; }
             public int RequestedNodes { get; set; }
@@ -778,6 +779,20 @@ namespace GxMcp.Worker.Services
                 .Select(t => t.Trim())
                 .ToList();
             var originalSet = new HashSet<string>(originalList, StringComparer.OrdinalIgnoreCase);
+
+            if (_indexCacheService != null)
+            {
+                foreach (var target in originalList)
+                {
+                    if (_indexCacheService.FindEntriesByName(target).Count > 1)
+                        plan.AmbiguousTargets.Add(target);
+                }
+                if (plan.AmbiguousTargets.Count > 0)
+                {
+                    plan.Expanded.AddRange(originalList);
+                    return plan;
+                }
+            }
 
             // No graph or "none" → preserve original order, but still inject
             // BC variants (FR#8) since the BC heuristic is index-driven, not
@@ -1001,6 +1016,13 @@ namespace GxMcp.Worker.Services
                                 ["includeCallees"] = plan.IncludeCallees
                             });
                     }
+                    if (plan.AmbiguousTargets.Count > 0)
+                    {
+                        return McpResponse.Err(
+                            code: "BuildTargetAmbiguous",
+                            message: "One or more build targets resolve to multiple typed GeneXus objects.",
+                            extra: new JObject { ["targets"] = JArray.FromObject(plan.AmbiguousTargets) });
+                    }
                     targets = plan.Expanded;
                 }
                 return McpResponse.Ok(
@@ -1122,6 +1144,17 @@ namespace GxMcp.Worker.Services
                         status = "BuildPlanTooLarge",
                         suggested = "Build All from IDE, or set includeCallees='none' / 'direct' / reduce the target set",
                         graph = new { requestedNodes = plan.RequestedNodes, cap = plan.NodeCap },
+                        requested = targets,
+                        includeCallees = plan.IncludeCallees
+                    });
+                }
+                if (plan.AmbiguousTargets.Count > 0)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        status = "BuildTargetAmbiguous",
+                        code = "BuildTargetAmbiguous",
+                        targets = plan.AmbiguousTargets,
                         requested = targets,
                         includeCallees = plan.IncludeCallees
                     });

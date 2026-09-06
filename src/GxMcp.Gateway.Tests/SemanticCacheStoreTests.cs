@@ -9,8 +9,8 @@ namespace GxMcp.Gateway.Tests
     /// <summary>
     /// A4 — the semantic cache used to be an unbounded ConcurrentDictionary in a
     /// gateway that lives forever, so long read-only sessions grew without bound.
-    /// SemanticCacheStore adds a cap (LRU eviction by last access) and a TTL
-    /// (idle expiry swept on Set). These tests drive both via the internal ctor.
+    /// SemanticCacheStore adds a cap (LRU eviction by last access) and an
+    /// absolute TTL swept on read/Set. These tests drive both via the internal ctor.
     /// </summary>
     public class SemanticCacheStoreTests
     {

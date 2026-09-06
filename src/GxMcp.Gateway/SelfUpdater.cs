@@ -56,7 +56,7 @@ namespace GxMcp.Gateway
         private static string StagedTmpDir => Path.Combine(InstallDir, ".staged.tmp");
         private static string StagedMarker => Path.Combine(StagedDir, "staged.json");
 
-        // string.GetHashCode é randomizado por processo no .NET 8 — dois gateways
+        // string.GetHashCode é randomizado por processo no runtime — dois gateways
         // derivariam nomes de mutex diferentes e ambos poderiam aplicar o update
         // simultaneamente. SHA-256 do caminho é estável entre processos.
         private static string MutexName =>

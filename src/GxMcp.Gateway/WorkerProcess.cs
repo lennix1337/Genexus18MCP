@@ -125,7 +125,18 @@ namespace GxMcp.Gateway
         // forwarding) together with the already-parsed JObject (WorkerProcess parses
         // every line to route it), so downstream handlers don't re-parse the response.
         public event Action<string, JObject>? OnRpcResponse;
+        // Context-preserving companion used by the Gateway's notification path. The
+        // original event remains unchanged for existing consumers and tests; this
+        // event carries the worker's KB identity so unsolicited resource updates can
+        // never be mistaken for the same-named object from another open KB.
+        public event Action<string, JObject, string?>? OnRpcResponseWithContext;
         public event Action<WorkerStopReason>? OnWorkerExited;
+
+        private void RaiseRpcResponse(string json, JObject payload)
+        {
+            OnRpcResponse?.Invoke(json, payload);
+            OnRpcResponseWithContext?.Invoke(json, payload, Kb?.NormalizedAlias);
+        }
 
         public int? Pid
         {
@@ -356,7 +367,7 @@ namespace GxMcp.Gateway
                                     ["id"] = failId == "unknown" ? (JToken)JValue.CreateNull() : new JValue(failId),
                                     ["error"] = new JObject { ["code"] = -32000, ["message"] = $"Worker for KB '{Kb.Alias}' crashed/exited. Reconnect or try again." }
                                 };
-                                OnRpcResponse?.Invoke(errResponse.ToString(Formatting.None), errResponse);
+                                RaiseRpcResponse(errResponse.ToString(Formatting.None), errResponse);
                                 continue;
                             }
 
@@ -506,7 +517,7 @@ namespace GxMcp.Gateway
                 ["id"] = id == "unknown" ? (JToken)JValue.CreateNull() : new JValue(id),
                 ["error"] = new JObject { ["code"] = -32000, ["message"] = message }
             };
-            OnRpcResponse?.Invoke(errResponse.ToString(Formatting.None), errResponse);
+            RaiseRpcResponse(errResponse.ToString(Formatting.None), errResponse);
         }
 
         private async Task WaitForPipeReadyAsync(string id, CancellationToken cancellationToken)
@@ -998,7 +1009,7 @@ namespace GxMcp.Gateway
                             HandleWorkerRpcResponse(e.Data, out var parsed);
                             // parsed is null only when the line failed to parse; the
                             // handler is null-tolerant (falls back to its own parse).
-                            OnRpcResponse?.Invoke(e.Data, parsed!);
+                            RaiseRpcResponse(e.Data, parsed!);
                         }
                         else
                         {

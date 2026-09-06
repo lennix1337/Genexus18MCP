@@ -12,6 +12,11 @@
       "uri": "genexus://kb/agent-playbook"
     },
     {
+      "description": "Capability evidence for the active KB and installed GeneXus SDK; availability is queried explicitly and is not hidden in tools/list.",
+      "name": "GeneXus SDK Capabilities",
+      "uri": "genexus://kb/capabilities"
+    },
+    {
       "description": "Health report for the GeneXus MCP worker and gateway.",
       "name": "Gateway Health Report",
       "uri": "genexus://kb/health"

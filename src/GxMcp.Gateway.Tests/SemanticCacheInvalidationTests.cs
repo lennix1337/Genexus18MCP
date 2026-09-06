@@ -222,6 +222,19 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void MutationPreview_IsRecognizedAsNonPersisting()
+        {
+            Assert.True(Program.IsMutatingTool("genexus_edit", new JObject
+            {
+                ["changeSet"] = new JObject { ["action"] = "preview" }
+            }));
+            Assert.True(Program.IsMutationPreview(new JObject
+            {
+                ["changeSet"] = new JObject { ["action"] = "preview" }
+            }));
+        }
+
+        [Fact]
         public void BrowserPreviewSideEffects_InvalidateSemanticCache()
         {
             Assert.True(Program.IsMutatingTool("genexus_browser", new JObject

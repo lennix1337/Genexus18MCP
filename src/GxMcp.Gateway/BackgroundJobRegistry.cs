@@ -73,6 +73,7 @@ namespace GxMcp.Gateway
                 StartedAt = DateTime.UtcNow,
                 EstimatedSeconds = estimatedSeconds
             };
+            job.LastUpdatedAt = job.StartedAt;
             _jobs[job.Id] = job;
             return job;
         }
@@ -93,6 +94,7 @@ namespace GxMcp.Gateway
                 if (!string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase)) return;
                 job.Status = success ? "succeeded" : "failed";
                 job.CompletedAt = DateTime.UtcNow;
+                job.LastUpdatedAt = job.CompletedAt;
                 if (job.Summary == null) job.Summary = summary;
                 if (job.Result == null) job.Result = result;
                 // Issue #27 item 2: feed the estimator with the observed wall-clock of a
@@ -124,6 +126,7 @@ namespace GxMcp.Gateway
                 if (!string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase)) return;
                 job.Status = "stalled";
                 job.CompletedAt = DateTime.UtcNow;
+                job.LastUpdatedAt = job.CompletedAt;
                 if (job.Summary == null) job.Summary = summary;
                 if (job.Result == null) job.Result = result;
             }
@@ -142,18 +145,23 @@ namespace GxMcp.Gateway
         public bool Cancel(string jobId, string? reason = null)
         {
             if (!_jobs.TryGetValue(jobId, out var job)) return false;
-            // A terminal job (succeeded/failed/stalled) is done — cancelling it would
-            // only rewrite history. Only running jobs can be cancelled.
-            if (!string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase)) return false;
+            // The status check and terminal transition must be one critical section.
+            // Otherwise Complete() can win the lock after this check and Cancel()
+            // would overwrite a succeeded/failed result.
+            lock (job.SyncRoot)
+            {
+                // A terminal job (succeeded/failed/stalled) is done — cancelling it
+                // would only rewrite history. Only running jobs can be cancelled.
+                if (!string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase)) return false;
+                job.Status = "cancelled";
+                job.CompletedAt = DateTime.UtcNow;
+                job.LastUpdatedAt = job.CompletedAt;
+                job.Summary = reason ?? "Cancelled by client";
+            }
+
             if (_cts.TryGetValue(jobId, out var cts))
             {
                 try { cts.Cancel(); } catch { /* already disposed */ }
-            }
-            lock (job.SyncRoot)
-            {
-                job.Status = "cancelled";
-                job.CompletedAt = DateTime.UtcNow;
-                job.Summary = reason ?? "Cancelled by client";
             }
             return true;
         }
@@ -300,6 +308,10 @@ namespace GxMcp.Gateway
         public string Status { get; set; } = "running";
         public DateTime StartedAt { get; set; }
         public DateTime? CompletedAt { get; set; }
+        // Updated whenever a task changes state. Persisting this separately from
+        // StartedAt lets the MCP tasks extension expose a monotonic freshness marker
+        // without deriving it from a nullable terminal timestamp.
+        public DateTime? LastUpdatedAt { get; set; }
         public int EstimatedSeconds { get; set; }
         public string? Summary { get; set; }
         public JObject? Result { get; set; }

@@ -175,12 +175,14 @@ namespace GxMcp.Gateway.Routers
                 }
 
                 case "genexus_sdk_probe":
+                    string sdkProbeMode = args?["mode"]?.ToString();
                     return new
                     {
                         module = "SdkProbe",
-                        action = "Run",
+                        action = string.Equals(sdkProbeMode, "capabilities", StringComparison.OrdinalIgnoreCase) ? "Capabilities" : "Run",
                         target = "_self",
-                        outputDir = args?["outputDir"]?.ToString()
+                        outputDir = args?["outputDir"]?.ToString(),
+                        mode = sdkProbeMode
                     };
 
                 // Versioning umbrella: history_*|undo|time_travel|blame|diff|diff_generated.
