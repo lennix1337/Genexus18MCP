@@ -382,6 +382,51 @@ namespace GxMcp.Worker.Services
             return _rxGenerationOk.IsMatch(output) && _rxCompilationOk.IsMatch(output);
         }
 
+        internal static bool HasBuildAllCompletionEvidence(string output)
+        {
+            return !string.IsNullOrEmpty(output)
+                && output.IndexOf("[GXMCP-BUILD-ALL] BuildAll completed", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        internal static bool DetectBuildAllReorgRequired(string output)
+        {
+            if (string.IsNullOrWhiteSpace(output)) return false;
+            string text = output.ToLowerInvariant();
+            bool mentionsReorg = text.Contains("reorg") || text.Contains("reorganization") || text.Contains("reorganiza");
+            if (!mentionsReorg) return false;
+            if (text.Contains("no reorg") || text.Contains("no reorganization")
+                || text.Contains("not required") || text.Contains("not needed")
+                || text.Contains("does not require") || text.Contains("doesn't require")
+                || text.Contains("não necessária") || text.Contains("nao necessaria")
+                || text.Contains("não requer") || text.Contains("nao requer"))
+                return false;
+            return text.Contains("required") || text.Contains("needed") || text.Contains("necess");
+        }
+
+        internal static void FinalizeBuildAllStatus(BuildTaskStatus status, string output)
+        {
+            if (status == null || !string.Equals(status.Action, "BuildAll", StringComparison.OrdinalIgnoreCase)) return;
+            status.BuildMode = "BuildAll";
+            status.KbOpened = status.KbOpened == true
+                || (!string.IsNullOrEmpty(output) && output.IndexOf("[GXMCP-BUILD-ALL] KB opened", StringComparison.OrdinalIgnoreCase) >= 0);
+            status.BuildAllDone = status.BuildAllDone == true || HasBuildAllCompletionEvidence(output);
+            status.ReorgRequired = status.ReorgRequired == true || DetectBuildAllReorgRequired(output);
+            status.MsBuildExitCode = status.ExitCode;
+
+            if (status.ReorgRequired == true)
+            {
+                status.Status = "ReorgRequired";
+                status.Error = "Build All stopped because the selected Knowledge Base requires reorganization. Run genexus_lifecycle action=reorg explicitly, then retry action=build_all.";
+                status.Hint = "FailIfReorg=true prevented a silent schema change. Run genexus_lifecycle action=reorg, then retry action=build_all.";
+            }
+            else if (status.BuildAllDone != true)
+            {
+                status.Status = "Failed";
+                status.Error = "Build All did not emit completion evidence; an exit code of 0 alone is not sufficient to confirm that Build All ran.";
+                status.Hint = "Inspect fullLogPath and retry after confirming the SDK/MSBuild task completed.";
+            }
+        }
+
         // v2.6.6 Stream E (FR#9): CS2001 referencing "<obj>_bc.cs" is treated as
         // an orphan demotion when the underlying object is not a Transaction in the
         // current index (either missing entirely, or renamed to a different type).
@@ -503,9 +548,19 @@ namespace GxMcp.Worker.Services
         public class BuildTaskStatus
         {
             public string TaskId { get; set; }
-            public string Status { get; set; }            // Accepted | Running | Succeeded | Failed | Error | Cancelled
+            public string Status { get; set; }            // Accepted | Running | Succeeded | Failed | Error | Cancelled | ReorgRequired
             public string Phase { get; set; }             // Starting | OpeningKB | Specifying | Generating | Compiling | Finishing | Done
             public string Action { get; set; }
+            [JsonProperty("buildMode", NullValueHandling = NullValueHandling.Ignore)]
+            public string BuildMode { get; set; }
+            [JsonProperty("kbOpened", NullValueHandling = NullValueHandling.Ignore)]
+            public bool? KbOpened { get; set; }
+            [JsonProperty("buildAllDone", NullValueHandling = NullValueHandling.Ignore)]
+            public bool? BuildAllDone { get; set; }
+            [JsonProperty("reorgRequired", NullValueHandling = NullValueHandling.Ignore)]
+            public bool? ReorgRequired { get; set; }
+            [JsonProperty("msBuildExitCode", NullValueHandling = NullValueHandling.Ignore)]
+            public int? MsBuildExitCode { get; set; }
             public string Environment { get; set; }
             public bool? UpToDate { get; set; }
             // issue #42 hardening (D) — the KB this build belongs to. The concurrent-build
@@ -715,7 +770,7 @@ namespace GxMcp.Worker.Services
         // v2.6.6 Stream F: terminal statuses always return immediately from GetStatusWait.
         private static readonly HashSet<string> _terminalStatuses =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "Succeeded", "Failed", "Cancelled", "Error" };
+            { "Succeeded", "Failed", "Cancelled", "Error", "ReorgRequired" };
         private static bool IsTerminalStatus(string s)
             => !string.IsNullOrEmpty(s) && _terminalStatuses.Contains(s);
 
@@ -999,6 +1054,33 @@ namespace GxMcp.Worker.Services
         {
             try
             {
+                if (string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!string.IsNullOrWhiteSpace(target))
+                    {
+                        return McpResponse.Err(
+                            code: "BuildAllTargetNotAllowed",
+                            message: "action=build_all is global and cannot accept target; omit target. Use action=build for directed builds.",
+                            extra: new JObject { ["action"] = "build_all", ["target"] = target });
+                    }
+
+                    return McpResponse.Ok(
+                        code: "DryRun",
+                        result: new JObject
+                        {
+                            ["preview"] = new JObject
+                            {
+                                ["action"] = "BuildAll",
+                                ["buildMode"] = "BuildAll",
+                                ["kbWide"] = true,
+                                ["failIfReorg"] = true,
+                                ["wouldBuild"] = new JArray("<entire selected Knowledge Base>"),
+                                ["includeCallees"] = "ignored for Build All",
+                                ["buildPlanCap"] = buildPlanCap
+                            }
+                        });
+                }
+
                 var targets = ParseTargets(target);
                 BuildPlan plan = null;
                 if (action != null && action.Equals("Build", StringComparison.OrdinalIgnoreCase) && targets.Count > 0)
@@ -1061,6 +1143,15 @@ namespace GxMcp.Worker.Services
         public string Build(string action, string target, string includeCallees, int buildPlanCap, bool skipFullDeploy, string notifyOnFailure, bool fastIncremental, bool specifyOnly,
                             bool compileCheck, List<string> compileCheckCallers, bool compileCheckTruncated, bool compileCheckGraphAvailable, bool fullDeploy = false)
         {
+            if (string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(target))
+            {
+                return McpResponse.Err(
+                    code: "BuildAllTargetNotAllowed",
+                    message: "action=build_all is global and cannot accept target; omit target. Use action=build for directed builds.",
+                    extra: new JObject { ["action"] = "build_all", ["target"] = target });
+            }
+
             // issue #37 item 4: fast-fail reorg on a DBA-managed datastore
             // (Reorganize Server tables = No). GeneXus never applies the delta there,
             // so CheckAndInstallDatabase is a no-op the agent should not queue+poll.
@@ -1177,6 +1268,7 @@ namespace GxMcp.Worker.Services
             var status = new BuildTaskStatus {
                 TaskId = taskId,
                 Action = action,
+                BuildMode = string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase) ? "BuildAll" : null,
                 Environment = envName,
                 Target = target,
                 // Always echo the parsed list so the agent can confirm what got dispatched,
@@ -1240,7 +1332,9 @@ namespace GxMcp.Worker.Services
             }
             else
             {
-                acceptedMessage = targets.Count > 1
+                acceptedMessage = string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase)
+                    ? "Build All started for the entire selected Knowledge Base. It will stop with ReorgRequired if reorganization is needed. Poll genexus_lifecycle action=status with target=<taskId> for progress."
+                    : targets.Count > 1
                     ? $"Batch build started for {targets.Count} objects in a single KB-open cycle. Poll action='status' target=<taskId> for progress."
                     : "Build task started in background. Poll genexus_lifecycle action='status' with target=<taskId> for progress.";
             }
@@ -1701,11 +1795,14 @@ namespace GxMcp.Worker.Services
         // issue #37 items 2/3: build/preview could run unbounded (>9min observed) and
         // never terminalize, forcing the agent to poll "Running" forever. Wall-clock cap
         // (seconds) after which the task is force-failed and any spawned MSBuild.exe tree
-        // is killed. Override with GXMCP_BUILD_TIMEOUT_SEC; RebuildAll gets a larger default
-        // (a full KB rebuild is legitimately long). Clamped to [60, 7200].
+        // is killed. Override with GXMCP_BUILD_TIMEOUT_SEC; full-KB builds get a larger
+        // default (a full KB build is legitimately long). Clamped to [60, 7200].
         internal static int ResolveBuildTimeoutSeconds(string action)
         {
-            int def = (action != null && action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase)) ? 2400 : 900;
+            bool fullKbBuild = action != null
+                && (action.Equals("BuildAll", StringComparison.OrdinalIgnoreCase)
+                    || action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase));
+            int def = fullKbBuild ? 2400 : 900;
             var raw = Environment.GetEnvironmentVariable("GXMCP_BUILD_TIMEOUT_SEC");
             if (!string.IsNullOrWhiteSpace(raw) && int.TryParse(raw.Trim(), out var v) && v > 0)
                 def = v;
@@ -1738,6 +1835,7 @@ namespace GxMcp.Worker.Services
         {
             if (string.IsNullOrEmpty(action)) return false;
             return action.Equals("Build", StringComparison.OrdinalIgnoreCase)
+                || action.Equals("BuildAll", StringComparison.OrdinalIgnoreCase)
                 || action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase)
                 || action.Equals("Sync", StringComparison.OrdinalIgnoreCase);
         }
@@ -2318,6 +2416,79 @@ namespace GxMcp.Worker.Services
             return set;
         }
 
+        internal static string BuildExternalProjectXml(string importPath, string kbPath, string action, IList<string> targets, BuildTaskStatus status = null)
+        {
+            importPath = SecurityElement.Escape(importPath ?? string.Empty);
+            string kbPathEsc = SecurityElement.Escape(kbPath ?? string.Empty);
+            bool buildAll = string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase);
+
+            var sb = new StringBuilder();
+            // issue #37 item 1: pin the 4.0 toolset so GeneXus tasks resolve under
+            // the .NET Framework MSBuild used by the Worker.
+            sb.AppendLine("<Project DefaultTargets=\"Execute\" ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">");
+            sb.AppendLine("  <Import Project=\"" + importPath + "\" />");
+            sb.AppendLine("  <Target Name=\"Execute\">");
+            sb.AppendLine("    <OpenKnowledgeBase Directory=\"" + kbPathEsc + "\" Output=\"IDE\" />");
+
+            if (buildAll)
+            {
+                sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] KB opened\" />");
+                sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] BuildAll started\" />");
+                sb.AppendLine("    <BuildAll ForceRebuild=\"false\" CompileMains=\"true\" FailIfReorg=\"true\" DoNotExecuteReorg=\"true\" DetailedNavigation=\"false\" Output=\"IDE\" EventsSuspended=\"true\" />");
+                sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] BuildAll completed\" />");
+            }
+            else if (targets != null && targets.Count > 0 &&
+                (string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(action, "Rebuild", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(action, "RebuildAll", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (status != null)
+                {
+                    status.TargetsTotal = targets.Count;
+                    status.TargetsDone = 0;
+                }
+                string joined = string.Join(";", targets.Select(t => SecurityElement.Escape(t ?? string.Empty)));
+                sb.AppendLine("    <SpecifyOneOnly ObjectNames=\"" + joined + "\" />");
+                bool force = string.Equals(action, "RebuildAll", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "Rebuild", StringComparison.OrdinalIgnoreCase);
+                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"" + (force ? "true" : "false") + "\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
+            }
+            else if (string.Equals(action, "RebuildAll", StringComparison.OrdinalIgnoreCase)
+                  || string.Equals(action, "Rebuild", StringComparison.OrdinalIgnoreCase))
+            {
+                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"true\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
+            }
+            else if (string.Equals(action, "Reorg", StringComparison.OrdinalIgnoreCase))
+                sb.AppendLine("    <CheckAndInstallDatabase />");
+            else if (string.Equals(action, "Validate", StringComparison.OrdinalIgnoreCase)
+                  || string.Equals(action, "Check", StringComparison.OrdinalIgnoreCase))
+                sb.AppendLine("    <CheckKnowledgeBase />");
+            else
+                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"false\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
+
+            sb.AppendLine("    <CloseKnowledgeBase />");
+            if (buildAll)
+            {
+                // OnError must be the last task in the target. If BuildAll fails
+                // (especially on ReorgRequired), the normal close is skipped and
+                // this handler releases the SDK KB before MSBuild exits.
+                sb.AppendLine("    <OnError ExecuteTargets=\"CloseOnBuildAllError\" />");
+            }
+            sb.AppendLine("  </Target>");
+            if (buildAll)
+                sb.AppendLine("  <Target Name=\"CloseOnBuildAllError\"><CloseKnowledgeBase /></Target>");
+            sb.AppendLine("</Project>");
+            return sb.ToString();
+        }
+
+        internal static string BuildMsBuildArguments(string action, string projectPath)
+        {
+            string msbuildParallelism = string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase)
+                ? "/m:1"
+                : "/m";
+            return "/nologo " + msbuildParallelism + " /v:n /nodeReuse:false /target:Execute \"" + projectPath + "\"";
+        }
+
         private void RunBuild(BuildTaskStatus status, string action, List<string> targets)
         {
             string tempFile = null;
@@ -2540,6 +2711,7 @@ namespace GxMcp.Worker.Services
                         bool failed = outcome == InProcessBuildOutcome.FailedWithDiagnostics
                                       || status.ErrorCount > 0;
                         status.Status = failed ? "Failed" : "Succeeded";
+                        FinalizeBuildAllStatus(status, fullText);
                         // A1 (parity with the MSBuild.exe branch below): when the
                         // in-process pipeline reports failure but emitted zero code
                         // errors AND the captured output shows Generation + Compilation
@@ -2613,64 +2785,17 @@ namespace GxMcp.Worker.Services
                 status.BuildPath = "msbuild-exe";
 
                 tempFile = Path.Combine(Path.GetTempPath(), "GxBuild_" + Guid.NewGuid().ToString().Substring(0, 8) + ".msbuild");
-                string importPath = SecurityElement.Escape(Path.Combine(_gxDir, "Genexus.Tasks.targets"));
-                string kbPathEsc = SecurityElement.Escape(kbPath);
+                string projectXml = BuildExternalProjectXml(
+                    Path.Combine(_gxDir, "Genexus.Tasks.targets"), kbPath, action, targets, status);
+                File.WriteAllText(tempFile, projectXml);
 
-                var sb = new StringBuilder();
-                // issue #37 item 1: without an explicit ToolsVersion the 2003-schema project
-                // resolves under the CLR-2.0 toolset (tasks searched in Framework\v2.0.50727),
-                // where the .NET 4.x GeneXus task assemblies can't load — CheckAndInstallDatabase
-                // (reorg) then fails MSB4036 "task not found". Pin 4.0 so the tasks resolve.
-                sb.AppendLine("<Project DefaultTargets=\"Execute\" ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">");
-                sb.AppendLine("  <Import Project=\"" + importPath + "\" />");
-                sb.AppendLine("  <Target Name=\"Execute\">");
-                // Open with Output="IDE" — same flag the GeneXus IDE passes. Without it
-                // the standalone msbuild later hits opaque Win32 ERROR_FILE_NOT_FOUND
-                // inside the deploy/IIS step ("Atualização de configuração da web").
-                sb.AppendLine("    <OpenKnowledgeBase Directory=\"" + kbPathEsc + "\" Output=\"IDE\" />");
-
-                if (targets != null && targets.Count > 0 &&
-                    (action.Equals("Build", StringComparison.OrdinalIgnoreCase) ||
-                     action.Equals("Rebuild", StringComparison.OrdinalIgnoreCase) ||
-                     action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase)))
-                {
-                    status.TargetsTotal = targets.Count;
-                    status.TargetsDone = 0;
-                    // issue #53: Honor target parameter for rebuilds so specifying a target
-                    // rebuilds ONLY the target instead of forcing a full KB rebuild.
-                    string joined = string.Join(";", targets.Select(t => SecurityElement.Escape(t)));
-                    sb.AppendLine("    <SpecifyOneOnly ObjectNames=\"" + joined + "\" />");
-                    bool force = action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase) || action.Equals("Rebuild", StringComparison.OrdinalIgnoreCase);
-                    sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"" + (force ? "true" : "false") + "\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
-                }
-                else if (action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase) || action.Equals("Rebuild", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Full force-rebuild — same task the IDE's "Rebuild All" fires.
-                    sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"true\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
-                }
-                else if (action.Equals("Reorg", StringComparison.OrdinalIgnoreCase))
-                    sb.AppendLine("    <CheckAndInstallDatabase />");
-                else if (action.Equals("Validate", StringComparison.OrdinalIgnoreCase) || action.Equals("Check", StringComparison.OrdinalIgnoreCase))
-                    sb.AppendLine("    <CheckKnowledgeBase />");
-                else if (action.Equals("Sync", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Sync = full incremental KB build (no force). IDE-style.
-                    sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"false\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
-                }
-                else
-                {
-                    sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"false\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
-                }
-
-                sb.AppendLine("    <CloseKnowledgeBase />");
-                sb.AppendLine("  </Target></Project>");
-                File.WriteAllText(tempFile, sb.ToString());
-
-                // Use /v:n (normal) so we get per-object progress lines, not /v:q
+                // Use /v:n (normal) so we get per-object progress lines, not /v:q.
+                // Build All stays single-node so cancellation and evidence capture do
+                // not depend on implicit MSBuild worker-node interleaving.
                 var psi = new ProcessStartInfo
                 {
                     FileName = _msbuildPath,
-                    Arguments = "/nologo /m /v:n /nodeReuse:false /target:Execute \"" + tempFile + "\"",
+                    Arguments = BuildMsBuildArguments(action, tempFile),
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
@@ -2744,6 +2869,7 @@ namespace GxMcp.Worker.Services
                         else
                             status.Status = "Failed";
                     }
+                    FinalizeBuildAllStatus(status, fullText);
 
                     // Friction 2026-05-22: when ErrorCount==0 and ExitCode!=0, the
                     // failure is a late MSBuild step (WebAppConfig, deploy task,
@@ -2830,6 +2956,14 @@ namespace GxMcp.Worker.Services
                 status.LineCount++;
                 status.LastLine = line;
                 status.FullOutput.AppendLine(line);
+
+                if (line.IndexOf("[GXMCP-BUILD-ALL] KB opened", StringComparison.OrdinalIgnoreCase) >= 0)
+                    status.KbOpened = true;
+                if (line.IndexOf("[GXMCP-BUILD-ALL] BuildAll completed", StringComparison.OrdinalIgnoreCase) >= 0)
+                    status.BuildAllDone = true;
+                if (string.Equals(status.Action, "BuildAll", StringComparison.OrdinalIgnoreCase)
+                    && DetectBuildAllReorgRequired(line))
+                    status.ReorgRequired = true;
 
                 // FR#12: keep noise out of TailLines but always preserve it in FullOutput.
                 // Errors/warnings/phase-change lines never count as noise.

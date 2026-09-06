@@ -38,6 +38,7 @@ namespace GxMcp.Worker.Services
         private static Type _typeSpecifyOneOnly;
         private static Type _typeIdeWebBuildAndDeploy;
         private static Type _typeBuildOne;
+        private static Type _typeBuildAll;
         private static bool _assemblyLoadAttempted;
 
         // Compile-only fast-fast path (env: GXMCP_BUILD_COMPILE_ONLY=1).
@@ -90,15 +91,17 @@ namespace GxMcp.Worker.Services
                 return InProcessBuildOutcome.CouldNotRun;
             }
 
-            // Stream D follow-up: only Build/RebuildAll are wired through the
-            // in-process task pair (SpecifyOneOnly + IdeWebBuildAndDeploy). Other
+            // Stream D follow-up: Build/RebuildAll are wired through the
+            // in-process task pair (SpecifyOneOnly + IdeWebBuildAndDeploy), while
+            // BuildAll uses the SDK's dedicated BuildAll task. Other
             // actions need distinct tasks the external-msbuild template owns
             // (Reorg → CheckAndInstallDatabase, Validate/Check → CheckKnowledgeBase,
             // Sync → full IdeWebBuildAndDeploy). Refuse here so RunBuild's
             // unchanged fallback runs them through MSBuild.exe.
             if (!string.IsNullOrEmpty(action)
                 && !action.Equals("Build", StringComparison.OrdinalIgnoreCase)
-                && !action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase))
+                && !action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase)
+                && !action.Equals("BuildAll", StringComparison.OrdinalIgnoreCase))
             {
                 Logger.Info("[BUILD-INPROCESS] action='" + action + "' not supported in-process — falling back to MSBuild.exe");
                 return InProcessBuildOutcome.CouldNotRun;
@@ -132,6 +135,24 @@ namespace GxMcp.Worker.Services
                         && targets != null
                         && targets.Count > 0;
                     bool forceRebuild = action != null && action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase);
+
+                    if (action != null && action.Equals("BuildAll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (_typeBuildAll == null)
+                        {
+                            Logger.Warn("[BUILD-INPROCESS] BuildAll task type is unavailable — falling back to MSBuild.exe");
+                            return InProcessBuildOutcome.CouldNotRun;
+                        }
+
+                        lineSink("[GXMCP-BUILD-ALL] KB opened", false);
+                        lineSink("[GXMCP-BUILD-ALL] BuildAll started", false);
+                        bool buildAllOk = ExecuteBuildAll(kbHandle, engine, lineSink);
+                        if (buildAllOk)
+                            lineSink("[GXMCP-BUILD-ALL] BuildAll completed", false);
+                        return buildAllOk
+                            ? InProcessBuildOutcome.Succeeded
+                            : InProcessBuildOutcome.FailedWithDiagnostics;
+                    }
 
                     // issue #28 item 12: spec-check only. Run SpecifyOneOnly (Spec+Gen) for the
                     // target(s) and stop — no Compile, no IdeWebBuildAndDeploy. Surfaces spc*/gen*
@@ -1046,18 +1067,21 @@ namespace GxMcp.Worker.Services
                 _typeSpecifyOneOnly = asm.GetType("Genexus.MsBuild.Tasks.SpecifyOneOnly", throwOnError: false);
                 _typeIdeWebBuildAndDeploy = asm.GetType("Genexus.MsBuild.Tasks.IdeWebBuildAndDeploy", throwOnError: false);
                 _typeBuildOne = asm.GetType("Genexus.MsBuild.Tasks.BuildOne", throwOnError: false);
+                _typeBuildAll = asm.GetType("Genexus.MsBuild.Tasks.BuildAll", throwOnError: false);
 
                 if (_typeSpecifyOneOnly == null || _typeIdeWebBuildAndDeploy == null)
                 {
                     Logger.Error("[BUILD-INPROCESS] Required task types missing in Genexus.MsBuild.Tasks.dll "
                                  + "(SpecifyOneOnly=" + (_typeSpecifyOneOnly != null) + ", "
                                  + "IdeWebBuildAndDeploy=" + (_typeIdeWebBuildAndDeploy != null) + ", "
-                                 + "BuildOne=" + (_typeBuildOne != null) + ")");
+                                 + "BuildOne=" + (_typeBuildOne != null) + ", "
+                                 + "BuildAll=" + (_typeBuildAll != null) + ")");
                     return false;
                 }
 
                 Logger.Info("[BUILD-INPROCESS] Task types loaded from " + asmPath
-                            + " (BuildOne fast path: " + (_typeBuildOne != null ? "available" : "missing") + ")");
+                            + " (BuildOne fast path: " + (_typeBuildOne != null ? "available" : "missing")
+                            + ", BuildAll: " + (_typeBuildAll != null ? "available" : "missing") + ")");
 
                 // Compile-only fast-fast path: load the GeneXus BL types via the
                 // referenced assemblies of Genexus.MsBuild.Tasks (already loaded above).
@@ -1317,6 +1341,40 @@ namespace GxMcp.Worker.Services
             catch (Exception ex)
             {
                 LogExceptionChain("IdeWebBuildAndDeploy", ex);
+                return false;
+            }
+        }
+
+        private static bool ExecuteBuildAll(object kbHandle, IBuildEngine engine, Action<string, bool> lineSink)
+        {
+            try
+            {
+                object task = Activator.CreateInstance(_typeBuildAll);
+                SetProp(task, "KB", kbHandle);
+                SetProp(task, "ForceRebuild", false);
+                SetProp(task, "CompileMains", true);
+                SetProp(task, "FailIfReorg", true);
+                SetProp(task, "DoNotExecuteReorg", true);
+                SetProp(task, "DetailedNavigation", false);
+                SetProp(task, "Output", "IDE");
+                SetProp(task, "EventsSuspended", true);
+                SetProp(task, "BuildEngine", engine);
+
+                var execute = _typeBuildAll.GetMethod("Execute", BindingFlags.Public | BindingFlags.Instance);
+                if (execute == null)
+                {
+                    Logger.Error("[BUILD-INPROCESS] BuildAll.Execute method not found");
+                    return false;
+                }
+                object result = execute.Invoke(task, null);
+                bool ok = result is bool b && b;
+                if (!ok) Logger.Warn("[BUILD-INPROCESS] BuildAll.Execute returned false");
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                LogExceptionChain("BuildAll", ex);
+                lineSink("[GXMCP-BUILD-ALL] BuildAll task failed: " + ex.Message, true);
                 return false;
             }
         }

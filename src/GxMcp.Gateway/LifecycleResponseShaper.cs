@@ -64,6 +64,14 @@ namespace GxMcp.Gateway
                 ["Phase"] = obj["Phase"],
                 ["TaskId"] = obj["TaskId"],
                 ["ExitCode"] = obj["ExitCode"],
+                ["buildMode"] = obj["buildMode"] ?? obj["BuildMode"],
+                ["kbOpened"] = obj["kbOpened"] ?? obj["KbOpened"],
+                ["buildAllDone"] = obj["buildAllDone"] ?? obj["BuildAllDone"],
+                ["reorgRequired"] = obj["reorgRequired"] ?? obj["ReorgRequired"],
+                ["msBuildExitCode"] = obj["msBuildExitCode"] ?? obj["MsBuildExitCode"],
+                ["fullLogPath"] = obj["fullLogPath"] ?? obj["FullLogPath"],
+                ["error"] = obj["error"] ?? obj["Error"],
+                ["hint"] = obj["hint"] ?? obj["Hint"],
                 ["errorCount"] = errCount,
                 ["warningCount"] = warnCount,
                 ["errors"] = new JArray(errors.Take(ErrorCap)),
@@ -211,7 +219,17 @@ namespace GxMcp.Gateway
             bool partial = buildPayload["partial_success"]?.ToObject<bool?>()
                            ?? buildPayload["PartialSuccess"]?.ToObject<bool?>()
                            ?? false;
+            bool isBuildAll = string.Equals(buildPayload["buildMode"]?.ToString(), "BuildAll", StringComparison.OrdinalIgnoreCase)
+                           || string.Equals(buildPayload["BuildMode"]?.ToString(), "BuildAll", StringComparison.OrdinalIgnoreCase)
+                           || string.Equals(buildPayload["Action"]?.ToString(), "BuildAll", StringComparison.OrdinalIgnoreCase);
+            bool reorgRequired = buildPayload["reorgRequired"]?.ToObject<bool?>()
+                              ?? buildPayload["ReorgRequired"]?.ToObject<bool?>()
+                              ?? string.Equals(status, "ReorgRequired", StringComparison.OrdinalIgnoreCase);
+            bool buildAllDone = buildPayload["buildAllDone"]?.ToObject<bool?>()
+                             ?? buildPayload["BuildAllDone"]?.ToObject<bool?>()
+                             ?? !isBuildAll;
 
+            if (isBuildAll && (reorgRequired || !buildAllDone)) return BuildOutcome.Error;
             if (partial) return BuildOutcome.PartialSuccess;
 
             // Explicit terminal labels win when present.
@@ -223,6 +241,7 @@ namespace GxMcp.Gateway
                 if (string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(status, "Error", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(status, "ReorgRequired", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(status, "cancelled", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(status, "stalled", StringComparison.OrdinalIgnoreCase))

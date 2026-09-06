@@ -2606,11 +2606,14 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Build, validate, index, or poll the KB. action=specify runs a spec-check (Spec+Gen only, no Compile/deploy) returning spc*/gen* diagnostics for the target fast (catch spec errors without a full build). action=build with mode=compile_check spec+gen+compiles the target(s) PLUS their transitive callers and skips the KB-wide DeveloperMenu regen (the dominant build-all cost) -- a fast 'did my edit break the build?' check that requires a target. Long ops are async with operationId. dryRun=true (build/rebuild/index) returns the build plan or index plan without executing. Build results carry generateEvidence + effective_status=SucceededWithGaps when a Succeeded build emitted no fresh .cs (don't trust Status=Succeeded alone); a 2nd concurrent build is refused (BuildAlreadyRunning). See genexus://kb/tool-help/genexus_lifecycle for the build-evidence checklist, actions, and target formats. action=inspect returns redacted durable mutation state; action=reconcile closes an unknown fence only after an independent read and explicit confirmation, never replaying the write.",
+      "description": "Build, validate, index, or poll the KB. action=build_all runs the native incremental Build All for the entire selected KB (ForceRebuild=false); it rejects target, refuses silent reorganization, and returns completion evidence. action=rebuild remains the forced Rebuild All path. action=specify runs Spec+Gen only. action=build with mode=compile_check checks targets plus transitive callers without KB-wide DeveloperMenu regeneration. Long operations are async with operationId. dryRun=true previews without executing. Build results carry generateEvidence and effective_status. See genexus://kb/tool-help/genexus_lifecycle for actions and target formats.",
       "inputSchema": {
         "examples": [
           {
             "action": "build"
+          },
+          {
+            "action": "build_all"
           },
           {
             "action": "status",
@@ -2632,6 +2635,7 @@
             "description": "Lifecycle action to perform.",
             "enum": [
               "build",
+              "build_all",
               "cancel",
               "specify",
               "rebuild",
@@ -2680,7 +2684,7 @@
           },
           "dryRun": {
             "default": false,
-            "description": "build/rebuild/index: returns the plan (object list / index entries) without executing.",
+            "description": "build/build_all/rebuild/index: returns the plan without executing.",
             "type": "boolean"
           },
           "environment": {
@@ -2775,7 +2779,7 @@
             "type": "string"
           },
           "target": {
-            "description": "Object name(s), taskId, job_id, or op:<id>. Build accepts CSV ('Foo,Bar').",
+            "description": "Object name(s), taskId, job_id, or op:<id>. Build accepts CSV ('Foo,Bar'); build_all is KB-global and rejects target.",
             "type": "string"
           },
           "verification": {
@@ -2791,7 +2795,7 @@
             "type": "integer"
           },
           "wait_until_done": {
-            "description": "Build/rebuild: block in one turn until terminal (up to wait_seconds, default 600).",
+            "description": "Build/build_all/rebuild: block in one turn until terminal (up to wait_seconds, default 600).",
             "type": "boolean"
           }
         },

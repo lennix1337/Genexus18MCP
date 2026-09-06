@@ -70,6 +70,16 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void RouteGoal_BuildAllAction_PreFillsExplicitBuildAll()
+        {
+            var raw = new HelpService().RouteGoal("build all objects in the knowledge base");
+            var obj = JObject.Parse(raw);
+            var top = obj["result"]["matches"][0];
+            Assert.Equal("genexus_lifecycle", (string)top["tool"]);
+            Assert.Equal("build_all", (string)top["args"]["action"]);
+        }
+
+        [Fact]
         public void RouteGoal_Read_RequiresNamePlaceholder()
         {
             var raw = new HelpService().RouteGoal("read Customer");

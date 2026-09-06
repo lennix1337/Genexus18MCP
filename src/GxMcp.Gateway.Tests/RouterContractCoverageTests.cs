@@ -228,6 +228,7 @@ namespace GxMcp.Gateway.Tests
         {
             var router = new SystemRouter();
             AssertRoute(router.ConvertToolCall("genexus_lifecycle", JObject.Parse("{action:'build',mode:'compile_check'}")), "Build", "CompileCheck");
+            AssertRoute(router.ConvertToolCall("genexus_lifecycle", JObject.Parse("{action:'build_all'}")), "Build", "BuildAll");
             AssertRoute(router.ConvertToolCall("genexus_lifecycle", JObject.Parse("{action:'status',target:'job',wait:999}")), "Build", "Status");
             AssertRoute(router.ConvertToolCall("genexus_lifecycle", JObject.Parse("{action:'status',wait:-1}")), "KB", "GetIndexStatus");
             AssertRoute(router.ConvertToolCall("genexus_lifecycle", JObject.Parse("{action:'result',target:'job'}")), "Build", "Result");

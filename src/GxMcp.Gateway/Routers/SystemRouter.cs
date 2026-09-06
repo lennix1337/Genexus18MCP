@@ -66,6 +66,17 @@ namespace GxMcp.Gateway.Routers
                             dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
                             deploy = args?["deploy"]?.ToObject<bool?>() ?? false
                         };
+                        case "build_all": return new {
+                            module = "Build",
+                            action = "BuildAll",
+                            // Build All is deliberately KB-global. Preserve a supplied
+                            // target so the worker can reject it with a structured,
+                            // actionable validation error instead of silently ignoring it.
+                            target = target,
+                            environment = args?["environment"]?.ToString(),
+                            dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
+                            deploy = args?["deploy"]?.ToObject<bool?>() ?? false
+                        };
                         case "reorg": return new { module = "Build", action = "Reorg", target = target };
                         // Item 43 (friction 2026-05-22) — DDL diff/preview pre-reorg.
                         case "reorg_preview": return new { module = "Build", action = "ReorgPreview", target = target };

@@ -56,6 +56,39 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ConvertToolCall_LifecycleBuildAll_UsesGlobalBuildAllAction()
+        {
+            var router = new SystemRouter();
+            var routed = router.ConvertToolCall("genexus_lifecycle", new JObject
+            {
+                ["action"] = "build_all",
+                ["dryRun"] = true,
+                ["deploy"] = true
+            });
+
+            var jobj = JObject.FromObject(routed!);
+            Assert.Equal("Build", jobj["module"]?.ToString());
+            Assert.Equal("BuildAll", jobj["action"]?.ToString());
+            Assert.Equal(JTokenType.Null, jobj["target"]?.Type);
+            Assert.True(jobj["dryRun"]?.Value<bool>());
+            Assert.True(jobj["deploy"]?.Value<bool>());
+        }
+
+        [Fact]
+        public void ConvertToolCall_LifecycleBuildAll_PreservesTargetForWorkerValidation()
+        {
+            var router = new SystemRouter();
+            var routed = router.ConvertToolCall("genexus_lifecycle", new JObject
+            {
+                ["action"] = "build_all",
+                ["target"] = "Customer"
+            });
+
+            Assert.Equal("BuildAll", JObject.FromObject(routed!)["action"]?.ToString());
+            Assert.Equal("Customer", JObject.FromObject(routed!)["target"]?.ToString());
+        }
+
+        [Fact]
         public void ConvertToolCall_LifecycleSpecify_PropagatesDryRun()
         {
             var router = new SystemRouter();

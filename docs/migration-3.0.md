@@ -12,6 +12,7 @@ Não há migração automática de uma KB nem publicação implícita.
 | MCP | HTTP/stdio 2025 | 2025 compatível + 2026 metadata/tasks | contratos de discovery/HTTP/tasks |
 | IDs | cancelamento frouxo | tokens JSON-RPC e tasks isolados por sessão/`Mcp-Client-Id` | request isolation tests |
 | Operações | retry por transporte | política por efeito e recuperação de outcome unknown | idempotência Gateway/Worker/Nexus |
+| Build de KB | `build` ambíguo para escopo global | `build_all` incremental global com evidência, fallback MSBuild e `ReorgRequired` explícito | contratos Gateway/Worker + testes BuildAll |
 | Cache | invalidação ampla | escopo por KB, alvo e dependência | semantic-cache tests |
 | Contexto | 360 sem orçamento explícito | hash, orçamento UTF-8, cursor e recursos endereçáveis | ContextBundleService tests |
 | Dados | records SQL sem semântica BC explícita | `dataAccess=typed_sql`, `businessRulesExecuted=false` | TransactionRecords tests |

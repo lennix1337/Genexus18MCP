@@ -955,6 +955,8 @@ namespace GxMcp.Gateway
         {
             string acceptedSummary = string.Equals(action, "validate", StringComparison.OrdinalIgnoreCase)
                 ? "Validate accepted;"
+                : string.Equals(action, "build_all", StringComparison.OrdinalIgnoreCase)
+                    ? "Build All accepted;"
                 : string.Equals(action, "rebuild", StringComparison.OrdinalIgnoreCase)
                     ? "Rebuild accepted;"
                     : "Build accepted;";

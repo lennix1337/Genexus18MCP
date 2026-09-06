@@ -96,10 +96,11 @@ namespace GxMcp.Gateway
         internal static JObject BuildAsyncLifecycleCommand(string lifecycleAction, JObject args, string cancelToken)
         {
             bool rebuild = string.Equals(lifecycleAction, "rebuild", StringComparison.OrdinalIgnoreCase);
+            bool buildAll = string.Equals(lifecycleAction, "build_all", StringComparison.OrdinalIgnoreCase);
             return new JObject
             {
                 ["module"] = "Build",
-                ["action"] = rebuild ? "RebuildAll" : "Build",
+                ["action"] = rebuild ? "RebuildAll" : buildAll ? "BuildAll" : "Build",
                 ["target"] = args?["target"]?.ToString(),
                 ["client"] = "mcp",
                 ["includeCallees"] = args?["includeCallees"]?.ToString(),
@@ -2011,6 +2012,7 @@ namespace GxMcp.Gateway
                     //   - estimated_seconds >= BuildSyncThresholdSeconds  → async Task.Run, return job_id immediately
                     if (string.Equals(tName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase)
                         && (string.Equals(lcAction, "build", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(lcAction, "build_all", StringComparison.OrdinalIgnoreCase)
                             || string.Equals(lcAction, "rebuild", StringComparison.OrdinalIgnoreCase))
                         && !IsLifecycleBuildDryRun(tArgs))
                     {
@@ -2087,7 +2089,7 @@ namespace GxMcp.Gateway
                                     var pollCt = JobRegistry.RegisterCancellation(job.Id);
 
                                     // Step 2: Poll worker Build/Status until status is terminal.
-                                    // Terminal states from BuildTaskStatus: Succeeded | Failed | Error | Cancelled.
+                                    // Terminal states from BuildTaskStatus: Succeeded | Failed | Error | Cancelled | ReorgRequired.
                                     JObject? finalStatus = null;
                                     int failedPolls = 0;
                                     int pollCount = 0;
@@ -2158,9 +2160,10 @@ namespace GxMcp.Gateway
                                         finalStatus = (statusEnv?["result"] as JObject) ?? statusEnv;
                                         string? s = finalStatus?["status"]?.ToString() ?? finalStatus?["Status"]?.ToString();
                                         if (string.Equals(s, "Succeeded", StringComparison.OrdinalIgnoreCase)
-                                            || string.Equals(s, "Failed", StringComparison.OrdinalIgnoreCase)
-                                            || string.Equals(s, "Error", StringComparison.OrdinalIgnoreCase)
-                                            || string.Equals(s, "Cancelled", StringComparison.OrdinalIgnoreCase))
+                                             || string.Equals(s, "Failed", StringComparison.OrdinalIgnoreCase)
+                                             || string.Equals(s, "Error", StringComparison.OrdinalIgnoreCase)
+                                             || string.Equals(s, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                                             || string.Equals(s, "ReorgRequired", StringComparison.OrdinalIgnoreCase))
                                         {
                                             break;
                                         }
@@ -2168,10 +2171,15 @@ namespace GxMcp.Gateway
 
                                     // Step 3: Complete the JobRegistry entry with the real final status.
                                     string? finalState = finalStatus?["status"]?.ToString() ?? finalStatus?["Status"]?.ToString() ?? "Timeout";
-                                    bool success = string.Equals(finalState, "Succeeded", StringComparison.OrdinalIgnoreCase);
+                                    var finalOutcome = finalStatus != null
+                                        ? LifecycleResponseShaper.ClassifyBuildOutcome(finalStatus)
+                                        : LifecycleResponseShaper.BuildOutcome.Error;
+                                    bool success = finalOutcome == LifecycleResponseShaper.BuildOutcome.Success;
                                     int errs = finalStatus?["errorCount"]?.ToObject<int?>() ?? finalStatus?["ErrorCount"]?.ToObject<int?>() ?? 0;
                                     int warns = finalStatus?["warningCount"]?.ToObject<int?>() ?? finalStatus?["WarningCount"]?.ToObject<int?>() ?? 0;
-                                    string summary = success
+                                    string summary = string.Equals(finalState, "ReorgRequired", StringComparison.OrdinalIgnoreCase)
+                                        ? "Build All stopped because the KB requires reorganization; run action=reorg explicitly and retry."
+                                        : success
                                         ? $"Build succeeded: {warns} warnings, {errs} errors"
                                         : $"Build {finalState}: {errs} errors, {warns} warnings";
                                     JobRegistry.Complete(job.Id, success, summary, finalStatus);

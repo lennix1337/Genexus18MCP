@@ -184,6 +184,24 @@ namespace GxMcp.Gateway.Tests
                 LifecycleResponseShaper.ClassifyBuildOutcome(fail));
         }
 
+        [Fact]
+        public void ClassifyBuildOutcome_BuildAllRequiresCompletionEvidence()
+        {
+            var payload = JObject.Parse(@"{""Status"":""Succeeded"",""Action"":""BuildAll"",""buildMode"":""BuildAll"",""ExitCode"":0,""ErrorCount"":0}");
+
+            Assert.Equal(LifecycleResponseShaper.BuildOutcome.Error,
+                LifecycleResponseShaper.ClassifyBuildOutcome(payload));
+        }
+
+        [Fact]
+        public void ClassifyBuildOutcome_BuildAllReorgOverridesPartialSuccess()
+        {
+            var payload = JObject.Parse(@"{""Status"":""ReorgRequired"",""Action"":""BuildAll"",""buildMode"":""BuildAll"",""buildAllDone"":false,""reorgRequired"":true,""PartialSuccess"":true}");
+
+            Assert.Equal(LifecycleResponseShaper.BuildOutcome.Error,
+                LifecycleResponseShaper.ClassifyBuildOutcome(payload));
+        }
+
         // Production bug this catches: a non-build envelope (e.g. job status,
         // history result) silently being reshaped — losing fields the caller
         // depended on — because the shaper failed to gate on the build-shape

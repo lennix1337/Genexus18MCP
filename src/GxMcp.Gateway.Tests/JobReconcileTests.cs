@@ -50,6 +50,44 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ReorgRequired_IsTerminalFailureWithExplicitRecoverySummary()
+        {
+            var ws = new JObject
+            {
+                ["status"] = "ReorgRequired",
+                ["buildMode"] = "BuildAll",
+                ["reorgRequired"] = true,
+                ["buildAllDone"] = false
+            };
+
+            var v = McpRouter.ClassifyWorkerBuildStatus(ws);
+
+            Assert.NotNull(v);
+            Assert.False(v!.Value.success);
+            Assert.Contains("reorganization", v.Value.summary);
+            Assert.Equal("ReorgRequired", v.Value.result["status"]?.ToString());
+        }
+
+        [Fact]
+        public void BuildAll_SucceededWithoutCompletionEvidence_IsNotSuccessful()
+        {
+            var worker = new JObject
+            {
+                ["status"] = "Succeeded",
+                ["action"] = "BuildAll",
+                ["buildMode"] = "BuildAll",
+                ["buildAllDone"] = false,
+                ["ExitCode"] = 0,
+                ["ErrorCount"] = 0
+            };
+
+            var result = McpRouter.ClassifyWorkerBuildStatus(worker);
+
+            Assert.NotNull(result);
+            Assert.False(result.Value.success);
+        }
+
+        [Fact]
         public void TrackingLost_WorkerNotFound_ResolvesFailureNotBuildError()
         {
             // Worker recycled and dropped its in-memory task map: GetStatus returns

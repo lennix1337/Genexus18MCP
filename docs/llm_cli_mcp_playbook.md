@@ -124,6 +124,13 @@ Follow-up flow:
 
 Do not treat timeout as hard failure when `operationId` is present.
 
+For a complete incremental build of the selected Knowledge Base, use
+`genexus_lifecycle(action='build_all')` without `target`. It runs the native
+`BuildAll` task when available, reports completion evidence, and returns
+`ReorgRequired` instead of applying a schema reorganization implicitly. Use
+`action='build'` for a directed target and `action='rebuild'` for the forced
+Rebuild All contract.
+
 ## Pagination and Token Budgeting
 
 Read/list defaults are intentionally broad for humans, but not for LLMs.

@@ -516,7 +516,7 @@ namespace GxMcp.Gateway
                 else if (refName == "genexus_forge")
                     values = _targetLanguages;
                 else if (refName == "genexus_lifecycle")
-                    values = new[] { "build", "rebuild", "reorg", "validate", "sync", "index", "status", "result" };
+                    values = new[] { "build", "build_all", "rebuild", "reorg", "validate", "sync", "index", "status", "result" };
                 else if (refName == "genexus_properties")
                     values = new[] { "get", "set", "move" };
                 else if (refName == "genexus_asset")
@@ -2285,13 +2285,20 @@ namespace GxMcp.Gateway
             bool terminal = string.Equals(s, "Succeeded", StringComparison.OrdinalIgnoreCase)
                          || string.Equals(s, "Failed", StringComparison.OrdinalIgnoreCase)
                          || string.Equals(s, "Error", StringComparison.OrdinalIgnoreCase)
-                         || string.Equals(s, "Cancelled", StringComparison.OrdinalIgnoreCase);
+                         || string.Equals(s, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                         || string.Equals(s, "ReorgRequired", StringComparison.OrdinalIgnoreCase);
             if (!terminal) return null; // still Running — genuinely in progress
 
-            bool success = string.Equals(s, "Succeeded", StringComparison.OrdinalIgnoreCase);
+            var outcome = LifecycleResponseShaper.ClassifyBuildOutcome(workerStatus);
+            bool success = outcome == LifecycleResponseShaper.BuildOutcome.Success
+                        || outcome == LifecycleResponseShaper.BuildOutcome.PartialSuccess;
             int errs = workerStatus["errorCount"]?.ToObject<int?>() ?? workerStatus["ErrorCount"]?.ToObject<int?>() ?? 0;
             int warns = workerStatus["warningCount"]?.ToObject<int?>() ?? workerStatus["WarningCount"]?.ToObject<int?>() ?? 0;
-            string summary = success
+            string summary = string.Equals(s, "ReorgRequired", StringComparison.OrdinalIgnoreCase)
+                ? "Build All stopped because the KB requires reorganization; run action=reorg explicitly and retry."
+                : outcome == LifecycleResponseShaper.BuildOutcome.Error
+                ? $"Build {s}: {errs} errors, {warns} warnings"
+                : success
                 ? $"Build succeeded: {warns} warnings, {errs} errors"
                 : $"Build {s}: {errs} errors, {warns} warnings";
             return (success, summary, workerStatus);

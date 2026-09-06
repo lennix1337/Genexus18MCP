@@ -47,6 +47,8 @@ namespace GxMcp.Worker.Services
                 "Search the active KB. Use name: type: usedby: parent: prefixes.", new[] { "query" }),
             new Intent("search source code text body", "genexus_search_source",
                 "Search inside source bodies of procs/web-events/transactions.", new[] { "pattern" }),
+            new Intent("all buildall entire whole knowledge base", "genexus_lifecycle",
+                "Run the explicit incremental Build All for the selected KB.", new string[] { }, ("action", "build_all")),
             new Intent("build compile", "genexus_lifecycle",
                 "Trigger a build. Long; returns operationId.", new string[] { }, ("action", "build")),
             new Intent("rebuild recompile", "genexus_lifecycle",

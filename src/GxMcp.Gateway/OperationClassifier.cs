@@ -95,7 +95,7 @@ namespace GxMcp.Gateway
                     mutating: new[] { "crystallize" }),
                 ["genexus_lifecycle"] = Contract(
                     readOnly: new[] { "reorg_preview", "status", "result", "snapshots-list", "inspect" },
-                    mutating: new[] { "build", "cancel", "specify", "validate", "validate-kb", "rebuild", "reorg", "sync", "index", "snapshots-restore", "reconcile" }),
+                    mutating: new[] { "build", "build_all", "cancel", "specify", "validate", "validate-kb", "rebuild", "reorg", "sync", "index", "snapshots-restore", "reconcile" }),
                 ["genexus_refactor"] = Contract(
                     readOnly: Array.Empty<string>(),
                     mutating: new[] { "RenameAttribute", "RenameVariable", "RenameObject", "ExtractProcedure", "ExtractSubroutine", "WWPSetCondition" }),
@@ -191,6 +191,7 @@ namespace GxMcp.Gateway
             "genexus_data_view:delete",
             "genexus_properties:move",
             "genexus_lifecycle:build",
+            "genexus_lifecycle:build_all",
             "genexus_lifecycle:rebuild",
             "genexus_lifecycle:index",
             "genexus_structure:update_visual",

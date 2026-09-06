@@ -6,15 +6,35 @@ integrada, os contratos determinísticos e os gates disponíveis neste ambiente
 foram revisados. Ele não autoriza publicação nem transforma uma dependência
 externa ausente em passagem.
 
+## Issue #141 integrada na 3.0
+
+`genexus_lifecycle action=build_all` foi integrado ao contrato 3.0 conforme a
+[issue #141](https://github.com/lennix1337/Genexus18MCP/issues/141). O fluxo
+rejeita `target`, usa `BuildAll` nativo quando disponível, mantém fallback
+MSBuild single-node com `/m:1` e `/nodeReuse:false`, fecha a KB em sucesso/erro, aplica
+`FailIfReorg=true`, e só aceita sucesso com evidência explícita de conclusão.
+Os testes cobrem discovery, roteamento, async, preview global, rejeição de
+target, distinção Build/Rebuild, projeto externo, evidência ausente, e
+`ReorgRequired`.
+
+A execução live pelo HTTP contra `C:\kbs\KBTeste` também percorreu o caminho
+nativo completo: retornou `BuildMode=BuildAll`, `kbOpened=true`,
+`buildAllDone=false`, `reorgRequired=false`, `msBuildExitCode=0` e
+`fullLogPath` preenchido. O SDK encerrou com falha estruturada porque a KB
+solicitou a etapa `Solicitação de Nuvem GeneXus` sem o parâmetro obrigatório
+`User`; o gate de evidência recusou corretamente o sucesso baseado apenas no
+exit code 0. Durante a execução, `fullLogPath` apontou para
+`publish/worker/logs/build-43c8682a.log`.
+
 ## Evidência executada
 
-- Gateway: **1.407 pass, 10 skipped, 0 failed**.
-- Worker com `GX_PATH` apontando para GeneXus 18: **2.310 pass, 4 skipped, 0 failed**.
+- Gateway: **1.416 pass, 10 skipped, 0 failed**.
+- Worker com `GX_PATH` apontando para GeneXus 18: **2.322 pass, 4 skipped, 0 failed**.
 - CLI: `npm test` **79 pass** e `npm run lint` passou.
 - Nexus IDE: `npm --prefix src/nexus-ide run check` passou com **111 testes**.
-- Scripts: `python -m unittest discover -s scripts/tests -v` passou com **36 testes**.
-- Contratos: `validate-tool-contracts.py` passou com **50 tools / 207 actions**;
-  inventário operacional passou com **50 tools / 226 operações projetadas**;
+- Scripts: `python -m unittest discover -s scripts/tests -v` passou com **37 testes**.
+- Contratos: `validate-tool-contracts.py` passou com **50 tools / 208 actions**;
+  inventário operacional passou com **50 tools / 227 operações projetadas**;
   avaliação v3 passou com **15 cenários**; warning baseline passou com **216
   localizações**.
 - Wire: `python scripts/mcp-wire-conformance.py` passou em HTTP legacy,
@@ -61,5 +81,5 @@ externa ausente em passagem.
 - Migração: `docs/migration-3.0.md`.
 
 O próximo passo para GA é executar somente os gates externos listados acima
-com fixtures e runtimes autorizados; não há alteração automática de KB,
-configuração de cliente, tag, push ou publicação neste relatório.
+com fixtures e runtimes autorizados; nenhuma tag ou publicação foi executada
+como parte da validação descrita neste relatório.

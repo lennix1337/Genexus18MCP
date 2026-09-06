@@ -10,10 +10,11 @@ namespace GxMcp.Worker.Tests
     public class BuildTimeoutAndReorgModeTests
     {
         [Fact]
-        public void ResolveBuildTimeout_DefaultsAndRebuildAllAreLarger()
+        public void ResolveBuildTimeout_DefaultsAndFullKbBuildsAreLarger()
         {
             Environment.SetEnvironmentVariable("GXMCP_BUILD_TIMEOUT_SEC", null);
             Assert.Equal(900, BuildService.ResolveBuildTimeoutSeconds("Build"));
+            Assert.Equal(2400, BuildService.ResolveBuildTimeoutSeconds("BuildAll"));
             Assert.Equal(2400, BuildService.ResolveBuildTimeoutSeconds("RebuildAll"));
         }
 

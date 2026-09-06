@@ -53,7 +53,7 @@ The table below is the machine-checkable action contract for every umbrella tool
 | --- | --- | --- |
 | `genexus_data_view` | `inspect`, `dry_run` | `create`, `update`, `delete` |
 | `genexus_recipe` | `list`, `describe`, `suggest_macro` | `crystallize` |
-| `genexus_lifecycle` | `inspect`, `reorg_preview`, `status`, `result`, `snapshots-list` | `build`, `cancel`, `reconcile`, `specify`, `validate`, `validate-kb`, `rebuild`, `reorg`, `sync`, `index`, `snapshots-restore` |
+| `genexus_lifecycle` | `inspect`, `reorg_preview`, `status`, `result`, `snapshots-list` | `build`, `build_all`, `cancel`, `reconcile`, `specify`, `validate`, `validate-kb`, `rebuild`, `reorg`, `sync`, `index`, `snapshots-restore` |
 | `genexus_refactor` | — | `RenameAttribute`, `RenameVariable`, `RenameObject`, `ExtractProcedure`, `ExtractSubroutine`, `WWPSetCondition` |
 | `genexus_gam` | `status` | `define_api`, `deploy` |
 | `genexus_properties` | `get` | `set`, `move` |
@@ -109,7 +109,7 @@ semantics documented in #65, and the homonym-routing behavior tracked in #34.
 | `genexus_edit` | active | `Write`, `SemanticOps -> Apply` (mode=ops), `JsonPatch -> Apply` (mode=patch + array), or legacy `Patch -> Apply` (mode=patch + string); `targets[]` plural form routes to `Batch -> MultiEdit` |
 | `genexus_inspect` | active | `Analyze -> GetConversionContext` |
 | `genexus_analyze` | active | `Analyze`, `Linter`, or `UI` depending on mode |
-| `genexus_lifecycle` | active | `Build`, `KB`, or `Validation` depending on action (specify, compile_check, build, rebuild, index, status, result, reorg, validate) |
+| `genexus_lifecycle` | active | `Build`, `KB`, or `Validation` depending on action (specify, compile_check, build, build_all, rebuild, index, status, result, reorg, validate) |
 | `genexus_create` | active | Object creation umbrella: Transaction, Procedure, WebPanel, SDT, API, Domain, Popup, SDPanel, SaveAs, Template, `object_atomic` |
 | `genexus_structure` | active | `Structure -> GetVisualStructure | UpdateVisualStructure | GetVisualIndexes | GetLogicStructure | CheckSubtypes`; supports `type` disambiguation, `remove_attribute`, `move_attribute` |
 | `genexus_refactor` | active | `Refactor -> RenameObject | RenameAttribute | RenameVariable | ExtractProcedure | ExtractSubroutine | WWPSetCondition` |

@@ -324,7 +324,7 @@ produced by `DataSelectorStructurePart.ToString()` on U16.
 - `genexus_security` — audit KB security: `audit_gam` (env/GAM props), `scan_secrets` (regex over Source), `scan_native` (the SDK's own Security Scanner, `ISecurityScannerService`)
 
 **Lifecycle, build, test & DB**
-- `genexus_lifecycle` — build (incl. `compile_check`), validate, index, reorg, poll status
+- `genexus_lifecycle` — directed `build` (incl. `compile_check`), incremental global `build_all`, forced global `rebuild`, validate, index, reorg, and poll status
 - `genexus_test` — run native GXtest tests
 - `genexus_db` — DB umbrella: schema-drift, `sql_ddl`/`sql_navigation`, static index advisor, `sample_data`, typed Transaction record query/insert/update with dry-run, optimistic versioning, reread and verified rollback, Domain/SDT type introspection, translation import, `reorg_impact`, and non-mutating `reorg_preview` with exact DDL only from a current Impact Analysis artifact
 - `genexus_deploy` — deploy application (`IDeploymentService`): `list_targets` (read) / `deploy` (destructive, `confirm=true`)

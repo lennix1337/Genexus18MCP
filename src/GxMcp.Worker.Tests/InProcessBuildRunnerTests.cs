@@ -189,6 +189,55 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void BuildAll_uses_native_build_all_task_with_fail_if_reorg()
+        {
+            var specifyField = typeof(InProcessBuildRunner).GetField("_typeSpecifyOneOnly", BindingFlags.Static | BindingFlags.NonPublic);
+            var deployField = typeof(InProcessBuildRunner).GetField("_typeIdeWebBuildAndDeploy", BindingFlags.Static | BindingFlags.NonPublic);
+            var buildOneField = typeof(InProcessBuildRunner).GetField("_typeBuildOne", BindingFlags.Static | BindingFlags.NonPublic);
+            var buildAllField = typeof(InProcessBuildRunner).GetField("_typeBuildAll", BindingFlags.Static | BindingFlags.NonPublic);
+            var attemptedField = typeof(InProcessBuildRunner).GetField("_assemblyLoadAttempted", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(buildAllField);
+
+            object oldSpecify = specifyField.GetValue(null);
+            object oldDeploy = deployField.GetValue(null);
+            object oldBuildOne = buildOneField.GetValue(null);
+            object oldBuildAll = buildAllField.GetValue(null);
+            object oldAttempted = attemptedField.GetValue(null);
+            try
+            {
+                FakeBuildAllTask.Reset();
+                FakeIdeWebBuildAndDeployTask.Reset();
+                specifyField.SetValue(null, typeof(FakeSpecifyOneOnlyTask));
+                deployField.SetValue(null, typeof(FakeIdeWebBuildAndDeployTask));
+                buildOneField.SetValue(null, null);
+                buildAllField.SetValue(null, typeof(FakeBuildAllTask));
+                attemptedField.SetValue(null, true);
+
+                var lines = new List<string>();
+                var outcome = InProcessBuildRunner.Run(
+                    NewStatus(), "BuildAll", new List<string>(),
+                    (s, l, e) => lines.Add(l),
+                    kbHandle: new object(),
+                    kbLock: new object());
+
+                Assert.Equal(InProcessBuildOutcome.Succeeded, outcome);
+                Assert.True(FakeBuildAllTask.Executed);
+                Assert.False(FakeBuildAllTask.LastForceRebuild);
+                Assert.True(FakeBuildAllTask.LastFailIfReorg);
+                Assert.False(FakeIdeWebBuildAndDeployTask.Executed);
+                Assert.Contains(lines, line => line.Contains("BuildAll completed"));
+            }
+            finally
+            {
+                specifyField.SetValue(null, oldSpecify);
+                deployField.SetValue(null, oldDeploy);
+                buildOneField.SetValue(null, oldBuildOne);
+                buildAllField.SetValue(null, oldBuildAll);
+                attemptedField.SetValue(null, oldAttempted);
+            }
+        }
+
+        [Fact]
         public void BuildWithTheseOnly_Reflection_FieldResolved()
         {
             var field = typeof(InProcessBuildRunner).GetField(
@@ -274,6 +323,36 @@ namespace GxMcp.Worker.Tests
         {
             Executed = false;
             LastForceRebuild = false;
+        }
+    }
+
+    public sealed class FakeBuildAllTask
+    {
+        public static bool Executed { get; private set; }
+        public static bool LastForceRebuild { get; private set; }
+        public static bool LastFailIfReorg { get; private set; }
+
+        public object KB { get; set; }
+        public bool ForceRebuild { get; set; }
+        public bool CompileMains { get; set; }
+        public bool FailIfReorg { get; set; }
+        public bool DoNotExecuteReorg { get; set; }
+        public bool DetailedNavigation { get; set; }
+        public IBuildEngine BuildEngine { get; set; }
+
+        public bool Execute()
+        {
+            Executed = true;
+            LastForceRebuild = ForceRebuild;
+            LastFailIfReorg = FailIfReorg;
+            return true;
+        }
+
+        public static void Reset()
+        {
+            Executed = false;
+            LastForceRebuild = false;
+            LastFailIfReorg = false;
         }
     }
 }

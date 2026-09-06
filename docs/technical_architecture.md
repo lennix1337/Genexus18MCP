@@ -70,6 +70,20 @@ POST path does not broadcast unsolicited progress between clients. A modern
 `notifications/cancelled` POST is accepted as a no-op because that transport
 has no prior stream identity; clients cancel by closing the response stream.
 
+### KB lifecycle build modes
+
+`genexus_lifecycle action=build` remains the directed or incremental build
+contract, while `action=rebuild` remains the forced Rebuild All contract.
+`action=build_all` is an explicit KB-global incremental Build All: it omits
+`target`, invokes the SDK `BuildAll` task in-process when the installed
+GeneXus version exposes it, and otherwise runs an equivalent temporary MSBuild
+project with `ForceRebuild=false`. Both paths set `FailIfReorg=true` and
+`DoNotExecuteReorg=true`; a required schema reorganization terminates as
+`ReorgRequired` with a retry hint instead of changing the database implicitly.
+Terminal results include `buildMode`, `kbOpened`, `buildAllDone`,
+`reorgRequired`, `msBuildExitCode`, and `fullLogPath`, and a zero exit code is
+not accepted as completion evidence by itself.
+
 ## Discovery-first surface
 
 Clients are expected to discover capabilities dynamically:

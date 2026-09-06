@@ -33,6 +33,8 @@ namespace GxMcp.Gateway
                 "Build, validate, index, or poll the active Knowledge Base.\n\n" +
                 "## Actions\n" +
                 "- `build` — non-blocking when `estimated_seconds >= 20`; returns `{ operationId, job_id, status: 'running', pollTarget: 'op:<id>' }` and surfaces `_meta.background_jobs` on the next call. Pass `wait_until_done: true` to block until terminal (single turn instead of polling).\n" +
+                "- `build_all` — incremental Build All for the entire selected KB (`ForceRebuild=false`). It is global and rejects `target`; if the SDK reports a required reorganization it returns `status: 'ReorgRequired'` without applying the reorg.\n" +
+                "- `rebuild` — forced Rebuild All (`ForceRebuild=true`) and remains compatible with directed targets.\n" +
                 "- `validate` — inline validation/specifier check. Returns the result in the same call; it does not currently use the background-job path.\n" +
                 "- `index` — rebuilds the search index. Pass `force=true` to ignore the on-disk cache.\n" +
                 "- `status` — accepts either a `taskId` or `job_id` via `target`; pass `wait_seconds > 0` to long-poll up to 600s.\n" +
@@ -42,6 +44,7 @@ namespace GxMcp.Gateway
                 "- `stop-worker` — gracefully recycle the worker process for the active KB.\n\n" +
                 "## target format\n" +
                 "- Build/validate: object name(s), comma- or semicolon-separated.\n" +
+                "- Build All: omit `target`; the action always covers the selected KB.\n" +
                 "- Status/result on a background op: `op:<operationId>` or just `<job_id>`.\n\n" +
                 "## Build-evidence checklist (issue #42)\n" +
                 "A GeneXus build can report `Status: Succeeded` (0 errors/0 warnings) without the generated `.cs` actually landing on disk. Do NOT treat `Succeeded` alone as proof your edit was compiled. On every build result:\n" +
