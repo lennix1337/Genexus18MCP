@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v3.0.0 - 2026-09-06
+
+
 - Added: `genexus_lifecycle action=build_all` now runs the native incremental GeneXus Build All for the selected KB, rejects directed targets, preserves the existing `build` and `rebuild` contracts, reports KB-open/completion evidence and MSBuild exit data, and stops with structured `ReorgRequired` when `FailIfReorg=true` detects a required reorganization. The external fallback uses a single-node temporary MSBuild project with `/nodeReuse:false` and guaranteed KB close handling. ([#141](https://github.com/lennix1337/Genexus18MCP/issues/141))
 - Changed: Nexus IDE now negotiates the 2026-07-28 sessionless MCP transport through `server/discover`, sends the required per-request metadata and routing headers, and falls back to the legacy initialize/initialized session when the gateway does not advertise the modern revision. Handshake and request IDs are unique per client instance.
 - Added: a dependency-free tool contract gate validates every published input schema, required field, enum and executable example, including negative assertions for invalid actions and extra properties.

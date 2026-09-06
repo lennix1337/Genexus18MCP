@@ -3,7 +3,7 @@
   "displayName": "Nexus IDE (GeneXus)",
   "description": "Lightweight GeneXus IDE for VS Code powered by MCP",
   "publisher": "lennix1337",
-  "version": "2.57.0",
+  "version": "3.0.0",
   "license": "MIT",
   "icon": "resources/extension-icon.png",
   "galleryBanner": {
