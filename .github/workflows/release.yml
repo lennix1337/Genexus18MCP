@@ -47,6 +47,19 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      - name: Resolve release commit
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMMIT="$(git rev-parse HEAD)"
+          if [[ -z "$COMMIT" ]]; then
+            echo "::error::The release tag did not resolve to a commit."
+            exit 1
+          fi
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "Release source commit: $COMMIT"
+
       - name: Upgrade npm for Trusted Publishing
         run: |
           npm install -g npm@11.16.0
@@ -80,8 +93,7 @@ jobs:
             echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download publish.zip from Release
-        if: steps.npm_check.outputs.already_published == 'false'
+      - name: Download release artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -92,24 +104,34 @@ jobs:
           # references Artech.* DLLs from a GeneXus 18 install which the
           # ubuntu runner doesn't have) — release.ps1 automates the full
           # sequence: build → zip → tag → push → gh release create with asset.
-          if ! gh release view "${{ steps.tag.outputs.tag }}" \
-                --json assets --jq '.assets[].name' | grep -qx 'publish.zip'; then
+          ASSETS="$(gh release view "${{ steps.tag.outputs.tag }}" --json assets --jq '.assets[].name')"
+          if ! grep -qx 'publish.zip' <<<"$ASSETS"; then
             echo "::error title=publish.zip missing::Release ${{ steps.tag.outputs.tag }} has no publish.zip asset. Use ./release.ps1 to create releases (builds + zips + uploads in one step), or run 'gh release upload ${{ steps.tag.outputs.tag }} publish.zip' from a machine that has the Worker artefacts."
+            exit 1
+          fi
+          VERSION="${{ steps.pkg.outputs.version }}"
+          if [[ "$VERSION" == 3.* ]] && ! grep -qx 'publish.zip.sha256' <<<"$ASSETS"; then
+            echo "::error title=checksum missing::Release ${{ steps.tag.outputs.tag }} must publish publish.zip.sha256 as an asset."
             exit 1
           fi
           gh release download "${{ steps.tag.outputs.tag }}" \
             --pattern publish.zip \
             --dir .
+          if [[ "$VERSION" == 3.* ]]; then
+            gh release download "${{ steps.tag.outputs.tag }}" \
+              --pattern publish.zip.sha256 \
+              --dir .
+          fi
 
       - name: Verify publish.zip integrity
-        if: steps.npm_check.outputs.already_published == 'false'
         shell: bash
         run: |
           set -euo pipefail
-          # Read the SHA-256 committed at the tag (written by release.ps1 before tagging).
+          # The checksum is a release asset so the source commit remains the
+          # exact commit recorded by gxmcp-manifest.json.
           SHA_FILE="publish.zip.sha256"
           if [[ ! -f "$SHA_FILE" ]]; then
-            echo "::warning::$SHA_FILE not found at tag ${{ steps.tag.outputs.tag }} — skipping integrity check (pre-v2.9.2 release)."
+            echo "::warning::$SHA_FILE not found for tag ${{ steps.tag.outputs.tag }} — skipping integrity check for a legacy release."
           else
             EXPECTED=$(awk '{print $1}' "$SHA_FILE")
             ACTUAL=$(sha256sum publish.zip | awk '{print $1}')
@@ -122,7 +144,6 @@ jobs:
           fi
 
       - name: Unpack publish/
-        if: steps.npm_check.outputs.already_published == 'false'
         run: |
           set -euo pipefail
           mkdir -p publish
@@ -134,11 +155,29 @@ jobs:
           test -f publish/gxmcp-manifest.json || { echo "::error::gxmcp-manifest.json missing in publish.zip — rebuild with release.ps1"; exit 1; }
 
       - name: Verify release manifest artifacts
-        if: steps.npm_check.outputs.already_published == 'false'
-        run: python scripts/verify-release-manifest.py publish --version "${{ steps.pkg.outputs.version }}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          POLICY="$(python -c 'import json; print(json.load(open("publish/gxmcp-manifest.json", encoding="utf-8")).get("sourceCommitPolicy", "legacy"))')"
+          if [[ "$POLICY" == "exact-tag" ]]; then
+            python scripts/verify-release-manifest.py publish --version "${{ steps.pkg.outputs.version }}" --source-commit "${{ steps.source.outputs.commit }}"
+          else
+            echo "::warning::Release manifest uses legacy sourceCommit policy; verifying artifact hashes without tag binding."
+            python scripts/verify-release-manifest.py publish --version "${{ steps.pkg.outputs.version }}"
+          fi
+
+      - name: Verify release metadata parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          POLICY="$(python -c 'import json; print(json.load(open("publish/gxmcp-manifest.json", encoding="utf-8")).get("sourceCommitPolicy", "legacy"))')"
+          if [[ "$POLICY" == "exact-tag" ]]; then
+            python scripts/verify-release-metadata.py --root . --version "${{ steps.pkg.outputs.version }}"
+          else
+            echo "::warning::Skipping strict package/lockfile parity for a legacy release manifest."
+          fi
 
       - name: Require all v3 plans to be integrated
-        if: steps.npm_check.outputs.already_published == 'false'
         run: python scripts/validate-v3-plan.py --require-ready
 
       - name: Install dependencies

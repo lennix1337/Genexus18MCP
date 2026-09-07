@@ -11,6 +11,7 @@
 *.bak
 !LICENSE.txt
 *.zip
+publish.zip.sha256
 *.xpz
 /artifacts/
 BenchmarkDotNet.Artifacts/

@@ -37,6 +37,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
     parser.add_argument("--version", required=True)
+    parser.add_argument(
+        "--source-commit",
+        help="Require the manifest sourceCommit to match this resolved Git commit.",
+    )
     args = parser.parse_args()
     root = args.directory.resolve()
     manifest_path = root / "gxmcp-manifest.json"
@@ -67,6 +71,11 @@ def main() -> int:
         return fail("sourceCommit is required")
     if source_commit.strip().lower() == "working-tree":
         return fail("sourceCommit must identify a committed source tree")
+    if args.source_commit and source_commit.strip().lower() != args.source_commit.strip().lower():
+        return fail(
+            "sourceCommit does not match the checked-out release commit: "
+            f"expected {args.source_commit}, got {source_commit}"
+        )
     runtime = manifest.get("runtime") or {}
     if runtime.get("gateway") != "net10.0-windows" or runtime.get("worker") != "net48-x86":
         return fail("runtime matrix is unsupported")

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- Added a complete release preflight covering the solution, CLI, Nexus IDE,
+  contracts, operation inventory, plan readiness, script tests, and warning
+  baseline.
+- Added an explicit live Build All gate that reports terminal evidence and
+  distinguishes an unavailable GeneXus cloud User from a failed build.
+- Added atomic release status files and a status reader for detached runs.
+
+### Changed
+
+- Release manifests now bind packaged bytes to the exact commit that receives
+  the release tag; checksums are published as release assets.
+- Unified the legacy release command behind the canonical root entrypoint and
+  synchronized npm lockfile versions with package metadata.
+- The release entrypoint now lets configured `GXMCP_TEST_KB` and
+  `GXMCP_TEST_FIXTURE` values participate in preflight, while
+  `GXMCP_REQUIRE_LIVE_BUILD_ALL=1` makes that live gate mandatory.
+
+### Fixed
+
+- Warning baseline checks now classify line-only diagnostic moves separately
+  while continuing to block genuinely new warning locations.
+- Live Build All evidence parsing now preserves terminal fields from JSON-in-JSON
+  responses with duplicate-case keys, so an SDK exit code cannot mask missing
+  completion evidence.
+
 ## v3.0.0 - 2026-09-06
 
 

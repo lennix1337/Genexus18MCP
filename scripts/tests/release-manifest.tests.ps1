@@ -23,6 +23,7 @@ try {
     Assert-True ($manifest.schemaVersion -eq 'gxmcp-release-manifest/1') 'manifest schema version'
     Assert-True ($manifest.version -eq '3.0.0-rc.1') 'manifest version'
     Assert-True ($manifest.sourceCommit -eq 'fixture-commit') 'manifest source commit'
+    Assert-True ($manifest.sourceCommitPolicy -eq 'exact-tag') 'manifest source commit policy'
     Assert-True (@($manifest.protocolVersions) -contains '2025-11-25') 'legacy protocol declared'
     Assert-True (@($manifest.protocolVersions) -contains '2026-07-28') 'modern protocol declared'
     Assert-True ($manifest.provenance -eq 'gxmcp-sbom.json') 'provenance document is declared'

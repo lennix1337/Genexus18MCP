@@ -54,6 +54,14 @@ Precedence is: tool `auth` argument > these env vars > built-in default.
 | `GXMCP_BUILD_PROFILE` | Select a build profile. | unset |
 | `GXMCP_REAP_ORPHAN_MSBUILD` | Reap orphaned MSBuild processes after a build. | off |
 
+## Live KB and release preflight
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_TEST_KB` | Absolute path to the verified disposable synthetic KB used by `scripts/test-live.ps1` and the release preflight. | unset (live gate skipped) |
+| `GXMCP_TEST_FIXTURE` | Path to the fixture attestation JSON matching `GXMCP_TEST_KB`; it must prove synthetic data and database isolation. | unset (live gate skipped) |
+| `GXMCP_REQUIRE_LIVE_BUILD_ALL` | Set to `1` to require the native Build All evidence gate during release preflight. Missing fixtures or an unavailable GeneXus cloud `User` fail the required gate. | off |
+
 ## Timeouts / budgets
 
 | Variable | Purpose | Default |

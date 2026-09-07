@@ -19,6 +19,11 @@ param(
 
     [switch]$SkipBuild,
 
+    [switch]$RequireBuildAll,
+
+    [ValidateRange(30, 7200)]
+    [int]$BuildAllTimeoutSeconds = 2400,
+
     [ValidateRange(1, 100)]
     [int]$Iterations = 12
 )
@@ -26,9 +31,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
-function Fail-Live([string]$Message) {
+function Fail-Live([string]$Message, [int]$ExitCode = 1) {
     Write-Error "live=unavailable; Live gate failed: $Message"
-    exit 1
+    exit $ExitCode
 }
 
 function Get-FreeHttpPort {
@@ -242,6 +247,25 @@ Write-Host "`n>>> Gateway live smoke" -ForegroundColor Cyan
 & dotnet test $gatewayProject --no-restore --nologo -v:minimal --filter 'Category=LiveE2E'
 if ($LASTEXITCODE -ne 0) {
     Fail-Live "Gateway live smoke failed with exit code $LASTEXITCODE."
+}
+
+if ($RequireBuildAll) {
+    $buildAllScript = Join-Path $root 'scripts\live-build-all.ps1'
+    Write-Host "`n>>> Native Build All evidence gate" -ForegroundColor Cyan
+    & pwsh -NoProfile -File $buildAllScript `
+        -KbPath $KbPath `
+        -FixtureManifest $FixtureManifest `
+        -GatewayExe $gatewayExe `
+        -GxPath $GxPath `
+        -TimeoutSeconds $BuildAllTimeoutSeconds
+    $buildAllExit = $LASTEXITCODE
+    if ($buildAllExit -eq 2) {
+        Fail-Live 'Native Build All is unavailable in this fixture/environment (see the structured result above).' 2
+    }
+    if ($buildAllExit -ne 0) {
+        Fail-Live "Native Build All evidence gate failed with exit code $buildAllExit."
+    }
+    Write-Host 'Native Build All evidence gate passed.' -ForegroundColor Green
 }
 
 if (-not $GatewayOnly) {

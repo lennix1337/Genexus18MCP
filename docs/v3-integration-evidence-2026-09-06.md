@@ -35,7 +35,7 @@ exit code 0. Durante a execução, `fullLogPath` apontou para
 - Scripts: `python -m unittest discover -s scripts/tests -v` passou com **37 testes**.
 - Contratos: `validate-tool-contracts.py` passou com **50 tools / 208 actions**;
   inventário operacional passou com **50 tools / 227 operações projetadas**;
-  avaliação v3 passou com **15 cenários**; warning baseline passou com **216
+  avaliação v3 passou com **15 cenários**; warning baseline passou com **218
   localizações**.
 - Wire: `python scripts/mcp-wire-conformance.py` passou em HTTP legacy,
   HTTP sessionless 2026, tasks fail-closed, subscriptions/ack, reconexão,

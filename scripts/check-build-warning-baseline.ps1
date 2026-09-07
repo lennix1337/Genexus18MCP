@@ -47,6 +47,9 @@ function Get-Baseline([string]$Path) {
             Fail-Baseline "Duplicate warning entry: $key"
         }
     }
+    if ($null -ne $manifest.warningCount -and [int]$manifest.warningCount -ne $entries.Count) {
+        Fail-Baseline "warningCount=$($manifest.warningCount) does not match the $($entries.Count) warning entries."
+    }
     return $manifest
 }
 
@@ -86,6 +89,73 @@ function Normalize-WarningFile([string]$File) {
 
 function Warning-Key($Entry) {
     return '{0}|{1}|{2}' -f $Entry.code, $Entry.file, $Entry.line
+}
+
+function Warning-Pair($Entry) {
+    return '{0}|{1}' -f $Entry.code, $Entry.file
+}
+
+function Compare-WarningLocations {
+    param(
+        [object[]]$Baseline,
+        [object[]]$Current
+    )
+    $baselineList = @($Baseline)
+    $currentList = @($Current)
+    $baselineKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $baselineList) { [void]$baselineKeys.Add((Warning-Key $entry)) }
+    $currentKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $currentList) { [void]$currentKeys.Add((Warning-Key $entry)) }
+
+    $baselineGroups = @{}
+    foreach ($entry in $baselineList) {
+        $pair = Warning-Pair $entry
+        if (-not $baselineGroups.ContainsKey($pair)) { $baselineGroups[$pair] = @() }
+        $baselineGroups[$pair] += $entry
+    }
+    $currentGroups = @{}
+    foreach ($entry in $currentList) {
+        $pair = Warning-Pair $entry
+        if (-not $currentGroups.ContainsKey($pair)) { $currentGroups[$pair] = @() }
+        $currentGroups[$pair] += $entry
+    }
+
+    $moved = New-Object System.Collections.Generic.List[object]
+    foreach ($pair in $baselineGroups.Keys) {
+        if (-not $currentGroups.ContainsKey($pair)) { continue }
+        $oldLines = @($baselineGroups[$pair] | ForEach-Object line | Sort-Object)
+        $newLines = @($currentGroups[$pair] | ForEach-Object line | Sort-Object)
+        if ($oldLines.Count -eq $newLines.Count -and (@($oldLines) -join ',') -ne (@($newLines) -join ',')) {
+            $first = $baselineGroups[$pair][0]
+            [void]$moved.Add([PSCustomObject]@{
+                code = $first.code
+                file = $first.file
+                baselineLines = @($oldLines)
+                currentLines = @($newLines)
+            })
+        }
+    }
+    $movedPairs = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $moved) { [void]$movedPairs.Add((Warning-Pair $entry)) }
+
+    $newWarnings = @($currentList | Where-Object {
+        $key = Warning-Key $_
+        if ($baselineKeys.Contains($key)) { return $false }
+        $pair = Warning-Pair $_
+        # A pair with the same cardinality is a line move, not a new warning.
+        if ($movedPairs.Contains($pair)) { return $false }
+        return $true
+    })
+    $removedWarnings = @($baselineList | Where-Object {
+        $key = Warning-Key $_
+        if ($currentKeys.Contains($key)) { return $false }
+        return -not $movedPairs.Contains((Warning-Pair $_))
+    })
+    [PSCustomObject]@{
+        New = $newWarnings
+        Removed = $removedWarnings
+        Moved = $moved.ToArray()
+    }
 }
 
 $solution = Join-Path $root 'Genexus18MCP.sln'
@@ -134,19 +204,18 @@ if ($UpdateBaseline) {
     exit 0
 }
 
-$baselineKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($entry in @($manifest.warnings)) {
-    [void]$baselineKeys.Add((Warning-Key $entry))
-}
-$newWarnings = @($distinct | Where-Object { -not $baselineKeys.Contains((Warning-Key $_)) })
-$removedWarnings = @($manifest.warnings | Where-Object {
-    $key = Warning-Key $_
-    -not ($distinct | Where-Object { (Warning-Key $_) -eq $key })
-})
+$comparison = Compare-WarningLocations -Baseline @($manifest.warnings) -Current $distinct
+$newWarnings = @($comparison.New)
+$removedWarnings = @($comparison.Removed)
+$movedWarnings = @($comparison.Moved)
 
-Write-Host "Release warning locations: $($distinct.Count) (baseline $(@($manifest.warnings).Count)); new $($newWarnings.Count); removed $($removedWarnings.Count)."
+Write-Host "Release warning locations: $($distinct.Count) (baseline $(@($manifest.warnings).Count)); new $($newWarnings.Count); moved $($movedWarnings.Count); removed $($removedWarnings.Count)."
 if ($newWarnings.Count -gt 0) {
     $details = ($newWarnings | ForEach-Object { "{0} {1}:{2}" -f $_.code, $_.file, $_.line }) -join ', '
-    Fail-Baseline "New warning locations detected: $details"
+    Fail-Baseline "New warning locations detected (line-only moves are reported separately): $details"
+}
+if ($movedWarnings.Count -gt 0) {
+    $details = ($movedWarnings | ForEach-Object { "{0} {1} [$($_.baselineLines -join ',') -> $($_.currentLines -join ',')]" }) -join ', '
+    Write-Host "Line-only warning moves: $details" -ForegroundColor DarkGray
 }
 Write-Host "Warning baseline passed; no new locations and no MSB3277." -ForegroundColor Green

@@ -20,7 +20,7 @@ jobs:
     # GeneXus 18 and the configured test KB are proprietary/local resources;
     # ordinary hosted CI must never attempt this job.
     runs-on: [self-hosted, windows]
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -37,6 +37,7 @@ jobs:
           GXMCP_TEST_FIXTURE: ${{ inputs.fixture_manifest }}
         run: >-
           .\scripts\test-live.ps1
+          -RequireBuildAll
           -RunBenchmark
           -BenchmarkOut "$env:RUNNER_TEMP\gxmcp-live-benchmark.json"
           -Iterations 100

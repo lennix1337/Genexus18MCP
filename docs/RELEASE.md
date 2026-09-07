@@ -18,22 +18,29 @@ This document describes how `genexus-mcp` is published to npm. **Only the mainta
 
 From the repo root, in PowerShell:
 
+Run the canonical entrypoint from the repository root:
+
 ```pwsh
-.\scripts\release.ps1 patch    # bug fix:     2.1.2 -> 2.1.3
-.\scripts\release.ps1 minor    # new feature: 2.1.2 -> 2.2.0
-.\scripts\release.ps1 major    # breaking:    2.1.2 -> 3.0.0
-.\scripts\release.ps1 2.1.5    # explicit version (e.g. skip a number)
+pwsh -NoProfile -File .\release.ps1 -Version 3.0.1
 ```
+
+The compatibility wrapper at `scripts/release.ps1` still accepts `patch`,
+`minor`, `major`, or an explicit semver and delegates to that command. It has
+no independent build or publication path.
 
 The script will:
 
-1. Verify you're on `main` with a clean tree and `gh` is authenticated.
-2. Pull the latest `main`.
-3. Bump `package.json` (`npm version`).
-4. Run `.\build.ps1` to produce `publish/` with Gateway + Worker + Definitions.
-5. Zip `publish/` into `publish.zip`.
-6. Commit, tag (`vX.Y.Z`), and push.
-7. Create the GitHub Release with `publish.zip` as an asset.
+1. Verify the working tree and release notes.
+2. Synchronize package, lockfile, Gateway, Worker, and Nexus versions.
+3. Commit the release source state before building and record that commit in
+   `gxmcp-manifest.json`.
+4. Run `scripts/release-preflight.ps1` (the full solution, CLI, Nexus, contract,
+   inventory, plan, script-test, and warning gates).
+5. Run `.\build.ps1`, package the Nexus VSIX, and zip `publish/` into
+   `publish.zip`.
+6. Write `publish.zip.sha256` as a release asset, then verify the tree is still
+   at the manifest source commit.
+7. Create and push the annotated tag and GitHub Release with all assets.
 
 That Release **published** event triggers `.github/workflows/release.yml`, which:
 
@@ -51,15 +58,31 @@ npm view genexus-mcp@<version> --json | jq .  # confirm provenance present
 
 The package page at https://www.npmjs.com/package/genexus-mcp should show the **"Provenance"** badge.
 
+The script prints a status-file path (under `%TEMP%` by default). Follow a
+detached run with:
+
+```pwsh
+pwsh -NoProfile -File .\scripts\release-status.ps1 -Path <status-file> -WaitSeconds 60
+```
+
+The JSON status contains `version`, `tag`, `phase`, `state`, `pid`,
+`updatedAtUtc`, `releaseUrl`, `workflowRunId`, `exitCode`, and `error`.
+
 ## Recovery
 
-**Build failed locally**: the script reverts the `package.json` change before exiting. No tag is created, no Release is published. Fix and re-run.
+**Build failed locally**: the source metadata commit remains untagged and no
+Release is published. Fix the build and re-run with the same version; the
+script resumes only when the remote tag/release state is safe.
 
 **Tag pushed but workflow failed**: re-run from the Actions tab, or trigger manually:
 ```pwsh
 gh workflow run release.yml
 ```
 The workflow is idempotent — if the version is already on npm it skips automatically.
+
+**Release exists without assets**: rerun the canonical entrypoint with the same
+version. It uploads the missing assets to the existing release instead of
+trying to create a duplicate.
 
 **Need to unpublish**: npm only allows unpublish within 72 hours. Prefer publishing a patch with the fix.
 

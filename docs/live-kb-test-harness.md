@@ -61,6 +61,26 @@ pwsh -NoProfile -File scripts/test-live.ps1 `
   -BenchmarkOut scratchpad\synthetic-small.warm.json
 ```
 
+For the native incremental Build All gate, use the current published Gateway
+and require terminal evidence explicitly:
+
+```powershell
+pwsh -NoProfile -File scripts/live-build-all.ps1 `
+  -KbPath C:\fixtures\synthetic-small `
+  -FixtureManifest scratchpad\synthetic-small.fixture.json `
+  -GatewayExe publish\GxMcp.Gateway.exe `
+  -GxPath 'C:\Program Files (x86)\GeneXus\GeneXus18'
+```
+
+`live=pass` requires `buildMode=BuildAll`, `kbOpened=true`,
+`buildAllDone=true`, `reorgRequired=false`, `msBuildExitCode=0`, and a
+nonempty `fullLogPath`. An exit code of zero without completion evidence is a
+failure. A fixture that reaches the GeneXus cloud step without a configured
+`User` returns `live=unavailable` (exit code 2) with the environment reason;
+it is never counted as a Build All pass. Add `-RequireBuildAll` to
+`test-live.ps1`, or set `GXMCP_REQUIRE_LIVE_BUILD_ALL=1` for the preflight, to
+make this gate mandatory.
+
 Para comparar uma baseline em modo de gate, informe a identidade completa da
 população ao benchmark. O comando recusa baseline sem esses campos ou com
 fixture, revisão, gerador/SDK, estado de cache, concorrência, iterações ou

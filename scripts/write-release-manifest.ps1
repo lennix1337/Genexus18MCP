@@ -83,6 +83,7 @@ $sbom = [ordered]@{
     schemaVersion = 'gxmcp-provenance/1'
     version = $versionValue
     sourceCommit = $SourceCommit
+    sourceCommitPolicy = 'exact-tag'
     components = @($components)
 }
 [IO.File]::WriteAllText(
@@ -118,6 +119,7 @@ $manifest = [ordered]@{
     schemaVersion = 'gxmcp-release-manifest/1'
     version = $versionValue
     sourceCommit = $SourceCommit
+    sourceCommitPolicy = 'exact-tag'
     generatedAtUtc = [DateTime]::UtcNow.ToString('o')
     runtime = [ordered]@{
         gateway = 'net10.0-windows'

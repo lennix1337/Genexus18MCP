@@ -1,4 +1,4 @@
-# GeneXus 18 MCP - one-shot release script
+﻿# GeneXus 18 MCP - one-shot release script
 # =========================================
 #
 # Why this exists: the npm publish workflow (.github/workflows/release.yml)
@@ -42,6 +42,9 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipTests,
     [switch]$AllowDirty,
+    # Optional machine-readable progress file. Defaults to %TEMP% and is safe
+    # to poll from another shell while a detached release is running.
+    [string]$StatusFile,
     # Relaunch this script in a hidden background pwsh and return immediately.
     # A full release takes minutes (build + tests + zip); a shell/tool with a
     # short command timeout (e.g. 30 s) would kill the foreground run mid-way,
@@ -53,11 +56,76 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 $root = $PSScriptRoot
+$statusToken = if ([string]::IsNullOrWhiteSpace($Version)) { 'pending' } else { $Version -replace '[^0-9A-Za-z.-]', '-' }
+if ([string]::IsNullOrWhiteSpace($StatusFile)) {
+    $StatusFile = Join-Path $env:TEMP ("gxmcp-release-status-$statusToken-$PID.json")
+} else {
+    $StatusFile = [IO.Path]::GetFullPath($StatusFile)
+}
+$statusState = [ordered]@{
+    version = $Version
+    tag = $null
+    phase = 'starting'
+    state = 'running'
+    pid = $PID
+    updatedAtUtc = [DateTime]::UtcNow.ToString('o')
+    releaseUrl = $null
+    workflowRunId = $null
+    exitCode = $null
+    error = $null
+}
 
-function Step([string]$msg) { Write-Host "`n>>> $msg" -ForegroundColor Cyan }
+function Write-ReleaseStatus {
+    param(
+        [string]$Phase,
+        [ValidateSet('running', 'succeeded', 'failed')][string]$State = 'running',
+        [string]$ReleaseUrl,
+        [string]$WorkflowRunId,
+        [int]$ExitCode,
+        [string]$ErrorMessage,
+        [int]$ProcessId
+    )
+    try {
+        if ($PSBoundParameters.ContainsKey('Phase')) { $statusState.phase = $Phase }
+        if ($PSBoundParameters.ContainsKey('State')) { $statusState.state = $State }
+        if ($PSBoundParameters.ContainsKey('ReleaseUrl')) { $statusState.releaseUrl = $ReleaseUrl }
+        if ($PSBoundParameters.ContainsKey('WorkflowRunId')) { $statusState.workflowRunId = $WorkflowRunId }
+        if ($PSBoundParameters.ContainsKey('ExitCode')) { $statusState.exitCode = $ExitCode }
+        if ($PSBoundParameters.ContainsKey('ErrorMessage')) { $statusState.error = $ErrorMessage }
+        if ($PSBoundParameters.ContainsKey('ProcessId')) { $statusState.pid = $ProcessId }
+        $statusState.version = $Version
+        $statusState.tag = $tag
+        $statusState.updatedAtUtc = [DateTime]::UtcNow.ToString('o')
+        $parent = Split-Path -Parent $StatusFile
+        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        $tmp = "$StatusFile.$([guid]::NewGuid().ToString('N')).tmp"
+        [IO.File]::WriteAllText($tmp, (($statusState | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $tmp -Destination $StatusFile -Force
+    } catch {
+        # Status reporting must never hide the actual release failure.
+        Write-Verbose "Could not update release status: $($_.Exception.Message)"
+    }
+}
+
+Write-ReleaseStatus -Phase 'starting' -State 'running'
+Write-Host "Release status: $StatusFile" -ForegroundColor DarkGray
+
+function Step([string]$msg) { Write-Host "`n>>> $msg" -ForegroundColor Cyan; Write-ReleaseStatus -Phase $msg -State 'running' }
 function Ok  ([string]$msg) { Write-Host "    [OK] $msg" -ForegroundColor Green }
 function Warn([string]$msg) { Write-Host "    [!]  $msg" -ForegroundColor Yellow }
-function Fail([string]$msg) { Write-Host "    [ERR] $msg" -ForegroundColor Red; exit 1 }
+function Fail([string]$msg) {
+    Write-Host "    [ERR] $msg" -ForegroundColor Red
+    Write-ReleaseStatus -Phase 'failed' -State 'failed' -ExitCode 1 -ErrorMessage $msg
+    exit 1
+}
+
+trap {
+    $message = $_.Exception.Message
+    Write-ReleaseStatus -Phase 'failed' -State 'failed' -ExitCode 1 -ErrorMessage $message
+    throw
+}
 
 function Get-ForwardedArgs {
     # Rebuild the exact parameter set this invocation received, so a relaunch
@@ -97,6 +165,7 @@ if ($Detach) {
     $stdoutLog = "$logBase.log"
     $stderrLog = "$logBase.err.log"
     $forwarded = Get-ForwardedArgs -BoundParams $PSBoundParameters -Exclude @('Detach')
+    if ($forwarded -notcontains '-StatusFile') { $forwarded += @('-StatusFile', $StatusFile) }
     $argItems = @('-NoProfile', '-File', $PSCommandPath) + $forwarded
     $argString = (($argItems | ForEach-Object {
         if ($_ -match '\s') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
@@ -111,7 +180,9 @@ if ($Detach) {
     Write-Host "  stdout log: $stdoutLog"
     Write-Host "  stderr log: $stderrLog"
     Write-Host "  watch:      Get-Content -Wait $stdoutLog"
+    Write-Host "  status:     pwsh -NoProfile -File scripts/release-status.ps1 -Path $StatusFile"
     Write-Host "  The parent shell may close; the release keeps running."
+    Write-ReleaseStatus -Phase 'detached' -State 'running' -ProcessId $child.Id
     exit 0
 }
 
@@ -136,12 +207,56 @@ function Invoke-Cmd {
     # Use `$Arguments` (or any non-automatic name) instead.
     param([string]$Exe, [string[]]$Arguments, [switch]$IgnoreExit)
     $display = "$Exe $($Arguments -join ' ')"
+    if ($DryRun) {
+        Write-Host "    [DRY-RUN] would run: $display" -ForegroundColor DarkGray
+        return
+    }
     Write-Host "    $ $display" -ForegroundColor DarkGray
-    if ($DryRun) { return }
     & $Exe @Arguments
     if (-not $IgnoreExit -and $LASTEXITCODE -ne 0) {
         Fail "Command failed (exit $LASTEXITCODE): $display"
     }
+}
+
+function Set-LockfileVersion {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$TargetVersion)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    if ($DryRun) { Ok "$(Split-Path -Leaf $Path) -> $TargetVersion"; return }
+    $raw = [IO.File]::ReadAllText($Path)
+    # npm lockfiles repeat the package version at the document root and at
+    # packages[""]. Process only those two object levels so dependency
+    # versions elsewhere in the file remain untouched.
+    $newline = if ($raw.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = $raw -split "\r?\n"
+    $topDone = $false
+    $rootPackage = $false
+    $rootDone = $false
+    $rootIndent = -1
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        $line = $lines[$index]
+        if (-not $topDone -and $line -match '^\s*"version"\s*:\s*"[^"]+"') {
+            $lines[$index] = [Regex]::Replace($line, '("version"\s*:\s*)"[^"]+"', ('$1"' + $TargetVersion + '"'), 1)
+            $topDone = $true
+            continue
+        }
+        if (-not $rootPackage -and $line -match '^(?<indent>\s*)""\s*:\s*\{\s*$') {
+            $rootPackage = $true
+            $rootIndent = $Matches.indent.Length
+            continue
+        }
+        if ($rootPackage -and -not $rootDone -and $line -match '^\s*"version"\s*:\s*"[^"]+"') {
+            $lines[$index] = [Regex]::Replace($line, '("version"\s*:\s*)"[^"]+"', ('$1"' + $TargetVersion + '"'), 1)
+            $rootDone = $true
+            continue
+        }
+        if ($rootPackage -and -not $rootDone -and $line -match '^\s*}\s*,?\s*$' -and (($line -replace '^\s*', '').Length -le 2 -or $line.Length - $line.TrimStart().Length -le $rootIndent)) {
+            $rootDone = $true
+        }
+    }
+    if (-not $topDone -or -not $rootDone) { throw "Could not locate both npm lockfile version fields in $Path." }
+    $updated = $lines -join $newline
+    [IO.File]::WriteAllText($Path, $updated, [Text.UTF8Encoding]::new($false))
+    Ok "$(Split-Path -Leaf $Path) -> $TargetVersion"
 }
 
 # -- 1. Resolve version + sanity-check tree --------------------------------
@@ -162,7 +277,14 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     }
 }
 $tag = "v$Version"
+$numericVersion = ([regex]::Match($Version, '^\d+\.\d+\.\d+')).Value
 Ok "Target version: $Version  (tag: $tag)"
+
+$branch = (git rev-parse --abbrev-ref HEAD 2>$null).Trim()
+if ($branch -ne 'main') {
+    if ($DryRun) { Warn "[DRY-RUN] current branch is '$branch'; a real release requires main." }
+    else { Fail "Releases must be cut from the main branch (current: '$branch')." }
+}
 
 Step "Checking git working tree"
 $status = git status --porcelain
@@ -173,10 +295,10 @@ $bumpFiles = @(
     'package.json',
     'package-lock.json',
     'CHANGELOG.md',
-    'publish.zip.sha256',
     'src/GxMcp.Gateway/GxMcp.Gateway.csproj',
     'src/GxMcp.Worker/GxMcp.Worker.csproj',
-    'src/nexus-ide/package.json'
+    'src/nexus-ide/package.json',
+    'src/nexus-ide/package-lock.json'
 )
 if ($status -and -not $AllowDirty) {
     $dirtyPaths = @($status | ForEach-Object { $_.Substring(3).Trim().Trim('"') -replace '\\', '/' })
@@ -265,11 +387,33 @@ if (Test-Path $workerCsprojVersionPath) {
         $workerCsprojVersion = $Matches[1].Trim()
     }
 }
+$extPackageVersion = $null
+$extPackagePath = Join-Path $root 'src\nexus-ide\package.json'
+if (Test-Path $extPackagePath) {
+    try { $extPackageVersion = (Get-Content $extPackagePath -Raw | ConvertFrom-Json).version } catch { $extPackageVersion = $null }
+}
+$lockfileNeedsSync = $false
+foreach ($lockfilePath in @(
+    (Join-Path $root 'package-lock.json'),
+    (Join-Path $root 'src\nexus-ide\package-lock.json')
+)) {
+    if (-not (Test-Path -LiteralPath $lockfilePath -PathType Leaf)) { continue }
+    try {
+        $lockfile = Get-Content -LiteralPath $lockfilePath -Raw | ConvertFrom-Json -AsHashtable
+        $rootPackageVersion = if ($lockfile.ContainsKey('packages') -and $lockfile['packages'] -is [System.Collections.IDictionary]) {
+            $rootPackage = $lockfile['packages']['']
+            if ($rootPackage -is [System.Collections.IDictionary]) { $rootPackage['version'] } else { $null }
+        } else { $null }
+        if ($lockfile['version'] -ne $Version -or $rootPackageVersion -ne $Version) { $lockfileNeedsSync = $true }
+    } catch { $lockfileNeedsSync = $true }
+}
 $changelogNeedsPromotion = -not ($changelog -match $versionHeadingPattern)
 $needsBump = $changelogNeedsPromotion -or
              ($Version -ne $currentVersion) -or
              ($csprojVersion -and $csprojVersion -ne $Version) -or
-             ($workerCsprojVersion -and $workerCsprojVersion -ne $Version)
+             ($workerCsprojVersion -and $workerCsprojVersion -ne $Version) -or
+             ($extPackageVersion -and $extPackageVersion -ne $Version) -or
+             $lockfileNeedsSync
 if ($needsBump -and ($Version -eq $currentVersion) -and ($csprojVersion -ne $Version)) {
     Warn "csproj InformationalVersion=$csprojVersion is out of sync with package.json=$Version - forcing bump pass to realign."
 }
@@ -300,8 +444,8 @@ if ($needsBump) {
             $raw = Get-Content $csprojPath -Raw
             $bumped = $raw `
                 -replace '(<Version>)[^<]+(</Version>)',                       "`${1}$Version`${2}" `
-                -replace '(<AssemblyVersion>)[^<]+(</AssemblyVersion>)',       "`${1}$Version.0`${2}" `
-                -replace '(<FileVersion>)[^<]+(</FileVersion>)',               "`${1}$Version.0`${2}" `
+                -replace '(<AssemblyVersion>)[^<]+(</AssemblyVersion>)',       "`${1}$numericVersion.0`${2}" `
+                -replace '(<FileVersion>)[^<]+(</FileVersion>)',               "`${1}$numericVersion.0`${2}" `
                 -replace '(<InformationalVersion>)[^<]+(</InformationalVersion>)', "`${1}$Version`${2}"
             [System.IO.File]::WriteAllText($csprojPath, $bumped, [System.Text.UTF8Encoding]::new($false))
         }
@@ -316,8 +460,8 @@ if ($needsBump) {
             $raw = Get-Content $workerCsprojPath -Raw
             $bumped = $raw `
                 -replace '(<Version>)[^<]+(</Version>)',                       "`${1}$Version`${2}" `
-                -replace '(<AssemblyVersion>)[^<]+(</AssemblyVersion>)',       "`${1}$Version.0`${2}" `
-                -replace '(<FileVersion>)[^<]+(</FileVersion>)',               "`${1}$Version.0`${2}" `
+                -replace '(<AssemblyVersion>)[^<]+(</AssemblyVersion>)',       "`${1}$numericVersion.0`${2}" `
+                -replace '(<FileVersion>)[^<]+(</FileVersion>)',               "`${1}$numericVersion.0`${2}" `
                 -replace '(<InformationalVersion>)[^<]+(</InformationalVersion>)', "`${1}$Version`${2}"
             [System.IO.File]::WriteAllText($workerCsprojPath, $bumped, [System.Text.UTF8Encoding]::new($false))
         }
@@ -339,6 +483,9 @@ if ($needsBump) {
         }
         Ok "src/nexus-ide/package.json -> $Version"
     }
+
+    Set-LockfileVersion -Path (Join-Path $root 'package-lock.json') -TargetVersion $Version
+    Set-LockfileVersion -Path (Join-Path $root 'src\nexus-ide\package-lock.json') -TargetVersion $Version
 
     # CHANGELOG.md - promote ## Unreleased to ## v$Version - YYYY-MM-DD if ## v$Version does not exist yet.
     $changelogPath = Join-Path $root 'CHANGELOG.md'
@@ -374,6 +521,64 @@ if ($needsBump) {
 } else {
     Ok "Version unchanged - skipping bump."
 }
+
+# -- 3. Commit the source state before building -----------------------------
+# The manifest is written from the exact commit that will receive the tag.
+# Committing here prevents a successful build from being represented as the
+# ambiguous `working-tree` provenance marker.
+$releaseSourceCommit = $null
+if ($resumeRelease) {
+    if (-not $DryRun) {
+        $releaseSourceCommit = (git rev-list -n 1 $tag).Trim()
+        if ([string]::IsNullOrWhiteSpace($releaseSourceCommit)) {
+            Fail "Could not resolve the existing tag $tag while resuming the release."
+        }
+        Ok "Resuming from tagged source commit: $releaseSourceCommit"
+    }
+} elseif (-not $DryRun) {
+    $pendingMetadata = @(git status --porcelain)
+    if ($pendingMetadata) {
+        Step "Committing release source state"
+        $releaseManagedPaths = @(
+            'package.json',
+            'package-lock.json',
+            'CHANGELOG.md',
+            'src/GxMcp.Gateway/GxMcp.Gateway.csproj',
+            'src/GxMcp.Worker/GxMcp.Worker.csproj',
+            'src/nexus-ide/package.json',
+            'src/nexus-ide/package-lock.json'
+        )
+        if ($AllowDirty) {
+            Invoke-Cmd 'git' @('add', '-A')
+        } else {
+            Invoke-Cmd 'git' (@('add', '--') + $releaseManagedPaths)
+        }
+        git diff --cached --quiet
+        $hasStagedChanges = $LASTEXITCODE -ne 0
+        if ($hasStagedChanges) {
+            Invoke-Cmd 'git' @('commit', '-m', "release: $tag")
+            Ok "Committed release source state: release: $tag"
+        } else {
+            Ok "Release metadata was already committed."
+        }
+    }
+    $releaseSourceCommit = (git rev-parse HEAD).Trim()
+    if ([string]::IsNullOrWhiteSpace($releaseSourceCommit)) {
+        Fail "Could not resolve the committed release source state."
+    }
+    Ok "Release source commit: $releaseSourceCommit"
+} else {
+    $releaseSourceCommit = 'dry-run'
+    Warn "[DRY-RUN] would commit release metadata before building."
+}
+
+Step "Validating release metadata parity"
+Invoke-Cmd 'python' @(
+    (Join-Path $root 'scripts\verify-release-metadata.py'),
+    '--root', $root,
+    '--version', $Version
+)
+if ($DryRun) { Warn "[DRY-RUN] would validate package and lockfile versions at $Version." } else { Ok "Package and lockfile versions are synchronized at $Version." }
 
 # -- 3. Build + zip publish/ -----------------------------------------------
 if (-not $SkipBuild) {
@@ -442,17 +647,18 @@ if (-not $SkipBuild) {
 
 # -- 4. Optional test pass -------------------------------------------------
 if (-not $SkipTests) {
-    Step "Running test suite (Gateway + Worker)"
-    if (-not $DryRun) {
-        $env:GX_PATH = 'C:\Program Files (x86)\GeneXus\GeneXus18'
-        # Run gateway tests; worker tests can be flaky on parallel runs.
-        Invoke-Cmd 'dotnet' @('test',
-            (Join-Path $root 'src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj'),
-            '--nologo', '-v:minimal')
-        Ok "Gateway tests passed."
-    }
+    Step "Running complete release preflight"
+    Invoke-Cmd 'pwsh' @(
+        '-NoProfile',
+        '-File', (Join-Path $root 'scripts\release-preflight.ps1'),
+        '-Version', $Version,
+        '-GxPath', (if (-not [string]::IsNullOrWhiteSpace($env:GX_PATH)) { $env:GX_PATH } else { 'C:\Program Files (x86)\GeneXus\GeneXus18' }),
+        '-SummaryPath', (Join-Path $env:TEMP "gxmcp-release-preflight-$Version.json")
+    )
+    if ($DryRun) { Warn '[DRY-RUN] would run the complete release preflight.' } else { Ok 'Complete release preflight passed.' }
 } else {
-    Warn "-SkipTests set; not running test suite."
+    Warn "-SkipTests set; preflight is intentionally skipped (warning baseline still runs)."
+    Write-ReleaseStatus -Phase 'tests-skipped' -State 'running'
 }
 
 # A release build can succeed while adding a new nullable/analyzer warning.
@@ -466,7 +672,7 @@ Invoke-Cmd 'pwsh' @(
     '-BaselineFile',
     (Join-Path $root 'docs\build_warning_baseline.json')
 )
-Ok "Release warning baseline passed."
+if ($DryRun) { Warn '[DRY-RUN] would run the Release warning baseline gate.' } else { Ok 'Release warning baseline passed.' }
 
 # -- 4b. Validate artefact version stamps match $Version ------------------
 # With -SkipBuild a stale publish/ can ship silently; catch it here.
@@ -509,16 +715,18 @@ Invoke-Cmd 'pwsh' @(
     '-File', (Join-Path $root 'scripts\write-release-manifest.ps1'),
     '-PublishDirectory', $publishDir,
     '-Version', $Version,
-    '-SourceRoot', $root
+    '-SourceRoot', $root,
+    '-SourceCommit', $releaseSourceCommit
 )
-Ok "gxmcp-manifest.json written for $Version."
+if ($DryRun) { Warn "[DRY-RUN] would write gxmcp-manifest.json for $Version." } else { Ok "gxmcp-manifest.json written for $Version." }
 Step "Verifying release manifest"
 Invoke-Cmd 'python' @(
     (Join-Path $root 'scripts\verify-release-manifest.py'),
     $publishDir,
-    '--version', $Version
+    '--version', $Version,
+    '--source-commit', $releaseSourceCommit
 )
-Ok "Release manifest artifacts verified."
+if ($DryRun) { Warn '[DRY-RUN] would verify release manifest artifacts.' } else { Ok 'Release manifest artifacts verified.' }
 
 # -- 5. Zip publish/ -> publish.zip -----------------------------------------
 Step "Packing publish.zip"
@@ -548,22 +756,29 @@ if (-not $DryRun) {
     Ok "[dry-run] would create publish.zip + publish.zip.sha256"
 }
 
-# -- 6. Commit (if version bumped or tree dirty) ---------------------------
-$pending = git status --porcelain
-if ($pending) {
-    Step "Committing version bump"
-    Invoke-Cmd 'git' @('add', '-A')
-    $msg = "release: $tag"
-    Invoke-Cmd 'git' @('commit', '-m', $msg)
-    Ok "Committed: $msg"
+# -- 6. Confirm packaging did not alter the committed source ----------------
+# publish/, publish.zip, the VSIX, and the checksum are generated/ignored.
+# Any other change means the artifact no longer corresponds to the source
+# commit captured in the manifest and must stop the release.
+if (-not $DryRun) {
+    $pendingAfterPackage = @(git status --porcelain)
+    if ($pendingAfterPackage) {
+        Write-Host ($pendingAfterPackage -join "`n")
+        Fail "Packaging left tracked changes after source commit $releaseSourceCommit. Inspect the files before tagging."
+    }
+    $headAfterPackage = (git rev-parse HEAD).Trim()
+    if ($headAfterPackage -ne $releaseSourceCommit) {
+        Fail "HEAD changed after packaging ($headAfterPackage) but the manifest records $releaseSourceCommit."
+    }
+    Ok "Packaged artifacts still bind to source commit $releaseSourceCommit."
 } else {
-    Ok "No pending changes to commit."
+    Warn "[DRY-RUN] would verify a clean tree before tagging."
 }
 
 # -- 7. Tag (annotated) + push ---------------------------------------------
 Step "Tagging $tag"
-Invoke-Cmd 'git' @('tag', '-a', $tag, '-m', "$tag")
-Ok "Local tag created."
+Invoke-Cmd 'git' @('tag', '-a', $tag, $releaseSourceCommit, '-m', "$tag")
+if ($DryRun) { Warn "[DRY-RUN] would create local tag $tag." } else { Ok 'Local tag created.' }
 
 if (-not $DryRun) {
     Step "Pushing main + $tag to origin"
@@ -597,8 +812,6 @@ if (-not $notes) {
     }
 }
 
-# -- 9. Create release WITH publish.zip in the same call -------------------
-Step "Creating GitHub release $tag (with publish.zip)"
 $notesTmp = Join-Path $env:TEMP "release-notes-$tag.md"
 if (-not $DryRun) {
     [System.IO.File]::WriteAllText($notesTmp, $notes, [System.Text.UTF8Encoding]::new($false))
@@ -606,20 +819,42 @@ if (-not $DryRun) {
 # Key insight: `gh release create <tag> [files...]` uploads the assets in
 # the same call as create, so the workflow's FIRST `release.published` event
 # already has publish.zip attached -> npm publish succeeds on the first run.
-$createArgs = @(
-    'release', 'create', $tag,
-    '--title', "$tag",
-    '--notes-file', $notesTmp,
-    '--target', 'main',
-    $zipPath
-)
+# If a previous run created the release and failed before uploading assets,
+# resume with `gh release upload` instead of trying to create a duplicate.
+$assetArgs = @($zipPath)
 # Attach the checksum sidecar so the gateway self-updater can verify the download.
-if (Test-Path $shaPath) { $createArgs += $shaPath }
+if (Test-Path $shaPath) { $assetArgs += $shaPath }
 # Attach the Nexus IDE VSIX - ships in lockstep with the MCP release.
-if ($DryRun -or (Test-Path $vsixPath)) { $createArgs += $vsixPath }
-Invoke-Cmd 'gh' $createArgs
-
-Ok "Release created: https://github.com/lennix1337/Genexus18MCP/releases/tag/$tag"
+if ($DryRun -or (Test-Path $vsixPath)) { $assetArgs += $vsixPath }
+if ($releaseExists) {
+    Step "Uploading assets to existing GitHub release $tag"
+    $uploadArgs = @('release', 'upload', $tag, '--clobber') + $assetArgs
+    Invoke-Cmd 'gh' $uploadArgs
+    if ($DryRun) {
+        Warn "[DRY-RUN] would upload publish.zip, checksum, and VSIX assets to existing release $tag."
+    } else {
+        $releaseUrl = "https://github.com/lennix1337/Genexus18MCP/releases/tag/$tag"
+        Ok "Release assets uploaded: $releaseUrl"
+        Write-ReleaseStatus -Phase 'release-assets-uploaded' -State 'running' -ReleaseUrl $releaseUrl
+    }
+} else {
+    Step "Creating GitHub release $tag (with publish.zip)"
+    $createArgs = @(
+        'release', 'create', $tag,
+        '--title', "$tag",
+        '--notes-file', $notesTmp,
+        '--target', 'main'
+    ) + $assetArgs
+    Invoke-Cmd 'gh' $createArgs
+    if ($DryRun) {
+        Warn "[DRY-RUN] would create GitHub release $tag with publish.zip, checksum, and VSIX assets."
+    } else {
+        $releaseUrl = "https://github.com/lennix1337/Genexus18MCP/releases/tag/$tag"
+        Ok "Release created: $releaseUrl"
+        Write-ReleaseStatus -Phase 'release-created' -State 'running' -ReleaseUrl $releaseUrl
+    }
+}
+if (Test-Path -LiteralPath $notesTmp) { Remove-Item -LiteralPath $notesTmp -Force -ErrorAction SilentlyContinue }
 
 # Belt-and-suspenders: verify the publish workflow started, or trigger it manually.
 # Normally the `release.published` event starts the workflow automatically.
@@ -636,6 +871,7 @@ if (-not $DryRun) {
 
     if ($activeRun) {
         Ok "Publish workflow #$($activeRun.databaseId) is already active (triggered by release event)."
+        Write-ReleaseStatus -Phase 'workflow-running' -State 'running' -WorkflowRunId ([string]$activeRun.databaseId)
     } else {
         Warn "No active workflow detected after 5s - dispatching manually as fallback."
         Invoke-Cmd 'gh' @('workflow', 'run', 'release.yml', '-f', "tag=$tag")
@@ -652,4 +888,7 @@ Write-Host ""
 
 if ($DryRun) {
     Warn "DRY RUN - no remote changes were made. Re-run without -DryRun to publish."
+    Write-ReleaseStatus -Phase 'dry-run-complete' -State 'succeeded' -ExitCode 0
+} else {
+    Write-ReleaseStatus -Phase 'complete' -State 'succeeded' -ExitCode 0
 }

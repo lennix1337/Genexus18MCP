@@ -15,16 +15,17 @@ release. Before a release, `CHANGELOG.md` must contain a substantive
 ## Standard release execution
 
 This project ships both the GitHub Release and the npm package `genexus-mcp`.
-Use the one-shot script:
+Use the one-shot script (the only implementation entrypoint):
 
 ```powershell
 .\release.ps1 -Version <X.Y.Z>
 ```
 
-It bumps versions, builds Gateway and Worker, creates the normalized
-`publish.zip`, embeds `gxmcp-manifest.json` with artifact hashes and protocol
-revisions, writes the checksum, commits/tags, and creates the GitHub release
-with the zip attached. Do not run `gh release create` manually: the release workflow
+It bumps versions, synchronizes both npm lockfiles and the SDK project files,
+commits that source state before building, creates the normalized `publish.zip`,
+embeds `gxmcp-manifest.json` with artifact hashes and protocol revisions, and
+creates the GitHub release with the zip, checksum, and Nexus VSIX attached. The
+manifest source commit must equal the tag commit. Do not run `gh release create` manually: the release workflow
 requires `publish.zip` on the initial published event. The Worker needs the
 local GeneXus 18 SDK, so the release artifact must be built on Windows with
 GeneXus installed.
@@ -36,11 +37,36 @@ checksum, preserves operator configuration, and retains the previous directory
 for rollback. Legacy releases keep an explicitly versioned compatibility path.
 
 Use `-DryRun` to rehearse the changelog, artifact, warning, and release-note
-checks without changing Git state or deleting existing package artifacts.
+checks without changing Git state or deleting existing package artifacts. Dry
+runs label remote actions as `[DRY-RUN]` and never report a release URL as
+created.
+
+Before a release, the local matrix can be run independently:
+
+```powershell
+pwsh -NoProfile -File .\scripts\release-preflight.ps1 -GxPath $env:GX_PATH `
+  -SummaryPath "$env:TEMP\gxmcp-release-preflight.json"
+```
+
+The summary uses schema `gxmcp-release-preflight/1` and records each phase's
+`name`, `command`, `status`, `exitCode`, `durationSeconds`, timestamps, and an
+optional `reason`. Live KB validation is skipped with an explicit reason when
+no verified fixture is configured; set `GXMCP_REQUIRE_LIVE_BUILD_ALL=1` to make
+the live Build All gate mandatory.
+
+Release progress is written atomically to a status file under `%TEMP%` by
+default. Read it with `scripts/release-status.ps1`; terminal states are
+`succeeded` and `failed`, while exit code 2 means the run is still in progress
+or the requested wait elapsed.
 
 The release script requires a substantive `## Unreleased` section when the
 target version heading is absent, promotes that section, verifies the exact
 version heading, and refuses to publish generic release notes.
+If a local build fails after the metadata commit, leave that untagged commit in
+place, fix the cause, and rerun the same version; do not manually rewrite the
+manifest or tag a different source tree.
+If a tag already has a GitHub Release without `publish.zip`, the same command
+resumes with an asset upload and preserves the existing release record.
 
 After publishing, verify both channels:
 
@@ -91,7 +117,7 @@ evidence of isolation:
 
 ```powershell
 .\scripts\test-live.ps1 -KbPath $env:GXMCP_TEST_KB `
-  -FixtureManifest $env:GXMCP_TEST_FIXTURE -RunBenchmark `
+  -FixtureManifest $env:GXMCP_TEST_FIXTURE -RequireBuildAll -RunBenchmark `
   -BenchmarkOut "$env:TEMP\gxmcp-live-benchmark.json" -Iterations 100
 ```
 
@@ -120,7 +146,8 @@ real Release rebuild:
 ```
 
 The release script runs the non-update check automatically and fails on
-`MSB3277` or any new `(code, file, line)` warning location.
+`MSB3277` or any new `(code, file, line)` warning location. Line-only moves are
+reported as `moved` and do not hide genuinely new diagnostics.
 
 ## npm version verification
 
