@@ -13,6 +13,7 @@
 
 ### Internal
 
+- Update the contract regression inventory to 225 actions, including the three new Settings actions.
 - Increase the discovery schema budget from 27,500 to 27,750 approximate tokens for the three Settings actions and their identity, pagination and property-preview fields (measured 27,549).
 
 ## v3.2.2 - 2026-09-10
