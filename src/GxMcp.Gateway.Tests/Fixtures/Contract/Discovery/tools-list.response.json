@@ -2481,6 +2481,12 @@
       },
       "description": "Gateway-only filesystem comparison of two KB directories. Requires kbA and kbB aliases or paths; no active KB selection is used.",
       "inputSchema": {
+        "examples": [
+          {
+            "kbA": "development",
+            "kbB": "staging"
+          }
+        ],
         "properties": {
           "kbA": {
             "type": "string"
@@ -2506,6 +2512,14 @@
       },
       "description": "Gateway-only filesystem copy of one object between two KB directories. Requires source and object identity; run lifecycle index afterwards.",
       "inputSchema": {
+        "examples": [
+          {
+            "from": "C:\\KBs\\source",
+            "name": "Customer",
+            "to": "C:\\KBs\\target",
+            "type": "Transaction"
+          }
+        ],
         "properties": {
           "from": {
             "type": "string"
@@ -3814,6 +3828,17 @@
       },
       "description": "Gateway-only filesystem sandbox management; clone or remove a KB directory without SDK dispatch.",
       "inputSchema": {
+        "examples": [
+          {
+            "action": "create",
+            "from": "C:\\KBs\\base",
+            "name": "probe"
+          },
+          {
+            "action": "remove",
+            "name": "probe"
+          }
+        ],
         "properties": {
           "action": {
             "enum": [
@@ -4752,6 +4777,12 @@
       },
       "description": "Gateway-only worker-pool warm-spare configuration. Does not require a KB selection or dispatch to the Worker.",
       "inputSchema": {
+        "examples": [
+          {
+            "action": "warm_spares",
+            "spareCount": 1
+          }
+        ],
         "properties": {
           "action": {
             "enum": [
