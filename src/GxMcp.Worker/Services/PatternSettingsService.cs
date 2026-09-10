@@ -134,31 +134,122 @@ namespace GxMcp.Worker.Services
             };
         }
 
+        private static KBObject Fresh(KBObject seed)
+        {
+            if (seed == null) throw new InvalidOperationException("VersionConflict: an object disappeared while reading.");
+            var objects = seed.Model.Objects;
+            var cache = objects as IKBModelObjectsCacheConfiguration
+                ?? throw new InvalidOperationException("The SDK cannot invalidate Settings/template read caches.");
+            cache.Invalidate(seed);
+            cache.RemoveFromCaches(seed);
+            var fresh = objects.Get(seed.Key);
+            if (fresh == null || fresh.Guid != seed.Guid || ReferenceEquals(seed, fresh))
+                throw new InvalidOperationException("VersionConflict: the SDK did not return a fresh Settings/template object.");
+            return fresh;
+        }
+
+        private string ReadIdentity(KBObject settings)
+        {
+            var kb = _objects.GetKbService().GetKB() as KnowledgeBase;
+            var model = kb?.DesignModel;
+            var version = kb == null ? null : KBVersion.GetActive(kb);
+            if (model == null || version == null || !ReferenceEquals(kb, settings.Model.KB)
+                || model.Id != settings.Model.Id)
+                throw new InvalidOperationException("VersionConflict: the active KB/model no longer matches the Settings object.");
+            return kb.Location + "|" + model.Id + "|" + version.Guid + "|" + settings.Guid;
+        }
+
+        private static JArray ReadTemplateObjects(PatternSettings settings, JArray nodes)
+        {
+            var records = new JArray();
+            if (settings.Definition?.Id != PatternApplyService.WorkWithPlusPatternId) return records;
+            var objects = settings.Model.Objects;
+            foreach (var key in objects.GetKeys(WwpTemplateXml.ObjectType).OrderBy(k => k.ToString()).ToArray())
+            {
+                var obj = Fresh(objects.Get(key));
+                string main = obj.GetPropertyValue<string>("WWPTemplate_MainTemplate") ?? string.Empty;
+                string kind = obj.GetPropertyValue<string>("WWPTemplate_Type") ?? string.Empty;
+                var record = new JObject
+                {
+                    ["path"] = "wwp:" + obj.Guid, ["templateGuid"] = obj.Guid.ToString(),
+                    ["name"] = obj.Name, ["caption"] = obj.Description, ["type"] = kind,
+                    ["storage"] = "wwp-object", ["sourceProperty"] = WwpTemplateXml.SourceProperty,
+                    ["settingsGuid"] = settings.Guid.ToString(), ["mainTemplate"] = main,
+                    ["instanceType"] = obj.GetPropertyValue<string>("WWPTemplate_InstanceType"),
+                    ["category"] = obj.GetPropertyValue<string>("WWPTemplate_Category"),
+                    ["categoryOrder"] = obj.GetPropertyValue("WWPTemplate_CategoryOrder")?.ToString(),
+                    ["parentGuid"] = obj.Parent?.Guid.ToString(), ["revision"] = obj.VersionId,
+                    ["lastUpdate"] = obj.LastUpdate.ToUniversalTime().ToString("o"),
+                    ["source"] = obj.GetPropertyValue<string>(WwpTemplateXml.SourceProperty) ?? string.Empty,
+                    ["isTemplate"] = true
+                };
+                BindTemplate(record, nodes);
+                records.Add(record);
+            }
+            return records;
+        }
+
+        internal static void BindTemplate(JObject template, JArray settingsNodes)
+        {
+            string main = (string)template["mainTemplate"];
+            var matches = settingsNodes.OfType<JObject>().Where(n => (string)n["type"] == "InstanceTemplate"
+                && (string)n["properties"]?["Name"]?["value"] == main).ToList();
+            bool verified = !string.IsNullOrEmpty(main) && matches.Count == 1;
+            template["settingsPath"] = verified ? matches[0]["path"].DeepClone() : JValue.CreateNull();
+            template["settingsLinkVerified"] = verified;
+        }
+
         public string Run(string target, JObject args)
         {
             try
             {
                 var seed = _objects.FindObject(target, "Pattern Settings", (string)args["guid"], (string)args["entityKey"], null);
-                var settings = seed?.Model.Objects.Get(seed.Key) as PatternSettings;
-                if (settings == null) return McpResponse.Err(code: "PatternSettingsNotFound", message: "A persisted Pattern Settings object is required.");
+                if (!(seed is PatternSettings)) return McpResponse.Err(code: "PatternSettingsNotFound", message: "A persisted Pattern Settings object is required.");
+                string identity = ReadIdentity(seed);
+                var settings = Fresh(seed) as PatternSettings;
+                if (settings == null) return McpResponse.Err(code: "VersionConflict", message: "The persisted object is no longer Pattern Settings.");
                 string xml = Serialize(settings);
                 JArray nodes = Project(settings);
-                if (Serialize(settings) != xml)
-                    return McpResponse.Err(code: "VersionConflict", message: "Settings changed while reading the SDK tree.");
-                string token = Token(settings.Model.KB.Location + "|" + settings.Model.Id + "|" + settings.Guid, xml, nodes);
+                JArray objectTemplates = ReadTemplateObjects(settings, nodes);
+                string token = Token(identity, xml, new JArray(nodes, objectTemplates));
+                var reread = Fresh(settings) as PatternSettings;
+                if (reread == null || ReadIdentity(reread) != identity)
+                    return McpResponse.Err(code: "VersionConflict", message: "The active KB/model/version changed while reading Settings.");
+                string rereadXml = Serialize(reread);
+                JArray rereadNodes = Project(reread);
+                JArray rereadTemplates = ReadTemplateObjects(reread, rereadNodes);
+                if (ReadIdentity(reread) != identity || rereadXml != xml || !JToken.DeepEquals(nodes, rereadNodes)
+                    || !JToken.DeepEquals(objectTemplates, rereadTemplates))
+                    return McpResponse.Err(code: "VersionConflict", message: "Settings, templates or the active KB/model/version changed while reading.");
                 string expected = (string)(args["baseVersion"] ?? args["expectedVersion"] ?? args["versionToken"]);
                 if (!string.IsNullOrEmpty(expected) && expected != token)
                     return McpResponse.Err(code: "VersionConflict", message: "Settings changed; restart the read or dryRun.");
                 string action = (string)args["action"];
                 var templates = nodes.OfType<JObject>().Where(n => (bool)n["isTemplate"]).ToList();
+                templates.AddRange(objectTemplates.OfType<JObject>().Select(WwpTemplateXml.CatalogEntry));
                 if (action == "settings_templates")
                     return McpResponse.Ok(code: "SettingsTemplatesRead", result: Page(templates, (int?)args["offset"] ?? 0, (int?)args["limit"] ?? 50, token));
                 string selector = (string)args["template"];
+                if (string.IsNullOrWhiteSpace(selector))
+                    return McpResponse.Err(code: "TemplateNotUnique", message: "Select a template using its catalog path or GUID.");
                 var matches = templates.Where(n => (string)n["path"] == selector
                     || (string)n["properties"]?["Name"]?["value"] == selector
+                    || ((string)n["storage"] == "wwp-object" && ((string)n["name"] == selector
+                        || string.Equals((string)n["templateGuid"], selector, StringComparison.OrdinalIgnoreCase)))
                     || (string)n["caption"] == selector).ToList();
                 if (matches.Count != 1) return McpResponse.Err(code: "TemplateNotUnique", message: "Select exactly one template using its catalog path.");
                 string templatePath = (string)matches[0]["path"];
+                if ((string)matches[0]["storage"] == "wwp-object")
+                {
+                    var template = objectTemplates.OfType<JObject>().Single(t => (string)t["path"] == templatePath);
+                    if (action == "settings_read")
+                        return McpResponse.Ok(code: "SettingsTemplateRead", result: WwpTemplateXml.Read(template,
+                            (int?)args["offset"] ?? 0, (int?)args["limit"] ?? 50, token));
+                    if (action != "settings_edit") return McpResponse.Err(code: "SettingsUnknownAction", message: "Unknown Settings operation.");
+                    if ((bool?)template["settingsLinkVerified"] != true)
+                        return McpResponse.Err(code: "TemplateSettingsLinkUnverified", message: "The template MainTemplate does not identify exactly one Settings template.");
+                    return FinishEdit(WwpTemplateXml.Plan(template, args, token), (bool?)args["dryRun"] == true, expected);
+                }
                 if (action == "settings_read")
                     return McpResponse.Ok(code: "SettingsTemplateRead", result: Page(nodes.Where(n => (string)n["path"] == templatePath
                         || ((string)n["path"]).StartsWith(templatePath + "/", StringComparison.Ordinal)),
@@ -167,7 +258,8 @@ namespace GxMcp.Worker.Services
                 JObject plan = Plan(nodes, templatePath, args, token);
                 return FinishEdit(plan, (bool?)args["dryRun"] == true, expected);
             }
-            catch (Exception ex) { return McpResponse.Err(code: "SettingsReadOrPlanFailed", message: ex.Message); }
+            catch (Exception ex) { return McpResponse.Err(code: ex.Message.StartsWith("VersionConflict:", StringComparison.Ordinal)
+                ? "VersionConflict" : "SettingsReadOrPlanFailed", message: ex.Message); }
         }
 
         internal static string FinishEdit(JObject plan, bool dryRun, string expected)

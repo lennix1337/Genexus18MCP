@@ -6,6 +6,7 @@
 
 - Fixed WorkWithPlus Settings and instance actions failing to resolve objects by name; preserved explicit identities, pagination and version tokens.
 - Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
+- Include separate WorkWithPlus for Web Template objects in Settings template discovery and reads, with explicit Settings/Main links, pagination, and version tokens. Preview an existing table class with an exact XML text edit that preserves metadata and formatting; real template saves remain blocked pending isolation validation.
 
 ## v3.2.4 - 2026-09-10
 
