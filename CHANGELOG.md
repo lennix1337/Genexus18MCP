@@ -7,25 +7,7 @@
 - Fixed WorkWithPlus Settings and instance actions failing to resolve objects by name; preserved explicit identities, pagination and version tokens.
 - Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
 - Include separate WorkWithPlus for Web Template objects in Settings template discovery and reads, with explicit Settings/Main links, pagination, and version tokens. Preview an existing table class with an exact XML text edit that preserves metadata and formatting; real template saves remain blocked pending isolation validation.
-
-## v3.2.4 - 2026-09-10
-
-
-### Fixed
-
-- Complete write-result classification before advancing cache/concurrency timestamps, and prevent typed variable no-ops from marking objects dirty.
-
-## v3.2.3 - 2026-09-10
-
-
-### Fixed
-
-- Required Events object saves now fail before persistence with
-  `ObjectSaveIsolationUnverified` until SDK/pattern event isolation is verified;
-  dry-run previews remain available. The legacy patch route preserves the
-  requirement, and decreasing revisions no longer count as save evidence.
-
-- Optional profile-owned KB path/version pins now reject mismatched or frozen write destinations after Worker restarts, with pre-open path validation and explicit activation recovery. The guard never activates or updates a version automatically.
+- Preserve SDK-owned pattern metadata during raw XML property edits and previews. Unchanged XML is a no-op; structural or metadata changes are rejected explicitly instead of rebuilding child-order lists. Preview and save share the same unmodified payload, and unreadable current XML blocks both paths. This does not certify SDK save isolation.
 
 - Respect requested object types when resolving homonyms, including Pattern Settings, and separate read-cache entries by type and read shape.
 - Read Pattern Settings through the SDK pattern tree with explicit pagination instead of the generic properties XML.
