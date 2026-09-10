@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed WorkWithPlus Settings and instance actions failing to resolve objects by name; preserved explicit identities, pagination and version tokens.
+- Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
 
 ## v3.2.4 - 2026-09-10
 

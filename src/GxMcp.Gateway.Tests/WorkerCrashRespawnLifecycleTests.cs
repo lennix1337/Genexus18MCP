@@ -84,6 +84,54 @@ namespace GxMcp.Gateway.Tests
             Assert.Same(replacement, pool.TryGet("respawn-kb"));
         }
 
+        [Fact]
+        public async Task UnexpectedExit_PreservesReplacementCreatedByExitSubscriber()
+        {
+            var config = new Configuration();
+            var kb = new KbHandle("replacement-kb", @"C:\Models\ReplacementKb");
+            var initial = new WorkerProcess(config, kb);
+            var replacement = new WorkerProcess(config, kb);
+            var pool = new WorkerPool(config);
+            int spawnAttempts = 0;
+            pool.SpawnFactoryForTest = _ => ++spawnAttempts == 1 ? initial : replacement;
+            pool.OnWorkerExited += (handle, reason) =>
+            {
+                if (reason != WorkerStopReason.None) return;
+                // Reproduce an eager respawn completing before the old exit
+                // callback returns, without scheduler timing or real processes.
+                pool.DropLiveEntry(handle.NormalizedAlias);
+                pool.AcquireAsync(handle, CancellationToken.None).GetAwaiter().GetResult();
+                Assert.Same(replacement, pool.TryGet(handle.NormalizedAlias));
+            };
+            try
+            {
+                await pool.AcquireAsync(kb, CancellationToken.None);
+                initial.SimulateUnexpectedExitForTest();
+                Assert.Equal(2, spawnAttempts);
+                Assert.Same(replacement, pool.TryGet(kb.NormalizedAlias));
+            }
+            finally { pool.StopAll(); }
+        }
+
+        [Fact]
+        public async Task UnexpectedExit_DoesNotRemoveDifferentEntryForSameAlias()
+        {
+            var config = new Configuration();
+            var kb = new KbHandle("replacement-kb", @"C:\Models\ReplacementKb");
+            var initial = new WorkerProcess(config, kb);
+            var replacement = new WorkerProcess(config, kb);
+            var pool = new WorkerPool(config);
+            pool.SpawnFactoryForTest = _ => initial;
+            try
+            {
+                await pool.AcquireAsync(kb, CancellationToken.None);
+                pool.RegisterForTest(kb, worker: replacement);
+                initial.SimulateUnexpectedExitForTest();
+                Assert.Same(replacement, pool.TryGet(kb.NormalizedAlias));
+            }
+            finally { pool.StopAll(); }
+        }
+
         private static async Task EventuallyAsync(Func<bool> condition)
         {
             var timeout = DateTime.UtcNow.AddSeconds(5);

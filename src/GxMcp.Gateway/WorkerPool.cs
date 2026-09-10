@@ -250,17 +250,14 @@ namespace GxMcp.Gateway
                 var capturedHandle = handle;
                 worker.OnWorkerExited += (reason) =>
                 {
+                    // Detach the exited worker BEFORE notifying eager-respawn subscribers:
+                    // they can finish spawning a replacement before this callback returns.
+                    // Remove only the captured entry, preserving concurrent replacements,
+                    // planned drains, and an entry reused by a completed planned reload.
+                    if (!entry.Draining && (entry.Worker == null || ReferenceEquals(entry.Worker, worker)))
+                        _entries.TryRemove(new KeyValuePair<string, Entry>(capturedHandle.NormalizedAlias, entry));
+                    // Keep the durable _known record so this KB remains resolvable.
                     OnWorkerExited?.Invoke(capturedHandle, reason);
-                    // Drop the live-worker entry (a fresh AcquireAsync respawns) but keep
-                    // the durable _known record — issue #26 P3: the KB must stay resolvable.
-                    // Plan 031: skip removal while a planned drain owns this entry —
-                    // DrainAndReplaceAsync manages the entry's lifecycle itself across the
-                    // whole binary-swap window and relies on Draining staying true (and the
-                    // entry staying present) to keep protecting concurrent AcquireAsync
-                    // callers from creating a second, fresh, non-draining entry.
-                    if (_entries.TryGetValue(capturedHandle.NormalizedAlias, out var currentEntry) && currentEntry.Draining)
-                        return;
-                    _entries.TryRemove(capturedHandle.NormalizedAlias, out _);
                 };
                 if (SpawnFactoryForTest == null)
                 {
