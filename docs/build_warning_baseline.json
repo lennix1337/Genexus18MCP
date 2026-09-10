@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "generatedAt": "2026-09-10",
-  "warningCount": 219,
+  "warningCount": 221,
   "warnings": [
     {
       "code": "CS8600",
@@ -727,6 +727,16 @@
       "code": "CS8604",
       "file": "src/GxMcp.Gateway.Tests/EditVerificationRoutingTests.cs",
       "line": 26
+    },
+    {
+      "code": "CS8604",
+      "file": "src/GxMcp.Gateway.Tests/EditVerificationRoutingTests.cs",
+      "line": 39
+    },
+    {
+      "code": "CS8604",
+      "file": "src/GxMcp.Gateway.Tests/EditVerificationRoutingTests.cs",
+      "line": 64
     },
     {
       "code": "CS8604",

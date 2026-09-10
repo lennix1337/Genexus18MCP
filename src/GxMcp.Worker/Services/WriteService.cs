@@ -447,7 +447,22 @@ namespace GxMcp.Worker.Services
         internal static void NotePerTargetWrite(string target)
         {
             if (string.IsNullOrWhiteSpace(target)) return;
+            StampPerTargetWrite(target);
+            MarkTargetDirty(target);
+        }
+
+        // Keep the write timestamp independent from dirty classification. The timestamp is
+        // needed immediately after the SDK call to detect concurrent writes, while dirty state
+        // must wait for persisted-state wrapping and rollback classification.
+        private static void StampPerTargetWrite(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target)) return;
             _lastWriteAtUtc[target] = DateTime.UtcNow;
+        }
+
+        private static void MarkTargetDirty(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target)) return;
             // v2.6.9 — record edit so the next build of this target does a full
             // BuildOne (spec+gen+compile) rather than the compile-only fast path.
             // kbPath best-effort: missing kb maps to a "<no-kb>" bucket which is
@@ -460,6 +475,38 @@ namespace GxMcp.Worker.Services
                 EditDirtyTracker.MarkDirty(kbPath, target);
             }
             catch { /* dirty tracking is best-effort */ }
+        }
+
+        internal static bool ShouldMarkTargetDirty(string responseJson)
+        {
+            JObject response;
+            try { response = JObject.Parse(responseJson); }
+            catch { return false; }
+
+            var rollback = response["rollback"] as JObject;
+            if (rollback?["rolledBack"]?.Value<bool>() == true
+                && rollback["reReadConfirmed"]?.Value<bool>() == true)
+                return false;
+
+            string status = response["status"]?.ToString();
+            string code = response["code"]?.ToString() ?? response["error"]?["code"]?.ToString();
+            if (string.Equals(code, "WriteNoChange", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "WriteNotPersisted", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(status, "success", StringComparison.OrdinalIgnoreCase))
+                return string.Equals(code, "WriteApplied", StringComparison.OrdinalIgnoreCase)
+                    && response["persisted"]?.Value<bool>() == true
+                    && response["changed"]?.Value<bool?>() != false;
+
+            // Preserve a conservative dirty mark when a post-save failure or an inconclusive
+            // rollback may have left a mutation on disk. Pre-mutation errors have none of these
+            // evidence fields and therefore do not create a false dirty entry.
+            return response["partialPersistenceDetected"]?.Value<bool>() == true
+                || response["rollbackFailed"]?.Value<bool>() == true
+                || response["persisted"]?.Value<bool>() == true
+                || response["error"]?["partialPersistenceDetected"]?.Value<bool>() == true;
         }
 
         // Resolved lazily via the WriteService instance ctor so the static
@@ -1122,7 +1169,7 @@ namespace GxMcp.Worker.Services
                     Logger.Info($"[OBJ-SAVE-SLOW] {sw.ElapsedMilliseconds}ms target='{target}' part='{partName}' codeLen={code?.Length ?? 0} dryRun={dryRun}");
                 }
             }
-            if (!dryRun) NotePerTargetWrite(target);
+            if (!dryRun) StampPerTargetWrite(target);
             // v2.3.8 Task 3.4: every edit response carries persistedHash + persistedSnippet
             // (success, no-change, dry-run, rollback, or error).
             // Default sdkPath = typed-sdk; deeper writers (LayoutService raw-XML) tag their own
@@ -1175,6 +1222,7 @@ namespace GxMcp.Worker.Services
                     catch (Exception ex) { Logger.Debug("[SNAPSHOT] no-op cleanup failed: " + ex.Message); }
                 }
             }
+            if (!dryRun && ShouldMarkTargetDirty(wrapped)) MarkTargetDirty(target);
             return wrapped;
             } // end lock (AcquirePerTargetLock)
         }

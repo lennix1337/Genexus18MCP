@@ -122,6 +122,13 @@ The helper rejects pushes from `main` and pins the exact remote head OID for a
 force-with-lease push, preventing a same-named branch from being updated in the
 base repository by accident.
 
+The architectural `ripwire` analysis is an optional local/CI quality gate because
+it is not a runtime dependency of this repository. When unavailable, the PR
+preflight exits successfully only if the required GitHub gates pass, reports the
+analysis as `skipped`, and labels the final message as incomplete. Pass
+`-RequireRipwire` when a local policy requires it; absence then fails with exit
+code 127. If present, a nonzero `ripwire` exit code always fails the preflight.
+
 ## Live KB and performance gate
 
 The normal CI workflow does not have the proprietary GeneXus SDK or a KB. On a

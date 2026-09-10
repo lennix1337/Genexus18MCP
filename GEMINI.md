@@ -74,6 +74,10 @@ Reach for it BEFORE blind grep and whole-file reads:
 - Pre-edit contract check: `ripwire <dir> --edit-check=SYM`.
 - Diff review: `ripwire . --pr-context` (enforced by `scripts/pr-preflight.ps1`).
 
+`ripwire` is an optional architectural quality gate, not a runtime dependency.
+The PR preflight reports it as skipped when unavailable; use
+`scripts/pr-preflight.ps1 -RequireRipwire` to make it mandatory for a local run.
+
 ## Operating rules
 
 - Do not design new features around non-MCP transport contracts.

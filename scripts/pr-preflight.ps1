@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [int]$PullRequest
+    [int]$PullRequest,
+    [switch]$RequireRipwire
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +22,33 @@ function Get-GhJson([string[]]$Arguments) {
     } catch {
         Fail-Preflight "gh $($Arguments -join ' ') returned invalid JSON."
     }
+}
+
+function Invoke-RipwireGate([string]$BaseRef, [switch]$Require, [string]$RipwirePath) {
+    if ([string]::IsNullOrWhiteSpace($RipwirePath)) {
+        $command = Get-Command ripwire -ErrorAction SilentlyContinue
+        if ($command) { $RipwirePath = $command.Source }
+    } elseif (-not (Test-Path -LiteralPath $RipwirePath)) {
+        $RipwirePath = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RipwirePath)) {
+        if ($Require) {
+            return [pscustomobject]@{ status = 'failed'; exitCode = 127; reason = 'ripwire is not found on PATH.' }
+        }
+        return [pscustomobject]@{ status = 'skipped'; exitCode = 0; reason = 'ripwire is not found on PATH.' }
+    }
+
+    try {
+        & $RipwirePath . "--pr-context=$BaseRef" | Out-Host
+        $exitCode = $LASTEXITCODE
+    } catch {
+        $exitCode = 1
+    }
+    if ($exitCode -ne 0) {
+        return [pscustomobject]@{ status = 'failed'; exitCode = $exitCode; reason = "ripwire exited with code $exitCode." }
+    }
+    return [pscustomobject]@{ status = 'passed'; exitCode = 0; reason = $null }
 }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -88,23 +116,22 @@ if ($notPassing.Count -gt 0) {
     Fail-Preflight "PR #$PullRequest has non-passing checks: $names"
 }
 
-if (Get-Command ripwire -ErrorAction SilentlyContinue) {
+$baseRef = if ($pr.baseRefName) { "origin/$($pr.baseRefName)" } else { "origin/main" }
+$ripwireResult = Invoke-RipwireGate -BaseRef $baseRef -Require:$RequireRipwire
+if ($ripwireResult.status -eq 'passed') {
     Write-Host "Running ripwire architectural blast radius analysis..."
-    $baseRef = if ($pr.baseRefName) { "origin/$($pr.baseRefName)" } else { "origin/main" }
-    try {
-        & ripwire . "--pr-context=$baseRef"
-    } catch {
-        & ripwire . --pr-context
-    }
-    if ($LASTEXITCODE -ne 0) {
-        Fail-Preflight "ripwire architectural pre-check exited with code $LASTEXITCODE."
-    }
     Write-Host "  ripwire: blast radius and caller analysis passed." -ForegroundColor Green
+} elseif ($ripwireResult.status -eq 'failed') {
+    Fail-Preflight $ripwireResult.reason
 } else {
-    Write-Warning "ripwire is not found on PATH; skipping architectural blast radius analysis."
+    Write-Warning "ripwire architectural blast radius analysis skipped: $($ripwireResult.reason)"
 }
 
-Write-Host "PR #$PullRequest is ready for merge." -ForegroundColor Green
+if ($ripwireResult.status -eq 'skipped') {
+    Write-Host "PR #$PullRequest is ready for merge (mandatory gates passed; ripwire analysis skipped)." -ForegroundColor Yellow
+} else {
+    Write-Host "PR #$PullRequest is ready for merge." -ForegroundColor Green
+}
 Write-Host "  base: $baseRepo/$($pr.baseRefName)"
 Write-Host "  head: $headRepo/$($pr.headRefName) @ $($pr.headRefOid)"
 Write-Host "  review: APPROVED"
