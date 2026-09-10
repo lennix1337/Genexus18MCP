@@ -2,25 +2,28 @@
 
 ## Unreleased
 
-### Fixed
-
-- Respect requested object types when resolving homonyms, including Pattern Settings, and separate read-cache entries by type and read shape.
-- Read Pattern Settings through the SDK pattern tree with explicit pagination instead of the generic properties XML.
-
 ### Added
 
 - WorkWithPlus Settings template catalog, effective-property reads and pure single-property dry runs with snapshot tokens. Real saves remain explicitly blocked (`SettingsIsolationUnverified`): SDK and WorkWithPlus save hooks and atomic cross-process concurrency have not been certified. No isolated persistence capability is claimed.
 
-### Internal
+### Fixed
 
-- Update the contract regression inventory to 225 actions, including the three new Settings actions.
-- Increase the discovery schema budget from 27,500 to 27,750 approximate tokens for the three Settings actions and their identity, pagination and property-preview fields (measured 27,549).
+- Respect requested object types when resolving homonyms, including Pattern Settings, and separate read-cache entries by type and read shape.
+- Read Pattern Settings through the SDK pattern tree with explicit pagination instead of the generic properties XML.
+- Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.
 - Required Events object saves now fail before persistence with
   `ObjectSaveIsolationUnverified` until SDK/pattern event isolation is verified;
   dry-run previews remain available. The legacy patch route preserves the
   requirement, and decreasing revisions no longer count as save evidence.
 
 - Optional profile-owned KB path/version pins now reject mismatched or frozen write destinations after Worker restarts, with pre-open path validation and explicit activation recovery. The guard never activates or updates a version automatically.
+
+### Internal
+
+- Select exact SDK fingerprint manifests for GeneXus 18 U11, U12 and U16 during build and packaging; retain the original U10 default and reject mismatched SDKs without bypassing validation.
+- Refresh existing test SDK dependencies when changing upgrades instead of silently reusing DLLs from the previous SDK.
+- Update the contract regression inventory to 225 actions, including the three new Settings actions.
+- Increase the discovery schema budget from 27,500 to 27,750 approximate tokens for the three Settings actions and their identity, pagination and property-preview fields (measured 27,549).
 
 ## v3.2.2 - 2026-09-10
 

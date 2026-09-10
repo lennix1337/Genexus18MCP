@@ -6,6 +6,19 @@ namespace GxMcp.Worker.Tests
 {
     public class TypeIntrospectServiceTests
     {
+        private sealed class FakeDomain
+        {
+            public System.Collections.Generic.List<FakeEnumValue> EnumValues { get; } =
+                new System.Collections.Generic.List<FakeEnumValue>();
+        }
+
+        private sealed class FakeEnumValue
+        {
+            public string Name { get; set; }
+            public string Value { get; set; }
+            public string Description { get; set; }
+        }
+
         [Fact]
         public void ComputeNumericRange_8_0_Unsigned_Is_99999999()
         {
@@ -116,12 +129,43 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ReadDomainEnumValues_UsesDirectSdkEnumerationShape()
+        {
+            var domain = new FakeDomain();
+            domain.EnumValues.Add(new FakeEnumValue
+            {
+                Name = "Queued",
+                Value = "1",
+                Description = "Waiting"
+            });
+
+            var values = TypeIntrospectService.ReadDomainEnumValues(domain);
+
+            var value = Assert.Single(values);
+            Assert.Equal("Queued", value.Name);
+            Assert.Equal("1", value.Value);
+            Assert.Equal("Waiting", value.Description);
+        }
+
+        [Fact]
         public void Run_UnknownAction_ReturnsError()
         {
             var svc = new TypeIntrospectService(null, null);
             var json = svc.Run(new JObject { ["action"] = "bogus" });
             var o = JObject.Parse(json);
             Assert.Equal("error", (string)o["status"]);
+            Assert.Equal("InvalidAction", (string)o["error"]?["code"]);
+        }
+
+        [Fact]
+        public void Run_DescribeMissingDomain_ReturnsTypeNotFound()
+        {
+            var svc = new TypeIntrospectService(null, null);
+            var json = svc.Run(new JObject { ["action"] = "describe", ["name"] = "MissingDomain" });
+            var o = JObject.Parse(json);
+            Assert.Equal("error", (string)o["status"]);
+            Assert.Equal("TypeNotFound", (string)o["error"]?["code"]);
+            Assert.Contains("MissingDomain", (string)o["error"]?["message"]);
         }
 
         [Fact]

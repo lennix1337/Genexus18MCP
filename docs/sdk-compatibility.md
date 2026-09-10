@@ -8,6 +8,27 @@ The Worker is compiled against the GeneXus 18 SDK installed on the build host. T
 
 Provide the SDK through a self-hosted Windows build image or an installed developer workstation:
 
+Additional explicit locks are available for the inspected U11, U12 and U16
+installations in `config/sdk-compatibility-u11.json`,
+`config/sdk-compatibility-u12.json` and `config/sdk-compatibility-u16.json`.
+The original U10 lock remains the default. Select one lock for each build;
+the resulting Worker carries only that lock under `sdk-compatibility.json`.
+Both build and startup enforce its exact product version and all fingerprints.
+These hashes attest SDK identity, not validation of KB writes or save-event
+isolation. No proprietary SDK assemblies are added by these manifests.
+
+```powershell
+$env:GX_PATH = '<installed-upgrade-directory>'
+$env:GxMcpSdkManifest = (Resolve-Path '.\config\sdk-compatibility-u16.json').Path
+dotnet build src\GxMcp.Worker\GxMcp.Worker.csproj
+# build.ps1 also forwards GxMcpSdkManifest to its Release and Debug builds.
+```
+
+For a command-scoped choice, use `-p:GxMcpSdkManifest=<absolute-manifest-path>`.
+Clear the environment variable to return to the default U10 lock. Do not use
+`GxMcpSkipSdkValidation` to build upgrade packages. Switching upgrade builds
+replaces the output lock even when the selected source manifest is older.
+
 ```powershell
 $env:GX_PATH = 'C:\Program Files (x86)\GeneXus\GeneXus18'
 dotnet build src\GxMcp.Worker\GxMcp.Worker.csproj
@@ -31,3 +52,5 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 Do not publish proprietary DLLs, secrets, or a copied SDK fixture in CI. A CI runner without the self-hosted SDK should report the SDK build/live gate as unavailable; it must not claim that the Worker build passed.
 
 When intentionally upgrading the supported SDK, install the candidate on a controlled self-hosted image, run the validator, update the manifest hashes and version together, then run the focused tests and full verification gates. Treat the manifest as a reviewable compatibility decision, not as a license to redistribute the SDK.
+
+Worker test SDK dependencies are refreshed when switching `GX_PATH`. The copy target excludes resolved project/NuGet dependencies (for example Newtonsoft.Json) before copying SDK DLLs, so changing upgrades replaces stale SDK assemblies without replacing application dependencies. For a full SDK matrix, use a separate output directory under the worktree for each upgrade, and compare the output DLL hashes with the selected lock. Keeping outputs inside the worktree also supports tests that locate source files by walking parent directories.

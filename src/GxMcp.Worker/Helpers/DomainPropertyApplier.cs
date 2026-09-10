@@ -247,7 +247,10 @@ namespace GxMcp.Worker.Helpers
             {
                 object enumValues = AttributeTypeApplier.GetPropertyUnambiguous(domain.GetType(), "EnumValues")
                     ?.GetValue(domain, null);
-                object values = enumValues == null ? null
+                if (enumValues == null) enumValues = InvokePropertyBagGetEnumValues(domain);
+                object values = enumValues is IEnumerable
+                    ? enumValues
+                    : enumValues == null ? null
                     : AttributeTypeApplier.GetPropertyUnambiguous(enumValues.GetType(), "Values")?.GetValue(enumValues, null);
                 if (!(values is IEnumerable enumerable)) return result;
                 foreach (object item in enumerable)
@@ -281,10 +284,29 @@ namespace GxMcp.Worker.Helpers
             catch { return false; }
         }
 
+        private static object InvokePropertyBagGetEnumValues(object domain)
+        {
+            var mi = _getEnumValuesMethod;
+            if (mi == null)
+            {
+                mi = ResolveGetEnumValuesMethod();
+                _getEnumValuesMethod = mi;
+            }
+            if (mi == null) return null;
+            try { return mi.Invoke(null, new[] { domain }); }
+            catch { return null; }
+        }
+
         private static MethodInfo ResolveSetEnumValuesMethod()
         {
             var attType = ResolveType("Artech.Genexus.Common.Properties+ATT");
             return attType?.GetMethod("SetEnumValues", BindingFlags.Public | BindingFlags.Static);
+        }
+
+        private static MethodInfo ResolveGetEnumValuesMethod()
+        {
+            var attType = ResolveType("Artech.Genexus.Common.Properties+ATT");
+            return attType?.GetMethod("GetEnumValues", BindingFlags.Public | BindingFlags.Static);
         }
 
         private static Type ResolveType(string fullName)
@@ -332,5 +354,6 @@ namespace GxMcp.Worker.Helpers
             new ConcurrentDictionary<string, Type>(StringComparer.Ordinal);
 
         private static MethodInfo _setEnumValuesMethod;
+        private static MethodInfo _getEnumValuesMethod;
     }
 }

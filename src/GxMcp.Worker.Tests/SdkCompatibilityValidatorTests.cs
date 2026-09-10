@@ -9,6 +9,24 @@ namespace GxMcp.Worker.Tests
 {
     public class SdkCompatibilityValidatorTests
     {
+        [Theory]
+        [InlineData("18.0.10.184260")]
+        [InlineData("18.0.11.185416+build11")]
+        [InlineData("18.0.12.186073+build12")]
+        [InlineData("18.0.16.189550+build16")]
+        public void SelectedLock_AcceptsOnlyMatchingUpgradeAndFingerprint(string version)
+        {
+            using (var fixture = new SdkFixture(version, "selected-sdk"))
+            {
+                Assert.True(SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => version).IsCompatible);
+                Assert.Equal("GXMCP_SDK_VERSION_MISMATCH",
+                    SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => version + "-different").Code);
+                File.WriteAllText(Path.Combine(fixture.Root, "Artech.Architecture.Common.dll"), "different-sdk-bytes");
+                Assert.Equal("GXMCP_SDK_FINGERPRINT_MISMATCH",
+                    SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => version).Code);
+            }
+        }
+
         [Fact]
         public void Validate_ReturnsCompatibleForMatchingVersionAndFingerprint()
         {

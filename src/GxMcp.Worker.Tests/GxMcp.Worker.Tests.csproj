@@ -45,11 +45,12 @@
   <Target Name="CopyGeneXusSdkDependencies" AfterTargets="Build" Condition="Exists('$(GX_PATH)\Artech.Architecture.Common.dll')">
     <ItemGroup>
       <GeneXusSdkDependency Include="$(GX_PATH)\*.dll;$(GX_PATH)\Packages\*.dll" />
+      <!-- Preserve NuGet/project dependencies; refresh SDK files when GX_PATH changes. -->
+      <GeneXusSdkDependency Remove="@(ReferenceCopyLocalPaths)" MatchOnMetadata="Filename" MatchOnMetadataOptions="CaseInsensitive" />
     </ItemGroup>
     <Copy
       SourceFiles="@(GeneXusSdkDependency)"
       DestinationFolder="$(TargetDir)"
-      SkipUnchangedFiles="true"
-      Condition="!Exists('$(TargetDir)%(GeneXusSdkDependency.Filename)%(GeneXusSdkDependency.Extension)')" />
+      SkipUnchangedFiles="true" />
   </Target>
 </Project>

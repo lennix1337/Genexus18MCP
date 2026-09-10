@@ -144,11 +144,16 @@ Write-Host "   > Building Gateway (Debug)..."
 Invoke-DotNet (@("build", $gatewayProject, "-c", "Debug", "--nologo") + $versionArguments) "Gateway debug build failed."
 
 # 3. Build Worker (.NET Framework 4.8)
+$sdkManifestArguments = @()
+if (-not [string]::IsNullOrWhiteSpace($env:GxMcpSdkManifest)) {
+    $selectedSdkManifest = (Resolve-Path -LiteralPath $env:GxMcpSdkManifest).Path
+    $sdkManifestArguments += "-p:GxMcpSdkManifest=$selectedSdkManifest"
+}
 Write-Host "   > Building Worker (Release)..."
-Invoke-DotNet (@("build", $workerProject, "-c", "Release", "--nologo", "-p:GX_PATH=$buildGxPath") + $versionArguments) "Worker build failed."
+Invoke-DotNet (@("build", $workerProject, "-c", "Release", "--nologo", "-p:GX_PATH=$buildGxPath") + $versionArguments + $sdkManifestArguments) "Worker build failed."
 
 Write-Host "   > Building Worker (Debug)..."
-Invoke-DotNet (@("build", $workerProject, "-c", "Debug", "--nologo", "-p:GX_PATH=$buildGxPath") + $versionArguments) "Worker debug build failed."
+Invoke-DotNet (@("build", $workerProject, "-c", "Debug", "--nologo", "-p:GX_PATH=$buildGxPath") + $versionArguments + $sdkManifestArguments) "Worker debug build failed."
 
 # 4. Copy Worker Binaries to Publish
 $workerPublishDir = Join-Path $publishDir "worker"
