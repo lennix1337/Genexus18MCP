@@ -668,32 +668,6 @@ namespace GxMcp.Worker.Services
 
         // Walks ex.InnerException so the deepest message — usually the real SDK
         // diagnostic — ends up in the response. Outer wrappers are still surfaced
-        // Friction 2026-05-28 — surface the PatternChildOrderReconciler
-        // report on both DryRun and verify-failed envelopes so the caller
-        // sees which parents the reconciler had to fix (or skip) without
-        // needing live worker logs. validate=only callers rely on this to
-        // catch malformed childrenOrderedList before paying for a write.
-        private static void AttachReconcileReport(
-            JObject envelope,
-            GxMcp.Worker.Helpers.PatternChildOrderReconciler.Report report)
-        {
-            if (envelope == null || report == null || !report.HasContent) return;
-            var jo = new JObject
-            {
-                ["parentsUpdated"] = report.ParentsUpdated
-            };
-            if (report.Changes != null && report.Changes.Count > 0)
-            {
-                jo["changes"] = new JArray(report.Changes);
-            }
-            if (report.Skips != null && report.Skips.Count > 0)
-            {
-                jo["skips"] = new JArray(report.Skips);
-                jo["skipsHint"] = "Reconciler refused to rebuild childrenOrderedList for these parents — the XML is missing identifiers (controlName/Name/attribute) or has an unknown child kind. Fix those entries before retrying.";
-            }
-            envelope["childOrderReconcile"] = jo;
-        }
-
         // but only when they add information beyond the inner message.
         internal static string TryExtractFormType(string xml)
         {

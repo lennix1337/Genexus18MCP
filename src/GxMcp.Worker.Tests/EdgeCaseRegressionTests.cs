@@ -238,7 +238,8 @@ namespace GxMcp.Worker.Tests
             // because the producing method is private and the path needs a
             // live KB to exercise end-to-end.
             string writeSrc = System.IO.File.ReadAllText(FindWorkerServiceFile("WriteService.PatternWrite.cs"));
-            Assert.Contains("code: \"PatternInvalidXml\"", writeSrc);
+            Assert.Equal("PatternInvalidXml", GxMcp.Worker.Helpers.PatternXmlEditPlan.Create("<instance/>", "<invalid").ErrorCode);
+            Assert.Contains("code: plan.ErrorCode", writeSrc);
             Assert.Contains("code: \"PatternPartNotFound\"", writeSrc);
             Assert.Contains("code: \"PatternVerificationMismatch\"", writeSrc);
             Assert.Contains("code: \"PatternSaveFailed\"", writeSrc);

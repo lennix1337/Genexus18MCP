@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Preserve SDK-owned metadata during raw pattern XML property edits and previews; reject structural or metadata edits instead of inferring order lists. Does not certify SDK save isolation.
+
 - Respect requested object types when resolving homonyms, including Pattern Settings, and separate read-cache entries by type and read shape.
 - Read Pattern Settings through the SDK pattern tree with explicit pagination instead of the generic properties XML.
 - Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.

@@ -33,7 +33,7 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("code: \"VisualReadFailed\"", visualSrc);
 
             // 3. PatternWrite dryRun includes verified array, savePathExercised = false, and PatternInstance warning
-            Assert.Contains("[\"verified\"] = new JArray(\"xmlParse\", \"childrenOrderedList\", \"diffVsCurrent\")", patternSrc);
+            Assert.Contains("[\"verified\"] = new JArray(\"xmlParse\", \"metadataPreserved\", \"structurePreserved\", \"diffVsCurrent\")", patternSrc);
             Assert.Contains("[\"savePathExercised\"] = false", patternSrc);
             Assert.Contains("WorkWithPlus pattern saves can still be rejected by the WWP validator on save", patternSrc);
 

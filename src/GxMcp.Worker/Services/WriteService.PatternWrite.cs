@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reflection;
-using System.Xml.Linq;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
 
@@ -14,82 +13,41 @@ namespace GxMcp.Worker.Services
     {
         private string WritePatternPart(global::Artech.Architecture.Common.Objects.KBObject obj, string target, string partName, string xml, bool dryRun = false, bool strictVerify = true)
         {
-            string normalizedInput;
-            GxMcp.Worker.Helpers.PatternChildOrderReconciler.Report reconcileReport;
+            string currentXml;
             try
             {
-                var doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
-                // Auto-reconcile childrenOrderedList so callers (LLMs) can add/remove/reorder
-                // children purely by editing XML — the helper rebuilds each parent's
-                // ordering attribute from the live child tree. Without this, an LLM that
-                // adds a <textBlock> but forgets to update childrenOrderedList ships a
-                // technically-valid XML that the IDE renders incorrectly. See
-                // src/GxMcp.Worker/Helpers/PatternChildOrderReconciler.cs for the rules.
-                reconcileReport = GxMcp.Worker.Helpers.PatternChildOrderReconciler.Reconcile(doc);
-                if (reconcileReport.ParentsUpdated > 0)
-                {
-                    Logger.Info("[PATTERN-WRITE] Auto-reconciled childrenOrderedList on " + reconcileReport.ParentsUpdated + " parent(s).");
-                    foreach (var change in reconcileReport.Changes)
-                    {
-                        Logger.Info("[PATTERN-WRITE]   " + change);
-                    }
-                }
-                foreach (var skip in reconcileReport.Skips)
-                {
-                    Logger.Warn("[PATTERN-WRITE]   skipped: " + skip);
-                }
-                normalizedInput = doc.ToString();
+                currentXml = _patternAnalysisService.ReadPatternPartXml(obj, partName, out _, out _);
             }
             catch (Exception ex)
             {
-                return CreateWriteError("Invalid pattern XML", target, partName, ex.Message, obj, code: "PatternInvalidXml");
+                return CreateWriteError("Pattern precheck failed", target, partName, ex.Message, obj, code: "PatternReadFailed");
             }
 
-            try
-            {
-                string currentXml = _patternAnalysisService.ReadPatternPartXml(obj, partName, out _, out _);
-                if (XmlEquivalence.AreEquivalent(currentXml, normalizedInput, out _))
+            var plan = PatternXmlEditPlan.Create(currentXml, xml);
+            if (plan.ErrorCode != null)
+                return CreateWriteError("Pattern edit rejected", target, partName,
+                    plan.Error + " Use the appropriate SDK pattern authoring action for structural edits; this does not certify save isolation.",
+                    obj, code: plan.ErrorCode);
+            if (plan.IsNoChange)
+                return Models.McpResponse.Ok(target: target, code: "WriteNoChange", result: new JObject
                 {
-                    return Models.McpResponse.Ok(
-                        target: target,
-                        code: "WriteNoChange",
-                        result: new JObject
-                        {
-                            ["part"] = partName,
-                            ["details"] = dryRun ? "Dry-run: no change would be applied." : "No change"
-                        });
-                }
-                if (dryRun)
+                    ["part"] = partName,
+                    ["details"] = dryRun ? "Dry-run: no change would be applied." : "No change",
+                    ["savePathExercised"] = false
+                });
+            if (dryRun)
+                return Models.McpResponse.Ok(target: target, code: "WriteDryRun", result: new JObject
                 {
-                    var dryResp = new JObject
-                    {
-                        ["part"] = partName,
-                        ["details"] = "Dry-run: input parsed and would update pattern XML. Save skipped.",
-                        ["verified"] = new JArray("xmlParse", "childrenOrderedList", "diffVsCurrent"),
-                        ["savePathExercised"] = false
-                    };
-                    if (string.Equals(partName, "PatternInstance", StringComparison.OrdinalIgnoreCase))
-                    {
-                        dryResp["warning"] = "Dry-run verified XML structure and diff against current pattern. Note: WorkWithPlus pattern saves can still be rejected by the WWP validator on save.";
-                    }
-                    AttachReconcileReport(dryResp, reconcileReport);
-                    return Models.McpResponse.Ok(target: target, code: "WriteDryRun", result: dryResp);
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Debug("[DEBUG-SAVE] Pattern no-change precheck skipped: " + ex.Message);
-                if (dryRun)
-                {
-                    return CreateWriteError(
-                        "Pattern dry-run precheck failed",
-                        target,
-                        partName,
-                        "Dry-run input parsed, but reading current pattern failed (" + ex.Message + "). State comparison skipped.",
-                        obj,
-                        code: "PatternReadFailed");
-                }
-            }
+                    ["part"] = partName,
+                    ["details"] = "Dry-run: property changes validated; metadata preserved. Save skipped.",
+                    ["verified"] = new JArray("xmlParse", "metadataPreserved", "structurePreserved", "diffVsCurrent"),
+                    ["changes"] = plan.Changes,
+                    ["savePathExercised"] = false,
+                    ["warning"] = "WorkWithPlus pattern saves can still be rejected by the WWP validator on save. This preview does not certify save isolation."
+                });
+
+            // Preview and persistence use exactly the same validated payload.
+            string normalizedInput = plan.Xml;
 
             LogRequestedPatternPayloadIfEnabled(normalizedInput);
 
@@ -270,25 +228,6 @@ namespace GxMcp.Worker.Services
                                     errObj["verifyDiff"] = verifyJobj["verifyDiff"];
                                     verifyJobj.Remove("verifyDiff");
                                 }
-                                // Move childOrderReconcile into error when verification failed.
-                                if (verifyJobj["childOrderReconcile"] != null && errObj["childOrderReconcile"] == null)
-                                {
-                                    errObj["childOrderReconcile"] = verifyJobj["childOrderReconcile"];
-                                    verifyJobj.Remove("childOrderReconcile");
-                                }
-                                // Attach reconcile report under error.childOrderReconcile.
-                                if (reconcileReport != null && reconcileReport.HasContent && errObj["childOrderReconcile"] == null)
-                                {
-                                    var rcObj = new JObject { ["parentsUpdated"] = reconcileReport.ParentsUpdated };
-                                    if (reconcileReport.Changes != null && reconcileReport.Changes.Count > 0)
-                                        rcObj["changes"] = new JArray(reconcileReport.Changes);
-                                    if (reconcileReport.Skips != null && reconcileReport.Skips.Count > 0)
-                                    {
-                                        rcObj["skips"] = new JArray(reconcileReport.Skips);
-                                        rcObj["skipsHint"] = "Reconciler refused to rebuild childrenOrderedList for these parents.";
-                                    }
-                                    errObj["childOrderReconcile"] = rcObj;
-                                }
                             }
                             else
                             {
@@ -296,7 +235,6 @@ namespace GxMcp.Worker.Services
                                 if (persistedSnippet != null) verifyJobj["persistedSnippet"] = persistedSnippet;
                                 if (requestedSnippet != null) verifyJobj["requestedSnippet"] = requestedSnippet;
                                 if (sdkSaveError != null) verifyJobj["sdkSaveError"] = sdkSaveError;
-                                AttachReconcileReport(verifyJobj, reconcileReport);
                             }
                             // Inject restore nextStep so the caller knows how to roll back.
                             {
@@ -437,38 +375,6 @@ namespace GxMcp.Worker.Services
                         {
                             Logger.Debug("[WWP-PROJECT] auto-project on edit skipped: " + ex.Message);
                         }
-                    }
-
-                    // Echo the auto-reconcile report so LLM callers can see exactly
-                    // which childrenOrderedList values the MCP rewrote and why. The IDE
-                    // hides children that aren't listed; if a caller forgot to update
-                    // the attribute by hand, this block tells them the MCP did it for
-                    // them (or, with `skips`, that it could NOT and the layout may not
-                    // render — that's an actionable signal).
-                    if (reconcileReport.HasContent)
-                    {
-                        var ordering = new JObject
-                        {
-                            ["parentsUpdated"] = reconcileReport.ParentsUpdated,
-                            ["explanation"] = "WorkWithPlus uses `childrenOrderedList` on each container element to drive IDE rendering order. The MCP rebuilds it from the XML's actual child order so callers only need to place elements where they want them in the tree."
-                        };
-                        if (reconcileReport.Changes.Count > 0)
-                        {
-                            ordering["changes"] = new JArray(reconcileReport.Changes);
-                        }
-                        if (reconcileReport.Skips.Count > 0)
-                        {
-                            ordering["skipped"] = new JArray(reconcileReport.Skips);
-                            ordering["willRender"] = false;
-                            ordering["skipNote"] = "These parents were left untouched because their childrenOrderedList could not be inferred safely; the affected children may not render in the IDE until the list is corrected manually.";
-                            // issue #36.3 — escalate the skip from a footnote to a top-level
-                            // warning: the write persisted but the affected controls will NOT
-                            // render in the IDE, which is an actionable failure the caller
-                            // must see, not a note buried in the reconciliation block.
-                            success["warning"] = "Layout persisted, but " + reconcileReport.Skips.Count +
-                                " container(s) could not be reconciled and their controls will NOT render in the IDE. Give the container a name/title, or fix its childrenOrderedList in the IDE. See childrenOrderedListReconciliation.skipped.";
-                        }
-                        success["childrenOrderedListReconciliation"] = ordering;
                     }
 
                     return Models.McpResponse.Ok(target: target, code: "WriteApplied", result: success);
