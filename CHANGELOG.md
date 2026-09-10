@@ -25,6 +25,7 @@
 ### Fixed
 
 - Restored required schema examples for the gateway-only filesystem and worker-pool tools so the contract validator accepts the complete discovery surface.
+- Updated the tool-contract regression expectation to cover the four gateway-only tools already present in the supported schema.
 - Restored the `genexus_io` Object Text batch routes in the umbrella router after integrating the neutral-runtime changes with the current `main` contracts; the discovery schema budget now covers the combined tool surface.
 - Prevented concurrent Worker acquisition under different aliases from starting duplicate Workers for the same KB path; this avoids SDK single-instance `BusyReject` loops during initialize and warmup.
 - Serialized default-KB warmup and index bootstrap so initialize does not race two Worker acquisitions on the STA process.

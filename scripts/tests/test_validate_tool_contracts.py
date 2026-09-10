@@ -21,8 +21,8 @@ class ValidateToolContractsTests(unittest.TestCase):
             )
         )
         counts = MODULE.validate_document(document)
-        self.assertEqual(50, counts["tools"])
-        self.assertEqual(216, counts["actions"])
+        self.assertEqual(54, counts["tools"])
+        self.assertEqual(222, counts["actions"])
 
     def test_invalid_action_example_is_rejected(self):
         tool = {
