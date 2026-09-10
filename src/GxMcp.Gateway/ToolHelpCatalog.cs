@@ -368,7 +368,9 @@ namespace GxMcp.Gateway
                 "- `freeze` — freeze current version into an immutable baseline (`name`, `description`, `parentVersion`).\n" +
                 "- `branch` — create a new parallel branch from a parent version (`name`, `includeEnvironments`).\n" +
                 "- `set_active` — switch the active development version/branch (`targetVersion`, `autoUpdate`).\n" +
-                "- `revert` — revert working model changes back to a baseline version.\n",
+                "- `revert` — revert working model changes back to a baseline version.\n\n" +
+                "## Timestamp semantics\n" +
+                "Version results expose `lastUpdate` from `KBVersion.LastUpdate`. `createdAt` is null and `createdAtAvailable=false` when the SDK does not expose a reliable creation timestamp; never interpret `lastUpdate` as creation time.\n",
 
             ["genexus_doc"] =
                 "# genexus_doc\n\n" +

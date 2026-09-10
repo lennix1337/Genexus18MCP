@@ -18,7 +18,7 @@ This project ships both the GitHub Release and the npm package `genexus-mcp`.
 Use the one-shot script (the only implementation entrypoint):
 
 ```powershell
-.\release.ps1 -Version <X.Y.Z>
+./release.ps1 -Version <X.Y.Z>
 ```
 
 It bumps versions, synchronizes both npm lockfiles, SDK project files, and the
@@ -29,7 +29,17 @@ creates the GitHub release with the zip, checksum, and Nexus VSIX attached. The
 manifest source commit must equal the tag commit. Do not run `gh release create` manually: the release workflow
 requires `publish.zip` on the initial published event. The Worker needs the
 local primary SDK from `config/gx-versions.json`, so the release artifact must
-be built on Windows with that supported GeneXus installation.
+built on Windows with that supported GeneXus installation.
+
+To close completed issues as part of the same release, pass them explicitly:
+
+```powershell
+./release.ps1 -Version <X.Y.Z> -CloseIssues 146,148
+```
+
+The script reads each issue, comments the verified release URL, closes it, and
+reads the issue back to verify `state=closed`. It never infers issues from
+changelog text; omit `-CloseIssues` to leave issue state untouched.
 
 Gateway, tests, and benchmarks build with the .NET 10 SDK; the Worker remains
 .NET Framework 4.8/x86 for the GeneXus SDK. The v3 corporate installer stages

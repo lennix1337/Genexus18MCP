@@ -19,6 +19,8 @@
 - Source search now uses typed native accessors for Procedure source and Rules/Events where available, while retaining dynamic fallbacks for SDK variants.
 - Extended the live benchmark with wire-level content, structuredContent, and estimated-token measurements while preserving compatibility with legacy two-value probe results.
 - Improved live-KB harness isolation and diagnostics with stale-log cleanup, streaming child progress, timestamps, and explicit phases.
+- Clarified KB version timestamp semantics by keeping `lastUpdate` separate from an explicitly unavailable `createdAt` when the SDK provides no reliable creation timestamp.
+- Added an explicit `release.ps1 -CloseIssues` option that links the published release before closing completed GitHub issues and verifies the final state.
 
 ### Fixed
 

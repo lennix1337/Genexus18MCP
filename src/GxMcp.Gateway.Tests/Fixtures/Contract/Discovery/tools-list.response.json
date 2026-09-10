@@ -2536,7 +2536,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "KB model-version management (Create Version/Branch/Activate/Revert) over the SDK's KBVersionHelper — the IDE Version menu's code path. action=list is read-only; freeze/branch/set_active/revert mutate the KB's version tree.",
+      "description": "KB model-version management (Create Version/Branch/Activate/Revert) over the SDK's KBVersionHelper — the IDE Version menu's code path. action=list is read-only; freeze/branch/set_active/revert mutate the KB's version tree. Version results keep lastUpdate separate from createdAt; createdAt is null with createdAtAvailable=false when the SDK has no reliable creation timestamp.",
       "inputSchema": {
         "examples": [
           {
