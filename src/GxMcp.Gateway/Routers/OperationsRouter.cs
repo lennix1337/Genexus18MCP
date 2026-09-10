@@ -464,6 +464,7 @@ namespace GxMcp.Gateway.Routers
                     {
                         module = "WwpAction",
                         action = "Run",
+                        target = args?["name"]?.ToString(),
                         @params = args
                     };
 

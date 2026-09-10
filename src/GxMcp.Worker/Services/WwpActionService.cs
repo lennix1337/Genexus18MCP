@@ -26,8 +26,13 @@ namespace GxMcp.Worker.Services
             _write = write;
         }
 
+        // Older gateway envelopes kept the name only inside params.
+        internal static string ResolveTarget(string target, JObject args) =>
+            !string.IsNullOrWhiteSpace(target) ? target : (string)args?["name"];
+
         public string Run(string target, JObject args)
         {
+            target = ResolveTarget(target, args);
             if (((string)args?["action"])?.StartsWith("settings_", StringComparison.Ordinal) == true)
                 return new PatternSettingsService(_objects).Run(target, args);
             try
