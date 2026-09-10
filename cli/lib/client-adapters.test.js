@@ -195,7 +195,12 @@ test('all client adapters preserve unrelated servers and emit no structural KB o
 test('applyLauncherConfigOrExit creates neutral config outside a KB', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-outside-kb-'));
     const origEnv = process.env.GX_CONFIG_PATH;
+    const origGeneXusHome = process.env.GENEXUS_HOME;
     delete process.env.GX_CONFIG_PATH;
+    const fakeGeneXusHome = path.join(tmpDir, 'GeneXus18');
+    fs.mkdirSync(fakeGeneXusHome, { recursive: true });
+    fs.writeFileSync(path.join(fakeGeneXusHome, 'genexus.exe'), 'test fixture');
+    process.env.GENEXUS_HOME = fakeGeneXusHome;
 
     try {
         const stderr = { write: () => {} };
@@ -214,6 +219,11 @@ test('applyLauncherConfigOrExit creates neutral config outside a KB', () => {
             process.env.GX_CONFIG_PATH = origEnv;
         } else {
             delete process.env.GX_CONFIG_PATH;
+        }
+        if (origGeneXusHome !== undefined) {
+            process.env.GENEXUS_HOME = origGeneXusHome;
+        } else {
+            delete process.env.GENEXUS_HOME;
         }
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { }
     }
