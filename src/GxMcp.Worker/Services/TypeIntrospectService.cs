@@ -39,13 +39,13 @@ namespace GxMcp.Worker.Services
                     case "validate_value":
                         return RunValidateValue(args?["type"]?.ToString(), args?["value"]?.ToString());
                     default:
-                        return ErrorJson($"Unknown action '{action}'. Expected list|describe|validate_value.");
+                        return ErrorJson("InvalidAction", $"Unknown action '{action}'. Expected list|describe|validate_value.");
                 }
             }
             catch (Exception ex)
             {
                 Logger.Error("TypeIntrospectService.Run: " + ex.Message);
-                return ErrorJson(ex.Message);
+                return ErrorJson("TypeIntrospectFailed", ex.Message);
             }
         }
 
@@ -107,9 +107,9 @@ namespace GxMcp.Worker.Services
 
         private string RunDescribe(string name)
         {
-            if (string.IsNullOrWhiteSpace(name)) return ErrorJson("name required for action=describe.");
+            if (string.IsNullOrWhiteSpace(name)) return ErrorJson("InvalidArgument", "name required for action=describe.");
             var info = ReadDomainInfo(name);
-            if (info == null) return ErrorJson($"Type '{name}' not found or not a Domain.");
+            if (info == null) return ErrorJson("TypeNotFound", $"Domain '{name}' was not found.");
 
             var payload = new JObject
             {
@@ -149,9 +149,9 @@ namespace GxMcp.Worker.Services
 
         private string RunValidateValue(string typeName, string value)
         {
-            if (string.IsNullOrWhiteSpace(typeName)) return ErrorJson("type required for action=validate_value.");
+            if (string.IsNullOrWhiteSpace(typeName)) return ErrorJson("InvalidArgument", "type required for action=validate_value.");
             var info = ReadDomainInfo(typeName);
-            if (info == null) return ErrorJson($"Type '{typeName}' not found or not a Domain.");
+            if (info == null) return ErrorJson("TypeNotFound", $"Domain '{typeName}' was not found.");
             var r = ValidateValue(info, value);
             return McpResponse.Ok(code: "TypeIntrospected", result: r);
         }
@@ -268,7 +268,7 @@ namespace GxMcp.Worker.Services
             if (_objectService == null) return null;
             try
             {
-                dynamic obj = _objectService.FindObject(name);
+                dynamic obj = _objectService.FindObject(name, "Domain");
                 if (obj == null) return null;
                 string td = "";
                 try { td = (string)obj.TypeDescriptor.Name; } catch { }
@@ -286,31 +286,8 @@ namespace GxMcp.Worker.Services
                 try { info.Decimals = (int?)obj.Decimals; } catch { }
                 try { info.Signed = (bool?)obj.Signed; } catch { }
 
-                // EnumValues — best-effort. Domain has IPropertyBag-style accessor.
-                try
-                {
-                    dynamic evs = null;
-                    try { evs = obj.EnumValues; } catch { }
-                    if (evs != null)
-                    {
-                        var list = new List<DomainEnumValueRecord>();
-                        try
-                        {
-                            foreach (dynamic ev in evs.Values)
-                            {
-                                list.Add(new DomainEnumValueRecord
-                                {
-                                    Name = (string)ev.Name,
-                                    Value = ev.Value?.ToString(),
-                                    Description = ev.Description?.ToString()
-                                });
-                            }
-                        }
-                        catch { }
-                        if (list.Count > 0) info.AllowedValues = list;
-                    }
-                }
-                catch { }
+                var enumValues = ReadDomainEnumValues((object)obj);
+                if (enumValues.Count > 0) info.AllowedValues = enumValues;
 
                 return info;
             }
@@ -321,9 +298,41 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private static string ErrorJson(string message)
+        public static List<DomainEnumValueRecord> ReadDomainEnumValues(object domain)
         {
-            return McpResponse.Err(code: "TypeIntrospectFailed", message: message);
+            var result = new List<DomainEnumValueRecord>();
+            if (domain == null) return result;
+
+            try
+            {
+                dynamic valueSource = domain;
+                foreach (dynamic value in valueSource.EnumValues)
+                {
+                    result.Add(new DomainEnumValueRecord
+                    {
+                        Name = value.Name?.ToString(),
+                        Value = value.Value?.ToString(),
+                        Description = value.Description?.ToString()
+                    });
+                }
+            }
+            catch { }
+
+            if (result.Count > 0) return result;
+            return DomainPropertyApplier.ReadEnumValues(domain)
+                .OfType<JObject>()
+                .Select(value => new DomainEnumValueRecord
+                {
+                    Name = value["name"]?.ToString(),
+                    Value = value["value"]?.ToString(),
+                    Description = value["description"]?.ToString()
+                })
+                .ToList();
+        }
+
+        private static string ErrorJson(string code, string message)
+        {
+            return McpResponse.Err(code: code, message: message);
         }
 
         private static string EdbToCanonical(string edb)

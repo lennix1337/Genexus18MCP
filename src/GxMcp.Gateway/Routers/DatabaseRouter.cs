@@ -95,12 +95,14 @@ namespace GxMcp.Gateway.Routers
                         "types_describe" => "describe",
                         _ => "validate_value"
                     };
+                    var workerArgs = args == null ? new JObject() : (JObject)args.DeepClone();
+                    workerArgs["action"] = inner;
                     return new
                     {
                         module = "types",
                         action = inner,
                         target = args?["name"]?.ToString() ?? args?["type"]?.ToString() ?? target,
-                        @params = args
+                        @params = workerArgs
                     };
                 }
 

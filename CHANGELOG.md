@@ -29,21 +29,6 @@
 - Dirty tracking now classifies the final persisted write outcome, so no-op and pre-mutation failures do not create false dirty entries while confirmed rollbacks clear only the write they undo.
 - PR preflight now reports unavailable `ripwire` analysis explicitly, supports an opt-in required mode, and preserves nonzero tool failures instead of presenting an incomplete analysis as complete.
 
-### Added
-
-- WorkWithPlus Settings template catalog, effective-property reads and pure single-property dry runs with snapshot tokens. Real saves remain explicitly blocked (`SettingsIsolationUnverified`): SDK and WorkWithPlus save hooks and atomic cross-process concurrency have not been certified. No isolated persistence capability is claimed.
-
-### Internal
-
-- Update the contract regression inventory to 225 actions, including the three new Settings actions.
-- Increase the discovery schema budget from 27,500 to 27,750 approximate tokens for the three Settings actions and their identity, pagination and property-preview fields (measured 27,549).
-- Required Events object saves now fail before persistence with
-  `ObjectSaveIsolationUnverified` until SDK/pattern event isolation is verified;
-  dry-run previews remain available. The legacy patch route preserves the
-  requirement, and decreasing revisions no longer count as save evidence.
-
-- Optional profile-owned KB path/version pins now reject mismatched or frozen write destinations after Worker restarts, with pre-open path validation and explicit activation recovery. The guard never activates or updates a version automatically.
-
 ## v3.2.2 - 2026-09-10
 
 
