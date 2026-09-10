@@ -77,6 +77,59 @@ namespace GxMcp.Gateway.Tests
                 ((JArray)control["properties"]!["type"]!["enum"]!).Select(value => value.ToString()));
         }
 
+        [Theory]
+        [InlineData("settings_templates")]
+        [InlineData("settings_read")]
+        [InlineData("settings_edit")]
+        [InlineData("list")]
+        [InlineData("add_action")]
+        public void WorkWithPlusPublishedNameReachesWorkerTarget(string action)
+        {
+            var args = new JObject
+            {
+                ["action"] = action, ["name"] = "WorkWithPlus",
+                ["dryRun"] = true, ["template"] = "Transaction",
+                ["offset"] = 12, ["limit"] = 8,
+                ["baseVersion"] = "base", ["expectedVersion"] = "expected", ["versionToken"] = "token"
+            };
+            AssertWorkWithPlusRoute(args, "WorkWithPlus");
+        }
+
+        [Theory]
+        [InlineData("guid", "11111111-2222-3333-4444-555555555555", false)]
+        [InlineData("entityKey", "11111111-2222-3333-4444-555555555555-1", false)]
+        [InlineData("guid", "11111111-2222-3333-4444-555555555555", true)]
+        [InlineData("entityKey", "11111111-2222-3333-4444-555555555555-1", true)]
+        public void WorkWithPlusKeepsExplicitIdentityForTypedWorkerResolution(string identity, string value, bool withName)
+        {
+            var args = new JObject { ["action"] = "settings_templates", [identity] = value };
+            if (withName) args["name"] = "WorkWithPlus";
+            AssertWorkWithPlusRoute(args, withName ? "WorkWithPlus" : null);
+        }
+
+        private static void AssertWorkWithPlusRoute(JObject args, string? expectedTarget)
+        {
+            // Exercise the published schema and the real tools/call entry point, not only a module router.
+            JObject schema = (JObject)FindTool("genexus_wwp")["inputSchema"]!;
+            Assert.Equal("string", schema["properties"]!["name"]!["type"]!.ToString());
+            GatewayArgsValidator.PrimeCache("genexus_wwp", schema);
+            Assert.True(GatewayArgsValidator.Validate("genexus_wwp", args).Ok);
+            var request = new JObject
+            {
+                ["jsonrpc"] = "2.0", ["id"] = "wwp-routing", ["method"] = "tools/call",
+                ["params"] = new JObject { ["name"] = "genexus_wwp", ["arguments"] = args }
+            };
+            var original = request.DeepClone();
+
+            var routed = JObject.FromObject(McpRouter.ConvertToolCall(request)!);
+
+            Assert.Equal("WwpAction", (string?)routed["module"]);
+            Assert.Equal("Run", (string?)routed["action"]);
+            Assert.Equal(expectedTarget, (string?)routed["target"]);
+            Assert.True(JToken.DeepEquals(args, routed["params"]));
+            Assert.True(JToken.DeepEquals(original, request));
+        }
+
         [Fact]
         public void RecipeDoesNotAdvertiseUnsupportedRunAction()
         {

@@ -130,9 +130,9 @@ namespace GxMcp.Worker.Services
             return WrapWithPersistedState(raw, target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
         }
 
-        // v2.6.9 — parse the typed-writer raw response for a Success/NoChange
-        // status and mark the target dirty. NoChange does NOT mark dirty (no
-        // edit actually persisted), Success/PartialSuccess/ok do.
+        // v2.6.9 — parse the typed-writer raw response for a confirmed mutation.
+        // WriteNoChange and changed=false are not writes, even though the typed
+        // writer reports them with status=ok.
         private static void MarkDirtyIfSuccess(string raw, string target)
         {
             if (string.IsNullOrWhiteSpace(raw) || string.IsNullOrWhiteSpace(target)) return;
@@ -145,6 +145,10 @@ namespace GxMcp.Worker.Services
                     || string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(status, "partial", StringComparison.OrdinalIgnoreCase))
                 {
+                    string code = jo["code"]?.ToString();
+                    if (string.Equals(code, "WriteNoChange", StringComparison.OrdinalIgnoreCase)
+                        || jo["changed"]?.Value<bool?>() == false)
+                        return;
                     NotePerTargetWrite(target);
                 }
             }

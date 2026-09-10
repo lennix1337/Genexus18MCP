@@ -8,6 +8,32 @@ namespace GxMcp.Worker.Tests
 {
     public class WwpActionServiceTests
     {
+        [Theory]
+        [InlineData(null, "WorkWithPlus", "WorkWithPlus")]
+        [InlineData("", "WorkWithPlus", "WorkWithPlus")]
+        [InlineData(" ", "WorkWithPlus", "WorkWithPlus")]
+        [InlineData("ExplicitTarget", "OtherName", "ExplicitTarget")]
+        [InlineData("WorkWithPlusOrder", null, "WorkWithPlusOrder")]
+        [InlineData(null, null, null)]
+        public void LegacyEnvelopeResolvesNameWithoutReplacingExplicitTarget(string target, string name, string expected)
+        {
+            var args = new JObject { ["name"] = name, ["guid"] = "11111111-2222-3333-4444-555555555555" };
+            var original = args.DeepClone();
+
+            Assert.Equal(expected, WwpActionService.ResolveTarget(target, args));
+            Assert.True(JToken.DeepEquals(original, args));
+        }
+
+        [Fact]
+        public void MissingEnvelopeAndNameKeepIdentityOnlyResolutionAvailable()
+        {
+            Assert.Null(WwpActionService.ResolveTarget(null, null));
+            Assert.Null(WwpActionService.ResolveTarget(null, new JObject
+            {
+                ["entityKey"] = "11111111-2222-3333-4444-555555555555-1"
+            }));
+        }
+
         [Fact]
         public void AddGridAction_WritesTypedAttributesAndNeverAddsSecurity()
         {

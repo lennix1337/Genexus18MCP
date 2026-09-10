@@ -5,6 +5,7 @@
 ### Fixed
 
 - Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
+- Preserve named WorkWithPlus Settings targets across Gateway routing and accept legacy Worker envelopes without losing GUID, pagination or concurrency fields.
 - Preserve SDK-owned metadata during raw pattern XML property edits and previews; reject structural or metadata edits instead of inferring order lists. Does not certify SDK save isolation.
 - Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.
 
@@ -13,6 +14,12 @@
 - Select exact SDK fingerprint manifests for GeneXus 18 U11, U12 and U16 during build and packaging; retain the original U10 default and reject mismatched SDKs without bypassing validation.
 - Refresh test SDK dependencies when changing upgrades instead of reusing DLLs from a previous SDK.
 
+## v3.2.4 - 2026-09-10
+
+
+### Fixed
+
+- Complete write-result classification before advancing cache/concurrency timestamps, and prevent typed variable no-ops from marking objects dirty.
 
 ## v3.2.3 - 2026-09-10
 

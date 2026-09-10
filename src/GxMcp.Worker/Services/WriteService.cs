@@ -1169,7 +1169,6 @@ namespace GxMcp.Worker.Services
                     Logger.Info($"[OBJ-SAVE-SLOW] {sw.ElapsedMilliseconds}ms target='{target}' part='{partName}' codeLen={code?.Length ?? 0} dryRun={dryRun}");
                 }
             }
-            if (!dryRun) StampPerTargetWrite(target);
             // v2.3.8 Task 3.4: every edit response carries persistedHash + persistedSnippet
             // (success, no-change, dry-run, rollback, or error).
             // Default sdkPath = typed-sdk; deeper writers (LayoutService raw-XML) tag their own
@@ -1222,7 +1221,10 @@ namespace GxMcp.Worker.Services
                     catch (Exception ex) { Logger.Debug("[SNAPSHOT] no-op cleanup failed: " + ex.Message); }
                 }
             }
-            if (!dryRun && ShouldMarkTargetDirty(wrapped)) MarkTargetDirty(target);
+            // Record the timestamp and dirty state only after persisted-state verification and
+            // any rollback have classified the final outcome. This keeps no-op/pre-mutation
+            // failures out of both cache/concurrency invalidation and build dirty tracking.
+            if (!dryRun && ShouldMarkTargetDirty(wrapped)) NotePerTargetWrite(target);
             return wrapped;
             } // end lock (AcquirePerTargetLock)
         }
