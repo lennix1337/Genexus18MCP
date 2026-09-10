@@ -143,6 +143,8 @@ namespace GxMcp.Worker.Services
 
         public string OpenKB(string path)
         {
+            var destinationError = WriteDestinationGuard.CheckOpen(path);
+            if (destinationError != null) return destinationError;
             // issue #38 defect #1: reject a structurally-invalid path fast, before the
             // heavy KnowledgeBase.Open call. A GeneXus environment/model subfolder has no
             // .gxw / knowledgebase.connection; opening it always throws deep in the SDK.

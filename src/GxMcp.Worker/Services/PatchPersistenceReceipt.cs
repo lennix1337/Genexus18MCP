@@ -9,6 +9,22 @@ namespace GxMcp.Worker.Services
     /// </summary>
     internal static class PatchPersistenceReceipt
     {
+        internal static string ObjectSaveIsolationGuard(string target, bool requireObjectSave, bool dryRun)
+        {
+            if (!requireObjectSave || dryRun) return null;
+            return Models.McpResponse.Err(
+                code: "ObjectSaveIsolationUnverified",
+                message: "No write was attempted: complete object save can run SDK/pattern event handlers whose isolation has not been verified.",
+                target: target,
+                extra: new JObject
+                {
+                    ["requireObjectSave"] = true, ["persisted"] = false, ["saved"] = false,
+                    ["partPersisted"] = false, ["objectSaved"] = false,
+                    ["metadataUpdated"] = false, ["implicitOperations"] = new JArray(),
+                    ["writeAttempted"] = false
+                });
+        }
+
         internal static bool AttachVerification(
             JObject payload,
             TextPersistenceVerifier.Result verification,
@@ -147,9 +163,11 @@ namespace GxMcp.Worker.Services
             if (!metadataStampPersisted)
                 return false;
 
-            if (!string.IsNullOrWhiteSpace(revisionBefore)
-                && !string.IsNullOrWhiteSpace(revisionAfter)
-                && !string.Equals(revisionBefore, revisionAfter, StringComparison.Ordinal))
+            long beforeRevision;
+            long afterRevision;
+            if (long.TryParse(revisionBefore, out beforeRevision)
+                && long.TryParse(revisionAfter, out afterRevision)
+                && afterRevision > beforeRevision)
                 return true;
 
             DateTime before;
@@ -159,6 +177,23 @@ namespace GxMcp.Worker.Services
                    && DateTime.TryParse(lastUpdateAfter, null,
                        System.Globalization.DateTimeStyles.RoundtripKind, out after)
                    && after.ToUniversalTime() > before.ToUniversalTime();
+        }
+
+        internal static void RequireCompleteObjectSave(JObject payload)
+        {
+            if (payload["requireObjectSave"]?.Value<bool>() != true) return;
+            if (payload["objectSaved"]?.Value<bool>() == true
+                && payload["partPersisted"]?.Value<bool>() == true
+                && payload["metadataUpdated"]?.Value<bool>() == true
+                && payload["otherPartsIntact"]?.Value<bool?>() == true) return;
+
+            payload["_internalStatus"] = "Error";
+            payload["code"] = "ObjectSaveIncomplete";
+            payload["message"] = payload["partPersisted"]?.Value<bool>() == true
+                ? "The Events content is persisted, but the complete object-save contract was not confirmed. Do not repeat the edit blindly."
+                : "The complete object-save contract was not confirmed and the requested Events content was not found by the fresh re-read.";
+            payload["manualRecovery"] = "Compare the fresh Events content with the object open in the GeneXus IDE. If the IDE tab is older, reopen it before saving the object manually so the persisted content is not overwritten.";
+            payload["retrySafe"] = false;
         }
 
         internal static JObject BuildRollback(

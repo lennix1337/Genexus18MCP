@@ -638,6 +638,9 @@ namespace GxMcp.Worker.Services
                         dryRunBody["persisted"] = false;
                         dryRunBody["saved"] = false;
                         dryRunBody["verified"] = false;
+                        dryRunBody["requireObjectSave"] = requireObjectSave;
+                        if (requireObjectSave)
+                            dryRunBody["writeBlocker"] = "ObjectSaveIsolationUnverified";
                         dryRunBody["requestedHash"] = dryRunEvidence.RequestedHash;
                         dryRunBody["persistedHash"] = dryRunEvidence.PersistedHash;
                         dryRunBody["commentOnly"] = commentOnlyChange;
@@ -751,6 +754,9 @@ namespace GxMcp.Worker.Services
                             target: target,
                             extra: new JObject { ["baseVersion"] = baseVersion, ["currentVersion"] = currentVersion });
                 }
+
+                string isolationError = PatchPersistenceReceipt.ObjectSaveIsolationGuard(target, requireObjectSave, dryRun);
+                if (isolationError != null) return isolationError;
 
                 // 3. Write Back (re-normalize to CRLF for GeneXus)
                 string finalCode = updatedSource.Replace("\n", Environment.NewLine);
@@ -912,7 +918,7 @@ namespace GxMcp.Worker.Services
                         ?? (writePayload["result"] as JObject)?["metadataStampPersisted"]?.ToObject<bool?>()
                         ?? false;
                     bool objectSaved = saveReported;
-                    bool metadataUpdated = PatchPersistenceReceipt.AttachObjectSaveEvidence(
+                    PatchPersistenceReceipt.AttachObjectSaveEvidence(
                         writePayload,
                         persistedMatches,
                         objectSaved,
@@ -926,16 +932,7 @@ namespace GxMcp.Worker.Services
                     writePayload["requireObjectSave"] = true;
                     writePayload["persistencePath"] = "object_save";
 
-                    if (!objectSaved || !persistedMatches || !metadataUpdated || !comparison.Equal)
-                    {
-                        writePayload["_internalStatus"] = "Error";
-                        writePayload["code"] = "ObjectSaveIncomplete";
-                        writePayload["message"] = persistedMatches
-                            ? "The Events content is persisted, but the complete object-save contract was not confirmed. Do not repeat the edit blindly."
-                            : "The complete object-save contract was not confirmed and the requested Events content was not found by the fresh re-read.";
-                        writePayload["manualRecovery"] = "Compare the fresh Events content with the object open in the GeneXus IDE. If the IDE tab is older, reopen it before saving the object manually so the persisted content is not overwritten.";
-                        writePayload["retrySafe"] = false;
-                    }
+                    PatchPersistenceReceipt.RequireCompleteObjectSave(writePayload);
                 }
                 string versionToken = null;
                 try

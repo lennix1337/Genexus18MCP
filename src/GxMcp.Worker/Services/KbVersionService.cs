@@ -164,6 +164,9 @@ namespace GxMcp.Worker.Services
             string err = ResolveVersion(kbase, targetName, out target);
             if (err != null) return err;
 
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(WriteDestinationGuard.VersionVariable)) && target.IsFrozen)
+                return McpResponse.Err(code: "WriteDestinationVersionNotWritable", message: "The pinned target version is frozen; activation was not performed.", hint: "Choose a writable version explicitly in the profile.");
+
             try
             {
                 if (args?["autoUpdate"] != null)

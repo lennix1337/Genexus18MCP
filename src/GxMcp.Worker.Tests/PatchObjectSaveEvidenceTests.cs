@@ -6,6 +6,66 @@ namespace GxMcp.Worker.Tests
 {
     public class PatchObjectSaveEvidenceTests
     {
+        [Theory]
+        [InlineData(true, true)]
+        [InlineData(false, false)]
+        public void IsolationGuard_DoesNotBlockPreviewOrPartOnly(bool required, bool dryRun)
+        {
+            Assert.Null(PatchPersistenceReceipt.ObjectSaveIsolationGuard("SyntheticPanel", required, dryRun));
+        }
+
+        [Fact]
+        public void IsolationGuard_RejectsRequiredObjectSaveBeforeMutation()
+        {
+            string result = PatchPersistenceReceipt.ObjectSaveIsolationGuard("SyntheticPanel", true, false);
+            Assert.Contains("ObjectSaveIsolationUnverified", result);
+            var response = JObject.Parse(result);
+            Assert.False(response.SelectToken("$..objectSaved")?.Value<bool>());
+            Assert.False(response.SelectToken("$..writeAttempted")?.Value<bool>());
+            Assert.False(response.SelectToken("$..partPersisted")?.Value<bool>());
+        }
+
+        [Theory]
+        [InlineData(false, true, true, true)]
+        [InlineData(true, false, true, true)]
+        [InlineData(true, true, false, true)]
+        [InlineData(true, true, true, false)]
+        [InlineData(true, true, true, null)]
+        public void RequiredSave_MissingEvidenceIsIncomplete(bool objectSaved, bool partPersisted, bool metadataUpdated, bool? siblingsIntact)
+        {
+            var payload = new JObject
+            {
+                ["requireObjectSave"] = true, ["_internalStatus"] = "Success",
+                ["code"] = "AppliedPartOnly", ["objectSaved"] = objectSaved,
+                ["partPersisted"] = partPersisted, ["metadataUpdated"] = metadataUpdated,
+                ["otherPartsIntact"] = siblingsIntact
+            };
+            PatchPersistenceReceipt.RequireCompleteObjectSave(payload);
+            Assert.Equal("Error", payload["_internalStatus"]?.ToString());
+            Assert.Equal("ObjectSaveIncomplete", payload["code"]?.ToString());
+            Assert.Equal(partPersisted, payload["partPersisted"]?.Value<bool>());
+            Assert.False(payload["retrySafe"]?.Value<bool>());
+            Assert.Null(payload["rolledBack"]);
+        }
+
+        [Fact]
+        public void RequiredSave_CompleteEvidenceKeepsSuccess()
+        {
+            var payload = JObject.Parse("{requireObjectSave:true,code:'Applied',objectSaved:true,partPersisted:true,metadataUpdated:true,otherPartsIntact:true}");
+            PatchPersistenceReceipt.RequireCompleteObjectSave(payload);
+            Assert.Equal("Applied", payload["code"]?.ToString());
+            Assert.Null(payload["retrySafe"]);
+        }
+
+        [Theory]
+        [InlineData("42", "41")]
+        [InlineData("42", "unavailable")]
+        public void MetadataChanged_DoesNotTreatRegressionOrUnknownAsAdvance(string before, string after)
+        {
+            Assert.False(PatchPersistenceReceipt.MetadataChanged(before, after, null, null, metadataStampPersisted: true));
+        }
+
+
         [Fact]
         public void RequiredObjectSave_WithoutBaseVersion_IsRejectedBeforeWrite()
         {

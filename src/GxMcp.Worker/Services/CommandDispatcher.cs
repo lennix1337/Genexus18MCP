@@ -434,6 +434,12 @@ namespace GxMcp.Worker.Services
                 // a cultura do SO.
                 method = method.ToLowerInvariant();
 
+                // A configured fence may inspect KBVersion via the SDK. Unknown commands
+                // must therefore stay on STA even if legacy scheduling accepted the module.
+                if (WriteDestinationGuard.IsConfigured
+                    && !WriteDestinationGuard.IsObservation(method, action, request["params"] as JObject))
+                    return false;
+
                 // Only allow strictly non-SDK or pure read-cache operations to bypass STA thread
                 if (method == "ping" || method == "health")
                     return true;
@@ -673,6 +679,9 @@ namespace GxMcp.Worker.Services
                     }
                     args = merged;
                 }
+
+                var destinationError = WriteDestinationGuard.CheckCommand(_kbService, method, action, args);
+                if (destinationError != null) return destinationError;
 
                 string progressToken = request["_meta"] != null
                     ? request["_meta"]["progressToken"]?.ToString()

@@ -6,6 +6,44 @@ namespace GxMcp.Gateway.Tests
 {
     public class EditVerificationRoutingTests
     {
+        [Theory]
+        [InlineData(true, true, "strict")]
+        [InlineData(true, false, "strict")]
+        [InlineData(true, false, "only")]
+        [InlineData(false, false, "strict")]
+        [InlineData(null, false, "strict")]
+        public void EventsPatch_ForwardsCompleteSaveWithoutLosingSafetyArguments(bool? required, bool dryRun, string validate)
+        {
+            var args = new JObject
+            {
+                ["name"] = "SyntheticPanel", ["part"] = "Events", ["mode"] = "patch",
+                ["operation"] = "Replace", ["context"] = "old", ["content"] = "new",
+                ["baseVersion"] = "35", ["dryRun"] = dryRun, ["validate"] = validate,
+                ["rollbackOnFailure"] = false
+            };
+            if (required.HasValue) args["requireObjectSave"] = required.Value;
+
+            var routed = JObject.FromObject(new ObjectRouter().ConvertToolCall("genexus_edit", args));
+
+            Assert.Equal("Patch", routed["module"]?.ToString());
+            Assert.Equal(required ?? false, routed["requireObjectSave"]?.Value<bool>());
+            Assert.Equal("35", routed["baseVersion"]?.ToString());
+            Assert.Equal(dryRun, routed["dryRun"]?.Value<bool>());
+            Assert.Equal(validate, routed["validate"]?.ToString());
+            Assert.False(routed["rollbackOnFailure"]?.Value<bool>());
+        }
+
+        [Fact]
+        public void LegacyPatch_ForwardsRequireObjectSave()
+        {
+            var routed = JObject.FromObject(new ObjectRouter().ConvertToolCall("genexus_patch",
+                JObject.Parse("{name:'SyntheticPanel',part:'Events',requireObjectSave:true,dryRun:true,baseVersion:'35'}")));
+            Assert.True(routed["requireObjectSave"]?.Value<bool>());
+            Assert.True(routed["dryRun"]?.Value<bool>());
+            Assert.Equal("35", routed["baseVersion"]?.ToString());
+        }
+
+
         [Fact]
         public void Patch_ForwardsVerificationConcurrencyAndExplicitRollback()
         {

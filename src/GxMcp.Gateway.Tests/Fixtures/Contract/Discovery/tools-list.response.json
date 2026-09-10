@@ -1577,7 +1577,7 @@
           },
           "requireObjectSave": {
             "default": false,
-            "description": "Events patch only: require a complete parent-object save, an advanced revision/lastUpdate, fresh content re-read, and unchanged sibling parts. Requires baseVersion for non-dry-run writes; incomplete evidence is returned as ObjectSaveIncomplete without an automatic retry or rollback.",
+            "description": "Events patch complete-save requirement. dryRun remains available; real writes are blocked before persistence with ObjectSaveIsolationUnverified until SDK/pattern save-event isolation is established. No override. baseVersion remains required for a real write.",
             "type": "boolean"
           },
           "return_post_state": {

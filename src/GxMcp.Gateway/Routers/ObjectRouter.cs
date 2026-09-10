@@ -368,7 +368,8 @@ namespace GxMcp.Gateway.Routers
                         verifyRollback = args?["verifyRollback"]?.ToObject<bool?>() ?? false,
                         verifyMode = args?["verifyMode"]?.ToString(),
                         baseVersion = args?["baseVersion"]?.ToString(),
-                        rollbackOnFailure = args?["rollbackOnFailure"]?.ToObject<bool?>() ?? false
+                        rollbackOnFailure = args?["rollbackOnFailure"]?.ToObject<bool?>() ?? false,
+                        requireObjectSave = args?["requireObjectSave"]?.ToObject<bool?>() ?? false
                     };
                 case "genexus_write_object":
                     return new { module = "Write", action = part, target = target, payload = args?["code"]?.ToString() };
