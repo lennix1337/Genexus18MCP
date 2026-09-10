@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
 - Preserve SDK-owned metadata during raw pattern XML property edits and previews; reject structural or metadata edits instead of inferring order lists. Does not certify SDK save isolation.
 - Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.
 
