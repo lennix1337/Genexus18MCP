@@ -23,7 +23,6 @@
 - Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
 - Include separate WorkWithPlus for Web Template objects in Settings template discovery and reads, with explicit Settings/Main links, pagination, and version tokens. Preview an existing table class with an exact XML text edit that preserves metadata and formatting; real template saves remain blocked pending isolation validation.
 - Preserve SDK-owned pattern metadata during raw XML property edits and previews. Unchanged XML is a no-op; structural or metadata changes are rejected explicitly instead of rebuilding child-order lists. Preview and save share the same unmodified payload, and unreadable current XML blocks both paths. This does not certify SDK save isolation.
-
 - Respect requested object types when resolving homonyms, including Pattern Settings, and separate read-cache entries by type and read shape.
 - Read Pattern Settings through the SDK pattern tree with explicit pagination instead of the generic properties XML.
 - Dirty tracking now classifies the final persisted write outcome, so no-op and pre-mutation failures do not create false dirty entries while confirmed rollbacks clear only the write they undo.
