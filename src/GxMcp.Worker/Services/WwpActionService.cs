@@ -32,7 +32,11 @@ namespace GxMcp.Worker.Services
                 return new PatternSettingsService(_objects).Run(target, args);
             try
             {
-                KBObject requestedObject = _objects.FindObject(target);
+                KBObject requestedObject = _objects.FindObject(
+                    target,
+                    typeFilter: "WorkWithPlus",
+                    guid: (string)args?["guid"],
+                    entityKey: (string)args?["entityKey"]);
                 const string wwpPrefix = "WorkWithPlus";
                 if (requestedObject == null && !string.IsNullOrEmpty(target) &&
                     target.StartsWith(wwpPrefix, StringComparison.OrdinalIgnoreCase) &&
