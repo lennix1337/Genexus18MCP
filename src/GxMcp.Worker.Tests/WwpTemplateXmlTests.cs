@@ -145,8 +145,9 @@ namespace GxMcp.Worker.Tests
             var settings = JArray.Parse("[{'path':'/15/0','type':'InstanceTemplate','properties':{'Name':{'value':'Main'}}}]");
             var template = Template();
             PatternSettingsService.BindTemplate(template, settings);
-            Assert.True((bool)template["settingsLinkVerified"]);
-            Assert.Equal("/15/0", (string)template["settingsPath"]);
+            Assert.False((bool)template["settingsLinkVerified"]);
+            Assert.True(template["settingsPath"]?.Type == JTokenType.Null);
+            Assert.Equal("model-wide", (string)template["settingsScope"]);
             string token = PatternSettingsService.Token("kb/version/settings", "settings xml", new JArray(settings, template));
             template["source"] = Xml + " ";
             Assert.NotEqual(token, PatternSettingsService.Token("kb/version/settings", "settings xml", new JArray(settings, template)));

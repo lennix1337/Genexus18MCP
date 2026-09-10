@@ -194,9 +194,15 @@ namespace GxMcp.Worker.Services
             string main = (string)template["mainTemplate"];
             var matches = settingsNodes.OfType<JObject>().Where(n => (string)n["type"] == "InstanceTemplate"
                 && (string)n["properties"]?["Name"]?["value"] == main).ToList();
-            bool verified = !string.IsNullOrEmpty(main) && matches.Count == 1;
-            template["settingsPath"] = verified ? matches[0]["path"].DeepClone() : JValue.CreateNull();
-            template["settingsLinkVerified"] = verified;
+            // WWPTemplate objects are model-wide library records. A matching
+            // MainTemplate name is useful evidence for display, but is not an
+            // ownership relationship when multiple Settings objects exist.
+            template["settingsPath"] = JValue.CreateNull();
+            template["settingsLinkVerified"] = false;
+            template["settingsScope"] = "model-wide";
+            template["settingsLinkEvidence"] = string.IsNullOrEmpty(main)
+                ? "MainTemplate is empty; ownership is unknown."
+                : $"MainTemplate matched {matches.Count} Settings template node(s); ownership is not represented by the SDK object link.";
         }
 
         public string Run(string target, JObject args)

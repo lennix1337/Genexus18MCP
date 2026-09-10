@@ -23,31 +23,53 @@ namespace GxMcp.Worker.Services
                 return CreateWriteError("Pattern precheck failed", target, partName, ex.Message, obj, code: "PatternReadFailed");
             }
 
-            var plan = PatternXmlEditPlan.Create(currentXml, xml);
-            if (plan.ErrorCode != null)
-                return CreateWriteError("Pattern edit rejected", target, partName,
-                    plan.Error + " Use the appropriate SDK pattern authoring action for structural edits; this does not certify save isolation.",
-                    obj, code: plan.ErrorCode);
-            if (plan.IsNoChange)
-                return Models.McpResponse.Ok(target: target, code: "WriteNoChange", result: new JObject
-                {
-                    ["part"] = partName,
-                    ["details"] = dryRun ? "Dry-run: no change would be applied." : "No change",
-                    ["savePathExercised"] = false
-                });
-            if (dryRun)
-                return Models.McpResponse.Ok(target: target, code: "WriteDryRun", result: new JObject
-                {
-                    ["part"] = partName,
-                    ["details"] = "Dry-run: property changes validated; metadata preserved. Save skipped.",
-                    ["verified"] = new JArray("xmlParse", "metadataPreserved", "structurePreserved", "diffVsCurrent"),
-                    ["changes"] = plan.Changes,
-                    ["savePathExercised"] = false,
-                    ["warning"] = "WorkWithPlus pattern saves can still be rejected by the WWP validator on save. This preview does not certify save isolation."
-                });
-
-            // Preview and persistence use exactly the same validated payload.
-            string normalizedInput = plan.Xml;
+            string normalizedInput;
+            if (string.Equals(partName, "PatternInstance", StringComparison.OrdinalIgnoreCase))
+            {
+                var plan = PatternXmlEditPlan.Create(currentXml, xml);
+                if (plan.ErrorCode != null)
+                    return CreateWriteError("Pattern edit rejected", target, partName,
+                        plan.Error + " Use the appropriate SDK pattern authoring action for structural edits; this does not certify save isolation.",
+                        obj, code: plan.ErrorCode);
+                if (plan.IsNoChange)
+                    return Models.McpResponse.Ok(target: target, code: "WriteNoChange", result: new JObject
+                    {
+                        ["part"] = partName,
+                        ["details"] = dryRun ? "Dry-run: no change would be applied." : "No change",
+                        ["savePathExercised"] = false
+                    });
+                if (dryRun)
+                    return Models.McpResponse.Ok(target: target, code: "WriteDryRun", result: new JObject
+                    {
+                        ["part"] = partName,
+                        ["details"] = "Dry-run: property changes validated; metadata preserved. Save skipped.",
+                        ["verified"] = new JArray("xmlParse", "metadataPreserved", "structurePreserved", "diffVsCurrent"),
+                        ["changes"] = plan.Changes,
+                        ["savePathExercised"] = false,
+                        ["warning"] = "WorkWithPlus pattern saves can still be rejected by the WWP validator on save. This preview does not certify save isolation."
+                    });
+                normalizedInput = plan.Xml;
+            }
+            else
+            {
+                // PatternVirtual retains its structural SDK authoring contract.
+                if (XmlEquivalence.AreEquivalent(currentXml, xml, out _))
+                    return Models.McpResponse.Ok(target: target, code: "WriteNoChange", result: new JObject
+                    {
+                        ["part"] = partName,
+                        ["details"] = dryRun ? "Dry-run: no change would be applied." : "No change",
+                        ["savePathExercised"] = false
+                    });
+                if (dryRun)
+                    return Models.McpResponse.Ok(target: target, code: "WriteDryRun", result: new JObject
+                    {
+                        ["part"] = partName,
+                        ["details"] = "Dry-run: structural PatternVirtual edit parsed; save skipped.",
+                        ["verified"] = new JArray("xmlParse", "diffVsCurrent"),
+                        ["savePathExercised"] = false
+                    });
+                normalizedInput = xml;
+            }
 
             LogRequestedPatternPayloadIfEnabled(normalizedInput);
 

@@ -68,6 +68,7 @@ namespace GxMcp.Gateway
             public WorkerProcess? Worker;
             public DateTime LastActivityUtc = DateTime.UtcNow;
             public readonly SemaphoreSlim SpawnGate = new SemaphoreSlim(1, 1);
+            public readonly SemaphoreSlim LifecycleGate = new SemaphoreSlim(1, 1);
             // Draining: set to true when a planned worker reload is in progress.
             // AcquireAsync callers that hit the fast path while Draining==true wait
             // on DrainComplete before returning the freshly-spawned replacement.
@@ -259,6 +260,9 @@ namespace GxMcp.Gateway
                     // Keep the durable _known record so this KB remains resolvable.
                     OnWorkerExited?.Invoke(capturedHandle, reason);
                 };
+                // Publish before Start: an immediate exit may be reported
+                // synchronously by WorkerProcess.Start().
+                entry.Worker = worker;
                 if (SpawnFactoryForTest == null)
                 {
                     entry.Spawning = true;   // issue #26 P1: a process really is coming up now.
@@ -275,7 +279,15 @@ namespace GxMcp.Gateway
                         Program.OperationTracker.RegisterSpawnSample(handle.NormalizedAlias, worker.SpawnMs.Value);
                     }
                 }
-                entry.Worker = worker;
+                if (!_entries.TryGetValue(handle.NormalizedAlias, out var current)
+                    || !ReferenceEquals(current, entry)
+                    || !ReferenceEquals(current.Worker, worker))
+                {
+                    if (_entries.TryGetValue(handle.NormalizedAlias, out var replacement)
+                        && replacement.Worker != null)
+                        return replacement.Worker;
+                    throw new InvalidOperationException($"Worker for KB '{handle.Alias}' exited during startup.");
+                }
                 entry.LastActivityUtc = DateTime.UtcNow;
                 return worker;
             }
@@ -302,6 +314,9 @@ namespace GxMcp.Gateway
             if (!_entries.TryGetValue(handle.NormalizedAlias, out var entry))
                 throw new InvalidOperationException($"No pool entry for alias '{handle.Alias}'.");
 
+            await entry.LifecycleGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
             // Plan 031: the entry now survives the whole drain window (never removed
             // from _entries), so a SECOND drain cycle on the same entry would otherwise
             // reuse the previous cycle's already-completed DrainComplete TCS — any
@@ -362,6 +377,11 @@ namespace GxMcp.Gateway
                 // the entry as no longer draining once it wakes.
                 entry.Draining = false;
                 entry.DrainComplete.TrySetResult(true);
+            }
+            }
+            finally
+            {
+                entry.LifecycleGate.Release();
             }
         }
 

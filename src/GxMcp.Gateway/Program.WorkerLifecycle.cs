@@ -76,10 +76,9 @@ namespace GxMcp.Gateway
                         try
                         {
                             var ctSrc = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                            // Drop only the dead LIVE entry so AcquireAsync's fast path can't
-                            // return the just-exited WorkerProcess — but keep the durable
-                            // _known record (issue #26 P3) so the KB stays resolvable.
-                            try { respawnPool!.DropLiveEntry(kb.NormalizedAlias); } catch { }
+                            // WorkerPool detaches the exited entry before raising this
+                            // event. Do not remove by alias here: a concurrent AcquireAsync
+                            // may already have installed a healthy replacement.
                             await respawnPool!.AcquireAsync(kb, ctSrc.Token).ConfigureAwait(false);
                             _respawnFailures.TryRemove(kb.NormalizedAlias, out _);
                             Log($"[Respawn] Replacement worker spawned for KB '{kb.Alias}' (attempt {attempt}).");

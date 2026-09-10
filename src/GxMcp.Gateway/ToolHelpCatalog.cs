@@ -89,9 +89,7 @@ namespace GxMcp.Gateway
                 "- `{ name: 'InvoiceProc', part: 'Source', mode: 'patch', operation: 'Replace', context: '<old block>', content: '<new block>', dryRun: true }`\n" +
                 "- `{ name: 'OrderTrn', part: 'Rules', mode: 'full', content: '<rules text>' }`\n\n" +
                 "## Editing WorkWithPlus pattern parts (PatternInstance / PatternVirtual)\n" +
-                "Pattern XML is the IDE's structural model — containers, controls, actions, grids, orders, filters all live there. **Both `mode: full` and `mode: patch` work**; the MCP handles the SDK quirks transparently.\n\n" +
-                "### Auto-reconcile `childrenOrderedList`\n" +
-                "WorkWithPlus stores IDE rendering order in a per-parent `childrenOrderedList` attribute. **You don't need to manage it.** On every pattern write the MCP rebuilds (and creates if missing) every list from the actual child order in your XML, dropping orphans and adding new entries. The response includes a `childrenOrderedListReconciliation` block listing what changed and why — read it back to confirm your changes will render.\n\n" +
+                "Pattern XML is the IDE's structural model — containers, controls, actions, grids, orders, filters all live there. `PatternVirtual` continues to support structural full/patch edits through the SDK. Raw `PatternInstance` XML edits are limited to existing property changes; identity, defaults, templates, ordering metadata and structure are rejected explicitly. Use the typed WorkWithPlus actions or SDK pattern operations for structural changes.\n\n" +
                 "### Element kinds (XML node → IDE control)\n" +
                 "- `<textBlock controlName=\"...\" caption=\"...\" themeClass=\"BigTitle|LinkText|...\" format=\"HTML\" />`\n" +
                 "- `<errorViewer defaultThemeClass=\"ErrorViewer\" />`\n" +
@@ -114,7 +112,7 @@ namespace GxMcp.Gateway
                 "### Pattern examples\n" +
                 "- Add a custom button: `{ name: 'WorkWithPlusAcao', part: 'PatternInstance', mode: 'patch', operation: 'Insert_After', context: '<existing Trn_Delete standardAction line>', content: '<userAction caption=\"Auditar\" name=\"Auditar\" buttonClass=\"btn ButtonCinza\" confirm=\"False\" />' }`\n" +
                 "- Wrap attributes in a styled group (full rewrite): `{ name: 'WorkWithPlusAcao', part: 'PatternInstance', mode: 'full', content: '<full <instance> XML with <table isGroup=\"True\" title=\"Identificação\" groupThemeClass=\"GroupTelaResp\">...>' }`\n" +
-                "- Add a Selection ordering: insert `<order name=\"Por código\"><attribute attribute=\"<guid>-FieldName\" /></order>` inside `<orders>`; childrenOrderedList is auto-updated.\n",
+                "- Add a Selection ordering through the typed WorkWithPlus action or an SDK pattern operation; raw PatternInstance edits do not rebuild `childrenOrderedList`.\n",
 
             ["genexus_analyze"] =
                 "# genexus_analyze\n\n" +
