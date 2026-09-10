@@ -1716,7 +1716,8 @@ namespace GxMcp.Worker.Services
 
         private static string NormalizeTypeAlias(string type)
         {
-            string t = type.Trim();
+            string t = (type ?? string.Empty).Trim();
+            if (t.Equals("Pattern Settings", StringComparison.OrdinalIgnoreCase)) return "PatternSettings";
             if (t.Equals("StructuredDataType", StringComparison.OrdinalIgnoreCase)) return "SDT";
             if (t.Equals("Structure", StringComparison.OrdinalIgnoreCase)) return "SDT";
             if (t.Equals("Trn", StringComparison.OrdinalIgnoreCase)) return "Transaction";
@@ -1726,6 +1727,18 @@ namespace GxMcp.Worker.Services
             if (t.Equals("BPD", StringComparison.OrdinalIgnoreCase)) return "WorkflowDiagram";
             if (t.Equals("PanelForSD", StringComparison.OrdinalIgnoreCase)) return "SDPanel";
             return t;
+        }
+
+        internal static bool ResolutionTypeMatches(string actualType, string requestedType)
+        {
+            return string.IsNullOrWhiteSpace(requestedType)
+                || string.Equals(NormalizeTypeAlias(actualType), NormalizeTypeAlias(requestedType), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool ResolutionTypeMatches(KBObject obj, string requestedType)
+        {
+            return obj != null && (ResolutionTypeMatches(obj.TypeDescriptor?.Name, requestedType)
+                || ResolutionTypeMatches(obj.GetType().Name, requestedType));
         }
 
         private static Guid ResolveFromTypedDescriptor(string type)
@@ -2303,8 +2316,8 @@ namespace GxMcp.Worker.Services
                 if (helperObj != null)
                 {
                     // If helper resolved to a physical Table, promote to the source-bearing Transaction if one exists with the same name
-                    if (helperObj is global::Artech.Genexus.Common.Objects.Table ||
-                        string.Equals(helperObj.TypeDescriptor?.Name, "Table", StringComparison.OrdinalIgnoreCase))
+                    if (string.IsNullOrEmpty(norm) && (helperObj is global::Artech.Genexus.Common.Objects.Table ||
+                        string.Equals(helperObj.TypeDescriptor?.Name, "Table", StringComparison.OrdinalIgnoreCase)))
                     {
                         try
                         {
@@ -2315,7 +2328,7 @@ namespace GxMcp.Worker.Services
                     }
 
                     string hType = helperObj.TypeDescriptor?.Name ?? helperObj.GetType().Name;
-                    if (string.IsNullOrEmpty(norm) || string.Equals(NormalizeTypeAlias(hType), norm, StringComparison.OrdinalIgnoreCase))
+                    if (ResolutionTypeMatches(helperObj, norm))
                     {
                         Logger.Debug(string.Format("ResolveTypedObjectDirect: ObjectNameHelper matched '{0}' as {1}", name, hType));
                         return helperObj;
@@ -2342,7 +2355,7 @@ namespace GxMcp.Worker.Services
                 {
                     foreach (KBObject o in sdkMatches)
                     {
-                        if (o != null)
+                        if (ResolutionTypeMatches(o, norm))
                         {
                             // If it's a Table and untyped, prefer Transaction
                             if (string.IsNullOrEmpty(norm) && (o is global::Artech.Genexus.Common.Objects.Table || string.Equals(o.TypeDescriptor?.Name, "Table", StringComparison.OrdinalIgnoreCase)))
@@ -2444,8 +2457,7 @@ namespace GxMcp.Worker.Services
 
         private static bool IsEntryType(SearchIndex.IndexEntry entry, string type)
         {
-            return entry != null && (string.IsNullOrWhiteSpace(type)
-                || string.Equals(NormalizeTypeAlias(entry.Type), NormalizeTypeAlias(type), StringComparison.OrdinalIgnoreCase));
+            return entry != null && ResolutionTypeMatches(entry.Type, type);
         }
 
         private static bool IdentityNameMatches(SearchIndex.IndexEntry entry, string target)
@@ -2491,8 +2503,16 @@ namespace GxMcp.Worker.Services
             typeGuid = Guid.Empty;
             id = 0;
             if (string.IsNullOrWhiteSpace(raw)) return false;
-            var match = System.Text.RegularExpressions.Regex.Match(raw,
-                @"(?<type>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[^0-9]*(?<id>\d+)\s*[\)\]]*\s*$");
+            string value = raw.Trim();
+            bool wrapped = value.StartsWith("EntityKey(", StringComparison.OrdinalIgnoreCase);
+            if (wrapped)
+            {
+                if (!value.EndsWith(")", StringComparison.Ordinal)) return false;
+                value = value.Substring("EntityKey(".Length, value.Length - "EntityKey(".Length - 1).Trim();
+            }
+            var match = System.Text.RegularExpressions.Regex.Match(value,
+                @"\A(?<type>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*"
+                + (wrapped ? "," : "[:-]") + @"\s*(?<id>[0-9]+)\z");
             return match.Success
                 && Guid.TryParse(match.Groups["type"].Value, out typeGuid)
                 && int.TryParse(match.Groups["id"].Value, out id);
@@ -2503,6 +2523,27 @@ namespace GxMcp.Worker.Services
             if (!string.IsNullOrWhiteSpace(target)) return target;
             return !string.IsNullOrWhiteSpace(path) ? path :
                 (!string.IsNullOrWhiteSpace(entityKey) ? entityKey : guid);
+        }
+
+        internal static bool NormalizeResolutionTarget(ref string target, ref string type, ref string guid)
+        {
+            target = target?.Trim();
+            type = string.IsNullOrWhiteSpace(type) ? null : type.Trim();
+            if (target != null && target.Contains(":") && !TryParseEntityKey(target, out _, out _))
+            {
+                var parts = target.Split(ColonSeparator, 2);
+                if (string.IsNullOrWhiteSpace(parts[0]) || string.IsNullOrWhiteSpace(parts[1])
+                    || !ResolutionTypeMatches(parts[0], type)) return false;
+                type = parts[0].Trim();
+                target = parts[1].Trim();
+            }
+            if (Guid.TryParse(target, out var targetGuid))
+            {
+                if (!string.IsNullOrWhiteSpace(guid)
+                    && (!Guid.TryParse(guid, out var explicitGuid) || explicitGuid != targetGuid)) return false;
+                guid = targetGuid.ToString();
+            }
+            return true;
         }
 
         internal static KBObject ResolveIndexedObject(KBModel model, SearchIndex.IndexEntry entry, out string strategy)
@@ -2603,62 +2644,63 @@ namespace GxMcp.Worker.Services
                     return null;
                 target = ResolveTargetForIdentity(target, guid, entityKey, path);
             }
+            // Parse name syntax once before every resolution strategy, including
+            // explicit identities; conflicting selectors must not select a homonym.
+            if (!NormalizeResolutionTarget(ref target, ref typeFilter, ref guid)) return null;
             var sw = Stopwatch.StartNew();
             var kb = _kbService.GetKB();
             if (kb == null) return null;
 
             // Explicit identity is authoritative. Do not silently fall back to a
             // same-named object when a caller supplied a GUID/EntityKey/path.
-            if (!string.IsNullOrWhiteSpace(guid) || !string.IsNullOrWhiteSpace(entityKey) || !string.IsNullOrWhiteSpace(path))
+            if (!string.IsNullOrWhiteSpace(guid) || !string.IsNullOrWhiteSpace(entityKey))
+            {
+                try
+                {
+                    KBObject resolved = null;
+                    if (!string.IsNullOrWhiteSpace(guid))
+                    {
+                        if (!Guid.TryParse(guid, out var explicitGuid)) return null;
+                        resolved = kb.DesignModel.Objects.Get(explicitGuid);
+                    }
+                    if (!string.IsNullOrWhiteSpace(entityKey))
+                    {
+                        if (!TryParseEntityKey(entityKey, out var explicitTypeGuid, out int explicitId)) return null;
+                        var byKey = kb.DesignModel.Objects.Get(new global::Artech.Udm.Framework.EntityKey(explicitTypeGuid, explicitId));
+                        if (byKey == null || (!string.IsNullOrWhiteSpace(guid) && (resolved == null || byKey.Guid != resolved.Guid))) return null;
+                        resolved = byKey;
+                    }
+                    return ResolutionTypeMatches(resolved, typeFilter) ? resolved : null;
+                }
+                catch { return null; }
+            }
+            if (!string.IsNullOrWhiteSpace(path))
             {
                 var loadedIndex = GetLoadedIndexOrNull();
-                SearchIndex.IndexEntry identityEntry = null;
-                if (!string.IsNullOrWhiteSpace(guid) && loadedIndex?.GuidToKey != null && loadedIndex.GuidToKey.TryGetValue(guid.Trim(), out var gKey))
-                {
-                    loadedIndex.Objects?.TryGetValue(gKey, out identityEntry);
-                }
-                if (identityEntry == null)
-                {
-                    identityEntry = FindIndexEntry(loadedIndex, path ?? target, typeFilter);
-                }
+                var identityEntry = FindIndexEntry(loadedIndex, path, typeFilter);
                 if (identityEntry != null)
                 {
                     var probe = new SearchIndex.IndexEntry
                     {
-                        Guid = string.IsNullOrWhiteSpace(guid) ? identityEntry.Guid : guid.Trim(),
-                        EntityKey = string.IsNullOrWhiteSpace(entityKey) ? identityEntry.EntityKey : entityKey.Trim(),
+                        Guid = identityEntry.Guid,
+                        EntityKey = identityEntry.EntityKey,
                         EntityTypeGuid = identityEntry.EntityTypeGuid,
                         EntityId = identityEntry.EntityId,
                         Name = identityEntry.Name,
                         Type = identityEntry.Type,
-                        Path = string.IsNullOrWhiteSpace(path) ? identityEntry.Path : path.Trim(),
+                        Path = path.Trim(),
                         ParentPath = identityEntry.ParentPath,
                         Module = identityEntry.Module
                     };
                     string resolvedBy;
                     var resolved = ResolveIndexedObject(kb.DesignModel, probe, out resolvedBy);
-                    if (resolved != null) return resolved;
+                    if (ResolutionTypeMatches(resolved, typeFilter)) return resolved;
                     SetIndexedUnavailable(probe, target, typeFilter, resolvedBy);
                     return null;
                 }
 
-                if (Guid.TryParse(guid, out var explicitGuid))
-                {
-                    try { var resolved = kb.DesignModel.Objects.Get(explicitGuid); if (resolved != null) return resolved; } catch { }
-                }
-                if (TryParseEntityKey(entityKey, out var explicitTypeGuid, out int explicitId))
-                {
-                    try
-                    {
-                        var resolved = kb.DesignModel.Objects.Get(new global::Artech.Udm.Framework.EntityKey(explicitTypeGuid, explicitId));
-                        if (resolved != null) return resolved;
-                    }
-                    catch { }
-                }
-
                 foreach (var candidate in QualifiedIdentityCandidates(new SearchIndex.IndexEntry
                 {
-                    Name = target,
                     Type = typeFilter,
                     Path = path,
                     Module = null
@@ -2672,18 +2714,6 @@ namespace GxMcp.Worker.Services
 
             string typePart = typeFilter;
             string namePart = target.Trim();
-
-            if (target.Contains(":") && typeFilter == null)
-            {
-                var parts = target.Split(ColonSeparator, 2);
-                if (parts.Length != 2 || string.IsNullOrWhiteSpace(parts[0]) || string.IsNullOrWhiteSpace(parts[1]))
-                {
-                    Logger.Warn("FindObject: malformed 'Type:Name' target: " + target);
-                    return null;
-                }
-                typePart = parts[0].Trim();
-                namePart = parts[1].Trim();
-            }
 
             // Domains are native typed entities but are not reliably returned by the
             // generic DesignModel.Objects name index. Resolve them through the SDK's
@@ -2761,7 +2791,7 @@ namespace GxMcp.Worker.Services
                     {
                         string resolvedBy;
                         KBObject obj = ResolveIndexedObject(kb.DesignModel, entry, out resolvedBy);
-                        if (obj != null) {
+                        if (ResolutionTypeMatches(obj, typePart)) {
                             Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Index-Typed) in {1}ms", target, sw.ElapsedMilliseconds));
                             return obj;
                         }
@@ -2872,7 +2902,7 @@ namespace GxMcp.Worker.Services
                 var sdkMatchesTyped = kb.DesignModel.Objects.GetByName(null, null, namePart);
                 foreach (KBObject obj in sdkMatchesTyped)
                 {
-                    if (obj.TypeDescriptor != null && string.Equals(obj.TypeDescriptor.Name, typePart, StringComparison.OrdinalIgnoreCase))
+                    if (ResolutionTypeMatches(obj, typePart))
                     {
                         Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Typed-SDK) in {1}ms", target, sw.ElapsedMilliseconds));
                         return obj;
@@ -3079,16 +3109,17 @@ namespace GxMcp.Worker.Services
                     ["identity"] = BuildObjectIdentity(obj),
                     ["parts"] = new JObject()
                 };
-                string[] partsToFetch = { "Source", "Rules", "Events", "Variables", "Documentation", "Help", "Methods" };
+                string[] partsToFetch = obj is Artech.Packages.Patterns.Objects.PatternSettings
+                    ? new[] { "PatternSettings" } : DefaultPartsToFetch;
 
                 foreach (var pName in partsToFetch)
                 {
                     string partJson = ReadObjectSourceInternal(obj, pName, null, null, client);
                     try {
                         var pObj = JObject.Parse(partJson);
-                        if (pObj["source"] != null)
+                        if (obj is Artech.Packages.Patterns.Objects.PatternSettings || pObj["source"] != null)
                         {
-                            ((JObject)result["parts"])[pName] = pObj["source"];
+                            ((JObject)result["parts"])[pName] = obj is Artech.Packages.Patterns.Objects.PatternSettings ? pObj : pObj["source"];
                         }
                     } catch { }
                 }
@@ -3163,7 +3194,7 @@ namespace GxMcp.Worker.Services
             if (obj == null) return FormatReadNotFound(target);
 
             string resolvedPart = ResolvePartName(obj, partName);
-            if (ShouldUseReadCache(client, minimize))
+            if (!(obj is Artech.Packages.Patterns.Objects.PatternSettings) && ShouldUseReadCache(client, minimize))
             {
                 string cacheKey = BuildReadCacheKey(obj.Guid, resolvedPart, offset, limit, client, minimize);
                 if (TryGetReadCache(cacheKey, out string cachedPayload))
@@ -3232,7 +3263,7 @@ namespace GxMcp.Worker.Services
 
             string[] partsToFetch = (requestedParts != null && requestedParts.Any())
                 ? requestedParts.Select(p => p.Trim()).Where(p => !string.IsNullOrEmpty(p)).ToArray()
-                : DefaultPartsToFetch;
+                : obj is Artech.Packages.Patterns.Objects.PatternSettings ? new[] { "PatternSettings" } : DefaultPartsToFetch;
 
             var partsObj = new JObject();
             foreach (var pName in partsToFetch)
@@ -3241,8 +3272,8 @@ namespace GxMcp.Worker.Services
                 {
                     string partJson = ReadObjectSourceInternal(obj, pName, null, null, "mcp", false);
                     var pObj = JObject.Parse(partJson);
-                    if (pObj["source"] != null)
-                        partsObj[pName] = pObj["source"];
+                    if (obj is Artech.Packages.Patterns.Objects.PatternSettings || pObj["source"] != null)
+                        partsObj[pName] = obj is Artech.Packages.Patterns.Objects.PatternSettings ? pObj : pObj["source"];
                     else if (pObj["error"] == null)
                         // For XML/binary parts, include the raw response
                         partsObj[pName] = pObj;
@@ -3365,6 +3396,14 @@ namespace GxMcp.Worker.Services
             target = ResolveTargetForIdentity(target, guid, entityKey, path);
             var obj = FindObject(target, typeFilter, guid, entityKey, path);
             if (obj == null) return FormatReadNotFound(target);
+
+            if (obj is Artech.Packages.Patterns.Objects.PatternSettings)
+                return new JObject
+                {
+                    ["name"] = obj.Name, ["type"] = obj.TypeDescriptor?.Name,
+                    ["identity"] = BuildObjectIdentity(obj), ["explicitFullRead"] = true,
+                    ["parts"] = new JObject { ["PatternSettings"] = JObject.Parse(ReadObjectSourceInternal(obj, "PatternSettings", 0, 0, "mcp")) }
+                }.ToString();
 
             string typeName = obj.TypeDescriptor?.Name ?? "Object";
             var result = new JObject
@@ -3825,6 +3864,32 @@ namespace GxMcp.Worker.Services
 
         private string ReadObjectSourceInternal(KBObject obj, string partName, int? offset = null, int? limit = null, string client = "ide", bool minimize = false)
         {
+            if (obj is Artech.Packages.Patterns.Objects.PatternSettings settings
+                && (string.IsNullOrWhiteSpace(partName) || partName.Equals("Source", StringComparison.OrdinalIgnoreCase)
+                    || partName.Equals("PatternSettings", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    string xml = PatternSettingsService.Serialize(settings);
+                    var page = ReadPagination.ApplyDefault(xml, offset, limit, client);
+                    return new JObject
+                    {
+                        ["part"] = "PatternSettings", ["source"] = page.Content,
+                        ["serializationFormat"] = "Internal", ["contentType"] = "application/xml",
+                        ["isEmpty"] = false, ["truncated"] = page.Truncated,
+                        ["isTruncatedByWorker"] = page.Truncated, ["explicitFullRead"] = page.ExplicitFullRead,
+                        ["offset"] = page.Offset, ["limit"] = page.LinesReturned, ["totalLines"] = page.TotalLines,
+                        ["suggestedNextOffset"] = page.SuggestedNextOffset,
+                        ["versionToken"] = WriteService.ComputeContentVersionToken(obj, xml),
+                        ["saveAvailable"] = false
+                    }.ToString();
+                }
+                catch (Exception ex)
+                {
+                    return McpResponse.Err(code: "SettingsTreeUnavailable", message: ex.Message,
+                        hint: "The Settings tree could not be serialized. Do not infer an empty Settings object.");
+                }
+            }
             if (DataSelectorReadService.IsDataSelector(obj)
                 && (string.IsNullOrWhiteSpace(partName)
                     || partName.Equals("Source", StringComparison.OrdinalIgnoreCase)

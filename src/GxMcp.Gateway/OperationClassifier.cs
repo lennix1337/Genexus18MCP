@@ -179,9 +179,9 @@ namespace GxMcp.Gateway
                     readOnly: new[] { "list", "dry_run_add", "dry_run_remove" },
                     mutating: new[] { "add", "remove" }),
                 ["genexus_wwp"] = Contract(
-                    readOnly: new[] { "list" },
+                    readOnly: new[] { "list", "settings_templates", "settings_read" },
                     mutating: new[] { "add_action", "update_action", "move_action", "remove_action",
-                        "add_tab", "move_tab", "remove_tab", "add_grid_attribute" }),
+                        "add_tab", "move_tab", "remove_tab", "add_grid_attribute", "settings_edit" }),
                 ["genexus_sandbox"] = Contract(
                     readOnly: Array.Empty<string>(),
                     mutating: new[] { "create", "remove" }),
@@ -243,6 +243,7 @@ namespace GxMcp.Gateway
             "genexus_db:records_update",
             "genexus_transfer:import",
             "genexus_wwp:add_action",
+            "genexus_wwp:settings_edit",
             "genexus_wwp:update_action",
             "genexus_wwp:move_action",
             "genexus_wwp:remove_action",

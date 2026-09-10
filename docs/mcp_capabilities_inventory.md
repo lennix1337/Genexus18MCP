@@ -103,7 +103,7 @@ The table below is the machine-checkable action contract for every umbrella tool
 | `genexus_transfer` | `inspect` | `export`, `import` |
 | `genexus_deploy` | `list_targets` | `deploy` |
 | `genexus_generator_reference` | `list`, `dry_run_add`, `dry_run_remove` | `add`, `remove` |
-| `genexus_wwp` | `list` | `add_action`, `update_action`, `move_action`, `remove_action`, `add_tab`, `move_tab`, `remove_tab`, `add_grid_attribute` |
+| `genexus_wwp` | `list`, `settings_templates`, `settings_read` | `add_action`, `update_action`, `move_action`, `remove_action`, `add_tab`, `move_tab`, `remove_tab`, `add_grid_attribute`, `settings_edit` |
 
 Real-KB validation gate: `genexus_structure action=get_visual` with a homonymous
 target must be exercised against a KB that contains the relevant Transaction/Table

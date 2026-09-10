@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- Respect requested object types when resolving homonyms, including Pattern Settings, and separate read-cache entries by type and read shape.
+- Read Pattern Settings through the SDK pattern tree with explicit pagination instead of the generic properties XML.
+
+### Added
+
+- WorkWithPlus Settings template catalog, effective-property reads and pure single-property dry runs with snapshot tokens. Real saves remain explicitly blocked (`SettingsIsolationUnverified`): SDK and WorkWithPlus save hooks and atomic cross-process concurrency have not been certified. No isolated persistence capability is claimed.
+
+### Internal
+
+- Increase the discovery schema budget from 27,500 to 27,750 approximate tokens for the three Settings actions and their identity, pagination and property-preview fields (measured 27,549).
+
 ## v3.2.2 - 2026-09-10
 
 

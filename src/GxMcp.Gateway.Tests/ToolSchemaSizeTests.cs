@@ -176,7 +176,10 @@ namespace GxMcp.Gateway.Tests
             //   gateway-only RequestLoop tools: kb_diff, kb_import, sandbox, worker_pool.
             //   The current schema also includes the independently landed Object Text
             //   batch contracts from main; measured ~27279.
-            Assert.True(approxTokens < 27500, $"tool_definitions.json is ~{approxTokens} tokens; budget 27500.");
+            //   2026-09-10 (Pattern Settings): 27500 → 27750 for three Settings
+            //   actions, explicit identity, pagination and single-property preview fields.
+            //   Measured ~27549; real Settings saves remain blocked.
+            Assert.True(approxTokens < 27750, $"tool_definitions.json is ~{approxTokens} tokens; budget 27750.");
         }
     }
 }

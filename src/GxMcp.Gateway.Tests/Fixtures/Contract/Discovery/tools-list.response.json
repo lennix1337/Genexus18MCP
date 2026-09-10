@@ -4852,7 +4852,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Typed WorkWithPlus action, tab, and grid edits with dryRun, optimistic concurrency, exact snapshots, post-save reread, projection verification, and rollback. No lifecycle operation is implicit.",
+      "description": "Typed WorkWithPlus action, tab, and grid edits with dryRun, optimistic concurrency, exact snapshots, post-save reread, projection verification, and rollback. No lifecycle operation is implicit. Settings: SDK tree and dryRun only; save refused until event isolation is certified.",
       "inputSchema": {
         "$defs": {
           "wwpControl": {
@@ -4972,7 +4972,10 @@
               "add_tab",
               "move_tab",
               "remove_tab",
-              "add_grid_attribute"
+              "add_grid_attribute",
+              "settings_templates",
+              "settings_read",
+              "settings_edit"
             ],
             "type": "string"
           },
@@ -5023,6 +5026,9 @@
             "description": "Availability condition stored verbatim; expression semantics are not validated.",
             "type": "string"
           },
+          "entityKey": {
+            "type": "string"
+          },
           "expectedVersion": {
             "description": "Alias for baseVersion.",
             "type": "string"
@@ -5035,6 +5041,9 @@
             "description": "Action group name. add_action creates it when absent; update/remove use it as a filter.",
             "type": "string"
           },
+          "guid": {
+            "type": "string"
+          },
           "icon": {
             "description": "add/update: button icon.",
             "type": "string"
@@ -5043,9 +5052,22 @@
             "description": "KB alias.",
             "type": "string"
           },
+          "limit": {
+            "description": "Settings nodes per page; 0 reads all.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "name": {
             "description": "Transaction, WebPanel, or WorkWithPlus<Object> host.",
             "type": "string"
+          },
+          "nodePath": {
+            "description": "Settings node path returned by settings_read.",
+            "type": "string"
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
           },
           "position": {
             "description": "Zero-based action or tab index.",
@@ -5056,6 +5078,10 @@
             "description": "add/update: associated Procedure; existence is validated against the KB.",
             "type": "string"
           },
+          "property": {
+            "description": "Exact SDK property name.",
+            "type": "string"
+          },
           "selection": {
             "description": "add/update: execution scope for grid actions.",
             "enum": [
@@ -5064,12 +5090,19 @@
             ],
             "type": "string"
           },
+          "template": {
+            "description": "Settings template catalog path or unique internal name.",
+            "type": "string"
+          },
           "title": {
             "description": "add_tab: tab title.",
             "type": "string"
           },
           "toGroup": {
             "description": "move_action: destination group (created when absent).",
+            "type": "string"
+          },
+          "value": {
             "type": "string"
           },
           "versionToken": {

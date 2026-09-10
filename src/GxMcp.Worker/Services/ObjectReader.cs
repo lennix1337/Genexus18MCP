@@ -66,7 +66,7 @@ namespace GxMcp.Worker.Services
             string cacheKey = BuildCacheKey(request);
 
             // 2. Read-through cache check
-            if (TryGetCachedEntry(cacheKey, out string cachedResult))
+            if (!IsPatternSettingsRead(request) && TryGetCachedEntry(cacheKey, out string cachedResult))
             {
                 return cachedResult;
             }
@@ -103,7 +103,7 @@ namespace GxMcp.Worker.Services
             }
 
             // 4. Cache successful result
-            if (IsCacheable(result))
+            if (!IsPatternSettingsRead(request) && IsCacheable(result))
             {
                 _cache[cacheKey] = new CacheEntry
                 {
@@ -166,7 +166,7 @@ namespace GxMcp.Worker.Services
             return false;
         }
 
-        private static string BuildCacheKey(ObjectReadRequest req)
+        internal static string BuildCacheKey(ObjectReadRequest req)
         {
             string target = req.Target?.Trim() ?? string.Empty;
             string part = req.PartName?.Trim().ToLowerInvariant() ?? "source";
@@ -174,7 +174,21 @@ namespace GxMcp.Worker.Services
             int offset = req.Offset ?? -1;
             int limit = req.Limit ?? -1;
             int min = req.Minimize ? 1 : 0;
-            return $"{target}|{req.Guid}|{req.EntityKey}|{req.Path}|{part}|{offset}|{limit}|{client}|{min}";
+            // Type and response shape are part of the identity: homonyms and
+            // full/multi-part reads must never reuse a different request's result.
+            string parts = req.RequestedParts == null ? string.Empty : new JArray(req.RequestedParts).ToString(Newtonsoft.Json.Formatting.None);
+            return $"{target}|{req.Guid}|{req.EntityKey}|{req.Path}|{part}|{offset}|{limit}|{client}|{min}|{req.TypeFilter?.Trim()}|{req.FullObject}|{parts}";
+        }
+
+        internal static bool IsPatternSettingsRead(ObjectReadRequest request)
+        {
+            bool IsSettings(string value) => string.Equals(value?.Trim().Replace(" ", ""), "PatternSettings", StringComparison.OrdinalIgnoreCase);
+            bool untypedIdentity = string.IsNullOrWhiteSpace(request.TypeFilter)
+                && (!string.IsNullOrWhiteSpace(request.Guid) || !string.IsNullOrWhiteSpace(request.EntityKey)
+                    || Guid.TryParse(request.Target, out _));
+            return IsSettings(request.TypeFilter) || IsSettings(request.PartName)
+                || (request.RequestedParts?.Any(IsSettings) ?? false)
+                || IsSettings(request.Target?.Split(':')[0]) || untypedIdentity;
         }
 
         private static bool IsCacheable(string json)

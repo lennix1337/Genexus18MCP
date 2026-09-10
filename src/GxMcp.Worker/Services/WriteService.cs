@@ -1333,6 +1333,10 @@ namespace GxMcp.Worker.Services
 
                 Logger.Debug(string.Format("[DEBUG-SAVE] Object Found: {0} ({1})", obj.Name, obj.TypeDescriptor.Name));
 
+                if (obj is Artech.Packages.Patterns.Objects.PatternSettings)
+                    return Models.McpResponse.Err(code: "SettingsIsolationUnverified",
+                        message: "Generic Settings writes are disabled. Use genexus_wwp settings_edit with dryRun=true; isolated SDK save events have not been certified.");
+
                 if (ThemeStyleEditHelper.Applies(obj, partName, out object stylePart))
                 {
                     return WriteThemeStylePart(obj, target, partName, stylePart, decodedCode, dryRun, forceWrite);

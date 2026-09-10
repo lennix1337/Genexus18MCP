@@ -38,6 +38,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="Artech.Packages.Patterns">
+      <HintPath>$(GX_PATH)\Packages\Artech.Packages.Patterns.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <None Include="..\..\config\gx-versions.json" Link="config\gx-versions.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>

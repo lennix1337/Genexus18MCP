@@ -28,6 +28,8 @@ namespace GxMcp.Worker.Services
 
         public string Run(string target, JObject args)
         {
+            if (((string)args?["action"])?.StartsWith("settings_", StringComparison.Ordinal) == true)
+                return new PatternSettingsService(_objects).Run(target, args);
             try
             {
                 KBObject requestedObject = _objects.FindObject(target);
