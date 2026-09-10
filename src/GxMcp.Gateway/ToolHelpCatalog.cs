@@ -605,8 +605,9 @@ namespace GxMcp.Gateway
                 "- `add_action`, `update_action`, `move_action`, and `remove_action` — change the WWP action model.\n" +
                 "- `add_tab`, `move_tab`, and `remove_tab` — edit WebPanel tabs and typed nested controls.\n" +
                 "- `add_grid_attribute` — add one typed Attribute column without changing unrelated children.\n\n" +
-                "- `settings_templates` lists persisted Settings templates; `settings_read` returns their SDK nodes and effective properties. Use returned paths, offset/limit, and the same baseVersion on subsequent pages.\n" +
-                "- `settings_edit` with dryRun=true returns one proposed property difference without assigning SDK properties. Real Settings saves are refused with SettingsIsolationUnverified pending save-event and concurrency certification.\n" +
+                "- `settings_templates` includes embedded Settings templates and separate WorkWithPlus for Web Template objects linked to Settings/Main. `guid` identifies Settings; `template=wwp:<guid>` selects a separate template. Use returned paths, offset/limit, and the same baseVersion on subsequent pages.\n" +
+                "- `settings_read` returns separate templates' stored XML attributes; offset=0, limit=0 also includes the exact XML. WWP default resolvers are not invoked. Embedded templates retain the SDK property projection.\n" +
+                "- `settings_edit` with dryRun=true previews one property without mutation. Separate templates support an existing table themeClass only; textEdit preserves every character outside that attribute value. Metadata is protected. Real saves remain refused with SettingsIsolationUnverified.\n" +
                 "For instance writes, preview with `dryRun`, pass the returned token as `baseVersion`, `expectedVersion`, or `versionToken`, and persist only after reviewing the typed diff. Instance writes require exact snapshots, re-read the PatternInstance, verify the parent WebForm projection, and roll back on divergence. No lifecycle operation is implicit.\n"
         };
 

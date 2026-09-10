@@ -4852,7 +4852,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Typed WorkWithPlus action, tab, and grid edits with dryRun, optimistic concurrency, exact snapshots, post-save reread, projection verification, and rollback. No lifecycle operation is implicit. Settings: SDK tree and dryRun only; save refused until event isolation is certified.",
+      "description": "Typed WorkWithPlus action, tab, and grid edits with dryRun, optimistic concurrency, exact snapshots, post-save reread, projection verification, and rollback. No lifecycle operation is implicit. Settings: embedded and separate WWP templates, paged reads and exact table-class dryRun; saves remain blocked.",
       "inputSchema": {
         "$defs": {
           "wwpControl": {
@@ -5042,6 +5042,7 @@
             "type": "string"
           },
           "guid": {
+            "description": "Pattern Settings object GUID for settings_* actions.",
             "type": "string"
           },
           "icon": {
@@ -5053,7 +5054,7 @@
             "type": "string"
           },
           "limit": {
-            "description": "Settings nodes per page; 0 reads all.",
+            "description": "Settings nodes per page; offset=0, limit=0 includes full separate-template XML.",
             "minimum": 0,
             "type": "integer"
           },
@@ -5091,7 +5092,7 @@
             "type": "string"
           },
           "template": {
-            "description": "Settings template catalog path or unique internal name.",
+            "description": "Settings catalog path, wwp:<template-guid>, or unique template name.",
             "type": "string"
           },
           "title": {

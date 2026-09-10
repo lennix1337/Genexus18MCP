@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Discover separately stored WorkWithPlus template objects through the SDK and expose complete paginated reads and exact attribute previews without enabling unverified saves.
 - Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
 - Preserve named WorkWithPlus Settings targets across Gateway routing and accept legacy Worker envelopes without losing GUID, pagination or concurrency fields.
 - Preserve SDK-owned metadata during raw pattern XML property edits and previews; reject structural or metadata edits instead of inferring order lists. Does not certify SDK save isolation.
