@@ -96,9 +96,7 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void SourceComparison_AllowsSdkEolNormalizationOnly()
         {
-            Assert.True(EventsSaveIsolation.SourceEquivalent("a
-\nb
-\n", "a\nb\n"));
+            Assert.True(EventsSaveIsolation.SourceEquivalent("a" + Environment.NewLine + "b" + Environment.NewLine, "a" + (char)10 + "b" + (char)10));
             Assert.False(EventsSaveIsolation.SourceEquivalent("a\nb", "a\nc"));
         }
 
