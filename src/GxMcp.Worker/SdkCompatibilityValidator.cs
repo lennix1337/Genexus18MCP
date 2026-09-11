@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using Newtonsoft.Json.Linq;
@@ -38,7 +39,6 @@ namespace GxMcp.Worker
             catch (Exception ex) { return Fail("GXMCP_SDK_MANIFEST_INVALID", "GXMCP_SDK_MANIFEST_INVALID manifest=" + manifestPath + " error=" + ex.GetType().Name); }
 
             string expectedVersion = (string)manifest["supportedVersion"];
-            bool allowPatchVersionDrift = manifest["allowPatchVersionDrift"]?.Value<bool>() ?? false;
             string anchor = (string)manifest["anchor"];
             string anchorPath = Path.Combine(sdkPath, anchor ?? string.Empty);
             if (string.IsNullOrWhiteSpace(anchor) || !File.Exists(anchorPath))
@@ -46,13 +46,13 @@ namespace GxMcp.Worker
 
             string actualVersion = versionReader(anchorPath);
             bool exactVersion = string.Equals(expectedVersion, actualVersion, StringComparison.OrdinalIgnoreCase);
-            bool compatiblePatch = allowPatchVersionDrift && SameMajorMinor(expectedVersion, actualVersion);
-            if (!exactVersion && !compatiblePatch)
+            if (!SameMajor(expectedVersion, actualVersion))
                 return Fail("GXMCP_SDK_VERSION_MISMATCH", "GXMCP_SDK_VERSION_MISMATCH expectedVersion=" + expectedVersion + " actualVersion=" + actualVersion);
 
             var assemblies = manifest["assemblies"] as JArray;
             if (assemblies == null || assemblies.Count == 0)
                 return Fail("GXMCP_SDK_MANIFEST_INVALID", "GXMCP_SDK_MANIFEST_INVALID manifest=" + manifestPath + " error=assemblies");
+            var fingerprintDrift = new List<string>();
             foreach (var token in assemblies)
             {
                 string relativePath = (string)token["path"];
@@ -60,22 +60,22 @@ namespace GxMcp.Worker
                 string filePath = Path.Combine(sdkPath, relativePath ?? string.Empty);
                 if (string.IsNullOrWhiteSpace(relativePath) || !File.Exists(filePath))
                     return Fail("GXMCP_SDK_ASSEMBLY_MISSING", "GXMCP_SDK_ASSEMBLY_MISSING path=" + (relativePath ?? "<missing>"));
-                string actualHash = exactVersion ? Sha256(filePath) : null;
-                if (exactVersion && !string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
-                    return Fail("GXMCP_SDK_FINGERPRINT_MISMATCH", "GXMCP_SDK_FINGERPRINT_MISMATCH path=" + relativePath + " expectedSha256=" + expectedHash + " actualSha256=" + actualHash);
+                string actualHash = Sha256(filePath);
+                if (!string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
+                    fingerprintDrift.Add("GXMCP_SDK_FINGERPRINT_DRIFT path=" + relativePath + " expectedSha256=" + expectedHash + " actualSha256=" + actualHash);
             }
-            string versionDiagnostic = exactVersion ? expectedVersion : expectedVersion + " actualVersion=" + actualVersion + " (compatible patch drift)";
-            return new SdkCompatibilityResult(true, "GXMCP_SDK_COMPATIBLE", "GXMCP_SDK_COMPATIBLE version=" + versionDiagnostic + " assemblies=" + assemblies.Count);
+            string versionDiagnostic = exactVersion ? expectedVersion : expectedVersion + " actualVersion=" + actualVersion + " (compatible major; patch/build drift)";
+            string diagnostic = "GXMCP_SDK_COMPATIBLE version=" + versionDiagnostic + " assemblies=" + assemblies.Count;
+            if (fingerprintDrift.Count > 0) diagnostic += "\n" + string.Join("\n", fingerprintDrift);
+            return new SdkCompatibilityResult(true, "GXMCP_SDK_COMPATIBLE", diagnostic);
         }
 
-        private static bool SameMajorMinor(string expected, string actual)
+        private static bool SameMajor(string expected, string actual)
         {
             if (string.IsNullOrWhiteSpace(expected) || string.IsNullOrWhiteSpace(actual)) return false;
-            var e = expected.Split('.');
-            var a = actual.Split('.');
-            return e.Length >= 2 && a.Length >= 2
-                && string.Equals(e[0], a[0], StringComparison.Ordinal)
-                && string.Equals(e[1], a[1], StringComparison.Ordinal);
+            return int.TryParse(expected.Split('.')[0], out int expectedMajor)
+                && int.TryParse(actual.Split('.')[0], out int actualMajor)
+                && expectedMajor > 0 && expectedMajor == actualMajor;
         }
 
         private static SdkCompatibilityResult Fail(string code, string diagnostic)
