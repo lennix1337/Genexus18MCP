@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Accept SDK patch, build and fingerprint drift within the supported GeneXus major while continuing to reject incompatible majors and missing required assemblies.
+- Preserve dirty index shards for retry when snapshot pointer publication fails, and require a fresh enrichment certificate for each new snapshot body.
 - Extend the bounded live MCP benchmark with KB list/select, dependency graph, design-system inspection, and non-mutating pattern diagnosis operations; cap runs at 20 iterations and validate each operation's result shape before recording latency.
 - Preserve the last certified search-index snapshot during forced rebuilds so a Worker crash can warm-start from the previous index instead of leaving the KB cold; allow only manifest-declared SDK patch drift within the same major/minor line while retaining exact-build fingerprints otherwise.
 - Keep the index-readiness fast-fail limited to index-backed reads and analyses; SDK edits, creates and builds remain available while background indexing runs.
