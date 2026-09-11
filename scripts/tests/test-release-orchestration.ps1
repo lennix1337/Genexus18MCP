@@ -52,7 +52,7 @@ try {
     if ($commitIndex -lt 0 -or $buildIndex -lt 0 -or $commitIndex -gt $buildIndex) { throw 'Release source commit must occur before build.' }
     if ($releaseSource -notmatch '''-SourceCommit'', \$releaseSourceCommit') { throw 'Manifest writer is not passed the committed source id.' }
     if ($releaseSource -notmatch '\$releaseExists' -or $releaseSource -notmatch "'release', 'upload'") { throw 'Resume path must upload assets to an existing release instead of creating a duplicate.' }
-    foreach ($marker in @('CloseIssuesFile', 'Get-ReleaseIssueNumbers', 'Get-LabeledReleaseIssues', 'release-issues.txt', 'release-issues.json', 'gh api --paginate', 'per_page=100', 'ReleaseMilestone', 'Tracked issues', 'deduplicated', 'SkipLabeledIssues', 'hasTrackedIssuesInUnreleased', 'pre-validate issue', 'issues = [ordered]')) {
+    foreach ($marker in @('CloseIssuesFile', 'Get-ReleaseIssueNumbers', 'Get-LabeledReleaseIssues', 'release-issues.txt', 'release-issues.json', 'gh api --paginate', 'repos/{owner}/{repo}/issues/$issue', 'per_page=100', 'OutputEncoding', 'Console]::OutputEncoding', 'ReleaseMilestone', 'Tracked issues', 'deduplicated', 'SkipLabeledIssues', 'hasTrackedIssuesInUnreleased', 'pre-validate issue', 'issues = [ordered]')) {
         if ($releaseSource -notmatch [regex]::Escape($marker)) { throw "Release issue batch support is missing: $marker" }
     }
     Write-Host 'release-orchestration: exact provenance, dirty rejection and checksum asset checks passed' -ForegroundColor Green

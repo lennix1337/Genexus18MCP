@@ -6,7 +6,7 @@
   "issues": [
     {
       "number": 174,
-      "title": "[Enhancement] Detectar depend├¬ncias locais ausentes e oferecer instala├º├úo confirmada",
+      "title": "[Enhancement] Detectar dependências locais ausentes e oferecer instalação confirmada",
       "url": "https://github.com/lennix1337/Genexus18MCP/issues/174",
       "state": "OPEN",
       "labels": [
@@ -16,7 +16,7 @@
     },
     {
       "number": 176,
-      "title": "[Regression] build reports false Succeeded for an ambiguous object name ΓÇö real MSBuild error hidden in fullLogPath (regression after #115 fix)",
+      "title": "[Regression] build reports false Succeeded for an ambiguous object name — real MSBuild error hidden in fullLogPath (regression after #115 fix)",
       "url": "https://github.com/lennix1337/Genexus18MCP/issues/176",
       "state": "OPEN",
       "labels": [
@@ -26,7 +26,7 @@
     },
     {
       "number": 177,
-      "title": "[Bug] genexus_edit part=Styles returns false WriteNotPersisted ΓÇö verifyMode default not honored (same class as #100, not covered by that fix)",
+      "title": "[Bug] genexus_edit part=Styles returns false WriteNotPersisted — verifyMode default not honored (same class as #100, not covered by that fix)",
       "url": "https://github.com/lennix1337/Genexus18MCP/issues/177",
       "state": "OPEN",
       "labels": [
