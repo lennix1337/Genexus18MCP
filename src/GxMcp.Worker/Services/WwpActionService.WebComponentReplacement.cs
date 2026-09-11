@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Xml.Linq;
+
 using Artech.Architecture.Common.Objects;
 using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
@@ -494,20 +495,15 @@ namespace GxMcp.Worker.Services
         private static bool ReferenceMatches(string existing, string requested)
         {
             if (string.IsNullOrWhiteSpace(existing) || string.IsNullOrWhiteSpace(requested)) return false;
-            return string.Equals(existing, requested, StringComparison.OrdinalIgnoreCase)
-                || existing.EndsWith("-" + requested, StringComparison.OrdinalIgnoreCase)
-                || requested.EndsWith("-" + existing, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(SimpleReference(existing), SimpleReference(requested), StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static string SimpleReference(string value)
-        {
-            string result = value?.Trim() ?? string.Empty;
-            int dash = result.LastIndexOf('-');
-            if (dash >= 0 && dash + 1 < result.Length) result = result.Substring(dash + 1);
-            int dot = result.LastIndexOf('.');
-            if (dot >= 0 && dot + 1 < result.Length) result = result.Substring(dot + 1);
-            return result;
+            if (string.Equals(existing.Trim(), requested.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            const string knownSdkPrefix = "guid-";
+            string existingCanonical = existing.Trim();
+            string requestedCanonical = requested.Trim();
+            if (existingCanonical.StartsWith(knownSdkPrefix, StringComparison.OrdinalIgnoreCase))
+                existingCanonical = existingCanonical.Substring(knownSdkPrefix.Length);
+            if (requestedCanonical.StartsWith(knownSdkPrefix, StringComparison.OrdinalIgnoreCase))
+                requestedCanonical = requestedCanonical.Substring(knownSdkPrefix.Length);
+            return string.Equals(existingCanonical, requestedCanonical, StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsReplacementIdentity(string name) =>
@@ -574,17 +570,23 @@ namespace GxMcp.Worker.Services
         {
             if (string.IsNullOrWhiteSpace(webForm))
                 return ReplacementError("WwpProjectionNotConfirmed", "The parent WebForm could not be re-read after projection.");
-            bool hasName = webForm.IndexOf(request.UserActionName, StringComparison.OrdinalIgnoreCase) >= 0
-                || webForm.IndexOf("ddc_" + request.UserActionName, StringComparison.OrdinalIgnoreCase) >= 0;
             // The generated WebForm intentionally contains only the projected
             // control (for example ddc_EmpresaSelector) and its custom
             // properties. It does not carry the PatternInstance gxobject or
             // the textual ControlType name; those are verified authoritatively
             // in VerifyReplacementXml above.
-            string projectedText = webForm.Replace("&amp;amp;", "&").Replace("&amp;", "&");
-            bool captionConfirmed = string.IsNullOrWhiteSpace(request.Caption)
-                || projectedText.IndexOf(request.Caption, StringComparison.OrdinalIgnoreCase) >= 0;
-            if (!hasName || !captionConfirmed)
+            XDocument document;
+            try { document = XDocument.Parse(webForm, LoadOptions.PreserveWhitespace); }
+            catch (Exception ex) { return ReplacementError("WwpProjectionNotConfirmed", "The projected WebForm is not valid XML: " + ex.Message); }
+            string projectedName = "ddc_" + request.UserActionName;
+            List<XElement> matches = document.Descendants().Where(element =>
+                string.Equals(Attr(element, "name"), projectedName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Attr(element, "id"), projectedName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Attr(element, "name"), request.UserActionName, StringComparison.OrdinalIgnoreCase)).ToList();
+            matches = matches.Where(element =>
+                string.Equals(Attr(element, "caption"), request.Caption, StringComparison.Ordinal)
+                || string.Equals(Attr(element, "Caption"), request.Caption, StringComparison.Ordinal)).ToList();
+            if (matches.Count != 1)
                 return ReplacementError("WwpProjectionNotConfirmed", "The projected WebForm does not expose the requested selector control and caption.");
             return new JObject
             {

@@ -1,5 +1,7 @@
 using System.Xml.Linq;
 using System.Linq;
+using System;
+using System.Reflection;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -8,6 +10,34 @@ namespace GxMcp.Worker.Tests
 {
     public class WwpActionServiceTests
     {
+        [Fact]
+        public void WebComponentReplacement_RejectsDifferentReferencesWithSameSuffix()
+        {
+            var args = new JObject
+            {
+                ["sourceName"] = "CompanySelector",
+                ["tablePath"] = "Root>CompanySelector",
+                ["gxobject"] = "Other-1234",
+                ["caption"] = "&CompanyName"
+            };
+            var document = XDocument.Parse("<PatternInstance><table name='Root'><webComponent name='CompanySelector' gxobject='WebComponent-1234'/></table></PatternInstance>");
+            var result = WwpActionService.ApplyReplacementXml(document, args);
+            Assert.Equal("GxObjectMismatch", result["code"]?.ToString());
+        }
+
+        [Fact]
+        public void WebComponentReplacement_ProjectionRequiresExactNamedControlAndCaption()
+        {
+            var method = typeof(WwpActionService).GetMethod("VerifyReplacementProjection", BindingFlags.Static | BindingFlags.NonPublic);
+            var requestType = typeof(WwpActionService).GetNestedType("WebComponentReplacementRequest", BindingFlags.NonPublic);
+            var request = Activator.CreateInstance(requestType, nonPublic: true);
+            requestType.GetField("UserActionName", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(request, "CompanySelector");
+            requestType.GetField("Caption", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(request, "&CompanyName");
+            var webForm = "<WebForm><control name='OtherCompanySelector' caption='&amp;CompanyName'/><control name='ddc_CompanySelector' caption='&amp;Other'/></WebForm>";
+            var result = (JObject)method.Invoke(null, new object[] { webForm, request });
+            Assert.Equal("WwpProjectionNotConfirmed", result["code"]?.ToString());
+        }
+
         [Theory]
         [InlineData(null, "WorkWithPlus", "WorkWithPlus")]
         [InlineData("", "WorkWithPlus", "WorkWithPlus")]
