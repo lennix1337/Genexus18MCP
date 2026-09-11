@@ -557,7 +557,7 @@ namespace GxMcp.Worker.Services
                     try
                     {
                         _indexCacheService.Clear();
-                        _indexCacheService.DeleteOnDiskSnapshot();
+                        // Preserve the last certified snapshot as a crash fallback; new shard writes are atomic.
                         _indexCacheService.MarkReindexStarted(0);
                     }
                     catch (Exception ex) { Logger.Warn("BulkIndex(fast) force-clear failed: " + ex.Message); }
@@ -622,6 +622,7 @@ namespace GxMcp.Worker.Services
                     }
 
                     _currentStatus = "Lite-index pass: walking KB objects...";
+                    _indexCacheService.BeginLiteWalk();
                     Logger.Info(_currentStatus);
 
                     // Fase 0 instrumentation: split the lite-pass wall-clock into
@@ -846,6 +847,7 @@ namespace GxMcp.Worker.Services
                 }
                 catch (Exception ex)
                 {
+                    _indexCacheService.EndLiteWalk();
                     Logger.Error("[BULK-INDEX-LITE-FAIL] error=" + ex.Message);
                     try { _indexCacheService.MarkIndexFailed(); } catch { }
                     _currentStatus = "Error: " + ex.Message;
@@ -974,14 +976,15 @@ namespace GxMcp.Worker.Services
                     }
                     catch (Exception dex) { Logger.Warn("Delta deletion sweep failed: " + dex.Message); }
 
+                    int effectiveCount = _indexCacheService.GetIndex().Objects.Count;
                     _indexCacheService.ObserveLastUpdate(newHwm);
-                    _indexCacheService.MarkIndexComplete(loadedCount);
+                    _indexCacheService.MarkIndexComplete(effectiveCount);
                     // Persist the merged body + refreshed sidecar (advances the hwm baseline).
-                    try { _indexCacheService.FlushNow(); _indexCacheService.WriteMetaSidecar(loadedCount); }
+                    try { _indexCacheService.FlushNow(); _indexCacheService.WriteMetaSidecar(effectiveCount); }
                     catch (Exception fx) { Logger.Warn("Delta refresh flush/sidecar failed: " + fx.Message); }
 
                     sw.Stop();
-                    Logger.Info($"[DELTA-REFRESH] elapsedMs={sw.ElapsedMilliseconds} changed={changed} deleted={deleted} hwmBefore={highWaterMark:o} hwmAfter={newHwm:o} objects={loadedCount}");
+                    Logger.Info($"[DELTA-REFRESH] elapsedMs={sw.ElapsedMilliseconds} changed={changed} deleted={deleted} hwmBefore={highWaterMark:o} hwmAfter={newHwm:o} objects={effectiveCount}");
 
                     // Fase 1 (robustness): if the persisted body was lite-only or partially
                     // enriched (worker evicted mid-enrichment before), resume enrichment for the
@@ -1054,7 +1057,7 @@ namespace GxMcp.Worker.Services
                     try
                     {
                         _indexCacheService.Clear();
-                        _indexCacheService.DeleteOnDiskSnapshot();
+                        // Preserve the last certified snapshot as a crash fallback; new shard writes are atomic.
                         _indexCacheService.MarkReindexStarted(0);
                     }
                     catch (Exception ex) { Logger.Warn("BulkIndex force-clear failed (continuing with rebuild anyway): " + ex.Message); }

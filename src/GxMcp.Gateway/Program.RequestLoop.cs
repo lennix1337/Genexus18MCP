@@ -730,6 +730,18 @@ namespace GxMcp.Gateway
                                 newWorker.SdkReadyTask, timeoutMs: 180_000,
                                 progressToken: null, heartbeat: null,
                                 toolName: "worker_reload").ConfigureAwait(false);
+                            if (!sdkReady)
+                            {
+                                return BuildToolTextResponse(idToken,
+                                    new JObject
+                                    {
+                                        ["status"] = "NotReady",
+                                        ["swappedAndReady"] = false,
+                                        ["detail"] = "Worker replaced but new worker did not signal SDK-ready within 180s.",
+                                        ["retryable"] = true
+                                    },
+                                    isError: true, toolName: toolName, toolArgs: args, payloadOwned: true);
+                            }
                             BroadcastToolsListChanged(
                                 "worker_reloaded_soft",
                                 reloadKb.NormalizedAlias,
@@ -743,9 +755,7 @@ namespace GxMcp.Gateway
                                 {
                                     ["status"] = "Reloaded",
                                     ["swappedAndReady"] = sdkReady,
-                                    ["detail"] = sdkReady
-                                        ? "Worker gracefully drained and replaced; new worker is SDK-ready."
-                                        : "Worker replaced but new worker did not signal SDK-ready within 180s."
+                                    ["detail"] = "Worker gracefully drained and replaced; new worker is SDK-ready."
                                 },
                                 isError: false, toolName: toolName, toolArgs: args);
                         }
@@ -2075,33 +2085,7 @@ namespace GxMcp.Gateway
                     // the on-disk snapshot, returning its own SearchIndexMissing/Empty report
                     // with retry hints — far more useful than a generic IndexNotReady while
                     // indexing, and it doubles as an escape hatch when the mirror is wrong.
-                    if (string.Equals(tName, "genexus_list_objects", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_query", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_inspect", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_read", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_search_source", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_analyze", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_explain", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_apply_pattern", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_inject_context", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_db_optimize", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_api", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_types", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_edit", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_edit_form", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_edit_and_build", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_save_as", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_create_object", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_create_popup", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_bulk_edit", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_navigation", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_kb_explorer", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_run_object", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_diff_generated", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_what_if", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_db_drift", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_orient", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(tName, "genexus_security", StringComparison.OrdinalIgnoreCase))
+                    if (IsIndexDependentTool(tName))
                     {
                         IndexStateSnapshot idxSnap;
                         lock (_lastKnownIndexStateLock) { idxSnap = _lastKnownIndexState; }
@@ -2826,17 +2810,8 @@ namespace GxMcp.Gateway
                             // semantic answer. Caching it kept analyze impact pinned to the
                             // first response (often Timeout during a reindex), so callers got
                             // the same stale envelope on every retry until cache eviction.
-                            bool isTransient = false;
-                            if (finalResult is JObject transientCheck)
-                            {
-                                var s = transientCheck["status"]?.ToString();
-                                isTransient = string.Equals(s, "Reindexing", StringComparison.OrdinalIgnoreCase)
-                                              || string.Equals(s, "IndexCold", StringComparison.OrdinalIgnoreCase)
-                                              || string.Equals(s, "Timeout", StringComparison.OrdinalIgnoreCase)
-                                              || string.Equals(s, "Cancelled", StringComparison.OrdinalIgnoreCase)
-                                              || string.Equals(s, "BuildPlanTooLarge", StringComparison.OrdinalIgnoreCase)
-                                              || string.Equals(s, "Running", StringComparison.OrdinalIgnoreCase);
-                            }
+                            bool isTransient = finalResult is JObject transientCheck
+                                && IsTransientResponseForCache(transientCheck);
 
                             // PERF: `cKey != null` also excludes mutating tools (which
                             // cleared the cache and must not pollute it with a write

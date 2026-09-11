@@ -373,6 +373,29 @@ function Invoke-WithRetry {
     throw $lastErr
 }
 
+function Test-StrictSemVer([string]$Value) {
+    return $Value -match '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+}
+
+function Get-SemVerCore([string]$Value) {
+    $parts = $Value.TrimStart('v').Split('-', 2)[0].Split('+', 2)[0].Split('.')
+    return @([int64]$parts[0], [int64]$parts[1], [int64]$parts[2])
+}
+
+function Compare-StrictSemVer([string]$Left, [string]$Right) {
+    $a = Get-SemVerCore $Left; $b = Get-SemVerCore $Right
+    for ($i = 0; $i -lt 3; $i++) {
+        if ($a[$i] -gt $b[$i]) { return 1 }
+        if ($a[$i] -lt $b[$i]) { return -1 }
+    }
+    $aPre = if ($Left.Contains('-')) { $Left.Split('-', 2)[1].Split('+', 2)[0] } else { $null }
+    $bPre = if ($Right.Contains('-')) { $Right.Split('-', 2)[1].Split('+', 2)[0] } else { $null }
+    if ($null -eq $aPre -and $null -ne $bPre) { return 1 }
+    if ($null -ne $aPre -and $null -eq $bPre) { return -1 }
+    if ($aPre -eq $bPre) { return 0 }
+    return [string]::CompareOrdinal([string]$aPre, [string]$bPre)
+}
+
 # Scan likely GeneXus install roots and return all candidates. We don't just take
 # the first hit - the user might have GeneXus18 + GeneXus18u7 side-by-side and we
 # want to surface both. This catches the exact case from the v2.6.7 field report:
@@ -507,6 +530,11 @@ function Invoke-CliUninstall {
     Write-Step 'Removing AI client entries via genexus-mcp uninstall (uses npx @latest; needs network)...'
     try {
         & $npx.Source -y 'genexus-mcp@latest' uninstall --yes --format json 2>&1 | Out-Null
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Warn "genexus-mcp uninstall exited with code $exitCode. Falling back to inline cleanup."
+            return $false
+        }
         return $true
     } catch {
         Write-Warn "genexus-mcp uninstall failed: $($_.Exception.Message). Falling back to inline cleanup."
@@ -659,6 +687,9 @@ if (-not $Version) {
 }
 if ($Version -notmatch '^v') { $Version = "v$Version" }
 $VersionNoV = $Version.TrimStart('v')
+if (-not (Test-StrictSemVer $VersionNoV)) {
+    throw "Version '$Version' is not strict semver (X.Y.Z[-prerelease][+build])."
+}
 $versionMajor = 0
 [void][int]::TryParse(($VersionNoV -split '\.')[0], [ref]$versionMajor)
 $isV3Release = $versionMajor -ge 3
@@ -673,6 +704,13 @@ if ($Repair) { $Force = $true }
 
 if ((Test-Path $versionFile) -and -not $Force) {
     $current = (Get-Content $versionFile -Raw).Trim()
+    $currentNoV = $current.TrimStart('v')
+    if (-not (Test-StrictSemVer $currentNoV)) {
+        throw "Installed version '$current' is invalid; refusing to compare or replace it. Pass -Force after checking the installation."
+    }
+    if ((Compare-StrictSemVer $VersionNoV $currentNoV) -lt 0) {
+        throw "Refusing downgrade from $current to $Version. Pass -Force or -Repair to override."
+    }
     if ($current -eq $Version) {
         Write-Ok "Already at $Version. Pass -Force (or -Repair) to reinstall."
         # Even if we don't re-extract, still register the neutral runtime if -Gx was given.

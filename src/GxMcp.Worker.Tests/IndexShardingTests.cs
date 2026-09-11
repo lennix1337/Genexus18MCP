@@ -24,6 +24,43 @@ namespace GxMcp.Worker.Tests
             new SearchIndex.IndexEntry { Name = name, Type = type, Guid = Guid.NewGuid().ToString() };
 
         [Fact]
+        public void ReplaceAll_PreservesConcurrentLiteWalkMutation_AndHonorsRemoval()
+        {
+            var cache = new IndexCacheService();
+            var original = Entry("Procedure", "Original");
+            cache.ReplaceAll(new[] { original });
+            cache.BeginLiteWalk();
+            var added = Entry("Procedure", "Added");
+            cache.AddOrUpdateBatch(new[] { added });
+            cache.RemoveEntryByGuid(original.Guid);
+            cache.ReplaceAll(new[] { original });
+
+            var index = cache.GetIndex();
+            Assert.True(index.Objects.ContainsKey("Procedure:Added"));
+            Assert.False(index.Objects.ContainsKey("Procedure:Original"));
+        }
+
+        [Fact]
+        public void ShardedLoad_RejectsPostFlushShardMixUsingManifestHash()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                cache.ReplaceAll(new[] { Entry("Procedure", "HashProbe") });
+                Assert.True(cache.FlushNow());
+                int shard = IndexCacheService.ShardOf("Procedure:HashProbe");
+                File.AppendAllText(cache.ShardFilePathForTest(shard), "crash-mix");
+                var reloaded = new IndexCacheService();
+                reloaded.Initialize(kbPath, proactiveLoad: false);
+                Assert.ThrowsAny<Exception>(() => reloaded.GetIndex());
+                Assert.Null(reloaded.TryGetLoadedIndex());
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
         public void Flush_OnlyRewritesShardsDirtiedSinceLastFlush()
         {
             var cache = new IndexCacheService();
@@ -171,6 +208,53 @@ namespace GxMcp.Worker.Tests
                 var idx2 = reloaded.GetIndex();
                 Assert.True(idx2.Objects.ContainsKey("Procedure:Legacy1"));
                 Assert.Equal("legacy-guid-1", idx2.Objects["Procedure:Legacy1"].Guid);
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
+        public void ShardedLoad_RejectsInvalidManifestAndCanDeltaIsFalse()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                cache.ReplaceAll(new[] { Entry("Procedure", "ManifestProbe") });
+                Assert.True(cache.FlushNow());
+                cache.ObserveLastUpdate(DateTime.UtcNow);
+                cache.WriteMetaSidecar(1);
+                File.WriteAllText(cache.ShardManifestPathForTest, "{\"schemaVersion\":999}");
+
+                var validation = cache.ValidateOnDiskCache();
+                Assert.False(validation.CanDelta);
+                var reloaded = new IndexCacheService();
+                reloaded.Initialize(kbPath, proactiveLoad: false);
+                Assert.ThrowsAny<Exception>(() => reloaded.GetIndex());
+                Assert.Null(reloaded.TryGetLoadedIndex());
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
+        public void ShardedLoad_RejectsWrongShardAndDoesNotPublishPartialIndex()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                cache.ReplaceAll(new[] { Entry("Procedure", "IntegrityProbe") });
+                Assert.True(cache.FlushNow());
+                int expected = IndexCacheService.ShardOf("Procedure:IntegrityProbe");
+                int wrong = (expected + 1) % IndexCacheService.ShardCount;
+                File.Copy(cache.ShardFilePathForTest(expected), cache.ShardFilePathForTest(wrong), true);
+                File.Delete(cache.ShardFilePathForTest(expected));
+
+                var reloaded = new IndexCacheService();
+                reloaded.Initialize(kbPath, proactiveLoad: false);
+                Assert.ThrowsAny<Exception>(() => reloaded.GetIndex());
+                Assert.Null(reloaded.TryGetLoadedIndex());
             }
             finally { cache.DeleteOnDiskSnapshot(); }
         }

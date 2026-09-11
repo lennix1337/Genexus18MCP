@@ -59,6 +59,38 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void IndexStorageEngine_LoadRejectsMissingShardInsteadOfPublishingPartialIndex()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "gx_idx_integrity_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var engine = new IndexStorageEngine(tempDir);
+                var index = new SearchIndex();
+                index.Objects["Procedure:TestProc"] = new SearchIndex.IndexEntry { Name = "TestProc", Type = "Procedure" };
+                Assert.True(engine.Flush(index, new HashSet<int> { engine.ShardOf("Procedure:TestProc") }, 1));
+                File.Delete(Path.Combine(tempDir, "shard_00.json.gz"));
+                Assert.Null(engine.Load());
+            }
+            finally { try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { } }
+        }
+
+        [Fact]
+        public void IndexStorageEngine_LoadRejectsCorruptShardInsteadOfReturningOtherShards()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "gx_idx_integrity_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var engine = new IndexStorageEngine(tempDir);
+                var index = new SearchIndex();
+                index.Objects["Procedure:TestProc"] = new SearchIndex.IndexEntry { Name = "TestProc", Type = "Procedure" };
+                Assert.True(engine.Flush(index, new HashSet<int> { engine.ShardOf("Procedure:TestProc") }, 1));
+                File.WriteAllText(Path.Combine(tempDir, "shard_00.json.gz"), "not gzip");
+                Assert.Null(engine.Load());
+            }
+            finally { try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { } }
+        }
+
+        [Fact]
         public void MemoryService_Recall_EnrichesWithVectorSimilarity()
         {
             var vectorService = new VectorService();

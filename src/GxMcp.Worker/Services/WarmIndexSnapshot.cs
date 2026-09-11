@@ -88,15 +88,26 @@ namespace GxMcp.Worker.Services
             string metaJson = JsonConvert.SerializeObject(metadata);
             byte[] metaBytes = Encoding.UTF8.GetBytes(metaJson);
 
-            using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
-            using (var bw = new BinaryWriter(fs))
+            string tempPath = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            try
             {
-                bw.Write(Magic);
-                bw.Write(Version);
-                bw.Write(metaBytes.Length);
-                bw.Write(metaBytes);
-                bw.Write(payload.Length);
-                bw.Write(payload);
+                using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+                using (var bw = new BinaryWriter(fs))
+                {
+                    bw.Write(Magic);
+                    bw.Write(Version);
+                    bw.Write(metaBytes.Length);
+                    bw.Write(metaBytes);
+                    bw.Write(payload.Length);
+                    bw.Write(payload);
+                    fs.Flush(true);
+                }
+                if (File.Exists(path)) File.Replace(tempPath, path, null);
+                else File.Move(tempPath, path);
+            }
+            finally
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
             }
         }
 

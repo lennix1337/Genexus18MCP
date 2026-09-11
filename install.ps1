@@ -211,15 +211,15 @@ function Resolve-CommandPath([string[]]$names) {
 Check-Prerequisites
 
 if (-not (Test-Path $configPath)) {
-    Write-Warn "config.json not found at $configPath. Creating a neutral runtime config..."
-    $defaultConfig = @{
+    Write-Warn "config.json not found at $configPath. Creating a neutral runtime config after the build..."
+    $config = [pscustomobject]@{
         ConfigSchemaVersion = 2
         GatewayMode = "stdio-isolated"
-        GeneXus = @{
+        GeneXus = [pscustomobject]@{
             InstallationPath = Get-GxPrimaryInstallPath -Catalog $gxCatalog
             WorkerExecutable = "$publishDir\\worker\\GxMcp.Worker.exe"
         }
-        Server = @{
+        Server = [pscustomobject]@{
             HttpPort = 0
             McpStdio = $true
             SessionIdleTimeoutMinutes = 10
@@ -227,22 +227,17 @@ if (-not (Test-Path $configPath)) {
             EmitStructuredContent = $false
             TerseResponses = $true
         }
-        Environment = @{ ResolutionPolicy = "strict" }
+        Environment = [pscustomobject]@{ ResolutionPolicy = "strict" }
     }
-    Save-JsonFile $configPath $defaultConfig
+} else {
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json
 }
-
-$config = Get-Content $configPath -Raw | ConvertFrom-Json
 
 if ($PSBoundParameters.ContainsKey("GeneXusPath")) {
     $config.GeneXus.InstallationPath = $GeneXusPath
 }
 
 $config.GeneXus.InstallationPath = Get-ExistingPathOrPrompt "GeneXus installation path" $config.GeneXus.InstallationPath
-
-Backup-File $configPath
-Save-JsonFile $configPath $config
-Write-Ok "neutral config.json updated."
 
 Write-Step "[1/2] Building gateway and worker"
 & (Join-Path $root "build.ps1")
@@ -260,36 +255,25 @@ if ($SkipClientConfig) {
     Write-Step "[2/2] Registering MCP with detected AI clients (via genexus-mcp CLI)"
     $node = Resolve-CommandPath @("node.exe", "node")
     if (-not $node) {
-        Write-Warn "node was not found in PATH - cannot register AI clients automatically."
-        Write-Warn "Install Node.js 18+ and run the neutral config create command shown below."
+        Fail "node was not found in PATH - cannot register AI clients automatically. Use -SkipClientConfig to build without registration."
     } elseif (-not (Test-Path $gatewayExePath)) {
-        Write-Warn "Gateway exe not found at $gatewayExePath - skipping client registration."
+        Fail "Gateway exe not found at $gatewayExePath - cannot register AI clients."
     } else {
         # Point the CLI at the freshly-built gateway exe so the client launcher is a
         # direct exe path (not npx). getLauncher() in cli/lib/config.js honors this.
         $prevGatewayExe = $env:GENEXUS_MCP_GATEWAY_EXE
         $env:GENEXUS_MCP_GATEWAY_EXE = $gatewayExePath
         try {
-            $configArgs = @(
-                "`"$cliRunPath`"", "config", "create", "--config-scope", "neutral", "--output", "`"$configPath`"",
-                "--gx", "`"$($config.GeneXus.InstallationPath)`"",
-                "--worker", "`"$publishDir\\worker\\GxMcp.Worker.exe`"",
-                "--gateway-mode", "stdio-isolated", "--resolution-policy", "strict", "--format", "json"
+            $clientArgs = @(
+                $cliRunPath, "clients", "add", "--all-clients", "--format", "json"
             )
-            & $node @configArgs | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                $clientArgs = @(
-                    "`"$cliRunPath`"", "clients", "add", "--all-clients", "--format", "json"
-                )
-                & $node @clientArgs | Out-Null
+            & $node @clientArgs | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Fail "genexus-mcp client registration exited with code $LASTEXITCODE."
             }
-            if ($LASTEXITCODE -eq 0) {
-                Write-Ok "AI clients registered with the neutral runtime (Claude Desktop/Code, Antigravity, Gemini CLI, Cursor, OpenCode, Codex, VS Code - whichever are installed)."
-            } else {
-                Write-Warn "genexus-mcp neutral config/client registration exited with code $LASTEXITCODE. Re-run manually to see details."
-            }
+            Write-Ok "AI clients registered with the neutral runtime (Claude Desktop/Code, Antigravity, Gemini CLI, Cursor, OpenCode, Codex, VS Code - whichever are installed)."
         } catch {
-            Write-Warn "AI client registration failed: $($_.Exception.Message)"
+            Fail "AI client registration failed: $($_.Exception.Message)"
         } finally {
             if ($null -ne $prevGatewayExe) { $env:GENEXUS_MCP_GATEWAY_EXE = $prevGatewayExe }
             else { Remove-Item env:GENEXUS_MCP_GATEWAY_EXE -ErrorAction SilentlyContinue }
@@ -297,7 +281,12 @@ if ($SkipClientConfig) {
     }
 }
 
-Write-Host ""
+# Persist the prepared runtime only after build and optional registration both
+# succeeded. A failed build or registration therefore cannot leave a partial
+# config.json behind.
+Backup-File $configPath
+Save-JsonFile $configPath $config
+Write-Ok "neutral config.json updated."
 Write-Ok "Installation complete."
 Write-Host ""
 Write-Host "Artifacts:" -ForegroundColor Cyan

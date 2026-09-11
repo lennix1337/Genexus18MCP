@@ -34,6 +34,14 @@ Selected supported GeneXus SDK → Knowledge Base on disk
   `src/GxMcp.Gateway/GeneXusVersionCatalog.cs` is its runtime loader.
   `src/GxMcp.Worker/Compatibility/` contains reusable runtime adapters for SDK
   members that vary between GeneXus majors.
+- SDK compatibility is a **GeneXus-major** contract, not an exact DLL build
+  contract. Do not block a supported major because `ProductVersion`, patch or
+  assembly hashes differ between installations; patch/build drift is expected
+  and must be handled by the compatibility adapters plus focused/live smoke
+  tests. A different major requires the Worker built for that major (or a
+  verified adapter); never run a Worker against an unsupported major. Exact
+  build fingerprints may be retained as diagnostics, but must not silently
+  become a runtime compatibility gate again.
 - Design System compatibility: `DesignSystemSdkAdapter` uses the native helper
   when available and parses the `Tokens`/`Styles` source parts independently
   when an SDK helper member is absent.

@@ -91,6 +91,17 @@ namespace GxMcp.Worker.Services
         // Test observability: per-shard write counter so a shard-isolation test can assert
         // that dirtying one entry only rewrites that entry's shard file.
         private readonly ConcurrentDictionary<int, long> _shardWriteCounts = new ConcurrentDictionary<int, long>();
+        // Mutations observed while the lite walk builds its replacement list.
+        private readonly ConcurrentDictionary<string, byte> _liteWalkMutations = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, byte> _liteWalkRemovals = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        private volatile bool _liteWalkActive;
+        internal void BeginLiteWalk()
+        {
+            _liteWalkMutations.Clear();
+            _liteWalkRemovals.Clear();
+            _liteWalkActive = true;
+        }
+        internal void EndLiteWalk() => _liteWalkActive = false;
         internal long ShardWriteCountForTest(int shardId) => _shardWriteCounts.TryGetValue(shardId, out var v) ? v : 0;
         internal void ResetShardWriteCountsForTest() => _shardWriteCounts.Clear();
 
@@ -1061,6 +1072,11 @@ namespace GxMcp.Worker.Services
                 if (index.Objects.TryRemove(key, out var removed))
                 {
                     removedKey = key;
+                    if (_liteWalkActive)
+                    {
+                        _liteWalkRemovals[key] = 1;
+                        _liteWalkMutations.TryRemove(key, out _);
+                    }
                     TouchGraph(index);
                     if (index.ChildrenByParent != null) RemoveEntryFromParentIndex(index, removed);
                     if (Guid.TryParse(guid, out var g)) _hierarchyCache.TryRemove(g, out _);
@@ -1218,10 +1234,12 @@ namespace GxMcp.Worker.Services
             {
                 return loadState.Task.GetAwaiter().GetResult();
             }
+            catch (ShardedIntegrityException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                // A failed load must not publish an empty index: callers can retry after
-                // the snapshot is repaired, and the failed task is never reused.
                 Logger.Error("Load Index Error: " + ex.Message);
                 System.Threading.Interlocked.CompareExchange(ref _loadState, null, loadState);
                 return new SearchIndex();
@@ -1242,10 +1260,23 @@ namespace GxMcp.Worker.Services
             return state;
         }
 
+        private sealed class ShardedIntegrityException : Exception
+        {
+            public ShardedIntegrityException(string message) : base(message) { }
+            public ShardedIntegrityException(string message, Exception inner) : base(message, inner) { }
+        }
+
         private void CompleteLoad(TaskCompletionSource<SearchIndex> state)
         {
             try { state.TrySetResult(LoadIndexCore()); }
-            catch (Exception ex) { state.TrySetException(ex); }
+            catch (Exception ex)
+            {
+                System.Threading.Interlocked.CompareExchange(ref _loadState, null, state);
+                if (!string.IsNullOrEmpty(_shardManifestPath) && File.Exists(_shardManifestPath)
+                    && !(ex is ShardedIntegrityException))
+                    ex = new ShardedIntegrityException("invalid sharded snapshot", ex);
+                state.TrySetException(ex);
+            }
         }
 
         private SearchIndex LoadIndexCore()
@@ -1310,21 +1341,55 @@ namespace GxMcp.Worker.Services
         private SearchIndex LoadShardedIndex()
         {
             var idx = new SearchIndex();
+            var manifest = ReadAndValidateShardedSnapshot();
+            var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (int id = 0; id < ShardCount; id++)
             {
                 string shardPath = ShardFilePath(id);
-                if (!File.Exists(shardPath)) continue;
-                try
+                var root = Newtonsoft.Json.Linq.JObject.Parse(ReadGzippedText(shardPath));
+                foreach (var property in root.Properties())
                 {
-                    string json = ReadGzippedText(shardPath);
-                    if (string.IsNullOrEmpty(json)) continue;
-                    var bucket = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, SearchIndex.IndexEntry>>(json);
-                    if (bucket == null) continue;
-                    foreach (var kv in bucket) idx.Objects[kv.Key] = kv.Value;
+                    if (!keys.Add(property.Name)) throw new ShardedIntegrityException("duplicate shard key: " + property.Name);
+                    var entry = property.Value.ToObject<SearchIndex.IndexEntry>();
+                    if (entry == null || string.IsNullOrEmpty(entry.Name) || string.IsNullOrEmpty(entry.Type))
+                        throw new ShardedIntegrityException("invalid shard entry: " + property.Name);
+                    string derivedKey = $"{entry.Type}:{entry.Name}";
+                    if (!string.Equals(property.Name, derivedKey, StringComparison.OrdinalIgnoreCase)
+                        || ShardOf(property.Name) != id)
+                        throw new ShardedIntegrityException("key stored in wrong shard: " + property.Name);
+                    idx.Objects[property.Name] = entry;
                 }
-                catch (Exception ex) { Logger.Warn(string.Format("Shard {0} load failed ({1}): {2}", id, shardPath, ex.Message)); }
             }
+            if (idx.Objects.Count != manifest.ObjectCount)
+                throw new ShardedIntegrityException("shard object count does not match manifest");
             return idx;
+        }
+
+        private ShardManifest ReadAndValidateShardedSnapshot()
+        {
+            if (string.IsNullOrEmpty(_shardManifestPath) || !File.Exists(_shardManifestPath))
+                throw new ShardedIntegrityException("shard manifest is missing");
+            var manifest = Newtonsoft.Json.JsonConvert.DeserializeObject<ShardManifest>(File.ReadAllText(_shardManifestPath));
+            DateTime captured;
+            if (manifest == null || manifest.ShardCount != ShardCount || manifest.SchemaVersion != CurrentSchemaVersion
+                || manifest.ObjectCount < 0 || string.IsNullOrEmpty(manifest.CapturedAtUtc)
+                || !DateTime.TryParse(manifest.CapturedAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out captured))
+                throw new ShardedIntegrityException("invalid shard manifest");
+            for (int id = 0; id < ShardCount; id++)
+                if (!File.Exists(ShardFilePath(id))) throw new ShardedIntegrityException("missing shard: " + id);
+            if (manifest.ShardHashes != null)
+            {
+                if (manifest.ShardHashes.Count != ShardCount)
+                    throw new ShardedIntegrityException("shard hash manifest is incomplete");
+                for (int id = 0; id < ShardCount; id++)
+                {
+                    string actual = GetFileSha256(ShardFilePath(id));
+                    if (!manifest.ShardHashes.TryGetValue(id, out var expected)
+                        || !string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                        throw new ShardedIntegrityException("shard hash mismatch: " + id);
+                }
+            }
+            return manifest;
         }
 
         public bool LooksLikeAttributeName(string term)
@@ -1577,19 +1642,10 @@ namespace GxMcp.Worker.Services
             public bool MetaPresent;
             public bool SchemaMatch;
             public bool DllMatch;
+            public bool ShardedIntegrity = true;
             public DateTime HighWaterMark = DateTime.MinValue;
-            // Delta-on-open is only safe when the body is present AND a trustworthy sidecar
-            // (matching schema + worker DLL) accompanies it. Anything else → full rebuild.
-            public bool CanDelta => BodyPresent && MetaPresent && SchemaMatch && DllMatch && HighWaterMark != DateTime.MinValue;
-
-            // Relaxed predicate for the post-upgrade case: the worker DLL changed (DllMatch=False)
-            // but the index LAYOUT is unchanged (SchemaMatch=True), so the on-disk body is still
-            // structurally readable. Gated by Configuration.DeltaAcrossWorkerDll in the caller —
-            // running a bounded delta here (and re-baselining the sidecar's DLL hash) avoids the
-            // full 38k re-walk that would otherwise block writes for minutes after every upgrade.
-            // The only thing skipped vs. a full rebuild is retro-applying enrichment-LOGIC changes
-            // to objects that didn't change on disk; a forced reindex still does that.
-            public bool CanDeltaAcrossDll => BodyPresent && MetaPresent && SchemaMatch && HighWaterMark != DateTime.MinValue;
+            public bool CanDelta => BodyPresent && MetaPresent && SchemaMatch && DllMatch && ShardedIntegrity && HighWaterMark != DateTime.MinValue;
+            public bool CanDeltaAcrossDll => BodyPresent && MetaPresent && SchemaMatch && ShardedIntegrity && HighWaterMark != DateTime.MinValue;
         }
 
         /// <summary>
@@ -1602,9 +1658,17 @@ namespace GxMcp.Worker.Services
             try
             {
                 EnsureInitialized();
-                v.BodyPresent = (!string.IsNullOrEmpty(_indexPathGz) && File.Exists(_indexPathGz))
-                                 || (!string.IsNullOrEmpty(_indexPath) && File.Exists(_indexPath))
-                                 || (!string.IsNullOrEmpty(_shardManifestPath) && File.Exists(_shardManifestPath));
+                bool hasManifest = !string.IsNullOrEmpty(_shardManifestPath) && File.Exists(_shardManifestPath);
+                v.ShardedIntegrity = !hasManifest;
+                if (hasManifest)
+                {
+                    try { ReadAndValidateShardedSnapshot(); v.ShardedIntegrity = true; }
+                    catch (Exception ex) { v.ShardedIntegrity = false; Logger.Warn("Invalid sharded cache: " + ex.Message); }
+                }
+                v.BodyPresent = hasManifest
+                    ? v.ShardedIntegrity
+                    : ((!string.IsNullOrEmpty(_indexPathGz) && File.Exists(_indexPathGz))
+                       || (!string.IsNullOrEmpty(_indexPath) && File.Exists(_indexPath)));
                 string metaPath = _metaPath;
                 v.MetaPresent = !string.IsNullOrEmpty(metaPath) && File.Exists(metaPath);
                 Logger.Info(string.Format("[INDEX-CACHE-PATHS] validate: bodyPresent={0} metaPresent={1} gz={2} meta={3}", v.BodyPresent, v.MetaPresent, _indexPathGz, metaPath));
@@ -1636,12 +1700,16 @@ namespace GxMcp.Worker.Services
             public int SchemaVersion { get; set; }
             public int ObjectCount { get; set; }
             public string CapturedAtUtc { get; set; }
+            // Optional for compatibility with manifests written before integrity
+            // hashes were introduced. New manifests certify every shard's bytes.
+            public Dictionary<int, string> ShardHashes { get; set; }
         }
 
-        private void WriteShardManifest(int objectCount)
+        private bool WriteShardManifest(int objectCount)
         {
             string manifestPath = _shardManifestPath;
-            if (string.IsNullOrEmpty(manifestPath)) return;
+            if (string.IsNullOrEmpty(manifestPath)) return false;
+            string tmp = manifestPath + ".tmp-" + Guid.NewGuid().ToString("N");
             try
             {
                 var manifest = new ShardManifest
@@ -1649,17 +1717,18 @@ namespace GxMcp.Worker.Services
                     ShardCount = ShardCount,
                     SchemaVersion = CurrentSchemaVersion,
                     ObjectCount = objectCount,
-                    CapturedAtUtc = DateTime.UtcNow.ToString("o")
+                    CapturedAtUtc = DateTime.UtcNow.ToString("o"),
+                    ShardHashes = Enumerable.Range(0, ShardCount).ToDictionary(id => id, id => GetFileSha256(ShardFilePath(id)))
                 };
-                string json = Newtonsoft.Json.JsonConvert.SerializeObject(manifest);
                 string dir = Path.GetDirectoryName(manifestPath);
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                string tmp = manifestPath + ".tmp";
-                File.WriteAllText(tmp, json, new UTF8Encoding(false));
-                if (File.Exists(manifestPath)) File.Delete(manifestPath);
-                File.Move(tmp, manifestPath);
+                File.WriteAllText(tmp, Newtonsoft.Json.JsonConvert.SerializeObject(manifest), new UTF8Encoding(false));
+                if (File.Exists(manifestPath)) File.Replace(tmp, manifestPath, null);
+                else File.Move(tmp, manifestPath);
+                return true;
             }
-            catch (Exception ex) { Logger.Warn("WriteShardManifest failed: " + ex.Message); }
+            catch (Exception ex) { Logger.Warn("WriteShardManifest failed: " + ex.Message); return false; }
+            finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
         }
 
         // Returns true when this call wrote a snapshot to disk that is at least as new
@@ -1779,7 +1848,12 @@ namespace GxMcp.Worker.Services
                     return false;
                 }
 
-                WriteShardManifest(entryCount);
+                if (!WriteShardManifest(entryCount))
+                {
+                    foreach (var id in idsToWrite) _dirtyShards[id] = 1;
+                    _lastFlushErrorMessage = "manifest write failed";
+                    return false;
+                }
                 // Migration cleanup: once the sharded body is confirmed fully durable, the
                 // legacy single-file snapshot (if any) is no longer needed for warm start.
                 try { if (File.Exists(_indexPathGz)) File.Delete(_indexPathGz); } catch { }
@@ -1819,6 +1893,13 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private string GetFileSha256(string path)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            using (var stream = File.OpenRead(path))
+                return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+        }
+
         // v2.6.8: defensive reads for KBObject SDK accessors that can throw on
         // partially-loaded objects. Callers want a sentinel ("unknown") rather than
         // a crashed indexer.
@@ -1835,6 +1916,9 @@ namespace GxMcp.Worker.Services
         public void UpdateEntry(global::Artech.Architecture.Common.Objects.KBObject obj)
         {
             var index = GetIndex();
+            // The watcher may observe an external move/rename while the lite walk is
+            // running; do not reuse the hierarchy cached by the earlier SDK view.
+            _hierarchyCache.TryRemove(obj.Guid, out _);
             var hierarchy = ResolveHierarchy(obj);
 
             var entry = new SearchIndex.IndexEntry
@@ -1938,6 +2022,13 @@ namespace GxMcp.Worker.Services
 
             SearchIndex.IndexEntry previousEntry = null;
             try { index.Objects.TryGetValue(key, out previousEntry); } catch { }
+            if (previousEntry != null && index.ChildrenByParent != null
+                && (!string.Equals(previousEntry.ParentPath, entry.ParentPath, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(previousEntry.Path, entry.Path, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(previousEntry.Module, entry.Module, StringComparison.OrdinalIgnoreCase)))
+            {
+                RemoveEntryFromParentIndex(index, previousEntry);
+            }
             if (index.SourceTokenIndex != null)
             {
                 RemoveSourceTokens(index.SourceTokenIndex, previousEntry);
@@ -1959,6 +2050,11 @@ namespace GxMcp.Worker.Services
             {
                 if (index.Objects.TryRemove(oldKey, out var stale))
                 {
+                    if (_liteWalkActive)
+                    {
+                        _liteWalkRemovals[oldKey] = 1;
+                        _liteWalkMutations.TryRemove(oldKey, out _);
+                    }
                     if (index.ChildrenByParent != null) RemoveEntryFromParentIndex(index, stale);
                     RemoveSourceTokens(index.SourceTokenIndex, stale);
                     MarkShardDirty(oldKey); // the old key's shard lost an entry too
@@ -1967,6 +2063,11 @@ namespace GxMcp.Worker.Services
 
             // Atomic update using ConcurrentDictionary
             index.Objects.AddOrUpdate(key, entry, (k, existing) => entry);
+            if (_liteWalkActive)
+            {
+                _liteWalkMutations[key] = 1;
+                _liteWalkRemovals.TryRemove(key, out _);
+            }
             TouchGraph(index);
             if (index.ChildrenByParent != null)
             {
@@ -2388,6 +2489,7 @@ namespace GxMcp.Worker.Services
                     {
                         if (e == null || string.IsNullOrEmpty(e.Name)) continue;
                         string key = GetEntryStorageKey(e);
+                        if (_liteWalkRemovals.ContainsKey(key)) continue;
                         if (!e.IsEnriched && previous != null
                             && previous.Objects.TryGetValue(key, out var existing)
                             && existing != null && existing.IsEnriched)
@@ -2398,6 +2500,20 @@ namespace GxMcp.Worker.Services
                         idx.Objects[key] = e;
                     }
                 }
+                // Preserve live mutations that happened during the lite walk. Explicit
+                // removals win, preventing a stale walk entry from being resurrected.
+                if (previous != null)
+                {
+                    foreach (var mutation in _liteWalkMutations.Keys)
+                    {
+                        if (_liteWalkRemovals.ContainsKey(mutation)) continue;
+                        if (previous.Objects.TryGetValue(mutation, out var live) && live != null)
+                            idx.Objects[mutation] = live;
+                    }
+                }
+                _liteWalkMutations.Clear();
+                _liteWalkRemovals.Clear();
+                _liteWalkActive = false;
                 idx.LastUpdated = DateTime.UtcNow;
                 BuildParentIndex(idx);
                 _index = idx;
@@ -2431,6 +2547,11 @@ namespace GxMcp.Worker.Services
             {
                 if (e == null || string.IsNullOrEmpty(e.Name)) continue;
                 string key = GetEntryStorageKey(e);
+                if (_liteWalkActive)
+                {
+                    _liteWalkMutations[key] = 1;
+                    _liteWalkRemovals.TryRemove(key, out _);
+                }
                 if (!e.IsEnriched && idx.Objects.TryGetValue(key, out var existing)
                     && existing != null && existing.IsEnriched)
                 {

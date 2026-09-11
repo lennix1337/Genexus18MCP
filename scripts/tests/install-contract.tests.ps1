@@ -112,10 +112,21 @@ try {
     $passed++
 
     $installerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\install.ps1') -Raw
+    $localInstallerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\install.ps1') -Raw
+    $releaseInstallerSource = $installerSource
     Assert-True ($installerSource.Contains('Invoke-ValidatedInstall')) 'installer uses transactional staging helper'
     Assert-True ($installerSource.Contains('-RequireManifest:$isV3Release')) 'installer gates v3 manifest validation'
     Assert-True (-not $installerSource.Contains('Remove-Item -Path (Join-Path $InstallDir ''*'')')) 'installer does not destructively wipe the live directory'
-    $passed += 3
+    Assert-True ($localInstallerSource.Contains('$cliRunPath, "clients", "add"')) 'local installer passes executable path as an array element'
+    Assert-True ($localInstallerSource.Contains('Save-JsonFile $configPath $config')) 'local installer persists config after build and registration'
+    $savePosition = $localInstallerSource.IndexOf('Save-JsonFile $configPath $config', [StringComparison]::Ordinal)
+    $completePosition = $localInstallerSource.IndexOf('Installation complete.', [StringComparison]::Ordinal)
+    Assert-True ($savePosition -gt 0 -and $completePosition -gt $savePosition) 'installation completion follows final config persistence'
+    Assert-True ($localInstallerSource.Contains('client registration exited with code')) 'client registration failure is fatal'
+    Assert-True ($releaseInstallerSource.Contains('Test-StrictSemVer')) 'release installer validates strict semver'
+    Assert-True ($releaseInstallerSource.Contains('Refusing downgrade')) 'release installer rejects downgrade by default'
+    Assert-True ($releaseInstallerSource.Contains('$exitCode = $LASTEXITCODE')) 'uninstall checks LASTEXITCODE before claiming success'
+    $passed += 7
 
     Write-Host "install-contract: $passed assertions passed" -ForegroundColor Green
 } finally {

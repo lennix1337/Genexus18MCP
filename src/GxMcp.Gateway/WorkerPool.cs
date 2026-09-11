@@ -68,16 +68,21 @@ namespace GxMcp.Gateway
             public WorkerProcess? Worker;
             public DateTime LastActivityUtc = DateTime.UtcNow;
             public readonly SemaphoreSlim SpawnGate = new SemaphoreSlim(1, 1);
+            public readonly SemaphoreSlim LifecycleGate = new SemaphoreSlim(1, 1);
             // Draining: set to true when a planned worker reload is in progress.
             // AcquireAsync callers that hit the fast path while Draining==true wait
             // on DrainComplete before returning the freshly-spawned replacement.
             public volatile bool Draining;
+            // A failed drain remains fail-closed while the old worker is shutting down.
+            public volatile bool DrainFailed;
             // issue #26 P1: true while a worker process is actively being spawned for
             // this entry (gate held, Start() not yet returned). Lets whoami/health tell
             // "a process really IS coming up" apart from "no worker and nothing spawning"
             // instead of reporting a perpetual, misleading "respawning".
             public volatile bool Spawning;
+            public int Reloading;
             public TaskCompletionSource<bool> DrainComplete = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            public readonly SemaphoreSlim ReloadGate = new SemaphoreSlim(1, 1);
         }
 
         public IReadOnlyList<KbHandle> ListOpen() =>
@@ -190,6 +195,8 @@ namespace GxMcp.Gateway
                 // After the drain the entry was replaced — re-read.
                 entry = _entries.GetOrAdd(handle.NormalizedAlias, _ => new Entry { Handle = handle });
             }
+            if (entry.DrainFailed)
+                throw new InvalidOperationException($"Worker reload for KB '{handle.Alias}' failed; acquire refused until the shutting-down worker exits.");
             if (entry.Worker != null)
             {
                 entry.LastActivityUtc = DateTime.UtcNow;
@@ -259,6 +266,9 @@ namespace GxMcp.Gateway
                     // Keep the durable _known record so this KB remains resolvable.
                     OnWorkerExited?.Invoke(capturedHandle, reason);
                 };
+                // Publish before Start: an immediate exit may be reported
+                // synchronously by WorkerProcess.Start().
+                entry.Worker = worker;
                 if (SpawnFactoryForTest == null)
                 {
                     entry.Spawning = true;   // issue #26 P1: a process really is coming up now.
@@ -276,6 +286,20 @@ namespace GxMcp.Gateway
                     }
                 }
                 entry.Worker = worker;
+                if (!worker.IsProcessAliveForPool)
+                {
+                    _entries.TryRemove(handle.NormalizedAlias, out _);
+                    throw new InvalidOperationException($"Worker for KB '{handle.Alias}' exited before registration.");
+                }
+                if (!_entries.TryGetValue(handle.NormalizedAlias, out var current)
+                    || !ReferenceEquals(current, entry)
+                    || !ReferenceEquals(current.Worker, worker))
+                {
+                    if (_entries.TryGetValue(handle.NormalizedAlias, out var replacement)
+                        && replacement.Worker != null)
+                        return replacement.Worker;
+                    throw new InvalidOperationException($"Worker for KB '{handle.Alias}' exited during startup.");
+                }
                 entry.LastActivityUtc = DateTime.UtcNow;
                 return worker;
             }
@@ -302,6 +326,13 @@ namespace GxMcp.Gateway
             if (!_entries.TryGetValue(handle.NormalizedAlias, out var entry))
                 throw new InvalidOperationException($"No pool entry for alias '{handle.Alias}'.");
 
+            if (Interlocked.CompareExchange(ref entry.Reloading, 1, 0) != 0)
+                throw new InvalidOperationException($"A worker reload is already in progress for alias '{handle.Alias}'.");
+
+            await entry.LifecycleGate.WaitAsync(ct).ConfigureAwait(false);
+            bool drainSucceeded = false;
+            try
+            {
             // Plan 031: the entry now survives the whole drain window (never removed
             // from _entries), so a SECOND drain cycle on the same entry would otherwise
             // reuse the previous cycle's already-completed DrainComplete TCS — any
@@ -317,15 +348,18 @@ namespace GxMcp.Gateway
             if (oldWorker != null)
             {
                 oldWorker.StopWithReason(WorkerStopReason.PlannedReload);
-                // Wait for the OS process to exit.  We don't rethrow on timeout —
-                // the OS process will linger but we still spawn a fresh one.
                 try
-                {
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    timeoutCts.CancelAfter(drainTimeoutMs);
-                    await oldWorker.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) { /* timeout or caller cancel — proceed */ }
+                    {
+                        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(1, drainTimeoutMs)));
+                        await oldWorker.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        throw new TimeoutException($"Worker reload for KB '{handle.Alias}' did not stop within {drainTimeoutMs}ms.");
+                    }
+                    if (!oldWorker.ExitConfirmed)
+                        throw new TimeoutException($"Worker reload for KB '{handle.Alias}' did not confirm process exit.");
             }
 
             // Plan 031: do NOT remove the entry here. The old worker's own OnWorkerExited
@@ -342,8 +376,7 @@ namespace GxMcp.Gateway
             // The old worker's SpawnedExePath tells the caller where to copy the new bits.
             if (afterDrainBeforeSpawn != null)
             {
-                try { await afterDrainBeforeSpawn(oldWorker).ConfigureAwait(false); }
-                catch (Exception ex) { Program.Log($"[Gateway] worker_reload afterDrain hook failed: {ex.Message}"); }
+                await afterDrainBeforeSpawn(oldWorker).ConfigureAwait(false);
             }
 
             try
@@ -353,7 +386,14 @@ namespace GxMcp.Gateway
                 // but going direct keeps the intent explicit and avoids depending on that
                 // GetOrAdd identity guarantee.
                 var newWorker = await SpawnWorkerAsync(handle, entry, ct).ConfigureAwait(false);
+                drainSucceeded = true;
+                entry.DrainFailed = false;
                 return newWorker;
+            }
+            catch
+            {
+                entry.DrainFailed = true;
+                throw;
             }
             finally
             {
@@ -362,6 +402,16 @@ namespace GxMcp.Gateway
                 // the entry as no longer draining once it wakes.
                 entry.Draining = false;
                 entry.DrainComplete.TrySetResult(true);
+            }
+            }
+            finally
+            {
+                if (!drainSucceeded)
+                    entry.DrainFailed = true;
+                entry.Draining = false;
+                entry.DrainComplete.TrySetResult(true);
+                Interlocked.Exchange(ref entry.Reloading, 0);
+                entry.LifecycleGate.Release();
             }
         }
 
@@ -581,5 +631,8 @@ namespace GxMcp.Gateway
         /// <summary>Returns true when the entry for <paramref name="alias"/> exists and Draining==true.</summary>
         internal bool IsDrainingForTest(string alias) =>
             _entries.TryGetValue(alias.ToLowerInvariant(), out var e) && e.Draining;
+
+        internal bool IsReloadingForTest(string alias) =>
+            _entries.TryGetValue(alias.ToLowerInvariant(), out var e) && Volatile.Read(ref e.Reloading) != 0;
     }
 }

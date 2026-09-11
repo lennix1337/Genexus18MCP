@@ -4,15 +4,24 @@
 
 ### Fixed
 
-- Discover separately stored WorkWithPlus template objects through the SDK and expose complete paginated reads and exact attribute previews without enabling unverified saves.
-- Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
-- Preserve named WorkWithPlus Settings targets across Gateway routing and accept legacy Worker envelopes without losing GUID, pagination or concurrency fields.
-- Preserve SDK-owned metadata during raw pattern XML property edits and previews; reject structural or metadata edits instead of inferring order lists. Does not certify SDK save isolation.
 - Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.
+- Enforce the selected GeneXus major at build and Worker startup while reporting patch/build and assembly fingerprint drift as diagnostics, including changed DLLs with the same ProductVersion. Missing required assemblies and different majors still fail validation.
+- Preserve the last certified search-index snapshot during forced rebuilds so a Worker crash can warm-start from the previous index instead of leaving the KB cold.
+- Keep the index-readiness fast-fail limited to index-backed reads and analyses; SDK edits, creates and builds remain available while background indexing runs.
+- Never store `Indexing`/`IndexNotReady` responses in the semantic cache, so reads can observe the index as soon as background indexing completes.
+- Make Worker drain replacement fail closed until the old process has really exited; do not register dead replacements, leak draining entries, or run concurrent reloads for one KB.
+- Validate sharded manifests and every shard before publication, reject incomplete/corrupt snapshots, propagate manifest write failures, and atomically replace shard/manifest/warm-snapshot files.
+- Harden update and installer flows with strict semver/channel validation, bounded child commands, atomic update-cache writes, safe npx semantics, correct PowerShell argument passing, exit-code checks, and downgrade protection.
+- Return an explicit retryable error when a Worker reload replaces the process but the SDK does not become ready; keep failed drains fail-closed, prevent acquisitions from reusing a Worker that is still shutting down, and do not infer SDK readiness from RPC error responses.
+- Preserve creations, renames, updates, and removals observed during the lite index walk when publishing the final catalogue; refresh effective object counts after delta deletions and invalidate stale hierarchy data after external moves.
+- Add per-shard hashes to new index manifests so corrupted or mixed shard contents fail closed while retaining compatibility with older manifests.
+- Propagate the selected update channel through npx, global, fixed-path, and package-direct plans; reject release versions with leading-zero components.
+- Make local installation transactional across configuration, build, and client registration outcomes, so failed steps do not report a completed installation.
+- Require typed WorkWithPlus fallback resolution and version preconditions for action mutations; use structural/delimited projection matching so similarly named tabs and events cannot be reported as the requested target.
 
 ### Internal
 
-- Select exact SDK fingerprint manifests for GeneXus 18 U11, U12 and U16 during build and packaging; retain the original U10 default and reject mismatched SDKs without bypassing validation.
+- Select SDK diagnostic manifests for GeneXus 18 U11, U12 and U16 during build and packaging; retain the original U10 reference by default without imposing exact-build compatibility gates.
 - Refresh test SDK dependencies when changing upgrades instead of reusing DLLs from a previous SDK.
 
 ## v3.2.4 - 2026-09-10
@@ -20,19 +29,13 @@
 
 ### Fixed
 
-- Complete write-result classification before advancing cache/concurrency timestamps, and prevent typed variable no-ops from marking objects dirty.
+- Serialize Worker lifecycle replacement, preserve concurrent healthy replacements, and keep PatternVirtual structural writes on the SDK path while restricting raw PatternInstance edits to safe property changes.
+- Treat standalone WWP template objects as model-wide records without claiming ownership from a name-only Settings match.
 
-## v3.2.3 - 2026-09-10
-
-
-### Fixed
-
-- Required Events object saves now fail before persistence with
-  `ObjectSaveIsolationUnverified` until SDK/pattern event isolation is verified;
-  dry-run previews remain available. The legacy patch route preserves the
-  requirement, and decreasing revisions no longer count as save evidence.
-
-- Optional profile-owned KB path/version pins now reject mismatched or frozen write destinations after Worker restarts, with pre-open path validation and explicit activation recovery. The guard never activates or updates a version automatically.
+- Fixed WorkWithPlus Settings and instance actions failing to resolve objects by name; preserved explicit identities, pagination and version tokens.
+- Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
+- Include separate WorkWithPlus for Web Template objects in Settings template discovery and reads, with explicit Settings/Main links, pagination, and version tokens. Preview an existing table class with an exact XML text edit that preserves metadata and formatting; real template saves remain blocked pending isolation validation.
+- Preserve SDK-owned pattern metadata during raw XML property edits and previews. Unchanged XML is a no-op; structural or metadata changes are rejected explicitly instead of rebuilding child-order lists. Preview and save share the same unmodified payload, and unreadable current XML blocks both paths. This does not certify SDK save isolation.
 
 - Respect requested object types when resolving homonyms, including Pattern Settings, and separate read-cache entries by type and read shape.
 - Read Pattern Settings through the SDK pattern tree with explicit pagination instead of the generic properties XML.

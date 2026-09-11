@@ -21,10 +21,10 @@ namespace GxMcp.Worker.Tests
                 + System.IO.File.ReadAllText(System.IO.Path.Combine(servicesDir, "WriteService.PatternWrite.cs"));
 
             Assert.Contains("PatternXmlEditPlan.Create(currentXml, xml)", writeSrc);
-            Assert.Contains("string normalizedInput = plan.Xml;", writeSrc);
+            Assert.Contains("normalizedInput = plan.Xml;", writeSrc);
             Assert.DoesNotContain("PatternChildOrderReconciler.Reconcile", writeSrc);
             Assert.DoesNotContain("AttachReconcileReport", writeSrc);
-            Assert.True(writeSrc.IndexOf("if (plan.IsNoChange)") < writeSrc.IndexOf("string normalizedInput = plan.Xml;"));
+            Assert.True(writeSrc.IndexOf("if (plan.IsNoChange)") < writeSrc.IndexOf("normalizedInput = plan.Xml;"));
             Assert.True(writeSrc.IndexOf("if (plan.ErrorCode != null)") < writeSrc.IndexOf("ApplyPatternEnvelope(resolvedPart, envelope, normalizedInput)"));
         }
     }

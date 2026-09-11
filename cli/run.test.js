@@ -6,7 +6,14 @@ const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
 const { renderOutput } = require('./lib/output');
-const { compareSemver, detectInstallMethod, upgradePlanFor } = require('./lib/update-check');
+const {
+    compareSemver,
+    parseSemver,
+    validateChannel,
+    detectInstallMethod,
+    upgradePlanFor,
+    runCommand
+} = require('./lib/update-check');
 const {
     detectClientInstalled,
     readJsonFileSafe,
@@ -1727,12 +1734,37 @@ test('clients remove drops both OpenCode config shapes and legacy key', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
-test('compareSemver detects newer, older, equal versions', () => {
-    assert.equal(compareSemver('1.3.1', '1.3.0'), 1);
-    assert.equal(compareSemver('v1.4.0', '1.3.9'), 1);
-    assert.equal(compareSemver('1.3.0', '1.3.0'), 0);
-    assert.equal(compareSemver('1.2.9', '1.3.0'), -1);
-    assert.equal(compareSemver('garbage', '1.0.0'), 0);
+test('strict semver compares prerelease precedence and ignores build metadata', () => {
+    assert.deepEqual(parseSemver('v1.2.3-alpha.1+build.7'), {
+        valid: true, major: 1, minor: 2, patch: 3,
+        prerelease: ['alpha', '1'], build: ['build', '7']
+    });
+    assert.equal(compareSemver('1.0.0-alpha', '1.0.0-alpha.1'), -1);
+    assert.equal(compareSemver('1.0.0', '1.0.0-rc.1'), 1);
+    assert.equal(compareSemver('1.0.0+one', '1.0.0+two'), 0);
+});
+
+test('semver and channel validation are explicit for malformed input', () => {
+    assert.equal(parseSemver('1.2'), null);
+    assert.equal(parseSemver('1.2.3-01'), null);
+    assert.equal(compareSemver('garbage', '1.0.0'), null);
+    assert.equal(validateChannel('latest'), 'latest');
+    assert.equal(validateChannel('next-2026'), 'next-2026');
+    assert.equal(validateChannel('bad channel'), null);
+    assert.equal(validateChannel(''), null);
+});
+
+test('npx update plan does not use npm cache clean as an update', () => {
+    const plan = upgradePlanFor('npx-latest', 'latest');
+    assert.equal(plan.applyCommand, null);
+    assert.equal(plan.auto, true);
+});
+
+test('runCommand reports exit code and kills timed out child', async () => {
+    const result = await runCommand(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { timeoutMs: 30 });
+    assert.equal(result.ok, false);
+    assert.equal(result.timedOut, true);
+    assert.equal(typeof result.code, 'number');
 });
 
 test('detectInstallMethod returns fixed-path when GENEXUS_MCP_GATEWAY_EXE is set', () => {
@@ -1746,6 +1778,25 @@ test('detectInstallMethod returns fixed-path when GENEXUS_MCP_GATEWAY_EXE is set
         if (prev === undefined) delete process.env.GENEXUS_MCP_GATEWAY_EXE;
         else process.env.GENEXUS_MCP_GATEWAY_EXE = prev;
     }
+});
+
+test('upgradePlanFor carries the selected channel through every install method', () => {
+    const npx = upgradePlanFor('npx-latest', 'next');
+    assert.equal(npx.channel, 'next');
+    assert.match(npx.steps.join(' '), /npx genexus-mcp@next/);
+    assert.doesNotMatch(npx.steps.join(' '), /@latest/);
+
+    const npm = upgradePlanFor('npm-global', 'next');
+    assert.equal(npm.channel, 'next');
+    assert.deepEqual(npm.applyCommand.args, ['install', '-g', 'genexus-mcp@next']);
+
+    const fixed = upgradePlanFor('fixed-path', 'next');
+    assert.equal(fixed.channel, 'next');
+    assert.match(fixed.steps.join(' '), /next/);
+    assert.doesNotMatch(fixed.steps.join(' '), /npm @latest/);
+
+    const direct = upgradePlanFor('package-direct', 'next');
+    assert.equal(direct.channel, 'next');
 });
 
 test('upgradePlanFor encodes the per-method upgrade strategy', () => {

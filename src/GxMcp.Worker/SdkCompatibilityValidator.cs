@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using Newtonsoft.Json.Linq;
@@ -44,12 +45,14 @@ namespace GxMcp.Worker
                 return Fail("GXMCP_SDK_ANCHOR_MISSING", "GXMCP_SDK_ANCHOR_MISSING path=" + (anchor ?? "<missing>"));
 
             string actualVersion = versionReader(anchorPath);
-            if (!string.Equals(expectedVersion, actualVersion, StringComparison.OrdinalIgnoreCase))
+            bool exactVersion = string.Equals(expectedVersion, actualVersion, StringComparison.OrdinalIgnoreCase);
+            if (!SameMajor(expectedVersion, actualVersion))
                 return Fail("GXMCP_SDK_VERSION_MISMATCH", "GXMCP_SDK_VERSION_MISMATCH expectedVersion=" + expectedVersion + " actualVersion=" + actualVersion);
 
             var assemblies = manifest["assemblies"] as JArray;
             if (assemblies == null || assemblies.Count == 0)
                 return Fail("GXMCP_SDK_MANIFEST_INVALID", "GXMCP_SDK_MANIFEST_INVALID manifest=" + manifestPath + " error=assemblies");
+            var fingerprintDrift = new List<string>();
             foreach (var token in assemblies)
             {
                 string relativePath = (string)token["path"];
@@ -59,9 +62,20 @@ namespace GxMcp.Worker
                     return Fail("GXMCP_SDK_ASSEMBLY_MISSING", "GXMCP_SDK_ASSEMBLY_MISSING path=" + (relativePath ?? "<missing>"));
                 string actualHash = Sha256(filePath);
                 if (!string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
-                    return Fail("GXMCP_SDK_FINGERPRINT_MISMATCH", "GXMCP_SDK_FINGERPRINT_MISMATCH path=" + relativePath + " expectedSha256=" + expectedHash + " actualSha256=" + actualHash);
+                    fingerprintDrift.Add("GXMCP_SDK_FINGERPRINT_DRIFT path=" + relativePath + " expectedSha256=" + expectedHash + " actualSha256=" + actualHash);
             }
-            return new SdkCompatibilityResult(true, "GXMCP_SDK_COMPATIBLE", "GXMCP_SDK_COMPATIBLE version=" + expectedVersion + " assemblies=" + assemblies.Count);
+            string versionDiagnostic = exactVersion ? expectedVersion : expectedVersion + " actualVersion=" + actualVersion + " (compatible major; patch/build drift)";
+            string diagnostic = "GXMCP_SDK_COMPATIBLE version=" + versionDiagnostic + " assemblies=" + assemblies.Count;
+            if (fingerprintDrift.Count > 0) diagnostic += "\n" + string.Join("\n", fingerprintDrift);
+            return new SdkCompatibilityResult(true, "GXMCP_SDK_COMPATIBLE", diagnostic);
+        }
+
+        private static bool SameMajor(string expected, string actual)
+        {
+            if (string.IsNullOrWhiteSpace(expected) || string.IsNullOrWhiteSpace(actual)) return false;
+            return int.TryParse(expected.Split('.')[0], out int expectedMajor)
+                && int.TryParse(actual.Split('.')[0], out int actualMajor)
+                && expectedMajor > 0 && expectedMajor == actualMajor;
         }
 
         private static SdkCompatibilityResult Fail(string code, string diagnostic)

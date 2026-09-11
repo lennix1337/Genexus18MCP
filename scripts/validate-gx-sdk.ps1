@@ -23,8 +23,17 @@ if (-not (Test-Path -LiteralPath $anchor -PathType Leaf)) {
     Fail "GXMCP_SDK_ANCHOR_MISSING path=$($spec.anchor)"
 }
 $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($anchor).ProductVersion
-if ($actualVersion -ne $spec.supportedVersion) {
+$expectedMajor = 0
+$actualMajor = 0
+$sameMajor = [int]::TryParse(([string]$spec.supportedVersion -split '\.')[0], [ref]$expectedMajor) -and
+    [int]::TryParse(([string]$actualVersion -split '\.')[0], [ref]$actualMajor) -and
+    $expectedMajor -gt 0 -and $expectedMajor -eq $actualMajor
+$exactVersion = $actualVersion -eq $spec.supportedVersion
+if (-not $sameMajor) {
     Fail "GXMCP_SDK_VERSION_MISMATCH expectedVersion=$($spec.supportedVersion) actualVersion=$actualVersion"
+}
+if (-not $spec.assemblies -or $spec.assemblies.Count -eq 0) {
+    Fail "GXMCP_SDK_MANIFEST_INVALID manifest=$Manifest error=assemblies"
 }
 foreach ($assembly in $spec.assemblies) {
     $file = Join-Path $GxPath $assembly.path
@@ -37,9 +46,10 @@ foreach ($assembly in $spec.assemblies) {
         $actualHash = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
     }
     finally { $sha.Dispose() }
-    if ($actualHash -ne $assembly.sha256.ToLowerInvariant()) {
-        Fail "GXMCP_SDK_FINGERPRINT_MISMATCH path=$($assembly.path) expectedSha256=$($assembly.sha256) actualSha256=$actualHash"
+    if ($actualHash -ne $assembly.sha256) {
+        Write-Output "GXMCP_SDK_FINGERPRINT_DRIFT path=$($assembly.path) expectedSha256=$($assembly.sha256) actualSha256=$actualHash"
     }
 }
-Write-Output "GXMCP_SDK_COMPATIBLE version=$($spec.supportedVersion) assemblies=$($spec.assemblies.Count)"
+if ($exactVersion) { $versionDiagnostic = $spec.supportedVersion } else { $versionDiagnostic = "$($spec.supportedVersion) actualVersion=$actualVersion (compatible major; patch/build drift)" }
+Write-Output "GXMCP_SDK_COMPATIBLE version=$versionDiagnostic assemblies=$($spec.assemblies.Count)"
 exit 0

@@ -80,6 +80,10 @@ namespace GxMcp.Gateway
         // event — so idle-shutdown teardown must signal the exit itself, or the pool never
         // drops the entry and the next command hits a dead worker (WorkerCrashed).
         private int _exitNotified;
+        private int _exitConfirmed;
+        private bool? _processAliveForTest;
+        private bool? _exitConfirmedForTest;
+        internal Func<WorkerStopReason, Exception?>? StopFailureForTest { get; set; }
         private int _inFlightCommands;
         private int _queuedCommands;
         // BUG-03: start timestamp of each in-flight command, keyed by JSON-RPC id.
@@ -148,6 +152,9 @@ namespace GxMcp.Gateway
                 catch { return null; }
             }
         }
+
+        internal bool ExitConfirmed => _exitConfirmedForTest ?? Volatile.Read(ref _exitConfirmed) != 0;
+        internal bool IsProcessAliveForPool => _processAliveForTest ?? (_process == null || IsProcessRunning(_process));
 
         // Friction 2026-05-22: surface the exe path the worker was actually
         // spawned from so whoami can show it. Worker can come from publish/worker/
@@ -717,6 +724,7 @@ namespace GxMcp.Gateway
             try
             {
                 _stopReason = WorkerStopReason.None;
+                Volatile.Write(ref _exitConfirmed, 0);
                 MarkActivity();
                 // Publish the readiness sources under the lock: StopProcess /
                 // WaitForPipeReadyAsync read these same fields under _processLock, and
@@ -831,6 +839,7 @@ namespace GxMcp.Gateway
                     {
                     }
                     _lastExitCode = exitCode;
+                    Volatile.Write(ref _exitConfirmed, 1);
 
                     // FR#19: exit code 17 means a sibling worker already serves this KB
                     // (single-instance reject). Don't respawn — the live worker is authoritative.
@@ -1016,6 +1025,12 @@ namespace GxMcp.Gateway
 
         public void StopWithReason(WorkerStopReason reason)
         {
+            var failure = StopFailureForTest?.Invoke(reason);
+            if (failure != null)
+            {
+                try { _cts.Cancel(); } catch (ObjectDisposedException) { }
+                throw failure;
+            }
             StopProcess(reason);
         }
 
@@ -1060,6 +1075,7 @@ namespace GxMcp.Gateway
             // the gateway. Idempotent — safe when StopWithReason already cancelled.
             try { _cts.Cancel(); } catch (ObjectDisposedException) { }
 
+            bool hadProcess = _process != null;
             lock (_processLock)
             {
                 _stopReason = reason;
@@ -1097,12 +1113,15 @@ namespace GxMcp.Gateway
                         if (!_process.HasExited)
                         {
                             _process.Kill(true);
+                            _process.WaitForExit(5000);
                         }
                         else
                         {
                             try { _lastExitCode = _process.ExitCode; } catch { }
                         }
 
+                        if (_process.HasExited)
+                            Volatile.Write(ref _exitConfirmed, 1);
                         _process.Dispose();
                     }
                     catch (Exception ex)
@@ -1118,7 +1137,10 @@ namespace GxMcp.Gateway
             // async Exited event, so without this the pool would never drop the entry on an
             // idle/planned teardown and the next AcquireAsync would hand back this dead
             // worker. Fired outside _processLock; idempotent with the Exited handler.
-            FireWorkerExitedOnce(reason);
+            if (!hadProcess && _exitConfirmedForTest == null)
+                Volatile.Write(ref _exitConfirmed, 1);
+            if (ExitConfirmed)
+                FireWorkerExitedOnce(reason);
         }
 
         private void MarkActivity()
@@ -1217,12 +1239,12 @@ namespace GxMcp.Gateway
 
                 if (!string.Equals(id, "heartbeat", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Fallback readiness signal: a real response means the worker is processing
-                    // commands, so it's SDK-ready even if the sdk_ready notification was missed
-                    // (e.g. an older worker binary that doesn't emit it).
-                    _sdkReady.TrySetResult(true);
                     MarkActivity();
                     CompleteInFlight(id);
+                    // A pipe-level RPC error proves only transport, not SDK readiness.
+                    // Accept readiness from a valid success response or sdk_ready notification.
+                    if (payload["error"] == null && payload.TryGetValue("result", out _))
+                        _sdkReady.TrySetResult(true);
                 }
             }
             catch (Exception ex)
@@ -1232,6 +1254,11 @@ namespace GxMcp.Gateway
                 // (worker emitted malformed JSON-RPC) but historically nobody saw it.
                 Program.Log($"[Gateway] HandleWorkerRpcResponse error: {ex.Message}");
             }
+        }
+
+        internal void HandleWorkerRpcResponseForTest(string json)
+        {
+            HandleWorkerRpcResponse(json, out _);
         }
 
         private string ScopedCrashLedgerPath()
@@ -1345,6 +1372,12 @@ namespace GxMcp.Gateway
 
         // Test seam: invoke the private teardown sink directly (no real process needed).
         internal void StopProcessForTest(WorkerStopReason reason) => StopProcess(reason);
+
+        internal void SetProcessStateForTest(bool alive, bool exitConfirmed)
+        {
+            _processAliveForTest = alive;
+            _exitConfirmedForTest = exitConfirmed;
+        }
 
         // Test seam: model the OS process exiting without starting or killing one.
         internal void SimulateUnexpectedExitForTest() => FireWorkerExitedOnce(WorkerStopReason.None);

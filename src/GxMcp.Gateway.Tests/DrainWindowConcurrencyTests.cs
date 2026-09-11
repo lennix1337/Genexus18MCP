@@ -86,5 +86,26 @@ namespace GxMcp.Gateway.Tests
             Assert.Same(newWorker, acquiredWorker);
             Assert.NotSame(firstWorker, acquiredWorker);
         }
+
+        [Fact]
+        public async Task ConcurrentAcquire_AfterDrainTimeout_FailsClosedWithoutReturningClosingWorker()
+        {
+            var pool = new WorkerPool(CfgWithMax(5));
+            var handle = new KbHandle("kb1", "C:/KB1");
+            pool.SpawnFactoryForTest = h =>
+            {
+                var worker = new WorkerProcess(CfgWithMax(5), h);
+                worker.SetProcessStateForTest(alive: true, exitConfirmed: false);
+                return worker;
+            };
+
+            var oldWorker = await pool.AcquireAsync(handle, CancellationToken.None);
+            var drainTask = pool.DrainAndReplaceAsync(handle, drainTimeoutMs: 25, CancellationToken.None);
+            var acquireTask = pool.AcquireAsync(handle, CancellationToken.None);
+
+            await Assert.ThrowsAsync<TimeoutException>(() => drainTask);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => acquireTask);
+            Assert.Same(oldWorker, pool.TryGet(handle.Alias));
+        }
     }
 }

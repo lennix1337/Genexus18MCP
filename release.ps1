@@ -297,6 +297,10 @@ function Set-LockfileVersion {
 }
 
 # -- 1. Resolve version + sanity-check tree --------------------------------
+function Test-StrictSemVer([string]$Value) {
+    return $Value -match '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+}
+
 Step "Resolving version"
 $pkgPath = Join-Path $root 'package.json'
 if (-not (Test-Path $pkgPath)) { Fail "package.json not found at $pkgPath" }
@@ -307,11 +311,10 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = $currentVersion
     Warn "No -Version passed; using package.json: $Version"
 } else {
-    # Strip leading 'v' if user typed it
     $Version = $Version -replace '^v', ''
-    if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[\w.]+)?$') {
-        Fail "Version '$Version' is not semver (X.Y.Z or X.Y.Z-tag)."
-    }
+}
+if (-not (Test-StrictSemVer $Version)) {
+    Fail "Version '$Version' is not strict semver (X.Y.Z[-prerelease][+build])."
 }
 $tag = "v$Version"
 $numericVersion = ([regex]::Match($Version, '^\d+\.\d+\.\d+')).Value

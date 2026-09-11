@@ -138,6 +138,30 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void DiskWarmSnapshotStore_SaveRoundTripsThroughTemporaryDirectory()
+        {
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gx_warm_atomic_" + System.Guid.NewGuid().ToString("N"));
+            string path = System.IO.Path.Combine(dir, "index-snapshot.bin");
+            try
+            {
+                var store = new DiskWarmSnapshotStore();
+                var metadata = new WarmIndexSnapshotMetadata { WorkerDllSha256 = "hash", KbPath = dir, SchemaVersion = 1 };
+                store.Save(path, metadata, Encoding.UTF8.GetBytes("first"));
+                store.Save(path, metadata, Encoding.UTF8.GetBytes("second"));
+
+                WarmIndexSnapshotMetadata loadedMetadata;
+                byte[] loadedPayload;
+                Assert.True(store.TryLoad(path, out loadedMetadata, out loadedPayload));
+                Assert.Equal("second", Encoding.UTF8.GetString(loadedPayload));
+                Assert.Empty(System.IO.Directory.GetFiles(dir, "*.tmp*", System.IO.SearchOption.AllDirectories));
+            }
+            finally
+            {
+                try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { }
+            }
+        }
+
+        [Fact]
         public void IndexCache_restores_valid_warm_snapshot_and_rebuilds_derived_indexes()
         {
             var store = new InMemoryStore();

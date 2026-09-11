@@ -75,6 +75,26 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void Existing_snapshot_survives_in_memory_clear_for_crash_recovery()
+        {
+            var path = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(path);
+            try
+            {
+                cache.ReplaceAll(OneEntry("Survivor", "Procedure"));
+                Assert.True(cache.FlushNow());
+                cache.Clear();
+
+                var recovered = new IndexCacheService();
+                recovered.Initialize(path);
+                try { Assert.True(recovered.GetIndex().Objects.ContainsKey("Procedure:Survivor")); }
+                finally { recovered.DeleteOnDiskSnapshot(); }
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
         public void DeleteOnDiskSnapshot_resets_high_water_mark()
         {
             var cache = new IndexCacheService();

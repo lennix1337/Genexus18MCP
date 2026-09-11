@@ -27,6 +27,15 @@ if ($LASTEXITCODE -ne 0) { throw "Current release metadata is not synchronized: 
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'release.ps1'), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw $errors[0] }
+$semverDefinition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-StrictSemVer' }, $true)
+if (-not $semverDefinition) { throw 'Canonical release script is missing strict semver validation.' }
+. ([scriptblock]::Create($semverDefinition.Extent.Text))
+foreach ($valid in @('0.0.0', '1.2.3-rc.1+build.7')) {
+    if (-not (Test-StrictSemVer $valid)) { throw "Valid semver was rejected: $valid" }
+}
+foreach ($invalid in @('01.2.3', '1.02.3', '1.2.03', '1.2', '1.2.3-01')) {
+    if (Test-StrictSemVer $invalid) { throw "Invalid semver was accepted: $invalid" }
+}
 $lockDefinition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-LockfileVersion' }, $true)
 if (-not $lockDefinition) { throw 'Canonical release script is missing lockfile synchronization.' }
 . ([scriptblock]::Create($lockDefinition.Extent.Text))

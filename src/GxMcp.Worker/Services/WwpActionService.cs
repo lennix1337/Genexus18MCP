@@ -37,15 +37,24 @@ namespace GxMcp.Worker.Services
                 return new PatternSettingsService(_objects).Run(target, args);
             try
             {
-                KBObject requestedObject = _objects.FindObject(target);
+                KBObject requestedObject = _objects.FindObject(
+                    target,
+                    typeFilter: "WorkWithPlus",
+                    guid: (string)args?["guid"],
+                    entityKey: (string)args?["entityKey"]);
                 const string wwpPrefix = "WorkWithPlus";
                 if (requestedObject == null && !string.IsNullOrEmpty(target) &&
                     target.StartsWith(wwpPrefix, StringComparison.OrdinalIgnoreCase) &&
                     target.Length > wwpPrefix.Length)
                 {
                     // Some SDK builds do not expose pattern instances through
-                    // GetByName. Resolve the owning object and follow its typed child.
-                    requestedObject = _objects.FindObject(target.Substring(wwpPrefix.Length));
+                    // GetByName. Resolve the owning object only through the typed
+                    // WorkWithPlus lookup; an untyped homonym is never acceptable.
+                    requestedObject = _objects.FindObject(
+                        target.Substring(wwpPrefix.Length), typeFilter: wwpPrefix);
+                    if (requestedObject != null && !string.Equals(
+                        requestedObject.TypeDescriptor?.Name, wwpPrefix, StringComparison.OrdinalIgnoreCase))
+                        requestedObject = null;
                 }
                 if (requestedObject == null)
                     return McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", target: target,
@@ -57,6 +66,18 @@ namespace GxMcp.Worker.Services
                 if (instance == null || string.IsNullOrWhiteSpace(xml))
                     return McpResponse.Err(code: "WWPInstanceNotFound",
                         message: "No editable WorkWithPlus PatternInstance was resolved for this object.", target: target);
+                string versionToken = WriteService.ComputeContentVersionToken(instance, xml);
+                string expectedVersion = args?["baseVersion"]?.ToString()
+                    ?? args?["expectedVersion"]?.ToString()
+                    ?? args?["versionToken"]?.ToString();
+                if (!IsExpectedVersion(expectedVersion, versionToken))
+                    return McpResponse.Err(code: "StaleObject",
+                        message: "The WorkWithPlus PatternInstance changed after the caller's read; no action mutation was applied.",
+                        target: target, extra: new JObject
+                        {
+                            ["expectedVersion"] = expectedVersion,
+                            ["currentVersion"] = versionToken
+                        });
                 _patterns.BuildPatternPartEnvelope(requestedObject, "PatternInstance", xml,
                     out _, out KBObjectPart instancePart);
 
@@ -89,6 +110,7 @@ namespace GxMcp.Worker.Services
                         ["instance"] = instance.Name,
                         ["operation"] = operation,
                         ["diff"] = diff,
+                        ["versionToken"] = versionToken,
                         ["saved"] = false
                     });
 
@@ -124,6 +146,7 @@ namespace GxMcp.Worker.Services
                     ["instance"] = persistedInstance?.Name ?? instance.Name,
                     ["operation"] = operation,
                     ["diff"] = diff,
+                    ["versionToken"] = WriteService.ComputeContentVersionToken(persistedInstance, persistedXml),
                     ["persisted"] = persisted,
                     ["write"] = write,
                     ["saved"] = true,
@@ -143,6 +166,9 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Err(code: "WwpActionFailed", message: ex.Message, target: target);
             }
         }
+
+        internal static bool IsExpectedVersion(string expected, string current) =>
+            string.IsNullOrWhiteSpace(expected) || string.Equals(expected, current, StringComparison.Ordinal);
 
         private KBObject ResolveProcedure(string name)
         {

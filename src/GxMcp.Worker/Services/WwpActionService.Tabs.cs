@@ -604,7 +604,10 @@ namespace GxMcp.Worker.Services
         {
             if (string.IsNullOrWhiteSpace(webForm))
                 return new JObject { ["confirmed"] = false, ["message"] = "The projected WebForm could not be re-read." };
-            bool targetPresent = webForm.IndexOf(controlName, StringComparison.OrdinalIgnoreCase) >= 0;
+            XDocument document;
+            try { document = XDocument.Parse(webForm, LoadOptions.PreserveWhitespace); }
+            catch { return new JObject { ["confirmed"] = false, ["message"] = "The projected WebForm is not valid XML." }; }
+            bool targetPresent = FindWebFormNamedElement(document, controlName) != null;
             if (operation == "remove_tab")
                 return new JObject { ["confirmed"] = !targetPresent, ["actionEventConfirmed"] = true,
                     ["message"] = targetPresent ? "The removed tab is still present in WebForm." : null };
@@ -615,7 +618,8 @@ namespace GxMcp.Worker.Services
             bool ordered = true;
             foreach (string name in orderedNames)
             {
-                int current = webForm.IndexOf(name, StringComparison.OrdinalIgnoreCase);
+                XElement named = FindWebFormNamedElement(document, name);
+                int current = named == null ? -1 : document.Root.DescendantsAndSelf().ToList().IndexOf(named);
                 if (current >= 0 && current < previous) ordered = false;
                 if (current >= 0) previous = current;
             }
@@ -623,7 +627,7 @@ namespace GxMcp.Worker.Services
                 .FirstOrDefault(t => string.Equals(t["controlName"]?.ToString(), controlName, StringComparison.OrdinalIgnoreCase));
             var actions = new List<string>();
             CollectControlNames(target?["children"], "userAction", actions);
-            bool eventsConfirmed = actions.All(a => WebFormContainsEvent(webForm, a));
+            bool eventsConfirmed = actions.All(a => WebFormContainsEvent(document, a));
             return new JObject
             {
                 ["confirmed"] = targetPresent && ordered && eventsConfirmed,
@@ -696,16 +700,34 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private static bool WebFormContainsEvent(string webForm, string actionName)
+        internal static JObject VerifyWebFormProjectionForTests(string webForm, JObject expectedTabs, string operation, string controlName)
+            => VerifyWebFormProjection(webForm, expectedTabs, operation, controlName);
+
+        internal static bool WebFormContainsEventForTests(string webForm, string actionName)
         {
-            try
-            {
-                XDocument document = XDocument.Parse(webForm, LoadOptions.PreserveWhitespace);
-                return document.Root != null && document.Root.DescendantsAndSelf().Any(e => e.Attributes().Any(a =>
-                    a.Name.LocalName.IndexOf("event", StringComparison.OrdinalIgnoreCase) >= 0
-                    && a.Value.IndexOf(actionName, StringComparison.OrdinalIgnoreCase) >= 0));
-            }
+            try { return WebFormContainsEvent(XDocument.Parse(webForm, LoadOptions.PreserveWhitespace), actionName); }
             catch { return false; }
+        }
+
+        private static XElement FindWebFormNamedElement(XDocument document, string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            return document.Root.DescendantsAndSelf().FirstOrDefault(e => e.Attributes().Any(a =>
+                (a.Name.LocalName.Equals("ControlName", StringComparison.OrdinalIgnoreCase)
+                 || a.Name.LocalName.Equals("controlName", StringComparison.OrdinalIgnoreCase)
+                 || a.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase)
+                 || a.Name.LocalName.Equals("id", StringComparison.OrdinalIgnoreCase))
+                && string.Equals(a.Value, name, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private static bool WebFormContainsEvent(XDocument document, string actionName)
+        {
+            if (document?.Root == null || string.IsNullOrWhiteSpace(actionName)) return false;
+            return document.Root.DescendantsAndSelf().Any(e => e.Attributes().Any(a =>
+                a.Name.LocalName.IndexOf("event", StringComparison.OrdinalIgnoreCase) >= 0
+                && a.Value.Split(new[] { '.', ':', '/', '\\', '-', ' ', ',', ';', '(', ')', '[', ']' },
+                    StringSplitOptions.RemoveEmptyEntries)
+                    .Any(token => string.Equals(token, actionName, StringComparison.OrdinalIgnoreCase))));
         }
 
         private static string ReadObjectProperty(KBObject obj, string name)

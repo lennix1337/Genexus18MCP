@@ -44,7 +44,10 @@ function readCache() {
     try {
         const raw = fs.readFileSync(getCacheFile(), 'utf8');
         const data = JSON.parse(raw);
-        if (data && typeof data === 'object') return data;
+        if (data && typeof data === 'object'
+            && (data.package === undefined || data.package === NPM_PACKAGE)
+            && (data.channel === undefined || validateChannel(data.channel))
+            && parseSemver(data.latestVersion)) return data;
     } catch {
     }
     return null;
@@ -54,7 +57,9 @@ function writeCache(data) {
     try {
         const file = getCacheFile();
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, JSON.stringify(data), 'utf8');
+        const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+        fs.writeFileSync(tmp, JSON.stringify({ package: NPM_PACKAGE, channel: 'latest', ...data }), 'utf8');
+        fs.renameSync(tmp, file);
     } catch {
     }
 }
@@ -65,20 +70,40 @@ function stripV(v) {
 
 function parseSemver(v) {
     const s = stripV(v);
-    const m = /^(\d+)\.(\d+)\.(\d+)/.exec(s);
+    const m = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(s);
     if (!m) return null;
-    return [Number(m[1]), Number(m[2]), Number(m[3])];
+    return { valid: true, major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]),
+        prerelease: m[4] ? m[4].split('.') : [], build: m[5] ? m[5].split('.') : [] };
 }
 
 function compareSemver(a, b) {
     const pa = parseSemver(a);
     const pb = parseSemver(b);
-    if (!pa || !pb) return 0;
-    for (let i = 0; i < 3; i += 1) {
-        if (pa[i] > pb[i]) return 1;
-        if (pa[i] < pb[i]) return -1;
+    if (!pa || !pb) return null;
+    for (const key of ['major', 'minor', 'patch']) {
+        if (pa[key] > pb[key]) return 1;
+        if (pa[key] < pb[key]) return -1;
+    }
+    if (pa.prerelease.length === 0 && pb.prerelease.length > 0) return 1;
+    if (pa.prerelease.length > 0 && pb.prerelease.length === 0) return -1;
+    for (let i = 0; i < Math.max(pa.prerelease.length, pb.prerelease.length); i += 1) {
+        if (i >= pa.prerelease.length) return -1;
+        if (i >= pb.prerelease.length) return 1;
+        const left = pa.prerelease[i];
+        const right = pb.prerelease[i];
+        if (left === right) continue;
+        const leftNum = /^\d+$/.test(left);
+        const rightNum = /^\d+$/.test(right);
+        if (leftNum && rightNum) return Number(left) > Number(right) ? 1 : -1;
+        if (leftNum !== rightNum) return leftNum ? -1 : 1;
+        return left > right ? 1 : -1;
     }
     return 0;
+}
+
+function validateChannel(channel) {
+    const value = typeof channel === 'string' ? channel.trim() : '';
+    return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) ? value : null;
 }
 
 function httpGetJson(url) {
@@ -112,13 +137,14 @@ function httpGetJson(url) {
 // api.github.com. Falls back to the GitHub releases API only for the default
 // channel. The release URL is derived from the version (no API call needed).
 async function fetchLatestRelease(opts = {}) {
-    const channel = (opts && opts.channel) || 'latest';
+    const channel = validateChannel((opts && opts.channel) || 'latest');
+    if (!channel) return null;
 
     // 1. npm registry dist-tags (lightweight: just the tag → version map).
     const tags = await httpGetJson(`https://registry.npmjs.org/-/package/${NPM_PACKAGE}/dist-tags`);
     if (tags && typeof tags === 'object') {
         const v = stripV(tags[channel] || '');
-        if (v) return { latestVersion: v, releaseUrl: releaseUrlForVersion(v), source: 'npm' };
+        if (parseSemver(v)) return { latestVersion: v, releaseUrl: releaseUrlForVersion(v), source: 'npm' };
         // Channel not found on npm — for non-default channels, that's a definitive "no".
         if (channel !== 'latest') return null;
     }
@@ -128,7 +154,7 @@ async function fetchLatestRelease(opts = {}) {
         const rel = await httpGetJson(`https://api.github.com/repos/${REPO}/releases/latest`);
         if (rel && typeof rel === 'object') {
             const tag = stripV(rel.tag_name || '');
-            if (tag) {
+            if (parseSemver(tag)) {
                 const url = typeof rel.html_url === 'string' ? rel.html_url : releaseUrlForVersion(tag);
                 return { latestVersion: tag, releaseUrl: url, source: 'github' };
             }
@@ -157,7 +183,7 @@ function maybePrintCachedBanner(_opts) {
     const current = getPackageVersion();
     if (!current) return;
     const cache = readCache();
-    if (!cache || !cache.latestVersion) return;
+    if (!cache || !cache.latestVersion || (cache.channel && cache.channel !== 'latest')) return;
     if (compareSemver(cache.latestVersion, current) > 0) {
         try {
             process.stderr.write(formatBanner(current, cache.latestVersion, cache.releaseUrl || null));
@@ -253,27 +279,29 @@ function detectInstallMethod() {
 // The method-appropriate upgrade plan. `auto` means no manual install step is
 // needed (the npx launcher fetches @latest on the next client start).
 function upgradePlanFor(method, channel) {
-    const tag = channel && channel !== 'latest' ? `@${channel}` : '@latest';
+    const resolvedChannel = channel || 'latest';
+    const tag = resolvedChannel !== 'latest' ? `@${resolvedChannel}` : '@latest';
     if (method === 'npx-latest') {
         return {
             method,
+            channel: resolvedChannel,
             auto: true,
             steps: [
-                'Your clients launch via `npx genexus-mcp@latest`, which fetches the newest version on each start.',
-                'Just fully restart your AI client — it will pick up the new version automatically.'
+                `Your clients launch via \`npx ${NPM_PACKAGE}${tag}\`, which fetches the newest ${resolvedChannel} version on each start.`,
+                'Just fully restart your AI client — it will pick up the selected channel automatically.'
             ],
-            // --apply busts a stale npx cache so the next spawn is guaranteed fresh.
-            applyCommand: { exe: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: ['cache', 'clean', '--force'] },
+            applyCommand: null,
             restartRequired: true
         };
     }
     if (method === 'fixed-path') {
         return {
             method,
+            channel: resolvedChannel,
             auto: false,
             steps: [
-                'Your install runs the gateway from a fixed path (corporate install).',
-                `Re-run the installer to update in place: ${INSTALL_ONE_LINER}`,
+                `Your install runs the gateway from a fixed path (corporate install); npm ${tag} will not update that artifact.`,
+                `Re-run the fixed-path installer for the resolved ${resolvedChannel} release artifact${resolvedChannel === 'latest' ? '' : ` from channel \`${resolvedChannel}\``}: ${INSTALL_ONE_LINER}`,
                 'Then fully restart your AI client.'
             ],
             applyCommand: null, // self-stage is a future enhancement; installer is the path
@@ -284,6 +312,7 @@ function upgradePlanFor(method, channel) {
         const tag = channel && channel !== 'latest' ? `@${channel}` : '@latest';
         return {
             method,
+            channel: resolvedChannel,
             auto: false,
             steps: [
                 'Antigravity launches the gateway executable bundled with the npm package, so each MCP handshake skips npx.',
@@ -297,6 +326,7 @@ function upgradePlanFor(method, channel) {
     // npm-global
     return {
         method: 'npm-global',
+        channel: resolvedChannel,
         auto: false,
         steps: [
             `Run: npm install -g ${NPM_PACKAGE}${tag}`,
@@ -307,23 +337,37 @@ function upgradePlanFor(method, channel) {
     };
 }
 
-function runCommand(exe, args) {
+function runCommand(exe, args, options = {}) {
     return new Promise((resolve) => {
         let child;
+        let settled = false;
+        const finish = (result) => { if (!settled) { settled = true; resolve(result); } };
         try {
             child = spawn(exe, args, { stdio: 'inherit', windowsHide: true });
         } catch (err) {
-            resolve({ ok: false, code: null, error: err && err.message ? err.message : 'spawn failed' });
+            finish({ ok: false, code: null, error: err && err.message ? err.message : 'spawn failed' });
             return;
         }
-        child.on('error', (err) => resolve({ ok: false, code: null, error: err && err.message ? err.message : 'spawn failed' }));
-        child.on('exit', (code) => resolve({ ok: code === 0, code }));
+        let timedOut = false;
+        const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, options.timeoutMs) : 120000;
+        const timer = setTimeout(() => {
+            timedOut = true;
+            try { child.kill(); } catch { /* process may have exited */ }
+        }, timeoutMs);
+        child.on('error', (err) => { clearTimeout(timer); finish({ ok: false, code: null, error: err && err.message ? err.message : 'spawn failed', timedOut }); });
+        child.on('exit', (code, signal) => {
+            clearTimeout(timer);
+            finish({ ok: !timedOut && code === 0, code: timedOut ? -1 : code, signal: signal || null, timedOut });
+        });
     });
 }
 
 async function handleUpdate(options, ctx) {
     const opts = options || {};
-    const channel = opts.channel || 'latest';
+    const channel = validateChannel(opts.channel || 'latest');
+    if (!channel) {
+        return { exitCode: ctx.EXIT_CODES.USAGE, envelope: { error: { code: 'invalid_channel', message: 'Channel must contain only letters, numbers, dots, underscores, or hyphens.' } } };
+    }
     const current = getPackageVersion();
     const result = await fetchLatestRelease({ channel });
     const mismatches = detectClientExeDrift();
@@ -346,8 +390,13 @@ async function handleUpdate(options, ctx) {
         };
     }
 
-    writeCache({ checkedAt: Date.now(), latestVersion: result.latestVersion, releaseUrl: result.releaseUrl, source: result.source || null });
+    writeCache({ checkedAt: Date.now(), latestVersion: result.latestVersion, releaseUrl: result.releaseUrl, source: result.source || null, channel });
 
+    const currentSemver = parseSemver(current || '0.0.0');
+    const latestSemver = parseSemver(result.latestVersion);
+    if (!latestSemver || !currentSemver) {
+        return { exitCode: ctx.EXIT_CODES.OK, envelope: { ok: { current, latest: result.latestVersion, channel, updateAvailable: false, invalidVersion: true }, help: ['Could not compare versions because the installed or published version is invalid semver.'] } };
+    }
     const updateAvailable = compareSemver(result.latestVersion, current || '0.0.0') > 0;
     const plan = upgradePlanFor(install.method, channel);
 
@@ -433,5 +482,7 @@ module.exports = {
     getPackageVersion,
     detectInstallMethod,
     upgradePlanFor,
-    fetchLatestRelease
+    fetchLatestRelease,
+    validateChannel,
+    runCommand
 };

@@ -144,6 +144,50 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void WebFormProjectionMatchingIsDelimitedAndStructural()
+        {
+            JObject expected = new JObject
+            {
+                ["tabs"] = new JArray
+                {
+                    new JObject { ["controlName"] = "Tab1", ["children"] = new JArray
+                    {
+                        new JObject { ["type"] = "userAction", ["name"] = "Send" }
+                    } },
+                    new JObject { ["controlName"] = "Tab10", ["children"] = new JArray() }
+                }
+            };
+            string webForm = "<form><tab id='Tab10'/><tab id='Tab1'><button event='OnSendNow'/></tab></form>";
+            JObject result = WwpActionService.VerifyWebFormProjectionForTests(webForm, expected, "add_tab", "Tab1");
+            Assert.False(result["confirmed"].Value<bool>());
+            Assert.False(result["actionEventConfirmed"].Value<bool>());
+            Assert.False(WwpActionService.WebFormContainsEventForTests(webForm, "Send"));
+            Assert.True(WwpActionService.WebFormContainsEventForTests("<form><button event='On.Send'/></form>", "Send"));
+        }
+
+        [Fact]
+        public void WebFormProjectionDoesNotConfuseTabPrefixWithExactControlName()
+        {
+            JObject expected = new JObject { ["tabs"] = new JArray
+            {
+                new JObject { ["controlName"] = "Tab1", ["children"] = new JArray() }
+            } };
+            JObject result = WwpActionService.VerifyWebFormProjectionForTests(
+                "<form><tab id='Tab10'/></form>", expected, "add_tab", "Tab1");
+            Assert.False(result["confirmed"].Value<bool>());
+            Assert.False(result["targetPresent"].Value<bool>());
+        }
+
+        [Theory]
+        [InlineData(null, "current", true)]
+        [InlineData("current", "current", true)]
+        [InlineData("stale", "current", false)]
+        public void CommonWwpActionVersionPreconditionRejectsStale(string expected, string current, bool valid)
+        {
+            Assert.Equal(valid, WwpActionService.IsExpectedVersion(expected, current));
+        }
+
+        [Fact]
         public void AddGridAttribute_ChangesOnlyRequestedAttribute()
         {
             var before = XDocument.Parse("<instance childrenOrderedList='grid,footer'><grid childrenOrderedList='A,B'><gridAttribute attribute='1-Existing' description='Existing'/></grid><footer childrenOrderedList='X,Y'/></instance>");
