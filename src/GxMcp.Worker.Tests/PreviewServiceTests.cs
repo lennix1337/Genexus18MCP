@@ -15,11 +15,12 @@ namespace GxMcp.Worker.Tests
             public List<(string fileName, string arguments)> Calls = new List<(string, string)>();
             public Dictionary<string, PreviewService.CliResult> ByVerb = new Dictionary<string, PreviewService.CliResult>();
             public string WhichResult = "C:/fake/chrome-devtools-axi.cmd";
-            public bool ThrowOnWhich;
+            public bool ThrowOnRun;
             public PreviewService.CliResult Default = new PreviewService.CliResult { ExitCode = 0, StdOut = "", StdErr = "" };
 
             public PreviewService.CliResult Run(string fileName, string arguments, int timeoutMs)
             {
+                if (ThrowOnRun) throw new InvalidOperationException("C:\\secrets\\preview-token");
                 Calls.Add((fileName, arguments));
                 string verb = arguments?.Split(' ')[0] ?? "";
                 if (ByVerb.TryGetValue(verb, out var r)) return r;
@@ -28,7 +29,6 @@ namespace GxMcp.Worker.Tests
 
             public string Which(string command)
             {
-                if (ThrowOnWhich) throw new InvalidOperationException("C:\\secrets\\preview-token");
                 return WhichResult;
             }
         }
@@ -78,6 +78,113 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ResolveAxiCli_PrefersExplicitConfigAndResolvesQuotedRelativePath()
+        {
+            var dir = TempDir();
+            var configDir = Path.Combine(dir, "config with spaces");
+            var toolsDir = Path.Combine(dir, "tools with spaces");
+            Directory.CreateDirectory(configDir);
+            Directory.CreateDirectory(toolsDir);
+            var cliPath = Path.Combine(toolsDir, "chrome-devtools-axi.cmd");
+            File.WriteAllText(cliPath, "@echo off");
+
+            var resolved = PreviewService.ResolveAxiCli(
+                new JObject { ["axiCli"] = "\"..\\tools with spaces\\chrome-devtools-axi.cmd\"" },
+                Path.Combine(configDir, "preview.config.json"),
+                new JObject { ["axiCli"] = "missing-from-profile.cmd" },
+                Path.Combine(dir, "profile.json"),
+                Path.Combine(dir, "worker"),
+                Path.Combine(dir, "backend"),
+                new string[0],
+                "C:\\unrelated-path",
+                command => "C:/fake/" + command);
+
+            Assert.True(resolved.Resolved);
+            Assert.Equal(Path.GetFullPath(cliPath), resolved.ResolvedPath);
+            Assert.Equal("preview.config.json", resolved.Source);
+        }
+
+        [Fact]
+        public void ResolveAxiCli_UsesProfileBeforeRuntimeAndPath()
+        {
+            var dir = TempDir();
+            var profileDir = Path.Combine(dir, "profile");
+            var runtimeDir = Path.Combine(dir, "runtime");
+            Directory.CreateDirectory(profileDir);
+            Directory.CreateDirectory(runtimeDir);
+            var profileCli = Path.Combine(profileDir, "chrome-devtools-axi.cmd");
+            File.WriteAllText(profileCli, "@echo off");
+            File.WriteAllText(Path.Combine(profileDir, "profile.json"), "{}");
+
+            var resolved = PreviewService.ResolveAxiCli(
+                new JObject(),
+                Path.Combine(dir, "worker", "preview.config.json"),
+                new JObject { ["Preview"] = new JObject { ["axiCli"] = "chrome-devtools-axi.cmd" } },
+                Path.Combine(profileDir, "profile.json"),
+                Path.Combine(dir, "worker"),
+                Path.Combine(dir, "backend"),
+                new[] { runtimeDir },
+                "C:\\path-used",
+                command => "C:/path/" + command);
+
+            Assert.True(resolved.Resolved);
+            Assert.Equal(Path.GetFullPath(profileCli), resolved.ResolvedPath);
+            Assert.Equal("MCP profile", resolved.Source);
+        }
+
+        [Fact]
+        public void ResolveAxiCli_UsesRuntimeBeforeWorkerAndPath()
+        {
+            var dir = TempDir();
+            var runtimeDir = Path.Combine(dir, "runtime");
+            var workerDir = Path.Combine(dir, "worker");
+            Directory.CreateDirectory(runtimeDir);
+            Directory.CreateDirectory(workerDir);
+            var runtimeCli = Path.Combine(runtimeDir, "chrome-devtools-axi.cmd");
+            File.WriteAllText(runtimeCli, "@echo off");
+            File.WriteAllText(Path.Combine(workerDir, "chrome-devtools-axi.cmd"), "@echo off");
+
+            var resolved = PreviewService.ResolveAxiCli(
+                new JObject(),
+                Path.Combine(dir, "preview.config.json"),
+                null,
+                null,
+                workerDir,
+                Path.Combine(dir, "backend"),
+                new[] { runtimeDir },
+                "C:\\path-used",
+                command => "C:/path/" + command);
+
+            Assert.True(resolved.Resolved);
+            Assert.Equal(Path.GetFullPath(runtimeCli), resolved.ResolvedPath);
+            Assert.Equal("MCP runtime/dependencies", resolved.Source);
+        }
+
+        [Fact]
+        public void ResolveAxiCli_MissingIncludesPreflightEvidence()
+        {
+            var dir = TempDir();
+            var resolved = PreviewService.ResolveAxiCli(
+                new JObject { ["axiCli"] = "missing.cmd" },
+                Path.Combine(dir, "preview.config.json"),
+                null,
+                null,
+                Path.Combine(dir, "worker"),
+                Path.Combine(dir, "backend"),
+                new string[0],
+                "C:\\first;C:\\second",
+                command => null);
+
+            var json = resolved.ToJObject();
+            Assert.False((bool)json["resolved"]);
+            Assert.Equal("C:\\first;C:\\second", json["pathUsed"]?.ToString());
+            Assert.Equal("missing.cmd", json["axiCli"]?.ToString());
+            Assert.Contains("configure", json["installHint"]?.ToString(), System.StringComparison.OrdinalIgnoreCase);
+            Assert.Contains((JArray)json["searchedPaths"], item => item.ToString().EndsWith("missing.cmd"));
+            Assert.Contains((JArray)json["searchedPaths"], item => item.ToString().StartsWith("PATH:", System.StringComparison.Ordinal));
+        }
+
+        [Fact]
         public void PreviewSync_ReturnsCliMissingWhenProbeFails()
         {
             var dir = TempDir();
@@ -124,7 +231,7 @@ namespace GxMcp.Worker.Tests
         public void PreviewSync_UnexpectedFailure_HidesExceptionTextAndReturnsOperationId()
         {
             string dir = TempDir();
-            var runner = new FakeRunner { ThrowOnWhich = true };
+            var runner = new FakeRunner { ThrowOnRun = true };
             var svc = new PreviewService(null, null, runner, Path.Combine(dir, "preview.config.json"), dir);
             var result = svc.PreviewSync("PanelX", null, "auto", false, 0, new[] { "html" }, false, false);
             Assert.Equal("error", result["status"]?.ToString());
@@ -169,6 +276,31 @@ namespace GxMcp.Worker.Tests
             Assert.Contains(runner.Calls, c => c.arguments.StartsWith("open "));
             Assert.Contains(runner.Calls, c => c.arguments.StartsWith("snapshot"));
             Assert.Contains(runner.Calls, c => c.arguments.StartsWith("eval "));
+        }
+
+        [Fact]
+        public void PreviewSync_CapturesConsoleAndExceptionsWithoutBuild()
+        {
+            var dir = TempDir();
+            var runner = new FakeRunner();
+            runner.ByVerb["snapshot"] = new PreviewService.CliResult
+            {
+                ExitCode = 0,
+                StdOut = "form with PesCod ano sem aluno fields"
+            };
+            runner.ByVerb["eval"] = new PreviewService.CliResult { ExitCode = 0, StdOut = "[]" };
+            runner.ByVerb["open"] = new PreviewService.CliResult { ExitCode = 0, StdOut = "" };
+
+            var svc = new PreviewService(null, null, runner, Path.Combine(dir, "preview.config.json"), dir);
+            var r = svc.PreviewSync("MyPanel", null, "auto", false, 0,
+                new[] { "console", "exceptions" }, false, false, emulate: "desktop1280");
+
+            Assert.Equal("ok", r["status"]?.ToString());
+            Assert.NotNull(r["axiCli"]);
+            Assert.Equal("desktop1280", r["emulation"]?["emulate"]?.ToString());
+            Assert.Equal("[]", r["captures"]?["console"]?.ToString());
+            Assert.IsType<JArray>(r["captures"]?["exceptions"]);
+            Assert.DoesNotContain(runner.Calls, c => c.arguments.StartsWith("build", System.StringComparison.OrdinalIgnoreCase));
         }
 
         [Theory]

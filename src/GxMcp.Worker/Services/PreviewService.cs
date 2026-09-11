@@ -38,6 +38,40 @@ namespace GxMcp.Worker.Services
             public bool TimedOut;
         }
 
+        internal sealed class AxiCliResolution
+        {
+            public string ResolvedPath;
+            public string Version;
+            public string Source;
+            public string ConfigFile;
+            public string ProfileConfigFile;
+            public string AxiCli;
+            public string ProfileAxiCli;
+            public string PathUsed;
+            public readonly List<string> SearchedPaths = new List<string>();
+
+            public bool Resolved => !string.IsNullOrWhiteSpace(ResolvedPath);
+
+            public JObject ToJObject()
+            {
+                var result = new JObject
+                {
+                    ["resolved"] = Resolved,
+                    ["source"] = Source,
+                    ["configFile"] = ConfigFile,
+                    ["profileConfigFile"] = ProfileConfigFile,
+                    ["axiCli"] = AxiCli,
+                    ["profileAxiCli"] = ProfileAxiCli,
+                    ["pathUsed"] = PathUsed,
+                    ["searchedPaths"] = new JArray(SearchedPaths),
+                    ["installHint"] = "Configure axiCli with an absolute path or install chrome-devtools-axi in the MCP runtime (npm install chrome-devtools-axi), then restart the Worker."
+                };
+                result["path"] = ResolvedPath;
+                result["version"] = Version;
+                return result;
+            }
+        }
+
         public class DefaultCliRunner : ICliRunner
         {
             public CliResult Run(string fileName, string arguments, int timeoutMs)
@@ -220,6 +254,7 @@ namespace GxMcp.Worker.Services
         private readonly string _baselineRootOverride;
         private JObject _cachedConfig;
         private string _cachedCliPath;
+        private AxiCliResolution _cachedCliResolution;
 
         // v2.6.6 Stream H (FR#25) — F5 launcher resolver. Defaults to KbService
         // when running in-process; tests inject a deterministic resolver that
@@ -264,7 +299,7 @@ namespace GxMcp.Worker.Services
             _objectService = objectService;
             _buildService = buildService;
             _runner = runner ?? new DefaultCliRunner();
-            _configPath = configPath ?? DefaultConfigPath();
+            _configPath = ResolvePathValue(configPath ?? DefaultConfigPath(), AppDomain.CurrentDomain.BaseDirectory);
             _baselineRootOverride = baselineRootOverride;
             // Default resolver — best-effort lookup via KbService. Falls back to
             // null when ObjectService isn't wired (unit tests), in which case
@@ -390,21 +425,260 @@ namespace GxMcp.Worker.Services
         internal string ResolveCli()
         {
             if (!string.IsNullOrEmpty(_cachedCliPath)) return _cachedCliPath;
+            var diagnostic = ResolveCliDiagnostic();
+            _cachedCliPath = diagnostic.ResolvedPath;
+            return _cachedCliPath;
+        }
+
+        internal AxiCliResolution ResolveCliDiagnostic()
+        {
+            if (_cachedCliResolution != null) return _cachedCliResolution;
+
             var cfg = LoadConfig();
-            string fromCfg = cfg["axiCli"]?.ToString();
-            if (!string.IsNullOrEmpty(fromCfg) && File.Exists(fromCfg))
+            string workerDir = AppDomain.CurrentDomain.BaseDirectory ?? Environment.CurrentDirectory;
+            string profilePath = ResolvePathValue(
+                Environment.GetEnvironmentVariable("GXMCP_PROFILE_CONFIG_PATH"), workerDir);
+            JObject profile = TryLoadJson(profilePath);
+            var runtimeDirectories = new List<string>();
+            AddDirectory(runtimeDirectories, ResolvePathValue(
+                Environment.GetEnvironmentVariable("GXMCP_RUNTIME_DIR"), workerDir));
+            AddDirectory(runtimeDirectories, ResolvePathValue(
+                Environment.GetEnvironmentVariable("GXMCP_DEPENDENCIES_DIR"), workerDir));
+            AddDirectory(runtimeDirectories, ResolvePathValue(
+                GetConfigString(profile, "runtimeDirectory", "runtimeDir", "dependenciesDirectory", "dependenciesDir"),
+                DirectoryOf(profilePath) ?? workerDir));
+
+            string backendDir = null;
+            try { backendDir = Directory.GetParent(workerDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))?.FullName; }
+            catch { }
+
+            _cachedCliResolution = ResolveAxiCli(
+                cfg,
+                _configPath,
+                profile,
+                profilePath,
+                workerDir,
+                backendDir,
+                runtimeDirectories,
+                Environment.GetEnvironmentVariable("PATH"),
+                command => _runner.Which(command));
+
+            if (_cachedCliResolution.Resolved)
             {
-                _cachedCliPath = fromCfg;
-                return _cachedCliPath;
+                try
+                {
+                    var version = _runner.Run(_cachedCliResolution.ResolvedPath, "--version", 10000);
+                    _cachedCliResolution.Version = FirstOutputLine(version?.StdOut) ?? FirstOutputLine(version?.StdErr);
+                }
+                catch { }
             }
-            // Probe via PATH
-            var probed = _runner.Which("chrome-devtools-axi") ?? _runner.Which("chrome-devtools-axi.cmd");
-            if (!string.IsNullOrEmpty(probed))
+
+            return _cachedCliResolution;
+        }
+
+        internal static AxiCliResolution ResolveAxiCli(
+            JObject previewConfig,
+            string previewConfigPath,
+            JObject profileConfig,
+            string profileConfigPath,
+            string workerDir,
+            string backendDir,
+            IEnumerable<string> runtimeDirectories,
+            string pathUsed,
+            Func<string, string> pathProbe)
+        {
+            var resolution = new AxiCliResolution
             {
-                _cachedCliPath = probed;
-                return _cachedCliPath;
+                ConfigFile = ResolvePathValue(previewConfigPath, workerDir),
+                ProfileConfigFile = ResolvePathValue(profileConfigPath, workerDir),
+                AxiCli = GetConfigString(previewConfig, "axiCli"),
+                ProfileAxiCli = GetConfigString(profileConfig, "axiCli"),
+                PathUsed = pathUsed ?? string.Empty
+            };
+
+            // 1) Explicit preview configuration. Relative paths are owned by the
+            // config file, never by the process current directory.
+            if (TryConfigured(resolution, resolution.AxiCli, DirectoryOf(resolution.ConfigFile), "preview.config.json"))
+                return resolution;
+
+            // 2) MCP profile configuration. The Gateway forwards its absolute
+            // config path to the Worker through GXMCP_PROFILE_CONFIG_PATH.
+            if (TryConfigured(resolution, resolution.ProfileAxiCli, DirectoryOf(resolution.ProfileConfigFile), "MCP profile"))
+                return resolution;
+
+            // 3) Runtime/dependency directories, including npm's local .bin shims.
+            if (runtimeDirectories != null)
+            {
+                foreach (var directory in runtimeDirectories)
+                    if (TryDirectory(resolution, directory, workerDir, "MCP runtime/dependencies")) return resolution;
+            }
+            foreach (var ancestor in Ancestors(workerDir))
+            {
+                if (TryDirectory(resolution, Path.Combine(ancestor, "node_modules", ".bin"), workerDir, "MCP runtime/dependencies")) return resolution;
+                if (TryDirectory(resolution, Path.Combine(ancestor, "node_modules"), workerDir, "MCP runtime/dependencies")) return resolution;
+            }
+
+            // 4) The Worker and its backend directory.
+            if (TryDirectory(resolution, workerDir, workerDir, "Worker/backend")) return resolution;
+            if (!string.Equals(NormalizeDirectory(workerDir), NormalizeDirectory(backendDir), StringComparison.OrdinalIgnoreCase) &&
+                TryDirectory(resolution, backendDir, workerDir, "Worker/backend")) return resolution;
+
+            // 5) Last resort: the effective PATH inherited by the Worker.
+            if (pathProbe != null)
+            {
+                foreach (var name in AxiCliNames)
+                {
+                    AddSearch(resolution, "PATH:" + name);
+                    string probed = null;
+                    try { probed = pathProbe(name); } catch { }
+                    if (!string.IsNullOrWhiteSpace(probed))
+                    {
+                        resolution.ResolvedPath = ResolvePathValue(CleanPath(probed), workerDir);
+                        resolution.Source = "PATH";
+                        return resolution;
+                    }
+                }
+            }
+
+            return resolution;
+        }
+
+        private static readonly string[] AxiCliNames =
+        {
+            "chrome-devtools-axi.exe",
+            "chrome-devtools-axi.cmd",
+            "chrome-devtools-axi.bat",
+            "chrome-devtools-axi.ps1",
+            "chrome-devtools-axi"
+        };
+
+        private static bool TryConfigured(AxiCliResolution resolution, string rawPath, string baseDir, string source)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath)) return false;
+            string candidate = ResolvePathValue(CleanPath(rawPath), baseDir);
+            AddSearch(resolution, candidate);
+            if (File.Exists(candidate))
+            {
+                resolution.ResolvedPath = candidate;
+                resolution.Source = source;
+                return true;
+            }
+            return Directory.Exists(candidate) && TryDirectory(resolution, candidate, baseDir, source);
+        }
+
+        private static bool TryDirectory(AxiCliResolution resolution, string directory, string baseDir, string source)
+        {
+            if (string.IsNullOrWhiteSpace(directory)) return false;
+            string fullDir = ResolvePathValue(CleanPath(directory), baseDir);
+            foreach (var name in AxiCliNames)
+            {
+                string candidate = Path.Combine(fullDir, name);
+                AddSearch(resolution, candidate);
+                if (File.Exists(candidate))
+                {
+                    resolution.ResolvedPath = candidate;
+                    resolution.Source = source;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static IEnumerable<string> Ancestors(string directory)
+        {
+            string current = NormalizeDirectory(directory);
+            for (int i = 0; !string.IsNullOrEmpty(current) && i < 8; i++)
+            {
+                yield return current;
+                string parent = null;
+                try { parent = Directory.GetParent(current)?.FullName; } catch { }
+                if (string.Equals(current, parent, StringComparison.OrdinalIgnoreCase)) yield break;
+                current = parent;
+            }
+        }
+
+        private static string GetConfigString(JObject config, params string[] names)
+        {
+            if (config == null) return null;
+            foreach (var property in config.Properties())
+            {
+                if (names.Any(name => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)))
+                    return property.Value?.Type == JTokenType.Null ? null : property.Value?.ToString();
+            }
+
+            foreach (var sectionName in new[] { "preview", "browser", "browserDriver", "environment" })
+            {
+                var section = config.Properties().FirstOrDefault(p =>
+                    string.Equals(p.Name, sectionName, StringComparison.OrdinalIgnoreCase))?.Value as JObject;
+                var nested = GetConfigString(section, names);
+                if (!string.IsNullOrWhiteSpace(nested)) return nested;
             }
             return null;
+        }
+
+        private static JObject TryLoadJson(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
+            try { return JObject.Parse(File.ReadAllText(path)); }
+            catch { return null; }
+        }
+
+        private static void AddDirectory(List<string> directories, string directory)
+        {
+            if (!string.IsNullOrWhiteSpace(directory) &&
+                !directories.Any(d => string.Equals(d, directory, StringComparison.OrdinalIgnoreCase)))
+                directories.Add(directory);
+        }
+
+        private static void AddSearch(AxiCliResolution resolution, string path)
+        {
+            if (!string.IsNullOrWhiteSpace(path) &&
+                !resolution.SearchedPaths.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)))
+                resolution.SearchedPaths.Add(path);
+        }
+
+        private static string CleanPath(string path)
+        {
+            string value = path?.Trim() ?? string.Empty;
+            while (value.Length >= 2 && value[0] == '"' && value[value.Length - 1] == '"')
+                value = value.Substring(1, value.Length - 2).Trim();
+            try { value = Environment.ExpandEnvironmentVariables(value); } catch { }
+            return value;
+        }
+
+        private static string ResolvePathValue(string path, string baseDir)
+        {
+            string value = CleanPath(path);
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            try
+            {
+                if (!Path.IsPathRooted(value))
+                {
+                    string root = CleanPath(baseDir);
+                    if (string.IsNullOrWhiteSpace(root)) root = AppDomain.CurrentDomain.BaseDirectory ?? Environment.CurrentDirectory;
+                    value = Path.Combine(root, value);
+                }
+                return Path.GetFullPath(value);
+            }
+            catch { return value; }
+        }
+
+        private static string NormalizeDirectory(string directory)
+        {
+            string value = ResolvePathValue(directory, AppDomain.CurrentDomain.BaseDirectory);
+            return value?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        private static string DirectoryOf(string path)
+        {
+            try { return Path.GetDirectoryName(path); } catch { return null; }
+        }
+
+        private static string FirstOutputLine(string output)
+        {
+            if (string.IsNullOrWhiteSpace(output)) return null;
+            return output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim();
         }
 
         /// <summary>Merge precedence: defaultParms &lt; objectParms[name] &lt; caller.</summary>
@@ -589,12 +863,14 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
-                // 3) Resolve CLI
-                var cli = ResolveCli();
+                // 3) Resolve CLI and expose the exact preflight evidence.
+                var cliDiagnostic = ResolveCliDiagnostic();
+                result["axiCli"] = cliDiagnostic.ToJObject();
+                var cli = cliDiagnostic.ResolvedPath;
                 if (string.IsNullOrEmpty(cli))
                 {
                     result["status"] = "cli_missing";
-                    result["message"] = "chrome-devtools-axi not found in PATH and not configured in preview.config.json (axiCli).";
+                    result["message"] = "chrome-devtools-axi was not found. See the axiCli preflight fields for searched paths, config files, configured values, effective PATH and version. To fix: configure an absolute axiCli path or install chrome-devtools-axi in the MCP runtime, then restart the Worker.";
                     return result;
                 }
                 result["cli"] = cli;
@@ -803,6 +1079,11 @@ namespace GxMcp.Worker.Services
                 {
                     var conRes = _runner.Run(cli, "eval " + Quote("JSON.stringify(window.__gxConsoleErrors||[])"), DefaultCliTimeoutMs);
                     captures["console"] = conRes.StdOut ?? "";
+                }
+                if (captureSet.Contains("exceptions"))
+                {
+                    var exRes = _runner.Run(cli, "eval " + Quote("JSON.stringify(window.__gxUnhandledErrors||[])"), DefaultCliTimeoutMs);
+                    captures["exceptions"] = ParseJsonArrayOrEmpty(exRes.StdOut);
                 }
                 if (captureSet.Contains("screenshot"))
                 {
@@ -1017,6 +1298,17 @@ namespace GxMcp.Worker.Services
         {
             if (string.IsNullOrWhiteSpace(s)) return null;
             try { return JObject.Parse(s); } catch { return null; }
+        }
+
+        internal static JArray ParseJsonArrayOrEmpty(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return new JArray();
+            try
+            {
+                var token = JToken.Parse(s.Trim());
+                return token as JArray ?? new JArray();
+            }
+            catch { return new JArray(); }
         }
 
         private static string Quote(string s) =>

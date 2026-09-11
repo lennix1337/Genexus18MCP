@@ -788,6 +788,12 @@ namespace GxMcp.Gateway
                 // genexus_doctor reports the same number as whoami (the worker
                 // assembly version can lag the package version between releases).
                 startInfo.EnvironmentVariables["GXMCP_SERVER_VERSION"] = McpRouter.ServerVersion;
+                // Preview CLI resolution needs the MCP profile as a source of
+                // configuration, but the Worker otherwise only receives --kb.
+                // Forward the already-resolved absolute profile path so relative
+                // axiCli values are resolved against the profile file, not CWD.
+                if (!string.IsNullOrWhiteSpace(Configuration.CurrentConfigPath))
+                    startInfo.EnvironmentVariables["GXMCP_PROFILE_CONFIG_PATH"] = Configuration.CurrentConfigPath;
                 startInfo.EnvironmentVariables["GX_SHADOW_PATH"] = _config.Environment?.GX_SHADOW_PATH ?? Path.Combine(kbPath, ".gx_mirror");
                 startInfo.EnvironmentVariables["PATH"] = (_config.GeneXus?.InstallationPath ?? string.Empty) + ";" + Environment.GetEnvironmentVariable("PATH");
 

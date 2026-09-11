@@ -7,6 +7,7 @@
 - Capture installer client-registration stdout and stderr separately, parse only the JSON envelope, and fail closed when it is missing or invalid instead of committing a staged config after an ambiguous registration.
 - Make primitive Attribute type application all-or-nothing: restore previously written Type, Length, and Decimals when a later SDK setter fails, preventing parser paths from persisting partial mutations.
 - Isolate async build hard-cap default assertions from an ambient `GXMCP_BUILD_TIMEOUT_SEC` override and restore the process environment after each test.
+- **`genexus_preview` browser driver resolution.** Resolve `chrome-devtools-axi` from the preview configuration, MCP profile, bundled runtime/dependencies, Worker/backend directories, and finally the effective PATH; Windows shims and quoted relative paths are supported, with preflight diagnostics when no candidate is available. Preview captures continue to support screenshot, console, exceptions, desktop emulation, and `buildFirst=false` without starting a build.
 
 ## v3.3.2 - 2026-09-11
 
@@ -53,6 +54,7 @@
 - Corrigido o harness live para abrir a KB de teste uma única vez e evitar `KB_AMBIGUOUS` por alias duplicada em sessões strict.
 - Add executable validation gates for live-contract coverage, upstream drift reporting, bounded .NET output, and explicit PowerShell 7 enforcement in the documented development workflow.
 - Reject multiline layout `Caption` values before SDK persistence, normalize Design System `Styles` writes by default, surface fast-path ambiguous-object build diagnostics as errors, and add actionable locked-dependency setup diagnostics for the root lint command ([#174](https://github.com/lennix1337/Genexus18MCP/issues/174), [#176](https://github.com/lennix1337/Genexus18MCP/issues/176), [#177](https://github.com/lennix1337/Genexus18MCP/issues/177), [#178](https://github.com/lennix1337/Genexus18MCP/issues/178)).
+
 
 ## v3.3.0 - 2026-09-11
 
