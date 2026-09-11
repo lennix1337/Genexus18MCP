@@ -181,7 +181,8 @@ namespace GxMcp.Gateway
                 ["genexus_wwp"] = Contract(
                     readOnly: new[] { "list", "settings_templates", "settings_read" },
                     mutating: new[] { "add_action", "update_action", "move_action", "remove_action",
-                        "add_tab", "move_tab", "remove_tab", "add_grid_attribute", "settings_edit" }),
+                        "add_tab", "move_tab", "remove_tab", "add_grid_attribute",
+                        "replace_web_component_with_user_action", "settings_edit" }),
                 ["genexus_sandbox"] = Contract(
                     readOnly: Array.Empty<string>(),
                     mutating: new[] { "create", "remove" }),
@@ -251,6 +252,7 @@ namespace GxMcp.Gateway
             "genexus_wwp:move_tab",
             "genexus_wwp:remove_tab",
             "genexus_wwp:add_grid_attribute",
+            "genexus_wwp:replace_web_component_with_user_action",
             "genexus_generator_reference:add",
             "genexus_generator_reference:remove"
         };

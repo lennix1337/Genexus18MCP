@@ -1,7 +1,6 @@
 {
   "schemaVersion": 1,
   "supportedVersion": "18.0.10.184260",
-  "allowPatchVersionDrift": true,
   "anchor": "Artech.Architecture.Common.dll",
   "assemblies": [
     { "path": "Artech.Architecture.Common.dll", "sha256": "573019a7a79720e54be949a6569c4339975ffcb2e814b75ed884c0b474808c09" },

@@ -543,10 +543,7 @@ namespace GxMcp.Worker.Services
             string webFormError = null;
             try
             {
-                MethodInfo setBytes = part.GetType().GetMethod("SetBytes", BindingFlags.Public | BindingFlags.Instance,
-                    null, new[] { typeof(byte[]) }, null);
-                if (setBytes == null || nativeBytes == null) throw new InvalidOperationException("Native PatternInstance byte snapshot is unavailable.");
-                setBytes.Invoke(part, new object[] { nativeBytes });
+                RestorePartBytes(part, nativeBytes);
                 SaveNativePattern(instance, part);
                 if (!IsFalse(applyOnSaveBefore)) WwpApplyOnSaveHelper.TryEnable(instance);
                 string restored = _patterns.ReadPatternPartXml(instance, "PatternInstance", out _, out _);
@@ -585,8 +582,44 @@ namespace GxMcp.Worker.Services
 
         private static byte[] ReadPartBytes(KBObjectPart part)
         {
-            try { return part?.GetType().GetMethod("GetBytes", BindingFlags.Public | BindingFlags.Instance)?.Invoke(part, null) as byte[]; }
+            try
+            {
+                byte[] bytes = part?.GetType().GetMethod("GetBytes", BindingFlags.Public | BindingFlags.Instance)
+                    ?.Invoke(part, null) as byte[];
+                if (bytes != null && bytes.Length > 0) return bytes;
+            }
+            catch { }
+
+            try
+            {
+                Type serializer = part?.GetType().Assembly.GetType(
+                    "Artech.Packages.Patterns.Objects.PatternInstancePartSerializer", false);
+                MethodInfo method = serializer?.GetMethod("SerializeData", BindingFlags.Public | BindingFlags.Static,
+                    null, new[] { part.GetType() }, null)
+                    ?? serializer?.GetMethod("SerializeData", BindingFlags.Public | BindingFlags.Static);
+                return method?.Invoke(null, new object[] { part }) as byte[];
+            }
             catch { return null; }
+        }
+
+        private static void RestorePartBytes(KBObjectPart part, byte[] bytes)
+        {
+            if (part == null || bytes == null) throw new InvalidOperationException("Native PatternInstance byte snapshot is unavailable.");
+            MethodInfo setBytes = part.GetType().GetMethod("SetBytes", BindingFlags.Public | BindingFlags.Instance,
+                null, new[] { typeof(byte[]) }, null);
+            if (setBytes != null)
+            {
+                setBytes.Invoke(part, new object[] { bytes });
+                return;
+            }
+
+            Type serializer = part.GetType().Assembly.GetType(
+                "Artech.Packages.Patterns.Objects.PatternInstancePartSerializer", false);
+            MethodInfo deserialize = serializer?.GetMethod("DeserializeData", BindingFlags.Public | BindingFlags.Static,
+                null, new[] { part.GetType(), typeof(byte[]) }, null)
+                ?? serializer?.GetMethod("DeserializeData", BindingFlags.Public | BindingFlags.Static);
+            if (deserialize == null) throw new InvalidOperationException("PatternInstancePartSerializer is unavailable.");
+            deserialize.Invoke(null, new object[] { part, bytes });
         }
 
         private string ReadPart(KBObject obj, string part)

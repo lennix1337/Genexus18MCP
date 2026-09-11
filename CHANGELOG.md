@@ -7,7 +7,11 @@
 - Accept SDK patch, build and fingerprint drift within the supported GeneXus major while continuing to reject incompatible majors and missing required assemblies.
 - Preserve dirty index shards for retry when snapshot pointer publication fails, and require a fresh enrichment certificate for each new snapshot body.
 - Extend the bounded live MCP benchmark with KB list/select, dependency graph, design-system inspection, and non-mutating pattern diagnosis operations; cap runs at 20 iterations and validate each operation's result shape before recording latency.
-- Preserve the last certified search-index snapshot during forced rebuilds so a Worker crash can warm-start from the previous index instead of leaving the KB cold; allow only manifest-declared SDK patch drift within the same major/minor line while retaining exact-build fingerprints otherwise.
+- Preserved pending index changes after a snapshot publication failure, so a successful retry stores the latest contents instead of certifying stale data.
+- Correct template documentation to distinguish model-wide WWPTemplate records from embedded Settings templates; standalone edits and dry runs remain blocked by unverified ownership, and the original 3.2.2 report is historical.
+- Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.
+- Enforce the selected GeneXus major at build and Worker startup while reporting patch/build and assembly fingerprint drift as diagnostics, including changed DLLs with the same ProductVersion. Missing required assemblies and different majors still fail validation.
+- Preserve the last certified search-index snapshot during forced rebuilds so a Worker crash can warm-start from the previous index instead of leaving the KB cold.
 - Keep the index-readiness fast-fail limited to index-backed reads and analyses; SDK edits, creates and builds remain available while background indexing runs.
 - Never store `Indexing`/`IndexNotReady` responses in the semantic cache, so reads can observe the index as soon as background indexing completes.
 - Make Worker drain replacement fail closed until the old process has really exited; do not register dead replacements, leak draining entries, or run concurrent reloads for one KB.
@@ -23,6 +27,11 @@
 - Add bounded benchmarks for versioned snapshot publication and cold searches over built secondary indexes; existing search timing is retained as a separate warm/cache-sensitive benchmark.
 - Allow read-only live smoke tests to use an explicit KB path directly; keep fixture manifests only for destructive Build All and reproducible baseline gates.
 - Remove fixture-manifest requirements from live KB operation and Build All; manifests are now benchmark metadata only.
+
+### Internal
+
+- Select SDK diagnostic manifests for GeneXus 18 U11, U12 and U16 during build and packaging; retain the original U10 reference by default without imposing exact-build compatibility gates.
+- Refresh test SDK dependencies when changing upgrades instead of reusing DLLs from a previous SDK.
 
 ## v3.2.4 - 2026-09-10
 

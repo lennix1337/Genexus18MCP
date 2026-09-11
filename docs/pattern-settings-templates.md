@@ -1,6 +1,24 @@
-# Templates de Pattern Settings: estado da correcao
+# Templates de Pattern Settings: registro historico da base 3.2.2
 
-## Estado
+Este documento preserva o diagnostico, os exemplos e os resultados da entrega
+original sobre a base 3.2.2. Nao descreve o estado operacional atual nem serve
+como contrato da implementacao mais recente. Consulte o
+[contrato atual de templates WorkWithPlus](wwp-template-objects.md).
+
+Na implementacao atual, templates separados `wwp:<guid>` sao registros do modelo,
+sem ownership do Settings comprovado: `settingsLinkVerified=false` e
+`settingsPath=null`. `settings_edit`, inclusive `dryRun:true`, recusa esses
+templates com `TemplateSettingsLinkUnverified`. Os exemplos historicos de previa
+abaixo nao habilitam esse caminho. Templates embutidos seguem seu proprio
+planejamento, e o salvamento continua bloqueado por isolamento nao certificado.
+
+As contagens e o bypass SDK registrados abaixo pertencem somente a validacao
+historica. A politica atual de compatibilidade e por major, com fingerprints
+diagnosticos; ver [compatibilidade SDK](sdk-compatibility.md). Nenhum desses
+testes historicos demonstra persistencia nem cobertura integral de
+`PatternSettingsService.Run`.
+
+## Estado na entrega original
 
 Implementacao parcial, sem promocao operacional. Resolucao tipada, leitura SDK
 e planejamento de uma propriedade foram implementados. **Salvamento isolado

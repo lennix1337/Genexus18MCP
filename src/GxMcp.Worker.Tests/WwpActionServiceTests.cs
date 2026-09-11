@@ -237,5 +237,55 @@ namespace GxMcp.Worker.Tests
 
             Assert.Single(unrelated);
         }
+
+        [Fact]
+        public void ReplaceWebComponent_UsesExplicitPathAndPreservesUnrelatedPatternNodes()
+        {
+            var doc = XDocument.Parse("<instance childrenOrderedList='root'><WPRoot><table name='TableHeader' childrenOrderedList='header'><table name='TableUserRole' themeClass='keep' childrenOrderedList='role'><webComponent name='EmpresaSelector' gxobject='guid-WWP_MasterPageEmpresaSelectorWC'><parameters /></webComponent><userAction name='RuntimeDesignSettings' ControlType='DropDownComponent' /></table></table><table name='TableContent' /></WPRoot></instance>");
+
+            JObject result = WwpActionService.ApplyReplacementXml(doc, new JObject
+            {
+                ["sourceName"] = "EmpresaSelector",
+                ["userActionName"] = "EmpresaSelector",
+                ["tablePath"] = "TableHeader > TableUserRole > EmpresaSelector",
+                ["gxobject"] = "WWP_MasterPageEmpresaSelectorWC",
+                ["controlType"] = "DropDownComponent",
+                ["caption"] = "&Context.EmpresaDescricao",
+                ["webComponentLoad"] = "On every click",
+                ["trigger"] = "Click"
+            });
+
+            Assert.Null(result["error"]);
+            XElement role = doc.Descendants("table").Single(e => (string)e.Attribute("name") == "TableUserRole");
+            XElement replacement = role.Elements().Single(e => e.Name.LocalName == "userAction" && (string)e.Attribute("name") == "EmpresaSelector");
+            Assert.Equal("DropDownComponent", (string)replacement.Attribute("ControlType"));
+            Assert.Equal("guid-WWP_MasterPageEmpresaSelectorWC", (string)replacement.Attribute("gxobject"));
+            Assert.Equal("&Context.EmpresaDescricao", (string)replacement.Attribute("caption"));
+            Assert.Equal("On every click", (string)replacement.Attribute("webComponentLoad"));
+            Assert.Equal("Click", (string)replacement.Attribute("trigger"));
+            Assert.Equal("keep", (string)role.Attribute("themeClass"));
+            Assert.Equal("role", (string)role.Attribute("childrenOrderedList"));
+            Assert.Single(doc.Descendants("table"), e => (string)e.Attribute("name") == "TableContent");
+        }
+
+        [Fact]
+        public void ReplaceWebComponent_RefusesTargetMismatchAndNonEmptyChildren()
+        {
+            var mismatch = XDocument.Parse("<instance><table name='TableHeader'><table name='TableUserRole'><webComponent name='EmpresaSelector' gxobject='guid-OtherWC' /></table></table></instance>");
+            JObject wrongTarget = WwpActionService.ApplyReplacementXml(mismatch, new JObject
+            {
+                ["sourceName"] = "EmpresaSelector", ["tablePath"] = "TableHeader > TableUserRole > EmpresaSelector",
+                ["gxobject"] = "WWP_MasterPageEmpresaSelectorWC", ["controlType"] = "DropDownComponent", ["caption"] = "Empresa"
+            });
+            Assert.Equal("GxObjectMismatch", (string)wrongTarget["code"]);
+
+            var withParameters = XDocument.Parse("<instance><table name='TableHeader'><table name='TableUserRole'><webComponent name='EmpresaSelector' gxobject='guid-WC'><parameters><parameter name='x' /></parameters></webComponent></table></table></instance>");
+            JObject droppedChild = WwpActionService.ApplyReplacementXml(withParameters, new JObject
+            {
+                ["sourceName"] = "EmpresaSelector", ["tablePath"] = "TableHeader > TableUserRole > EmpresaSelector",
+                ["gxobject"] = "guid-WC", ["controlType"] = "DropDownComponent", ["caption"] = "Empresa"
+            });
+            Assert.Equal("WwpReplacementChildrenUnsupported", (string)droppedChild["code"]);
+        }
     }
 }

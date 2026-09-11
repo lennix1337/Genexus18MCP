@@ -179,7 +179,11 @@ namespace GxMcp.Gateway.Tests
             //   2026-09-10 (Pattern Settings): 27500 → 27750 for three Settings
             //   actions, explicit identity, pagination and single-property preview fields.
             //   Measured ~27549; real Settings saves remain blocked.
-            Assert.True(approxTokens < 27750, $"tool_definitions.json is ~{approxTokens} tokens; budget 27750.");
+            //   2026-09-10 (WWP native structural replacement): 27750 → 28250 for
+            //   the explicit WebComponent-to-DropDownComponent UserAction contract,
+            //   including target identity, preserved Gxobject, trigger/load metadata,
+            //   and the dry-run example. Measured ~27980.
+            Assert.True(approxTokens < 28250, $"tool_definitions.json is ~{approxTokens} tokens; budget 28250.");
         }
     }
 }
