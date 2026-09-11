@@ -22,6 +22,8 @@
 - Require typed WorkWithPlus fallback resolution and version preconditions for action mutations; use structural/delimited projection matching so similarly named tabs and events cannot be reported as the requested target.
 - Publish sharded index generations through immutable rebuild slots and an atomic certified pointer; abandoned or partially written slots are ignored, while legacy snapshots remain readable and migrate lazily.
 - Add bounded benchmarks for versioned snapshot publication and cold searches over built secondary indexes; existing search timing is retained as a separate warm/cache-sensitive benchmark.
+- Allow read-only live smoke tests to use an explicit KB path directly; keep fixture manifests only for destructive Build All and reproducible baseline gates.
+- Remove fixture-manifest requirements from live KB operation and Build All; manifests are now benchmark metadata only.
 
 ### Internal
 

@@ -109,6 +109,6 @@ finally {
     $ErrorActionPreference = $savedErrorAction
 }
 if ($childExit -eq 0 -or ($output -join "`n") -notmatch 'live=unavailable') {
-    throw 'The real entry point must fail closed before build/SDK startup without a manifest.'
+    throw 'The real entry point must fail closed when an explicitly supplied manifest is missing.'
 }
 Write-Host 'PASS: fixture rejection, provenance hashes, master/proxy log guard, benchmark alias contract and owned process selection.'

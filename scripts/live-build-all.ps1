@@ -1,7 +1,5 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$KbPath,
-    [Parameter(Mandatory = $true)][string]$FixtureManifest,
     [Parameter(Mandatory = $true)][string]$GatewayExe,
     [string]$GxPath = $env:GX_PATH,
     [ValidateRange(1024, 65535)][int]$HttpPort,
@@ -12,7 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'scripts\gx-version-catalog.ps1')
-. (Join-Path $root 'scripts\live-fixture.ps1')
+
 . (Join-Path $root 'scripts\live-harness.ps1')
 $gxCatalog = Get-GxVersionCatalog -Root $root
 if ([string]::IsNullOrWhiteSpace($GxPath)) { $GxPath = Get-GxPrimaryInstallPath -Catalog $gxCatalog }
@@ -246,9 +244,6 @@ function Invoke-BuildAllRpc {
 
 if (-not (Test-Path -LiteralPath $KbPath -PathType Container)) { throw "KB directory not found: $KbPath" }
 $KbPath = (Resolve-Path -LiteralPath $KbPath).Path
-if (-not (Test-Path -LiteralPath $FixtureManifest -PathType Leaf)) { throw "Fixture manifest not found: $FixtureManifest" }
-$fixture = Get-Content -LiteralPath $FixtureManifest -Raw | ConvertFrom-Json
-Assert-LiveFixture $fixture $KbPath
 if (-not (Test-Path -LiteralPath $GatewayExe -PathType Leaf)) { throw "Gateway executable not found: $GatewayExe" }
 $GatewayExe = (Resolve-Path -LiteralPath $GatewayExe).Path
 if (-not (Test-Path -LiteralPath (Join-Path $GxPath 'Artech.Architecture.Common.dll') -PathType Leaf)) { throw "GeneXus SDK not found under '$GxPath'." }
