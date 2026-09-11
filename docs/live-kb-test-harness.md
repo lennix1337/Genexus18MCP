@@ -157,8 +157,9 @@ operações diferentes:
 python scripts/bench-live-http.py --kb C:\fixtures\synthetic-small `
   --fixture-id synthetic-small-r1 --fixture-revision seed-2026-09-05 `
   --generator "GeneXus18-net" --cache-mode warm --concurrency 1 `
-  --iterations 100 --compare scratchpad\synthetic-small.baseline.json `
-  --fail-on-regression --out scratchpad\synthetic-small.current.json
+  --iterations 12 --ops whoami,kb_list,list_objects,query,search_source,inspect,read,lifecycle_status,pattern_diagnose `
+  --compare scratchpad\synthetic-small.baseline.json --fail-on-regression `
+  --out scratchpad\synthetic-small.current.json
 ```
 
 Alternatively set `GXMCP_TEST_KB` and `GXMCP_TEST_FIXTURE`. Without `-SkipBuild`,

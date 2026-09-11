@@ -47,11 +47,14 @@ import urllib.request
 import urllib.error
 
 BASE = "http://127.0.0.1:5000/mcp"
+MAX_ITERATIONS = 20
 
 # Op catalog order is the run order. `edit_dryrun` is prepared lazily (needs a
 # real identifier from the target's source); the rest are static shapes.
 ALL_OPS = [
     "whoami",
+    "kb_list",
+    "kb_select",
     "list_objects",
     "query",
     "search_source",
@@ -60,6 +63,17 @@ ALL_OPS = [
     "edit_dryrun",
     "analyze",
     "lifecycle_status",
+    "graph",
+    "design_system",
+    "pattern_diagnose",
+]
+# The default must contain operations that are valid for a plain sessionless
+# HTTP run. Session selection is intentionally unavailable there, and graph /
+# design-system require a target that may not exist in every KB. Those remain
+# opt-in through --ops so unsupported capabilities fail explicitly when asked.
+DEFAULT_OPS = [
+    "whoami", "kb_list", "list_objects", "query", "search_source",
+    "inspect", "read", "lifecycle_status", "pattern_diagnose",
 ]
 
 # Folders, modules and physical tables are valid list/query results but do not
@@ -327,6 +341,16 @@ def operation_envelope_is_ok(operation, env):
         return any(key in env for key in ("status", "Status", "Phase", "TaskId", "summary", "compact"))
     if operation == "analyze":
         return any(key in env for key in ("name", "type", "summary", "metrics", "criticalDependencies", "intents", "linter"))
+    if operation == "kb_list":
+        return any(key in env for key in ("open", "openKbs", "known", "declared", "kbs", "items", "results"))
+    if operation == "kb_select":
+        return any(key in env for key in ("selected", "sessionSelection", "selectionSource", "selectionState", "kbAlias", "alias"))
+    if operation == "graph":
+        return any(key in env for key in ("nodes", "edges", "graph", "content", "markdown", "result", "summary"))
+    if operation == "design_system":
+        return any(key in env for key in ("tokens", "styles", "classes", "designSystem", "result", "summary"))
+    if operation == "pattern_diagnose":
+        return any(key in env for key in ("findings", "diagnostics", "pattern", "actions", "result", "summary"))
     return envelope_is_ok(env)
 
 
@@ -451,8 +475,8 @@ def main():
                     help="Logical client concurrency represented by this run.")
     args = ap.parse_args()
 
-    if args.iterations < 1 or (args.fail_on_regression and not args.compare):
-        print("FATAL: positive iterations and a baseline for regression gating are required")
+    if args.iterations < 1 or args.iterations > MAX_ITERATIONS or (args.fail_on_regression and not args.compare):
+        print(f"FATAL: iterations must be between 1 and {MAX_ITERATIONS}, and regression gating requires a baseline")
         return 2
 
     if args.concurrency < 1:
@@ -465,7 +489,7 @@ def main():
         print("FATAL: regression thresholds must be finite and non-negative")
         return 2
 
-    ops = [o.strip() for o in (args.ops or "").split(",") if o.strip()] if args.ops else list(ALL_OPS)
+    ops = [o.strip() for o in (args.ops or "").split(",") if o.strip()] if args.ops else list(DEFAULT_OPS)
     unknown = [o for o in ops if o not in ALL_OPS]
     if unknown:
         print(f"FATAL: unknown op(s) {unknown}; catalog: {ALL_OPS}")
@@ -697,6 +721,12 @@ def main():
 
     if "whoami" in ops:
         run_op("whoami", lambda i: {"name": "genexus_whoami", "arguments": {"kb": args.alias}})
+    if "kb_list" in ops:
+        run_op("kb_list", lambda i: {"name": "genexus_kb", "arguments": {"action": "list"}})
+    if "kb_select" in ops:
+        run_op("kb_select", lambda i: {"name": "genexus_kb", "arguments": {
+            "action": "select", "alias": args.alias
+        }})
     if "list_objects" in ops:
         run_op("list_objects", lambda i: {"name": "genexus_list_objects", "arguments": {"kb": args.alias, "limit": 10}})
     if "query" in ops:
@@ -733,6 +763,19 @@ def main():
         }})
     if "lifecycle_status" in ops:
         run_op("lifecycle_status", lambda i: {"name": "genexus_lifecycle", "arguments": {"kb": args.alias, "action": "status"}})
+    if "graph" in ops:
+        run_op("graph", lambda i: {"name": "genexus_doc", "arguments": {
+            "action": "visualize", "target": names[i % len(names)]
+        }})
+    if "design_system" in ops:
+        run_op("design_system", lambda i: {"name": "genexus_layout", "arguments": {
+            "kb": args.alias, "action": "design_system", "name": names[i % len(names)]
+        }})
+    if "pattern_diagnose" in ops:
+        run_op("pattern_diagnose", lambda i: {"name": "genexus_apply_pattern", "arguments": {
+            "kb": args.alias, "name": names[i % len(names)], "pattern": "WorkWithPlus",
+            "mode": "diagnose", "dryRun": True
+        }})
 
     out = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "label": label, "kb": args.kb, "iterations": n, "ops": results,

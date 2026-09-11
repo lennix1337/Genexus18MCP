@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Extend the bounded live MCP benchmark with KB list/select, dependency graph, design-system inspection, and non-mutating pattern diagnosis operations; cap runs at 20 iterations and validate each operation's result shape before recording latency.
 - Preserved pending index changes after a snapshot publication failure, so a successful retry stores the latest contents instead of certifying stale data.
 - Correct template documentation to distinguish model-wide WWPTemplate records from embedded Settings templates; standalone edits and dry runs remain blocked by unverified ownership, and the original 3.2.2 report is historical.
 - Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.

@@ -111,9 +111,8 @@ if ($RunBenchmark -and -not [string]::IsNullOrWhiteSpace($FixtureManifest)) {
         Assert-LiveFixture $fixture $KbPath
     } catch { Fail-Live $_.Exception.Message }
 } else {
-    # An explicit KB path is sufficient for read-only smoke tests. The
-    # isolation manifest remains required by destructive Build All and
-    # reproducible baseline comparisons below.
+    # An explicit KB path is sufficient for live operation. A manifest is
+    # optional benchmark metadata only.
     $fixture = [pscustomobject]@{
         fixtureId = 'explicit-kb-readonly'
         fixtureRevision = 'local-working-copy'
@@ -263,7 +262,7 @@ if ($RunBenchmark) {
         '--generator', [string]$fixture.generator,
         '--iterations', $Iterations.ToString(),
         '--port', $HttpPort.ToString(),
-        '--ops', 'whoami,list_objects,query,search_source,inspect,read,lifecycle_status',
+        '--ops', 'whoami,kb_list,list_objects,query,search_source,inspect,read,lifecycle_status,pattern_diagnose',
         '--out', $BenchmarkOut,
         '--name', 'quality-gate'
     )

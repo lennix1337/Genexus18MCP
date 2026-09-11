@@ -80,9 +80,43 @@ class BenchmarkGateTests(unittest.TestCase):
                 self.assertTrue(bench.operation_envelope_is_ok(operation, envelope))
 
     def test_statusless_success_without_requested_shape_is_rejected(self):
-        for operation in ("whoami", "inspect", "read", "lifecycle_status"):
+        for operation in ("whoami", "inspect", "read", "lifecycle_status",
+                          "graph", "design_system", "pattern_diagnose"):
             with self.subTest(operation=operation):
                 self.assertFalse(bench.operation_envelope_is_ok(operation, {"message": "unknown"}))
+
+    def test_graph_design_and_pattern_success_shapes_are_validated(self):
+        cases = (
+            ("graph", {"nodes": [], "edges": []}),
+            ("design_system", {"tokens": {}, "classes": []}),
+            ("pattern_diagnose", {"findings": [], "pattern": "WorkWithPlus"}),
+        )
+        for operation, envelope in cases:
+            with self.subTest(operation=operation):
+                self.assertTrue(bench.operation_envelope_is_ok(operation, envelope))
+
+    def test_bounded_operation_catalog_contains_lifecycle_and_extended_families(self):
+        self.assertLessEqual(bench.MAX_ITERATIONS, 20)
+        for operation in ("whoami", "kb_list", "list_objects", "query", "search_source",
+                          "inspect", "read", "lifecycle_status", "pattern_diagnose"):
+            self.assertIn(operation, bench.DEFAULT_OPS)
+        for operation in ("kb_list", "kb_select", "graph", "design_system", "pattern_diagnose"):
+            self.assertIn(operation, bench.ALL_OPS)
+
+    def test_extended_operations_record_only_validated_successes(self):
+        cases = {
+            "kb_list": {"items": []},
+            "kb_select": {"selected": "live", "selectionState": "valid"},
+            "graph": {"nodes": [], "edges": []},
+            "design_system": {"tokens": {}, "classes": []},
+            "pattern_diagnose": {"findings": [], "pattern": "WorkWithPlus"},
+        }
+        for operation, envelope in cases.items():
+            with self.subTest(operation=operation):
+                code, report = self.run_main(envelope, operation=operation)
+                self.assertEqual(0, code)
+                self.assertEqual(1, report["ops"][operation]["succeeded"])
+                self.assertEqual(0, report["ops"][operation]["failed"])
 
     def test_error_status_with_success_shape_is_rejected(self):
         self.assertFalse(bench.operation_envelope_is_ok(
