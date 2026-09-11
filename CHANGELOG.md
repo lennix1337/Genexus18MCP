@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Preserved pending index changes after a snapshot publication failure, so a successful retry stores the latest contents instead of certifying stale data.
 - Correct template documentation to distinguish model-wide WWPTemplate records from embedded Settings templates; standalone edits and dry runs remain blocked by unverified ownership, and the original 3.2.2 report is historical.
 - Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.
 - Enforce the selected GeneXus major at build and Worker startup while reporting patch/build and assembly fingerprint drift as diagnostics, including changed DLLs with the same ProductVersion. Missing required assemblies and different majors still fail validation.
