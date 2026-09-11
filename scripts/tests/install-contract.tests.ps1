@@ -121,6 +121,8 @@ try {
     Assert-True ($localInstallerSource.Contains('Save-JsonFile $stagedConfigPath $config')) 'local installer stages config before client registration'
     Assert-True ($localInstallerSource.Contains('$env:GX_CONFIG_PATH = $stagedConfigPath')) 'client registration receives the staged config path'
     Assert-True ($localInstallerSource.Contains('ConvertFrom-Json')) 'local installer parses the CLI envelope instead of hiding its output'
+    Assert-True ($localInstallerSource.Contains('1> $clientStdoutPath 2> $clientStderrPath')) 'local installer captures CLI stdout and stderr separately'
+    Assert-True ($localInstallerSource.Contains('no valid JSON envelope')) 'local installer fails closed when the CLI envelope is missing or invalid'
     Assert-True ($localInstallerSource.Contains('Remove-StagedConfig $stagedConfigPath')) 'failed registration removes the staged config'
     Assert-True ($localInstallerSource.Contains('Move-Item -LiteralPath $stagedConfigPath -Destination $configPath -Force')) 'successful registration commits the staged config'
     $stagePosition = $localInstallerSource.IndexOf('Save-JsonFile $stagedConfigPath $config', [StringComparison]::Ordinal)
@@ -132,7 +134,7 @@ try {
     Assert-True ($releaseInstallerSource.Contains('Test-StrictSemVer')) 'release installer validates strict semver'
     Assert-True ($releaseInstallerSource.Contains('Refusing downgrade')) 'release installer rejects downgrade by default'
     Assert-True ($releaseInstallerSource.Contains('$exitCode = $LASTEXITCODE')) 'uninstall checks LASTEXITCODE before claiming success'
-    $passed += 7
+    $passed += 9
 
     Write-Host "install-contract: $passed assertions passed" -ForegroundColor Green
 } finally {

@@ -270,6 +270,8 @@ if ($SkipClientConfig) {
         # config path for `clients add`; commit it after the complete envelope
         # confirms that no client failed.
         $stagedConfigPath = "$configPath.pending-$([guid]::NewGuid().ToString('N'))"
+        $clientStdoutPath = "$stagedConfigPath.stdout"
+        $clientStderrPath = "$stagedConfigPath.stderr"
         # Point the CLI at the freshly-built gateway exe so the client launcher is a
         # direct exe path (not npx). getLauncher() in cli/lib/config.js honors this.
         $prevGatewayExe = $env:GENEXUS_MCP_GATEWAY_EXE
@@ -283,9 +285,21 @@ if ($SkipClientConfig) {
             $clientArgs = @(
                 $cliRunPath, "clients", "add", "--all-clients", "--format", "json"
             )
-            $clientOutput = @(& $node @clientArgs 2>&1)
+            & $node @clientArgs 1> $clientStdoutPath 2> $clientStderrPath
             $clientExitCode = $LASTEXITCODE
-            $clientOutputText = ($clientOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+            $clientOutputText = if (Test-Path -LiteralPath $clientStdoutPath) {
+                [IO.File]::ReadAllText($clientStdoutPath)
+            } else {
+                ''
+            }
+            $clientErrorText = if (Test-Path -LiteralPath $clientStderrPath) {
+                [IO.File]::ReadAllText($clientStderrPath)
+            } else {
+                ''
+            }
+            if (-not [string]::IsNullOrWhiteSpace($clientErrorText)) {
+                Write-Host $clientErrorText
+            }
             if (-not [string]::IsNullOrWhiteSpace($clientOutputText)) {
                 Write-Host $clientOutputText
             }
@@ -293,6 +307,9 @@ if ($SkipClientConfig) {
             $clientEnvelope = $null
             if (-not [string]::IsNullOrWhiteSpace($clientOutputText)) {
                 try { $clientEnvelope = $clientOutputText | ConvertFrom-Json } catch { }
+            }
+            if ($null -eq $clientEnvelope) {
+                throw "genexus-mcp returned no valid JSON envelope (exit code $clientExitCode)."
             }
             $failedClients = @()
             if ($null -ne $clientEnvelope -and $null -ne $clientEnvelope.meta -and $null -ne $clientEnvelope.meta.failedClients) {
@@ -315,6 +332,8 @@ if ($SkipClientConfig) {
             Remove-StagedConfig $stagedConfigPath
             Fail "AI client registration failed: $($_.Exception.Message)"
         } finally {
+            Remove-Item -LiteralPath $clientStdoutPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $clientStderrPath -Force -ErrorAction SilentlyContinue
             if ($null -ne $prevGatewayExe) { $env:GENEXUS_MCP_GATEWAY_EXE = $prevGatewayExe }
             else { Remove-Item env:GENEXUS_MCP_GATEWAY_EXE -ErrorAction SilentlyContinue }
             if ($null -ne $prevConfigPath) { $env:GX_CONFIG_PATH = $prevConfigPath }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Capture installer client-registration stdout and stderr separately, parse only the JSON envelope, and fail closed when it is missing or invalid instead of committing a staged config after an ambiguous registration.
+- Make primitive Attribute type application all-or-nothing: restore previously written Type, Length, and Decimals when a later SDK setter fails, preventing parser paths from persisting partial mutations.
+- Isolate async build hard-cap default assertions from an ambient `GXMCP_BUILD_TIMEOUT_SEC` override and restore the process environment after each test.
+
 ## v3.3.2 - 2026-09-11
 
 

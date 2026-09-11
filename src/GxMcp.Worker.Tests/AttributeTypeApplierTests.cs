@@ -142,11 +142,12 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void ApplyPrimitive_ReturnsFalse_WhenRequestedLengthCannotBeApplied()
         {
-            var fake = new FailingLengthAttribute();
+            var fake = new FailingLengthAttribute { Type = "ORIGINAL" };
 
             bool applied = AttributeTypeApplier.ApplyPrimitive(fake, "Character", 40, null);
 
             Assert.False(applied);
+            Assert.Equal("ORIGINAL", fake.Type);
         }
     }
 }

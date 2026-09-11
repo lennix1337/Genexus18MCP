@@ -139,7 +139,10 @@ namespace GxMcp.Worker.Helpers
             PropertyInfo typeProp = GetPropertyResolvingAmbiguity(t, "Type");
             PropertyInfo lenProp  = GetPropertyResolvingAmbiguity(t, "Length");
             PropertyInfo decProp  = GetPropertyResolvingAmbiguity(t, "Decimals");
-            if (typeProp == null) return false;
+            if (typeProp == null || !typeProp.CanRead || !typeProp.CanWrite) return false;
+
+            if (length.HasValue && (lenProp == null || !lenProp.CanRead || !lenProp.CanWrite)) return false;
+            if (decimals.HasValue && (decProp == null || !decProp.CanRead || !decProp.CanWrite)) return false;
 
             object enumValue;
             if (typeProp.PropertyType == typeof(string))
@@ -160,24 +163,49 @@ namespace GxMcp.Worker.Helpers
                 }
             }
 
-            try { typeProp.SetValue(attr, enumValue, null); }
-            catch { return false; }
-
-            if (length.HasValue)
+            object previousType;
+            object previousLength = null;
+            object previousDecimals = null;
+            try
             {
-                if (lenProp == null) return false;
-                try { lenProp.SetValue(attr, length.Value, null); }
-                catch { return false; }
+                previousType = typeProp.GetValue(attr, null);
+                if (length.HasValue) previousLength = lenProp.GetValue(attr, null);
+                if (decimals.HasValue) previousDecimals = decProp.GetValue(attr, null);
+            }
+            catch
+            {
+                return false;
             }
 
-            if (decimals.HasValue)
+            bool typeWriteAttempted = false;
+            bool lengthWriteAttempted = false;
+            bool decimalsWriteAttempted = false;
+            try
             {
-                if (decProp == null) return false;
-                try { decProp.SetValue(attr, decimals.Value, null); }
-                catch { return false; }
-            }
+                typeWriteAttempted = true;
+                typeProp.SetValue(attr, enumValue, null);
 
-            return true;
+                if (length.HasValue)
+                {
+                    lengthWriteAttempted = true;
+                    lenProp.SetValue(attr, length.Value, null);
+                }
+
+                if (decimals.HasValue)
+                {
+                    decimalsWriteAttempted = true;
+                    decProp.SetValue(attr, decimals.Value, null);
+                }
+
+                return true;
+            }
+            catch
+            {
+                if (decimalsWriteAttempted) RestoreProperty(decProp, attr, previousDecimals);
+                if (lengthWriteAttempted) RestoreProperty(lenProp, attr, previousLength);
+                if (typeWriteAttempted) RestoreProperty(typeProp, attr, previousType);
+                return false;
+            }
         }
 
         /// <summary>
@@ -225,6 +253,12 @@ namespace GxMcp.Worker.Helpers
 
         private static PropertyInfo GetPropertyResolvingAmbiguity(Type type, string name)
             => GetPropertyUnambiguous(type, name);
+
+        private static void RestoreProperty(PropertyInfo property, object target, object value)
+        {
+            try { property.SetValue(target, value, null); }
+            catch { }
+        }
 
         /// <summary>
         /// Resolve a property by name on <paramref name="type"/> without throwing
