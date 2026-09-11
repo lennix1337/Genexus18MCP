@@ -74,6 +74,33 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void AllowsOnlyAWebComponentInsertionIntoAnExistingTable()
+        {
+            const string current = "<instance><table name='Header' childrenOrderedList='2;18;Admin'><userAction name='Admin' gxobject='old'/></table></instance>";
+            const string requested = "<instance><table name='Header' childrenOrderedList='2;18;Admin'><userAction name='Admin' gxobject='old'/><webComponent name='SelectorComponent' gxobject='type-SelectorWebComponent'/></table></instance>";
+
+            var plan = PatternXmlEditPlan.Create(current, requested);
+
+            Assert.Null(plan.ErrorCode);
+            Assert.Single(plan.Changes);
+            Assert.Equal("Insert", (string)plan.Changes[0]["operation"]);
+            Assert.Contains("webComponent", (string)plan.Changes[0]["path"]);
+            Assert.Equal(requested, plan.Xml);
+        }
+
+        [Fact]
+        public void RejectsAWebComponentWithUnsupportedStructureOrMetadata()
+        {
+            const string current = "<instance><table name='Header'><userAction name='Admin'/></table></instance>";
+            const string unsupported = "<instance><table name='Header'><userAction name='Admin'/><webComponent name='SelectorComponent' gxobject='type-SelectorWebComponent' childrenOrderedList='x'/></table></instance>";
+
+            var plan = PatternXmlEditPlan.Create(current, unsupported);
+
+            Assert.Equal("PatternStructureChangeUnsupported", plan.ErrorCode);
+            Assert.Empty(plan.Changes);
+        }
+
+        [Fact]
         public void NamespacesAndTextRemainUntouchedForPropertyEdits()
         {
             const string xml = "<p:instance xmlns:p='urn:pattern'><p:table name='Main' p:class='Old'>keep &amp; preserve<![CDATA[ literal ]]><!-- note --></p:table></p:instance>";

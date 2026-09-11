@@ -67,6 +67,8 @@ namespace GxMcp.Worker.Helpers
             var newNodes = after.Nodes().Where(Significant).ToArray();
             if (oldNodes.Length != newNodes.Length)
             {
+                if (TryAllowWebComponentInsertion(before, after, oldNodes, newNodes, path))
+                    return;
                 Reject("PatternStructureChangeUnsupported", "Child structure changed at " + path);
                 return;
             }
@@ -83,6 +85,62 @@ namespace GxMcp.Worker.Helpers
                     Reject("PatternStructureChangeUnsupported", "Text or node structure changed at " + path);
                 if (ErrorCode != null) return;
             }
+        }
+
+        // A WebComponent is a named, non-ordered child in WorkWithPlus layout
+        // containers. Allow only the narrow structural operation needed to add
+        // one such component to an existing container: no removals, moves,
+        // replacements, metadata changes, or childrenOrderedList edits. The
+        // normal PatternInstance SDK deserializer/save path still performs the
+        // actual persistence and the later WWP projection verifies the result.
+        private bool TryAllowWebComponentInsertion(XElement before, XElement after,
+            XNode[] oldNodes, XNode[] newNodes, string path)
+        {
+            if (!string.Equals(before.Name.LocalName, "table", StringComparison.OrdinalIgnoreCase)
+                || newNodes.Length != oldNodes.Length + 1)
+                return false;
+
+            int insertedIndex = -1;
+            for (int i = 0; i < newNodes.Length; i++)
+            {
+                if (!(newNodes[i] is XElement element)
+                    || !string.Equals(element.Name.LocalName, "webComponent", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (insertedIndex >= 0) return false;
+                insertedIndex = i;
+            }
+            if (insertedIndex < 0) return false;
+
+            var inserted = (XElement)newNodes[insertedIndex];
+            if (inserted.HasElements
+                || inserted.Attributes().Any(a => !string.Equals(a.Name.LocalName, "name", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(a.Name.LocalName, "gxobject", StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            string name = (string)inserted.Attribute("name");
+            string gxobject = (string)inserted.Attribute("gxobject");
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(gxobject))
+                return false;
+
+            int oldIndex = 0;
+            for (int newIndex = 0; newIndex < newNodes.Length; newIndex++)
+            {
+                if (newIndex == insertedIndex) continue;
+                if (oldIndex >= oldNodes.Length || !XNode.DeepEquals(oldNodes[oldIndex], newNodes[newIndex]))
+                    return false;
+                oldIndex++;
+            }
+            if (oldIndex != oldNodes.Length) return false;
+
+            Changes.Add(new JObject
+            {
+                ["path"] = path + "webComponent[@name='" + name + "']",
+                ["operation"] = "Insert",
+                ["after"] = insertedIndex == 0 ? null : "existing child at index " + (insertedIndex - 1),
+                ["name"] = name,
+                ["gxobject"] = gxobject
+            });
+            return true;
         }
 
         private static bool Significant(XNode node) => !(node is XText text)

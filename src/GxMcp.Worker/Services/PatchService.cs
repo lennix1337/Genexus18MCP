@@ -339,7 +339,7 @@ namespace GxMcp.Worker.Services
                             return BuildPatchResult("Error", partName, normalizedOperation, expectedCount, 0,
                                 "Replace needs the text to find. Use mode=patch with operation=\"Replace\", context=\"<exact existing lines>\", content=\"<new lines>\" — or the shorthand patch={\"find\":\"<existing>\",\"replace\":\"<new>\"}. A bare patch string / content-only has nothing to match against.");
 
-                        if (NormalizeSourceForComparison(workContext) == NormalizeSourceForComparison(workContent))
+                        if (!requireObjectSave && NormalizeSourceForComparison(workContext) == NormalizeSourceForComparison(workContent))
                         {
                             return BuildPatchResult("NoChange", partName, normalizedOperation, expectedCount, 1, "Patch content is identical to context. Write skipped.");
                         }
@@ -572,7 +572,8 @@ namespace GxMcp.Worker.Services
                     return AttachTimings(failure, readMs, patchMs, 0, sourceFromCache);
                 }
 
-                if (NormalizeForPartCompare(partName, workSource) == NormalizeForPartCompare(partName, updatedSource))
+                bool noContentChange = NormalizeForPartCompare(partName, workSource) == NormalizeForPartCompare(partName, updatedSource);
+                if (noContentChange && !requireObjectSave)
                 {
                     // Friction 2026-05-22: distinguish the two NoChange cases.
                     // case-a: matched + content identical to context (caught earlier
@@ -599,6 +600,11 @@ namespace GxMcp.Worker.Services
                     catch { }
                     return AttachTimings(noChange, readMs, patchMs, 0, sourceFromCache);
                 }
+
+                // Events may already have been saved only as a part. Requiring the
+                // object save still means ForceSave + verification when the text is
+                // unchanged. Preserve its exact bytes instead of normalizing again.
+                if (noContentChange) updatedSource = workSource;
 
                 bool commentOnlyChange = CommentOnlyPatch.TryClassify(
                     partName, normalizedOperation, workContext, workContent, out string commentStyle);
@@ -634,13 +640,20 @@ namespace GxMcp.Worker.Services
                     {
                         var dryRunJson = JObject.Parse(dryRunResult);
                         var dryRunBody = dryRunJson["result"] as JObject ?? dryRunJson;
-                        var dryRunEvidence = TextPersistenceVerifier.Evaluate(requested: updatedSource.Replace("\n", Environment.NewLine), persisted: originalSource, requestedMode: resolvedVerifyMode, partName: partName);
+                        var dryRunEvidence = TextPersistenceVerifier.Evaluate(
+                            requested: requireObjectSave && noContentChange ? originalSource : ToSdkLineEndings(updatedSource),
+                            persisted: originalSource, requestedMode: resolvedVerifyMode, partName: partName);
                         dryRunBody["persisted"] = false;
                         dryRunBody["saved"] = false;
                         dryRunBody["verified"] = false;
                         dryRunBody["requireObjectSave"] = requireObjectSave;
+                        dryRunBody["noContentChange"] = noContentChange;
                         if (requireObjectSave)
-                            dryRunBody["writeBlocker"] = "ObjectSaveIsolationUnverified";
+                        {
+                            var isolation = _writeService.InspectEventsIsolation(target, typeFilter);
+                            dryRunBody["objectSaveIsolation"] = isolation;
+                            if (isolation["blocker"] != null) dryRunBody["writeBlocker"] = isolation["blocker"];
+                        }
                         dryRunBody["requestedHash"] = dryRunEvidence.RequestedHash;
                         dryRunBody["persistedHash"] = dryRunEvidence.PersistedHash;
                         dryRunBody["commentOnly"] = commentOnlyChange;
@@ -755,11 +768,17 @@ namespace GxMcp.Worker.Services
                             extra: new JObject { ["baseVersion"] = baseVersion, ["currentVersion"] = currentVersion });
                 }
 
-                string isolationError = PatchPersistenceReceipt.ObjectSaveIsolationGuard(target, requireObjectSave, dryRun);
-                if (isolationError != null) return isolationError;
+                if (requireObjectSave)
+                {
+                    var requiredSaveWatch = Stopwatch.StartNew();
+                    string requiredSave = _writeService.WriteIsolatedEvents(target,
+                        noContentChange ? originalSource : ToSdkLineEndings(updatedSource), typeFilter, baseVersion);
+                    requiredSaveWatch.Stop();
+                    return AttachTimings(requiredSave, readMs, patchMs, requiredSaveWatch.ElapsedMilliseconds, sourceFromCache);
+                }
 
                 // 3. Write Back (re-normalize to CRLF for GeneXus)
-                string finalCode = updatedSource.Replace("\n", Environment.NewLine);
+                string finalCode = ToSdkLineEndings(updatedSource);
                 ObjectMetadataSnapshot metadataBefore = null;
                 ObjectMoveSnapshot fullObjectSnapshot = null;
                 if (requireObjectSave && !dryRun)
@@ -1092,6 +1111,12 @@ namespace GxMcp.Worker.Services
             return text.Replace("\r\n", "\n").Replace("\r", "\n").TrimEnd('\n');
         }
 
+        private static string ToSdkLineEndings(string text)
+        {
+            return (text ?? string.Empty).Replace("\r\n", "\n").Replace("\r", "\n")
+                .Replace("\n", Environment.NewLine);
+        }
+
         // Friction-report #5 write-side: VariablesPart's underlying SDK collection inserts new
         // variables at the FRONT of the list, so a patch that produced `<original>...\n&NewVar`
         // round-trips through SetVariablesFromText / GetVariablesAsText as
@@ -1413,6 +1438,8 @@ namespace GxMcp.Worker.Services
                 PatchLanded = false
             };
         }
+
+        internal static void InvalidateAllSourceCaches() => _sourceCache.Clear();
 
         public static void InvalidateCachedSource(string target, string partName, string typeFilter)
         {

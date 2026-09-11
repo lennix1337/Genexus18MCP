@@ -18,6 +18,7 @@
 
 - Serialize Worker lifecycle replacement, preserve concurrent healthy replacements, and keep PatternVirtual structural writes on the SDK path while restricting raw PatternInstance edits to safe property changes.
 - Treat standalone WWP template objects as model-wide records without claiming ownership from a name-only Settings match.
+- Complete Events patches now verify SDK and pattern-save isolation before invoking the full object save, preserve pattern projections, invalidate stale reads, and report incomplete persistence instead of claiming success from a part-only write.
 
 - Fixed WorkWithPlus Settings and instance actions failing to resolve objects by name; preserved explicit identities, pagination and version tokens.
 - Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.

@@ -70,6 +70,8 @@ namespace GxMcp.Worker.Services
                 object buildProcess = getBuildProcess.Invoke(impl, null);
                 if (buildProcess == null) { Logger.Debug("[WWP-PROJECT] GetBuildProcess returned null"); return false; }
 
+                RefreshHostStateForProjection(host);
+
                 var updateParent = buildProcess.GetType().GetMethod("UpdateParentObject",
                     BindingFlags.Public | BindingFlags.Instance);
                 if (updateParent == null) { Logger.Debug("[WWP-PROJECT] UpdateParentObject() not found"); return false; }
@@ -129,6 +131,32 @@ namespace GxMcp.Worker.Services
                 Logger.Warn("[WWP-PROJECT] failed: " + ex.Message);
                 return false;
             }
+        }
+
+        private static void RefreshHostStateForProjection(KBObject host)
+        {
+            if (host == null) return;
+            var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            foreach (string methodName in new[] { "RefreshDefaultDependentParts", "Reload", "Refresh", "Reset" })
+            {
+                try
+                {
+                    var method = host.GetType().GetMethod(methodName, flags, null, Type.EmptyTypes, null);
+                    if (method == null) continue;
+                    method.Invoke(host, null);
+                    Logger.Info("[WWP-PROJECT] Refreshed host state via " + methodName + " before projection.");
+                    return;
+                }
+                catch (TargetInvocationException tie)
+                {
+                    Logger.Debug("[WWP-PROJECT] Host " + methodName + " skipped: " + (tie.InnerException?.Message ?? tie.Message));
+                }
+                catch (Exception ex)
+                {
+                    Logger.Debug("[WWP-PROJECT] Host " + methodName + " skipped: " + ex.Message);
+                }
+            }
+            Logger.Debug("[WWP-PROJECT] No host refresh method was available before projection.");
         }
 
         // Best-effort invoke for IPatternBuildProcess lifecycle hooks that take
