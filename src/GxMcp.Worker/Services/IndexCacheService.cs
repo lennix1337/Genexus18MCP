@@ -1783,20 +1783,16 @@ namespace GxMcp.Worker.Services
             finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
         }
 
-        // Returns true when this call wrote a snapshot to disk that is at least as new
-        // as the dirty generation captured before serialization started; false when it
-        // skipped (flush already in flight / no index) or failed. Never throws.
-        //
         // Plan 003 (sharded flush): only shards dirtied since the last successful flush
         // are (re)serialized — clean shards are left untouched on disk, so cost scales
         // with dirty-entry count rather than total index size. Each dirty shard id is
         // popped from _dirtyShards BEFORE its content is read/written, so any mutation
         // landing concurrently (even mid-write) re-marks the shard dirty for the next
         // round instead of being silently dropped by an end-of-round clear.
-        private bool FlushVersionedSlot(SearchIndex snapshot, List<int> idsToWrite, long generation)
+        private void FlushVersionedSlot(SearchIndex snapshot, List<int> idsToWrite, long generation)
         {
             string slots = _snapshotSlotsPath;
-            if (string.IsNullOrEmpty(slots)) return false;
+            if (string.IsNullOrEmpty(slots)) throw new InvalidOperationException("Index snapshot path is not initialized.");
             string slotName = "generation-" + generation + "-" + Guid.NewGuid().ToString("N");
             string tempSlot = Path.Combine(slots, ".rebuild-" + Guid.NewGuid().ToString("N"));
             string finalSlot = Path.Combine(slots, slotName);
@@ -1835,6 +1831,8 @@ namespace GxMcp.Worker.Services
                     if (idsToWrite.Contains(id)) _shardWriteCounts.AddOrUpdate(id, 1, (k, v) => v + 1);
                 }
 
+                // Do not inherit the previous generation's enrichment certificate.
+                // Its caller must certify this body with WriteMetaSidecar after enrichment/delta completes.
                 WriteShardManifestAt(tempSlot, snapshot.Objects.Count);
                 Directory.Move(tempSlot, finalSlot);
                 string pointerTemp = _snapshotPointerPath + ".tmp-" + Guid.NewGuid().ToString("N");
@@ -1855,13 +1853,6 @@ namespace GxMcp.Worker.Services
                             Directory.Delete(directory, true);
                 }
                 catch (Exception cleanup) { Logger.Warn("Snapshot slot cleanup deferred: " + cleanup.Message); }
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _lastFlushErrorMessage = ex.Message;
-                Logger.Error("Versioned index snapshot failed: " + ex.ToString());
-                return false;
             }
             finally { try { if (Directory.Exists(tempSlot)) Directory.Delete(tempSlot, true); } catch { } }
         }
@@ -1879,6 +1870,8 @@ namespace GxMcp.Worker.Services
             File.WriteAllText(Path.Combine(directory, "manifest.json"), Newtonsoft.Json.JsonConvert.SerializeObject(manifest), new UTF8Encoding(false));
         }
 
+        // Returns true only after publishing the captured generation. Failures retain
+        // dirty shards for retry and return false; they never certify the old bytes.
         private bool FlushToDisk()
         {
             if (_savingInProgress) return false;
@@ -1906,7 +1899,7 @@ namespace GxMcp.Worker.Services
 
             try
             {
-                if (!FlushVersionedSlot(snapshot, idsToWrite, gen)) return false;
+                FlushVersionedSlot(snapshot, idsToWrite, gen);
                 System.Threading.Interlocked.Exchange(ref _consecutiveFlushFailures, 0);
                 _lastFlushSuccessUtc = DateTime.UtcNow;
                 _lastFlushErrorMessage = null;
@@ -1917,8 +1910,8 @@ namespace GxMcp.Worker.Services
                 return true;
             }
             catch (Exception ex) {
-                // Round-level failure (e.g. directory creation) before/around the per-shard
-                // loop — restore every popped id so nothing is lost.
+                // Includes failed certified-pointer publication: the old generation is
+                // still current, so every popped shard must be retried with its new bytes.
                 foreach (var id in idsToWrite) _dirtyShards[id] = 1;
                 int n = System.Threading.Interlocked.Increment(ref _consecutiveFlushFailures);
                 _lastFlushErrorMessage = ex.Message;
