@@ -23,18 +23,22 @@ contract, not a replacement for the KB's current values. No import is involved.
 `DVelop.Extensions.WWPPackagesCommon.dll` inspected SHA-256:
 `6025d0e585c0edf4fcbe2fe38ec6bb5879c18193cdc4446e4e5fab919df7a689`.
 
-## Read and preview contract
+## Read contract and blocked edits
 
 `genexus_wwp` keeps `guid`/`entityKey` scoped to the Pattern Settings object.
 Separate-object discovery requires the native Settings definition ID to match
 the WorkWithPlus pattern ID; a homonymous Settings from another pattern is not
-linked to WorkWithPlus objects.
+used as the discovery context. This definition check does not establish ownership
+of the separately stored objects.
 Separate templates have a stable catalog selector `wwp:<template-object-guid>`,
 `storage=wwp-object`, `templateGuid`, `settingsGuid`, `mainTemplate`,
-`settingsPath`, and `settingsLinkVerified`. Templates must identify
-exactly one embedded `InstanceTemplate` by `WWPTemplate_MainTemplate`; unresolved
-or empty main-template links remain visible but cannot be edited. An empty main
-template does not prove a link to the Settings root.
+`settingsPath`, and `settingsLinkVerified`. These are model-wide library records:
+`settingsGuid` identifies the read context, not a verified owner.
+`BindTemplate` always returns `settingsScope="model-wide"`, `settingsPath=null`
+and `settingsLinkVerified=false`. `settingsLinkEvidence` reports any
+`WWPTemplate_MainTemplate` name matches for display only. Even one matching
+embedded `InstanceTemplate` does not prove ownership; neither does an empty main
+template identify the Settings root.
 
 The token covers KB/model/active-version identity, the whole Settings snapshot,
 and the separately stored template XML and object metadata. A change to another
@@ -60,24 +64,36 @@ unmodified `source` string; paged responses report `sourceIncluded=false` and
 `effectivePropertiesResolved=false` explicitly means WWP default resolvers and
 validators have not run. Embedded Settings templates retain their SDK projection.
 
-For separate objects, preview currently accepts only an existing `themeClass`
-attribute on a `table`. Use the node path from the read response:
+For separate objects, `settings_edit` is refused with
+`TemplateSettingsLinkUnverified`, including `dryRun:true`. Once the snapshot and
+selector checks pass, the service stops at the ownership guard before invoking
+the planner. The following call documents that refusal, not an available preview:
 
 ```json
 {"action":"settings_edit","name":"WorkWithPlus","guid":"<settings-guid>","template":"wwp:<template-guid>","nodePath":"wwp:<template-guid>/0","property":"themeClass","value":"TableMainTransaction example-entry","baseVersion":"<read-token>","dryRun":true}
 ```
 
-The pure planner returns a property `diff` and exact `textEdit` with UTF-16
+The internal pure planner can plan an existing `themeClass` attribute on a
+`table`, returning a property `diff` and exact `textEdit` with UTF-16
 offset/length and before/after text. It changes only the chosen attribute's
 encoded value, preserving quotes, whitespace, comments, XML entity spelling
 elsewhere, and every internal identifier/default/order attribute. No-op previews
 retain the original entity spelling. DTDs and invalid XML characters are refused.
-No SDK property setter, deserializer, resolver, import, or Save is invoked.
+This helper is tested offline but is not reachable through the standalone
+template edit route while ownership remains unverified. The refused MCP call
+returns no successful diff and invokes no property setter or Save.
+
+Embedded Settings templates follow a different route: their `dryRun:true` can
+return a pure projection diff. This does not enable previews for `wwp:<guid>`
+records or establish SDK save isolation.
 
 ## Save isolation remains unverified
 
-The real-save path still returns `SettingsIsolationUnverified`, with
-`saved=false` and `saveAvailable=false`. This change does not enable writes.
+Standalone template edits, including real-save attempts, stop earlier with
+`TemplateSettingsLinkUnverified`. For embedded Settings templates, a valid
+real-save request with a version token returns `SettingsIsolationUnverified`,
+with `saved=false` and `saveAvailable=false`. Missing or stale tokens and invalid
+selectors can fail their own checks first. Neither route enables writes.
 
 Saving the separate object is a different SDK route from saving Pattern Settings.
 The inspected `WWPTemplate` class declares only its constructor and property
@@ -87,10 +103,17 @@ By contrast, `PatternSettings.OnBeforeSaveKBObject` and
 can directly save ThemeClass objects or create DesignSystemClass entities.
 Broker suppression alone cannot suppress those virtual hooks.
 
-Before enabling a separate-template save, verify the exact loaded SDK/WWP
-fingerprints, native base save route, actual parts and direct delegates, global
+Before enabling a separate-template save, establish its actual Settings ownership,
+record loaded SDK/WWP versions and fingerprints as diagnostics, and verify the
+native base save route, actual parts and direct delegates, global
 broker suppression/restoration, transaction and concurrency behavior, and fresh
 SDK read-back. Compare every other object property/part and dependent object or
 entity; do not update Pattern Settings metadata or apply any pattern instance.
 Protected WWP method bodies prevent treating static inspection as a complete
 isolation proof. No KB was opened or written during these static/offline tests.
+
+The offline tests cover XML and binding/planning helpers, not the full
+`PatternSettingsService.Run` path. They do not certify live SDK enumeration,
+fresh-read/token conflicts through that service, or persistence. Those remain
+explicit validation gaps; passing the pure planner tests does not remove the
+ownership or save guards.

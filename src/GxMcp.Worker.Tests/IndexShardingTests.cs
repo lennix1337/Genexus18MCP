@@ -49,13 +49,60 @@ namespace GxMcp.Worker.Tests
             try
             {
                 cache.ReplaceAll(new[] { Entry("Procedure", "HashProbe") });
-                Assert.True(cache.FlushNow());
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
                 int shard = IndexCacheService.ShardOf("Procedure:HashProbe");
                 File.AppendAllText(cache.ShardFilePathForTest(shard), "crash-mix");
                 var reloaded = new IndexCacheService();
                 reloaded.Initialize(kbPath, proactiveLoad: false);
                 Assert.ThrowsAny<Exception>(() => reloaded.GetIndex());
                 Assert.Null(reloaded.TryGetLoadedIndex());
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
+        public void VersionedSnapshot_PublishesCertifiedPointerOnlyAfterCompleteSlot()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                cache.ReplaceAll(new[] { Entry("Procedure", "Certified") });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+                string firstPointer = File.ReadAllText(cache.SnapshotPointerPathForTest);
+                string firstSlot = cache.CertifiedSlotPathForTest;
+                Assert.True(Directory.Exists(firstSlot));
+
+                cache.ReplaceAll(new[] { Entry("Procedure", "Rebuilt") });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+                Assert.NotEqual(firstPointer, File.ReadAllText(cache.SnapshotPointerPathForTest));
+                Assert.NotEqual(firstSlot, cache.CertifiedSlotPathForTest);
+                Assert.True(File.Exists(Path.Combine(cache.CertifiedSlotPathForTest, "manifest.json")));
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
+        public void VersionedSnapshot_IgnoresAbandonedRebuildSlotAndLoadsCertifiedGeneration()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                cache.ReplaceAll(new[] { Entry("Procedure", "KeepCertified") });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+                string certified = cache.CertifiedSlotPathForTest;
+                string abandoned = Path.Combine(cache.SnapshotSlotsPathForTest, "generation-abandoned");
+                Directory.CreateDirectory(abandoned);
+                File.WriteAllText(Path.Combine(abandoned, "manifest.json"), "{\"incomplete\":true}");
+
+                var reloaded = new IndexCacheService();
+                reloaded.Initialize(kbPath, proactiveLoad: false);
+                var index = reloaded.GetIndex();
+                Assert.True(index.Objects.ContainsKey("Procedure:KeepCertified"));
+                Assert.Equal(certified, reloaded.CertifiedSlotPathForTest);
             }
             finally { cache.DeleteOnDiskSnapshot(); }
         }
@@ -221,7 +268,7 @@ namespace GxMcp.Worker.Tests
             try
             {
                 cache.ReplaceAll(new[] { Entry("Procedure", "ManifestProbe") });
-                Assert.True(cache.FlushNow());
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
                 cache.ObserveLastUpdate(DateTime.UtcNow);
                 cache.WriteMetaSidecar(1);
                 File.WriteAllText(cache.ShardManifestPathForTest, "{\"schemaVersion\":999}");
@@ -245,7 +292,7 @@ namespace GxMcp.Worker.Tests
             try
             {
                 cache.ReplaceAll(new[] { Entry("Procedure", "IntegrityProbe") });
-                Assert.True(cache.FlushNow());
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
                 int expected = IndexCacheService.ShardOf("Procedure:IntegrityProbe");
                 int wrong = (expected + 1) % IndexCacheService.ShardCount;
                 File.Copy(cache.ShardFilePathForTest(expected), cache.ShardFilePathForTest(wrong), true);
@@ -282,7 +329,7 @@ namespace GxMcp.Worker.Tests
                 // generation, before any subsequent flush could run.
                 cache.GetIndex();               // FlushNow no-ops while _index is null
                 cache.SetFlushThrottleForTest(0);
-                Assert.True(cache.FlushNow());
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
                 Assert.True(cache.IsFullyFlushed);
 
                 long before = cache.DirtyGeneration;
@@ -305,7 +352,7 @@ namespace GxMcp.Worker.Tests
             {
                 cache.GetIndex();
                 cache.SetFlushThrottleForTest(0);
-                Assert.True(cache.FlushNow()); // baseline
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error"); // baseline
 
                 // Background flusher keeps racing the mutations below, widening the
                 // generation-capture window the old Increment-then-mark order could

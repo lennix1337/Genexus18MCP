@@ -123,8 +123,12 @@ namespace GxMcp.Worker.Services
         // Plan 003: sharded snapshot directory + manifest, derived from _indexPath the same
         // way _indexPathGz is so the paths never drift relative to each other.
         private string _shardDirPath => string.IsNullOrEmpty(_indexPath) ? null : _indexPath + "_shards";
-        private string _shardManifestPath => string.IsNullOrEmpty(_shardDirPath) ? null : Path.Combine(_shardDirPath, "manifest.json");
-        private string ShardFilePath(int shardId) => Path.Combine(_shardDirPath, string.Format("shard_{0:00}.json.gz", shardId));
+        private string _shardManifestPath => string.IsNullOrEmpty(ActiveShardDirPath) ? null : Path.Combine(ActiveShardDirPath, "manifest.json");
+        private string _snapshotSlotsPath => string.IsNullOrEmpty(_indexPath) ? null : _indexPath + "_slots";
+        private string _snapshotPointerPath => string.IsNullOrEmpty(_snapshotSlotsPath) ? null : Path.Combine(_snapshotSlotsPath, "certified.json");
+        private string _certifiedSlotPath;
+        private string ActiveShardDirPath => _certifiedSlotPath ?? _shardDirPath;
+        private string ShardFilePath(int shardId) => Path.Combine(ActiveShardDirPath, string.Format("shard_{0:00}.json.gz", shardId));
 
         // Test observability only — lets tests locate on-disk shard/manifest files without
         // duplicating the path-derivation logic above.
@@ -133,6 +137,9 @@ namespace GxMcp.Worker.Services
         internal string ShardFilePathForTest(int shardId) => ShardFilePath(shardId);
         internal string IndexPathForTest => _indexPath;
         internal string IndexPathGzForTest => _indexPathGz;
+        internal string SnapshotSlotsPathForTest => _snapshotSlotsPath;
+        internal string SnapshotPointerPathForTest => _snapshotPointerPath;
+        internal string CertifiedSlotPathForTest => _certifiedSlotPath;
         private BuildService _buildService;
         private bool _initialized = false;
         private readonly object _lock = new object();
@@ -1282,6 +1289,14 @@ namespace GxMcp.Worker.Services
         private SearchIndex LoadIndexCore()
         {
             System.Threading.Interlocked.Increment(ref _loadInvocationCount);
+            // A certified pointer is the commit record for a complete shard set.
+            // Abandoned rebuild directories are intentionally never discovered here.
+            if (TrySelectCertifiedSlot())
+            {
+                Logger.Debug(string.Format("Loading certified index slot from disk: {0}", _certifiedSlotPath));
+                var certified = LoadShardedIndex();
+                return InstallLoadedIndex(certified);
+            }
             // Plan 003: prefer the sharded snapshot (manifest present = the shard
             // directory is trustworthy); fall back to the legacy single-file gz/plain
             // snapshot so existing installs keep working without re-indexing.
@@ -1308,19 +1323,47 @@ namespace GxMcp.Worker.Services
             }
 
             if (loaded == null) loaded = new SearchIndex();
+            return InstallLoadedIndex(loaded);
+        }
+
+        private SearchIndex InstallLoadedIndex(SearchIndex loaded)
+        {
+            if (loaded == null) loaded = new SearchIndex();
             NormalizeLegacyHierarchy(loaded);
             BuildParentIndex(loaded);
             PrimeHierarchyCacheFromIndex(loaded);
             lock (_lock)
             {
-                // A live mutation or test fixture may publish an index while the disk
-                // read is in flight; never replace that newer in-memory state.
                 if (_index != null) return _index;
                 _index = loaded;
             }
             Logger.Info(string.Format("Index loaded. Objects: {0}", loaded.Objects.Count));
             if (loaded.Objects.Count > 0) MarkIndexComplete(loaded.Objects.Count);
             return loaded;
+        }
+
+        private bool TrySelectCertifiedSlot()
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_snapshotPointerPath) || !File.Exists(_snapshotPointerPath)) return false;
+                var pointer = Newtonsoft.Json.JsonConvert.DeserializeObject<SnapshotPointer>(File.ReadAllText(_snapshotPointerPath));
+                if (pointer == null || string.IsNullOrEmpty(pointer.Slot) || string.IsNullOrEmpty(pointer.Generation)
+                    || !string.Equals(pointer.Slot, pointer.Generation, StringComparison.Ordinal)) return false;
+                string root = Path.GetFullPath(_snapshotSlotsPath);
+                string slot = Path.GetFullPath(Path.Combine(root, pointer.Slot));
+                if (!slot.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                    || !Directory.Exists(slot) || !File.Exists(Path.Combine(slot, "manifest.json"))) return false;
+                _certifiedSlotPath = slot;
+                return true;
+            }
+            catch (Exception ex) { Logger.Warn("Invalid certified snapshot pointer: " + ex.Message); return false; }
+        }
+
+        private sealed class SnapshotPointer
+        {
+            public string Generation { get; set; }
+            public string Slot { get; set; }
         }
 
         private static string ReadGzippedText(string path)
@@ -1518,7 +1561,9 @@ namespace GxMcp.Worker.Services
         // refresh — never on the throttled mid-enrichment body flushes. So the sidecar's presence
         // means "the body on disk is fully enriched and this hwm is trustworthy"; a worker that
         // dies mid-enrichment leaves a body but no sidecar → next warm start does a full rebuild.
-        private string _metaPath => string.IsNullOrEmpty(_indexPath) ? null : _indexPath.Replace(".json", ".meta.json");
+        private string LegacyMetaPath => string.IsNullOrEmpty(_indexPath) ? null : _indexPath.Replace(".json", ".meta.json");
+        private string _metaPath => string.IsNullOrEmpty(ActiveShardDirPath) ? null :
+            (_certifiedSlotPath == null ? LegacyMetaPath : Path.Combine(ActiveShardDirPath, "meta.json"));
 
         // High-water-mark: max KBObject.LastUpdate observed. Stored as ticks for lock-free CAS.
         // Instance field (per index / per KB) — not process-global.
@@ -1603,8 +1648,13 @@ namespace GxMcp.Worker.Services
         /// </summary>
         public void WriteMetaSidecar(int objectCount)
         {
-            string metaPath = _metaPath;
-            if (string.IsNullOrEmpty(metaPath)) return;
+            WriteMetaSidecarAt(Path.GetDirectoryName(_metaPath), objectCount, Path.GetFileName(_metaPath));
+        }
+
+        private bool WriteMetaSidecarAt(string directory, int objectCount, string fileName = "meta.json")
+        {
+            string metaPath = string.IsNullOrEmpty(directory) ? null : Path.Combine(directory, fileName);
+            if (string.IsNullOrEmpty(metaPath)) return false;
             try
             {
                 var meta = new WarmIndexSnapshotMetadata
@@ -1631,8 +1681,9 @@ namespace GxMcp.Worker.Services
                 else
                     File.Move(tmp, metaPath);
                 Logger.Info($"[INDEX-META] sidecar written: schema={CurrentSchemaVersion} hwm={meta.HighWaterMarkUtc ?? "<none>"} objects={objectCount}");
+                return true;
             }
-            catch (Exception ex) { Logger.Warn("WriteMetaSidecar failed: " + ex.Message); }
+            catch (Exception ex) { Logger.Warn("WriteMetaSidecar failed: " + ex.Message); return false; }
         }
 
         /// <summary>Result of validating the on-disk cache against the current worker + schema.</summary>
@@ -1658,6 +1709,7 @@ namespace GxMcp.Worker.Services
             try
             {
                 EnsureInitialized();
+                TrySelectCertifiedSlot();
                 bool hasManifest = !string.IsNullOrEmpty(_shardManifestPath) && File.Exists(_shardManifestPath);
                 v.ShardedIntegrity = !hasManifest;
                 if (hasManifest)
@@ -1741,6 +1793,92 @@ namespace GxMcp.Worker.Services
         // popped from _dirtyShards BEFORE its content is read/written, so any mutation
         // landing concurrently (even mid-write) re-marks the shard dirty for the next
         // round instead of being silently dropped by an end-of-round clear.
+        private bool FlushVersionedSlot(SearchIndex snapshot, List<int> idsToWrite, long generation)
+        {
+            string slots = _snapshotSlotsPath;
+            if (string.IsNullOrEmpty(slots)) return false;
+            string slotName = "generation-" + generation + "-" + Guid.NewGuid().ToString("N");
+            string tempSlot = Path.Combine(slots, ".rebuild-" + Guid.NewGuid().ToString("N"));
+            string finalSlot = Path.Combine(slots, slotName);
+            try
+            {
+                Directory.CreateDirectory(slots);
+                Directory.CreateDirectory(tempSlot);
+                var sourceDir = _certifiedSlotPath;
+                if (sourceDir == null && File.Exists(_shardManifestPath)) sourceDir = _shardDirPath;
+                var buckets = new Dictionary<int, Dictionary<string, SearchIndex.IndexEntry>>();
+                foreach (var id in Enumerable.Range(0, ShardCount))
+                    buckets[id] = new Dictionary<string, SearchIndex.IndexEntry>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in snapshot.Objects)
+                    buckets[ShardOf(kv.Key)][kv.Key] = kv.Value;
+
+                var settings = new Newtonsoft.Json.JsonSerializerSettings {
+                    NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
+                    DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore,
+                    Formatting = Newtonsoft.Json.Formatting.None
+                };
+                var serializer = Newtonsoft.Json.JsonSerializer.Create(settings);
+                foreach (int id in Enumerable.Range(0, ShardCount))
+                {
+                    string destination = Path.Combine(tempSlot, string.Format("shard_{0:00}.json.gz", id));
+                    string previous = sourceDir == null ? null : Path.Combine(sourceDir, string.Format("shard_{0:00}.json.gz", id));
+                    if (!idsToWrite.Contains(id) && previous != null && File.Exists(previous))
+                    {
+                        File.Copy(previous, destination);
+                        continue;
+                    }
+                    using (var fs = File.Create(destination))
+                    using (var gz = new GZipStream(fs, CompressionLevel.Fastest))
+                    using (var writer = new StreamWriter(gz, new UTF8Encoding(false)))
+                    using (var jsonWriter = new Newtonsoft.Json.JsonTextWriter(writer))
+                        serializer.Serialize(jsonWriter, buckets[id]);
+                    if (idsToWrite.Contains(id)) _shardWriteCounts.AddOrUpdate(id, 1, (k, v) => v + 1);
+                }
+
+                WriteShardManifestAt(tempSlot, snapshot.Objects.Count);
+                Directory.Move(tempSlot, finalSlot);
+                string pointerTemp = _snapshotPointerPath + ".tmp-" + Guid.NewGuid().ToString("N");
+                try
+                {
+                    File.WriteAllText(pointerTemp, Newtonsoft.Json.JsonConvert.SerializeObject(new SnapshotPointer { Generation = slotName, Slot = slotName }), new UTF8Encoding(false));
+                    if (File.Exists(_snapshotPointerPath)) File.Replace(pointerTemp, _snapshotPointerPath, null);
+                    else File.Move(pointerTemp, _snapshotPointerPath);
+                }
+                finally { try { if (File.Exists(pointerTemp)) File.Delete(pointerTemp); } catch { } }
+                _certifiedSlotPath = finalSlot;
+                try { if (File.Exists(_indexPathGz)) File.Delete(_indexPathGz); } catch { }
+                try { if (File.Exists(_indexPath)) File.Delete(_indexPath); } catch { }
+                try
+                {
+                    foreach (var directory in Directory.GetDirectories(slots))
+                        if (!string.Equals(Path.GetFullPath(directory), Path.GetFullPath(finalSlot), StringComparison.OrdinalIgnoreCase))
+                            Directory.Delete(directory, true);
+                }
+                catch (Exception cleanup) { Logger.Warn("Snapshot slot cleanup deferred: " + cleanup.Message); }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _lastFlushErrorMessage = ex.Message;
+                Logger.Error("Versioned index snapshot failed: " + ex.ToString());
+                return false;
+            }
+            finally { try { if (Directory.Exists(tempSlot)) Directory.Delete(tempSlot, true); } catch { } }
+        }
+
+        private void WriteShardManifestAt(string directory, int objectCount)
+        {
+            var manifest = new ShardManifest
+            {
+                ShardCount = ShardCount,
+                SchemaVersion = CurrentSchemaVersion,
+                ObjectCount = objectCount,
+                CapturedAtUtc = DateTime.UtcNow.ToString("o"),
+                ShardHashes = Enumerable.Range(0, ShardCount).ToDictionary(id => id, id => GetFileSha256(Path.Combine(directory, string.Format("shard_{0:00}.json.gz", id))))
+            };
+            File.WriteAllText(Path.Combine(directory, "manifest.json"), Newtonsoft.Json.JsonConvert.SerializeObject(manifest), new UTF8Encoding(false));
+        }
+
         private bool FlushToDisk()
         {
             if (_savingInProgress) return false;
@@ -1768,104 +1906,13 @@ namespace GxMcp.Worker.Services
 
             try
             {
-                string dir = _shardDirPath;
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-
-                var settings = new Newtonsoft.Json.JsonSerializerSettings {
-                    NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
-                    DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore,
-                    Formatting = Newtonsoft.Json.Formatting.None
-                };
-                var serializer = Newtonsoft.Json.JsonSerializer.Create(settings);
-
-                // Single O(N) pass bucketing entries into the shards we're about to write
-                // (clean shards are never even visited for bucketing, let alone written).
-                // PERF NOTE (perf-review round 2): a per-shard key registry was tried here
-                // to make this O(dirty) — reverted deliberately. A shard file REPLACES its
-                // previous contents, so any registry miss would silently DROP live entries
-                // from disk. ~38k FNV hashes costs ~2ms on a background thread; correctness
-                // wins.
-                var buckets = new Dictionary<int, Dictionary<string, SearchIndex.IndexEntry>>();
-                foreach (var id in idsToWrite) buckets[id] = new Dictionary<string, SearchIndex.IndexEntry>(StringComparer.OrdinalIgnoreCase);
-                if (idsToWrite.Count > 0)
-                {
-                    foreach (var kv in snapshot.Objects)
-                    {
-                        if (buckets.TryGetValue(ShardOf(kv.Key), out var bucket)) bucket[kv.Key] = kv.Value;
-                    }
-                }
-
-                var flushSw = System.Diagnostics.Stopwatch.StartNew();
-                bool allOk = true;
-                long totalGzBytes = 0;
-
-                foreach (var id in idsToWrite)
-                {
-                    try
-                    {
-                        string shardPath = ShardFilePath(id);
-                        string tmpPath = shardPath + ".tmp";
-                        // PERFORMANCE (W-A3): write gzipped via a temp file + atomic move so
-                        // partial writes never leave a corrupt shard on disk. LOH fix carried
-                        // over from the single-file design: stream straight through gzip
-                        // instead of building the whole shard as one JSON string first.
-                        using (var fs = File.Create(tmpPath))
-                        using (var gz = new GZipStream(fs, CompressionLevel.Fastest))
-                        using (var writer = new StreamWriter(gz, new UTF8Encoding(false)))
-                        using (var jsonWriter = new Newtonsoft.Json.JsonTextWriter(writer))
-                        {
-                            serializer.Serialize(jsonWriter, buckets[id]);
-                        }
-                        try { totalGzBytes += new FileInfo(tmpPath).Length; } catch { }
-                        if (File.Exists(shardPath)) File.Delete(shardPath);
-                        File.Move(tmpPath, shardPath);
-                        _shardWriteCounts.AddOrUpdate(id, 1, (k, v) => v + 1);
-                    }
-                    catch (Exception exShard)
-                    {
-                        allOk = false;
-                        _dirtyShards[id] = 1; // not durable yet — retry this shard next round
-                        Logger.Error(string.Format("[INDEX-SAVE] shard {0} flush failed: {1}", id, exShard.Message));
-                    }
-                }
-
-                long totalMs = flushSw.ElapsedMilliseconds;
-                int entryCount = snapshot.Objects?.Count ?? 0;
-                // Fase 3 measurement: piggyback the running enrichment sub-step split on the
-                // throttled flush so the SDK-bound (refScan/typeExtract) vs CPU-only
-                // (embedding/textualScan) proportion is observable without waiting for the
-                // (pathologically slow) full drain to reach [ENRICH-DONE].
-                Logger.Info($"[INDEX-SAVE] shardsWritten={idsToWrite.Count}/{ShardCount} gzKB={totalGzBytes / 1024} totalMs={totalMs} entries={entryCount} gen={gen} | {GetEnrichTimingSummary()}");
-
-                if (!allOk)
-                {
-                    // Partial round: some shards durable, some not. Don't certify `gen`,
-                    // don't touch the legacy files or manifest — the next flush retries
-                    // only the shards still marked dirty above.
-                    int nFail = System.Threading.Interlocked.Increment(ref _consecutiveFlushFailures);
-                    _lastFlushErrorMessage = "partial shard flush failure";
-                    Logger.Error($"Flush Error (consecutive={nFail}): {_lastFlushErrorMessage}");
-                    return false;
-                }
-
-                if (!WriteShardManifest(entryCount))
-                {
-                    foreach (var id in idsToWrite) _dirtyShards[id] = 1;
-                    _lastFlushErrorMessage = "manifest write failed";
-                    return false;
-                }
-                // Migration cleanup: once the sharded body is confirmed fully durable, the
-                // legacy single-file snapshot (if any) is no longer needed for warm start.
-                try { if (File.Exists(_indexPathGz)) File.Delete(_indexPathGz); } catch { }
-                try { if (File.Exists(_indexPath)) File.Delete(_indexPath); } catch { }
-
+                if (!FlushVersionedSlot(snapshot, idsToWrite, gen)) return false;
                 System.Threading.Interlocked.Exchange(ref _consecutiveFlushFailures, 0);
                 _lastFlushSuccessUtc = DateTime.UtcNow;
                 _lastFlushErrorMessage = null;
-                // Publish the confirmed-on-disk generation (monotonic max).
-                long cur;
-                while ((cur = System.Threading.Interlocked.Read(ref _flushedGeneration)) < gen
-                       && System.Threading.Interlocked.CompareExchange(ref _flushedGeneration, gen, cur) != cur) { }
+                long published;
+                while ((published = System.Threading.Interlocked.Read(ref _flushedGeneration)) < gen
+                    && System.Threading.Interlocked.CompareExchange(ref _flushedGeneration, gen, published) != published) { }
                 System.Threading.Interlocked.Increment(ref _flushWriteCount);
                 return true;
             }
@@ -2598,6 +2645,10 @@ namespace GxMcp.Worker.Services
                 try { if (!string.IsNullOrEmpty(_indexPath) && File.Exists(_indexPath)) File.Delete(_indexPath); } catch (Exception ex) { Logger.Warn("Delete plain snapshot failed: " + ex.Message); }
                 // Plan 003: drop the sharded snapshot directory too.
                 try { if (!string.IsNullOrEmpty(_shardDirPath) && Directory.Exists(_shardDirPath)) Directory.Delete(_shardDirPath, true); } catch (Exception ex) { Logger.Warn("Delete shard dir failed: " + ex.Message); }
+                // Versioned slots are append-only until publication; remove both the
+                // certified generation and abandoned rebuild generations on a forced reset.
+                try { if (!string.IsNullOrEmpty(_snapshotSlotsPath) && Directory.Exists(_snapshotSlotsPath)) Directory.Delete(_snapshotSlotsPath, true); } catch (Exception ex) { Logger.Warn("Delete snapshot slots failed: " + ex.Message); }
+                _certifiedSlotPath = null;
                 // Fase 1: drop the validation sidecar + hwm so a forced rebuild starts clean.
                 try { if (!string.IsNullOrEmpty(_metaPath) && File.Exists(_metaPath)) File.Delete(_metaPath); } catch (Exception ex) { Logger.Warn("Delete meta sidecar failed: " + ex.Message); }
                 ResetHighWaterMark();

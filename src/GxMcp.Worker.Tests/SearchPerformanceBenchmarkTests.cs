@@ -70,5 +70,40 @@ Search ranking (2,000 candidate objects, 1,000 searches):
             _output.WriteLine(report);
             Console.WriteLine(report);
         }
+
+        [Fact]
+        public void Benchmark_Search_WithBuiltSecondaryIndexes_AndColdQueries()
+        {
+            var entries = new List<SearchIndex.IndexEntry>(2000);
+            for (int i = 0; i < 2000; i++)
+            {
+                entries.Add(new SearchIndex.IndexEntry
+                {
+                    Name = "IndexedCustomer" + i,
+                    Type = i % 2 == 0 ? "Procedure" : "Transaction",
+                    Description = "indexed customer billing record " + i,
+                    Keywords = new List<string> { "indexed", "customer", "billing" },
+                    BusinessDomain = i % 2 == 0 ? "Billing" : "Sales",
+                    Guid = "indexed-guid-" + i
+                });
+            }
+
+            var cache = new IndexCacheService();
+            cache.ReplaceAll(entries);
+            var searchSvc = new SearchService(cache);
+            var sw = Stopwatch.StartNew();
+            for (int i = 0; i < 250; i++)
+            {
+                // Unique queries intentionally bypass the bounded query cache.
+                searchSvc.Search("IndexedCustomer" + i, typeFilter: "Procedure", limit: 10);
+            }
+            sw.Stop();
+
+            string report = string.Format(
+                "\n=== SEARCH_SECONDARY_INDEX_BENCHMARK ===\nBuilt entries: {0}\nUnique cold queries: 250\nLatency: {1:F3} ms/op\n===========================================",
+                entries.Count, sw.Elapsed.TotalMilliseconds / 250.0);
+            _output.WriteLine(report);
+            Console.WriteLine(report);
+        }
     }
 }

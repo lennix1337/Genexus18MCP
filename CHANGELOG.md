@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Correct template documentation to distinguish model-wide WWPTemplate records from embedded Settings templates; standalone edits and dry runs remain blocked by unverified ownership, and the original 3.2.2 report is historical.
 - Restore native Domain introspection: database type actions reach the correct Worker action, resolve Domain homonyms by type and read SDK enumeration values.
 - Enforce the selected GeneXus major at build and Worker startup while reporting patch/build and assembly fingerprint drift as diagnostics, including changed DLLs with the same ProductVersion. Missing required assemblies and different majors still fail validation.
 - Preserve the last certified search-index snapshot during forced rebuilds so a Worker crash can warm-start from the previous index instead of leaving the KB cold.
@@ -18,6 +19,8 @@
 - Propagate the selected update channel through npx, global, fixed-path, and package-direct plans; reject release versions with leading-zero components.
 - Make local installation transactional across configuration, build, and client registration outcomes, so failed steps do not report a completed installation.
 - Require typed WorkWithPlus fallback resolution and version preconditions for action mutations; use structural/delimited projection matching so similarly named tabs and events cannot be reported as the requested target.
+- Publish sharded index generations through immutable rebuild slots and an atomic certified pointer; abandoned or partially written slots are ignored, while legacy snapshots remain readable and migrate lazily.
+- Add bounded benchmarks for versioned snapshot publication and cold searches over built secondary indexes; existing search timing is retained as a separate warm/cache-sensitive benchmark.
 
 ### Internal
 
