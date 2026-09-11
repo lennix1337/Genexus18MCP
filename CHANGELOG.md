@@ -29,25 +29,16 @@
 
 - Serialize Worker lifecycle replacement, preserve concurrent healthy replacements, and keep PatternVirtual structural writes on the SDK path while restricting raw PatternInstance edits to safe property changes.
 - Treat standalone WWP template objects as model-wide records without claiming ownership from a name-only Settings match.
+- Complete Events patches now verify SDK and pattern-save isolation before invoking the full object save, preserve pattern projections, invalidate stale reads, and report incomplete persistence instead of claiming success from a part-only write.
 
 - Fixed WorkWithPlus Settings and instance actions failing to resolve objects by name; preserved explicit identities, pagination and version tokens.
 - Preserve a replacement Worker when an eager respawn finishes during the previous Worker's exit callback; remove only the exited entry before notifying subscribers.
 - Include separate WorkWithPlus for Web Template objects in Settings template discovery and reads, with explicit Settings/Main links, pagination, and version tokens. Preview an existing table class with an exact XML text edit that preserves metadata and formatting; real template saves remain blocked pending isolation validation.
 - Preserve SDK-owned pattern metadata during raw XML property edits and previews. Unchanged XML is a no-op; structural or metadata changes are rejected explicitly instead of rebuilding child-order lists. Preview and save share the same unmodified payload, and unreadable current XML blocks both paths. This does not certify SDK save isolation.
-
 - Respect requested object types when resolving homonyms, including Pattern Settings, and separate read-cache entries by type and read shape.
 - Read Pattern Settings through the SDK pattern tree with explicit pagination instead of the generic properties XML.
 - Dirty tracking now classifies the final persisted write outcome, so no-op and pre-mutation failures do not create false dirty entries while confirmed rollbacks clear only the write they undo.
 - PR preflight now reports unavailable `ripwire` analysis explicitly, supports an opt-in required mode, and preserves nonzero tool failures instead of presenting an incomplete analysis as complete.
-
-### Added
-
-- WorkWithPlus Settings template catalog, effective-property reads and pure single-property dry runs with snapshot tokens. Real saves remain explicitly blocked (`SettingsIsolationUnverified`): SDK and WorkWithPlus save hooks and atomic cross-process concurrency have not been certified. No isolated persistence capability is claimed.
-
-### Internal
-
-- Update the contract regression inventory to 225 actions, including the three new Settings actions.
-- Increase the discovery schema budget from 27,500 to 27,750 approximate tokens for the three Settings actions and their identity, pagination and property-preview fields (measured 27,549).
 
 ## v3.2.2 - 2026-09-10
 

@@ -3600,6 +3600,10 @@ namespace GxMcp.Worker.Services
             return Models.McpResponse.Ok(target: obj.Name, code: "FullObjectRead", result: result);
         }
 
+        // Managed cache only: safe even when an interrupted SDK save poisoned the
+        // session. Strict persisted-state verification uses the public SDK cache API.
+        internal static void InvalidateAllReadCaches() => _readCache.Clear();
+
         public void MarkReadCacheDirty(KBObject obj, string partName = null)
         {
             if (obj == null)

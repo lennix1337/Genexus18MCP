@@ -132,6 +132,36 @@ namespace GxMcp.Worker.Helpers
                 : Comparison.Failed(changed, current.Hash, changedKeys);
         }
 
+        internal JArray DescribeDifferences(KBObject obj, params string[] ignoredPartNames)
+        {
+            var result = new JArray();
+            if (obj == null) return result;
+
+            ObjectMoveSnapshot current;
+            try { current = Capture(obj); }
+            catch { return result; }
+
+            var ignored = new HashSet<string>(ignoredPartNames ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            foreach (string key in FindChangedPartKeys(
+                _parts.Where(p => !ignored.Contains(p.Value.Name)).ToDictionary(p => p.Key, p => p.Value.VerificationData, StringComparer.OrdinalIgnoreCase),
+                current._parts.Where(p => !ignored.Contains(p.Value.Name)).ToDictionary(p => p.Key, p => p.Value.VerificationData, StringComparer.OrdinalIgnoreCase)))
+            {
+                _parts.TryGetValue(key, out var before);
+                current._parts.TryGetValue(key, out var after);
+                result.Add(new JObject
+                {
+                    ["part"] = before?.Name ?? after?.Name ?? key,
+                    ["beforeFormat"] = before?.Format,
+                    ["afterFormat"] = after?.Format,
+                    ["beforeLength"] = before?.VerificationData?.Length ?? 0,
+                    ["afterLength"] = after?.VerificationData?.Length ?? 0,
+                    ["beforeHash"] = before == null ? null : HashBytes(before.VerificationData),
+                    ["afterHash"] = after == null ? null : HashBytes(after.VerificationData)
+                });
+            }
+            return result;
+        }
+
         /// <summary>
         /// Compensating restoration used only when the enclosing SDK transaction did not
         /// fully undo a failed move. The normal rollback path is the transaction rollback.
@@ -292,6 +322,11 @@ namespace GxMcp.Worker.Helpers
             var sb = new StringBuilder(bytes.Length * 2);
             foreach (byte b in bytes) sb.Append(b.ToString("x2"));
             return sb.ToString();
+        }
+
+        private static string HashBytes(byte[] bytes)
+        {
+            using (var sha = SHA256.Create()) return ToHex(sha.ComputeHash(bytes ?? new byte[0]));
         }
 
         private static byte[] SerializeEntityData(object entity)

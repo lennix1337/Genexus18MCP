@@ -136,6 +136,10 @@ namespace GxMcp.Worker.Services
             _objectService?.MarkReadCacheDirty(null, part);
         }
 
+        // An isolated object transaction can be addressed through different names,
+        // GUIDs and paths. These request keys have no reverse identity index.
+        internal static void InvalidateAll() => _cache.Clear();
+
         public bool TryGetCached(string target, string part, int? offset, int? limit, string client, out string cachedJson)
         {
             var req = new ObjectReadRequest

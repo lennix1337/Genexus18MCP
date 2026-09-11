@@ -573,6 +573,9 @@ namespace GxMcp.Worker
 
         private static void DrainSdkCommands()
         {
+            // SDK Save may pump the STA message loop. A nested command or
+            // background job must not run inside another operation's broker scope.
+            if (GxMcp.Worker.Helpers.SdkEventSuppressionScope.IsActive) return;
             while (SdkCommandQueue.TryTake(out string line))
             {
                 Interlocked.Exchange(ref _sdkBusySinceTicks, DateTime.UtcNow.Ticks);
@@ -989,6 +992,8 @@ namespace GxMcp.Worker
                     ["cacheOutcome"] = "unknown"
                 };
                 SendResponse(result, idJson, telemetry);
+                if (GxMcp.Worker.Helpers.SdkEventSuppressionScope.IsPoisoned)
+                    SchedulePoisonedExit();
             } catch (Exception ex) when (GxMcp.Worker.Helpers.WorkerCrashGuard.IsCorruptedState(ex)) {
                 // Native/corrupted-state SDK crash: the heap may be inconsistent, so answer THIS
                 // call with a structured error and then exit — the gateway respawns a fresh worker

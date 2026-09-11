@@ -19,6 +19,7 @@
 
   <PropertyGroup>
     <GX_PATH Condition="'$(GX_PATH)' == ''">C:\Program Files (x86)\GeneXus\GeneXus18</GX_PATH>
+    <GxMcpSdkManifest Condition="'$(GxMcpSdkManifest)' == ''">$(MSBuildProjectDirectory)\..\..\config\sdk-compatibility.json</GxMcpSdkManifest>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(GxMcpSkipSdkValidation)' == ''">
@@ -26,11 +27,11 @@
   </PropertyGroup>
 
   <Target Name="ValidateGeneXusSdk" BeforeTargets="ResolveAssemblyReferences" Condition="'$(GxMcpSkipSdkValidation)' != 'true'">
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\scripts\validate-gx-sdk.ps1&quot; -GxPath &quot;$(GX_PATH)&quot; -Manifest &quot;$(MSBuildProjectDirectory)\..\..\config\sdk-compatibility.json&quot;" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\scripts\validate-gx-sdk.ps1&quot; -GxPath &quot;$(GX_PATH)&quot; -Manifest &quot;$(GxMcpSdkManifest)&quot;" />
   </Target>
 
   <ItemGroup>
-    <None Include="..\..\config\sdk-compatibility.json" Link="sdk-compatibility.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(GxMcpSdkManifest)" Link="sdk-compatibility.json" TargetPath="sdk-compatibility.json" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
   <PropertyGroup Condition="Exists('$(GX_PATH)\GeneXus.SecurityScanner.Common.dll')">

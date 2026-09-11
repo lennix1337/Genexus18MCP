@@ -18,6 +18,18 @@ namespace GxMcp.Worker.Tests
             public object DomainBasedOn { get; set; }
         }
 
+        public class FakeEnumValue
+        {
+            public string Name { get; set; }
+            public string Value { get; set; }
+            public string Description { get; set; }
+        }
+
+        public class FakeEnumerableDomain
+        {
+            public List<FakeEnumValue> EnumValues { get; } = new List<FakeEnumValue>();
+        }
+
         [Fact]
         public void ApplyPrimitive_SetsTypeLengthDecimalsSigned()
         {
@@ -129,6 +141,25 @@ namespace GxMcp.Worker.Tests
         {
             var d = new FakeDomain();
             Assert.Equal(0, DomainPropertyApplier.ApplyEnumValues(d, new List<DomainEnumValueSpec>()));
+        }
+
+        [Fact]
+        public void ReadEnumValues_AcceptsDirectlyEnumerableSdkShape()
+        {
+            var d = new FakeEnumerableDomain();
+            d.EnumValues.Add(new FakeEnumValue
+            {
+                Name = "Queued",
+                Value = "1",
+                Description = "Waiting"
+            });
+
+            var values = DomainPropertyApplier.ReadEnumValues(d);
+
+            var value = Assert.Single(values);
+            Assert.Equal("Queued", (string)value["name"]);
+            Assert.Equal("1", (string)value["value"]);
+            Assert.Equal("Waiting", (string)value["description"]);
         }
     }
 }

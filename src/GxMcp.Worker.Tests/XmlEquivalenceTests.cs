@@ -55,6 +55,22 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void EmptyWebComponentParametersInjectedBySdkAreEquivalent()
+        {
+            var persisted = "<instance><table><webComponent name='SelectorComponent' gxobject='type-WC'><parameters /></webComponent></table></instance>";
+            var requested = "<instance><table><webComponent name='SelectorComponent' gxobject='type-WC' /></table></instance>";
+            Assert.True(XmlEquivalence.AreEquivalent(persisted, requested, out var diff), diff);
+        }
+
+        [Fact]
+        public void NonEmptyWebComponentParametersRemainStrict()
+        {
+            var persisted = "<instance><table><webComponent name='SelectorComponent' gxobject='type-WC'><parameters><parameter name='&amp;Id' /></parameters></webComponent></table></instance>";
+            var requested = "<instance><table><webComponent name='SelectorComponent' gxobject='type-WC' /></table></instance>";
+            Assert.False(XmlEquivalence.AreEquivalent(persisted, requested, out _));
+        }
+
+        [Fact]
         public void ElementNameDifferenceIsDetected()
         {
             var a = "<r><a/></r>";

@@ -10,6 +10,23 @@ namespace GxMcp.Gateway.Tests
     public class RouterContractCoverageTests
     {
         [Theory]
+        [InlineData("types_list", "list")]
+        [InlineData("types_describe", "describe")]
+        [InlineData("types_validate", "validate_value")]
+        public void Db_types_normalizes_worker_action_without_mutating_caller(string action, string workerAction)
+        {
+            var args = new JObject { ["action"] = action, ["name"] = "ExampleDomain", ["type"] = "domain" };
+            var routed = JObject.FromObject(new OperationsRouter().ConvertToolCall("genexus_db", args)!);
+
+            Assert.Equal("types", (string?)routed["module"]);
+            Assert.Equal(workerAction, (string?)routed["action"]);
+            Assert.Equal(workerAction, (string?)routed["params"]?["action"]);
+            Assert.Equal("ExampleDomain", (string?)routed["params"]?["name"]);
+            Assert.Equal("domain", (string?)routed["params"]?["type"]);
+            Assert.Equal(action, (string?)args["action"]);
+        }
+
+        [Theory]
         [InlineData("genexus_delete_object", "{}", "Object", "Delete")]
         [InlineData("genexus_worker_reload", "{}", "Object", "WorkerReload")]
         [InlineData("genexus_validate_payload", "{}", "Write", "ValidatePayload")]

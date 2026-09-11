@@ -46,6 +46,17 @@ namespace GxMcp.Worker.Helpers
             catch (Exception ex) { diffSummary = "Right parse error: " + ex.Message; structuredDiff = new XmlEquivalenceDiff { Summary = diffSummary }; return false; }
 
             var ok = ElementsEqual(da.Root, db.Root, "/", out diffSummary, out structuredDiff);
+            // WorkWithPlus materializes an empty Parameters node for a
+            // WebComponent control even when the author omitted it. This is a
+            // canonical SDK projection, not a rejected authored child. Accept
+            // only that exact normalization; substantive children and all
+            // other structure remain strict.
+            if (!ok && WwpEmptyWebComponentParametersEquivalent(da.Root, db.Root))
+            {
+                diffSummary = null;
+                structuredDiff = null;
+                return true;
+            }
             // Report-layout projection: the persisted <Report> is a SUPERSET of the request
             // (the projection re-emits SDK defaults like BorderStyle/ForeColor that the
             // caller never sent). Only accept requested⊆persisted — never the reverse, or
@@ -59,6 +70,43 @@ namespace GxMcp.Worker.Helpers
             if (!ok && structuredDiff == null)
                 structuredDiff = new XmlEquivalenceDiff { Summary = diffSummary };
             return ok;
+        }
+
+        private static bool WwpEmptyWebComponentParametersEquivalent(XElement persisted, XElement requested)
+        {
+            if (persisted == null || requested == null) return false;
+            var persistedCopy = new XElement(persisted);
+            var requestedCopy = new XElement(requested);
+            bool hasWebComponent = persistedCopy.Descendants()
+                .Concat(requestedCopy.Descendants())
+                .Any(e => e.Name.LocalName.Equals("webComponent", StringComparison.OrdinalIgnoreCase));
+            if (!hasWebComponent) return false;
+
+            bool removed = RemoveImplicitParameters(persistedCopy) | RemoveImplicitParameters(requestedCopy);
+            if (!removed) return false;
+
+            return ElementsEqual(persistedCopy, requestedCopy, "/", out _, out _);
+        }
+
+        private static bool RemoveImplicitParameters(XElement root)
+        {
+            bool removed = false;
+            foreach (var component in root.Descendants()
+                .Where(e => e.Name.LocalName.Equals("webComponent", StringComparison.OrdinalIgnoreCase)))
+            {
+                foreach (var parameters in component.Elements()
+                    .Where(e => e.Name.LocalName.Equals("parameters", StringComparison.OrdinalIgnoreCase))
+                    .ToList())
+                {
+                    if (!parameters.HasAttributes && !parameters.HasElements
+                        && !parameters.Nodes().OfType<XText>().Any(t => !string.IsNullOrWhiteSpace(t.Value)))
+                    {
+                        parameters.Remove();
+                        removed = true;
+                    }
+                }
+            }
+            return removed;
         }
 
         /// <summary>

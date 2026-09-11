@@ -1,9 +1,11 @@
 # Required Events save isolation
 
-`requireObjectSave=true` on an Events patch now returns
-`ObjectSaveIsolationUnverified` before persistence. `dryRun=true` and
-`validate=only` still calculate the preview, with `writeBlocker` indicating
-that the corresponding real write is unavailable. There is no bypass flag.
+`requireObjectSave=true` uses the restricted U16 candidate described in
+[Events save candidate](events-save-u16-candidate.md). Unverified SDK hashes,
+object/part types, direct callbacks, destinations, cache removal, or broker
+suppression return `ObjectSaveIsolationUnverified` before persistence. Dry runs
+include the dynamic preflight result and a `writeBlocker` when ineligible.
+There is no caller-controlled bypass flag. Live candidate validation is pending.
 
 This is separate from the KB/version destination guard. A correct destination
 does not establish that save handlers have no automatic effects.
@@ -16,7 +18,7 @@ arguments and forwards supported Events patch requests to the same
 `PatchService.ApplyPatch` path. The isolation check runs after dry-run handling
 and the pre-write version check, before the full snapshot or SDK write.
 
-The complete-save receipt remains available for a future certified path.
+The original complete-save receipt remains available for legacy paths.
 `ObjectSaveIncomplete` preserves the actual part persistence state when any
 required evidence is absent. Its classification is tested through the same
 pure receipt function used in production. Revision advancement requires a
@@ -26,13 +28,16 @@ insufficient.
 
 ## SDK audit and limitations
 
-Static inspection of GeneXus 18 U16's
+The original static inspection of GeneXus 18 U16's
 `Artech.Packages.Patterns.Package.OnAfterSave` shows an
 `AfterSaveKBObject` subscription that can call `ApplyPattern` for an object's
 pattern items. It honors `SkipApplyPattern`, but this is not proof that other
 installed packages honor the flag. WorkWithPlus has its own save event
 subscriptions, with dependencies whose protected implementations could not
-be fully inspected. No global suppression contract was established.
+be fully inspected. That audit did not identify a global suppression contract.
+The subsequent candidate uses the public `EventsService.Events.EventsSuspended`
+switch, validates dispatch suppression dynamically, and also audits direct
+entity callbacks that this broker switch cannot suppress.
 
 The existing Events object-save path calls SDK persistence methods; omitting
 an explicit Apply invocation does not disable these event subscriptions.
@@ -66,14 +71,14 @@ native_genexus_edit({name: "SampleModule.SamplePanel", type: "WebPanel",
   dryRun: true, autoDeclareVariables: false, rollbackOnFailure: false})
 ```
 
-The preview returns `writeBlocker: ObjectSaveIsolationUnverified`. Repeating
-the exact patch with `dryRun:false` currently returns that error before
+An ineligible preview returns `writeBlocker: ObjectSaveIsolationUnverified`.
+Repeating an ineligible patch with `dryRun:false` returns that error before
 writing, with `writeAttempted:false`, `partPersisted:false`, and
-`objectSaved:false`. This is an explicit refusal, not complete-save success.
+`objectSaved:false`. An eligible candidate must still pass the checks at the
+actual save boundary and the mandatory post-save verification.
 Do not remove `requireObjectSave` or retry the request through another write
-mode to bypass it. There is no currently certified call that saves the object
-with the required event isolation; enabling that path requires the pending
-SDK integration evidence above. No build or pattern application is requested
+mode to bypass it. Live integration evidence for the candidate remains pending.
+No build or pattern application is requested
 by these example arguments.
 
 ## Offline validation
