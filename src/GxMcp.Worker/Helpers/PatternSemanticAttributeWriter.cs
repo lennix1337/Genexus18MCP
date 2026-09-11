@@ -218,10 +218,25 @@ namespace GxMcp.Worker.Helpers
         internal static bool ApplySemanticAttribute(object element, string attributeName, string value)
         {
             if (element == null || string.IsNullOrWhiteSpace(attributeName) || value == null) return false;
+            return ApplySemanticAttributeObject(element, attributeName, value, value);
+        }
+
+        internal static object ReadSemanticAttributeObject(object element, string attributeName)
+        {
+            if (element == null || string.IsNullOrWhiteSpace(attributeName)) return null;
+            object attributes = ReadProperty(element, "Attributes");
+            return attributes == null ? null : ReadAttributeObject(attributes, attributeName);
+        }
+
+        internal static bool ApplySemanticAttributeObject(object element, string attributeName,
+            object value, string expectedString = null)
+        {
+            if (element == null || string.IsNullOrWhiteSpace(attributeName) || value == null) return false;
             object attributes = ReadProperty(element, "Attributes");
             if (attributes == null) return false;
 
-            if (string.Equals(ReadAttribute(attributes, attributeName), value, StringComparison.Ordinal)) return true;
+            if (expectedString != null
+                && string.Equals(ReadAttribute(attributes, attributeName), expectedString, StringComparison.Ordinal)) return true;
 
             Type commandType = element.GetType().Assembly.GetType(
                 "Artech.Packages.Patterns.Objects.ChangeAttributeValueCommand", false);
@@ -260,7 +275,26 @@ namespace GxMcp.Worker.Helpers
             MethodInfo executeMethod = commandType.GetMethod("Execute", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             if (executeMethod == null) return false;
             executeMethod.Invoke(command, null);
-            return string.Equals(ReadAttribute(attributes, attributeName), value, StringComparison.Ordinal);
+            object resultingValue = ReadAttributeObject(attributes, attributeName);
+            if (expectedString == null) return resultingValue != null;
+            return string.Equals(ReadAttribute(attributes, attributeName), expectedString, StringComparison.Ordinal)
+                || ValuesEquivalent(resultingValue, value);
+        }
+
+        private static bool ValuesEquivalent(object left, object right)
+        {
+            if (left == null || right == null) return false;
+            if (ReferenceEquals(left, right) || left.Equals(right)) return true;
+            try
+            {
+                PropertyInfo leftGuid = left.GetType().GetProperty("Guid", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo rightGuid = right.GetType().GetProperty("Guid", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                string leftValue = leftGuid?.GetValue(left, null)?.ToString();
+                string rightValue = rightGuid?.GetValue(right, null)?.ToString();
+                return !string.IsNullOrWhiteSpace(leftValue)
+                    && string.Equals(leftValue, rightValue, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
         }
 
         private static object ReadAttributeObject(object attributes, string name)

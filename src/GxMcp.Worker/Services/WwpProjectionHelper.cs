@@ -19,6 +19,26 @@ namespace GxMcp.Worker.Services
     /// </summary>
     internal static class WwpProjectionHelper
     {
+        internal sealed class ProjectionResult
+        {
+            internal bool LifecycleAttempted;
+            internal bool ShouldBuild;
+            internal bool BeforeStartBuild;
+            internal bool AfterImportResources;
+            internal bool UpdateParentObject;
+            internal bool AfterEndBuild;
+            internal bool ParentSaved;
+            internal string Failure;
+
+            internal bool LifecycleExecuted => LifecycleAttempted
+                && ShouldBuild
+                && BeforeStartBuild
+                && AfterImportResources
+                && UpdateParentObject
+                && AfterEndBuild
+                && ParentSaved;
+        }
+
         /// <summary>
         /// Project the PatternInstance on <paramref name="host"/> onto
         /// <paramref name="parent"/>'s WebForm via the WWP build process.
@@ -30,6 +50,13 @@ namespace GxMcp.Worker.Services
         /// </summary>
         public static bool TryProjectHostOntoParent(KBObject parent, KBObject host)
         {
+            return TryProjectHostOntoParent(parent, host, out _);
+        }
+
+        public static bool TryProjectHostOntoParent(KBObject parent, KBObject host,
+            out ProjectionResult result)
+        {
+            result = new ProjectionResult();
             if (parent == null || host == null) return false;
             try
             {
@@ -84,21 +111,35 @@ namespace GxMcp.Worker.Services
                 Logger.Info("[WWP-PROJECT] Running full IPatternBuildProcess lifecycle on " +
                     buildProcess.GetType().FullName + " for host=" + host.Name);
 
-                TryInvokeBP(buildProcess, "ShouldBuild", new[] { host });
-                TryInvokeBP(buildProcess, "BeforeStartBuild", new[] { host });
-                TryInvokeBP(buildProcess, "AfterImportResources", new[] { host });
+                result.LifecycleAttempted = true;
+                result.ShouldBuild = TryInvokeBP(buildProcess, "ShouldBuild", new[] { host });
+                result.BeforeStartBuild = result.ShouldBuild
+                    && TryInvokeBP(buildProcess, "BeforeStartBuild", new[] { host });
+                result.AfterImportResources = result.BeforeStartBuild
+                    && TryInvokeBP(buildProcess, "AfterImportResources", new[] { host });
+                if (!result.AfterImportResources)
+                {
+                    result.Failure = "A required WorkWithPlus build-process callback failed before projection.";
+                    return false;
+                }
                 // BeforeGenerateObjects takes (PatternInstance, IBaseCollection<PatternObject>).
                 // We don't have the second arg cheaply; skip — it's mostly used to filter
                 // which objects to build, not required for the projection step.
 
                 updateParent.Invoke(buildProcess, new object[] { parent, host });
+                result.UpdateParentObject = true;
                 Logger.Info("[WWP-PROJECT] UpdateParentObject returned successfully");
 
                 // AfterSaveObjects takes (PatternInstance, InstanceObjects); we don't have
                 // a real InstanceObjects collection. Same for BeforeSaveObjects. Skip
                 // them rather than pass nulls and risk NRE inside the SDK.
 
-                TryInvokeBP(buildProcess, "AfterEndBuild", new[] { host });
+                result.AfterEndBuild = TryInvokeBP(buildProcess, "AfterEndBuild", new[] { host });
+                if (!result.AfterEndBuild)
+                {
+                    result.Failure = "The WorkWithPlus AfterEndBuild callback failed after projection.";
+                    return false;
+                }
 
                 try
                 {
@@ -109,23 +150,35 @@ namespace GxMcp.Worker.Services
                         SkipValidation = true
                     };
                     parent.Save(prefs);
+                    result.ParentSaved = true;
                     Logger.Info("[WWP-PROJECT] Saved parent '" + parent.Name + "' (ForceSave+SkipValidation).");
                 }
                 catch (Exception saveEx)
                 {
                     Logger.Info("[WWP-PROJECT] ForceSave parent threw: " + saveEx.Message + " — falling back to EnsureSave.");
-                    try { parent.EnsureSave(true); } catch (Exception ex2) { Logger.Info("[WWP-PROJECT] EnsureSave fallback failed: " + ex2.Message); }
+                    try
+                    {
+                        parent.EnsureSave(true);
+                        result.ParentSaved = true;
+                    }
+                    catch (Exception ex2)
+                    {
+                        result.Failure = "Both ForceSave and EnsureSave failed: " + ex2.Message;
+                        Logger.Info("[WWP-PROJECT] EnsureSave fallback failed: " + ex2.Message);
+                    }
                 }
-                return true;
+                return result.LifecycleExecuted;
             }
             catch (TargetInvocationException tie)
             {
                 var inner = tie.InnerException ?? tie;
+                result.Failure = inner.GetType().Name + ": " + inner.Message;
                 Logger.Warn("[WWP-PROJECT] UpdateParentObject threw: " + inner.GetType().Name + ": " + inner.Message);
                 return false;
             }
             catch (Exception ex)
             {
+                result.Failure = ex.GetType().Name + ": " + ex.Message;
                 Logger.Warn("[WWP-PROJECT] failed: " + ex.Message);
                 return false;
             }
@@ -135,22 +188,30 @@ namespace GxMcp.Worker.Services
         // a single (PatternInstance) argument. Logs and swallows errors — these
         // are advisory in our headless context and missing services in the SDK
         // shouldn't fail the projection.
-        private static void TryInvokeBP(object buildProcess, string methodName, object[] args)
+        private static bool TryInvokeBP(object buildProcess, string methodName, object[] args)
         {
             try
             {
                 var m = buildProcess.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
-                if (m == null) { Logger.Debug("[WWP-PROJECT] " + methodName + " not found"); return; }
-                m.Invoke(buildProcess, args);
+                if (m == null) { Logger.Debug("[WWP-PROJECT] " + methodName + " not found"); return false; }
+                object value = m.Invoke(buildProcess, args);
+                if (m.ReturnType == typeof(bool) && value is bool boolValue && !boolValue)
+                {
+                    Logger.Debug("[WWP-PROJECT] " + methodName + " returned False");
+                    return false;
+                }
                 Logger.Debug("[WWP-PROJECT] " + methodName + " ok");
+                return true;
             }
             catch (TargetInvocationException tie)
             {
                 Logger.Debug("[WWP-PROJECT] " + methodName + " threw: " + (tie.InnerException?.GetType().Name ?? "") + ": " + (tie.InnerException?.Message ?? ""));
+                return false;
             }
             catch (Exception ex)
             {
                 Logger.Debug("[WWP-PROJECT] " + methodName + " reflection error: " + ex.Message);
+                return false;
             }
         }
 

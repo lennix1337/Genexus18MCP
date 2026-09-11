@@ -82,6 +82,8 @@ namespace GxMcp.Worker.Services
                     out _, out KBObjectPart instancePart);
 
                 string operation = NormalizeOperation(args?["action"]?.ToString());
+                if (IsWebComponentReplacementOperation(operation))
+                    return RunWebComponentReplacementOperation(target, requestedObject, instance, instancePart, xml, args);
                 if (IsGridAttributeOperation(operation))
                     return RunGridAttributeOperation(target, requestedObject, instance, instancePart, xml, args);
                 if (IsTabOperation(operation))
