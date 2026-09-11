@@ -96,8 +96,21 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void SourceComparison_AllowsSdkEolNormalizationOnly()
         {
-            Assert.True(EventsSaveIsolation.SourceEquivalent("a\r\nb\r\n", "a\nb\n"));
+            Assert.True(EventsSaveIsolation.SourceEquivalent("a
+\nb
+\n", "a\nb\n"));
             Assert.False(EventsSaveIsolation.SourceEquivalent("a\nb", "a\nc"));
+        }
+
+        [Fact]
+        public void PatternProjection_DoesNotTrustPartNamesWithoutExactEquality()
+        {
+            Assert.True(EventsSaveIsolation.IsExpectedPatternProjection(
+                ObjectMoveSnapshot.Comparison.Verified("same")));
+            Assert.False(EventsSaveIsolation.IsExpectedPatternProjection(
+                ObjectMoveSnapshot.Comparison.Failed(new[] { "Rules" }, "different")));
+            Assert.False(EventsSaveIsolation.IsExpectedPatternProjection(
+                ObjectMoveSnapshot.Comparison.Failed(new[] { "Conditions" }, "different")));
         }
 
         [Fact]

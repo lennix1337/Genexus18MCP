@@ -218,7 +218,7 @@ namespace GxMcp.Worker.Services
                             var changedOthers = EventsSaveIsolation.ChangedOthers(inventory, EventsSaveIsolation.Inventory(kb), guid);
                             receipt["preCommitObjectStateVerified"] = true;
                             receipt["preCommitFreshReadDeferred"] = true;
-                            receipt["preCommitSourceMatch"] = receipt["preCommitPartSourceMatch"]?.Value<bool>() == true;
+                            receipt["preCommitSourceMatch"] = receipt["preCommitObjectSourceMatch"]?.Value<bool>() == true;
                             receipt["preCommitSourceLength"] = EventsSaveIsolation.Source(current).Length;
                             receipt["requestedSourceLength"] = source.Length;
                             receipt["preCommitSourceHash"] = EventsSaveIsolation.ContentHash(EventsSaveIsolation.Source(current));

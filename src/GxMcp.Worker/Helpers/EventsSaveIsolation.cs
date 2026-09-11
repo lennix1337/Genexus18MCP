@@ -94,15 +94,11 @@ namespace GxMcp.Worker.Helpers
 
         internal static bool IsExpectedPatternProjection(ObjectMoveSnapshot.Comparison comparison)
         {
-            if (comparison == null || comparison.Equal) return true;
-            foreach (var changed in comparison.ChangedParts)
-            {
-                string name = changed?.ToString();
-                if (!string.Equals(name, "Rules", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(name, "Conditions", StringComparison.OrdinalIgnoreCase))
-                    return false;
-            }
-            return comparison.ChangedParts.Count > 0;
+            // Part names alone are not evidence of a legitimate projection: the
+            // same names can contain arbitrary authored changes. Until the SDK
+            // exposes a canonical projection diff, fail closed and require the
+            // complete snapshot to remain unchanged.
+            return comparison == null || comparison.Equal;
         }
 
         internal static void InspectDirectCallbacks(object instance, JArray report)

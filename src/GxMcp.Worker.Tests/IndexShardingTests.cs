@@ -84,6 +84,67 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void VersionedSnapshot_FailedPublicationRetriesEveryDirtyShard()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                var entry = Entry("Procedure", "RetryProbe");
+                entry.Description = "before";
+                cache.ReplaceAll(new[] { entry });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+                string originalPointer = File.ReadAllText(cache.SnapshotPointerPathForTest);
+                long originalGeneration = cache.FlushedGeneration;
+
+                cache.AddOrUpdateBatch(new[] {
+                    new SearchIndex.IndexEntry {
+                        Name = entry.Name, Type = entry.Type, Guid = entry.Guid, Description = "after"
+                    }
+                });
+                using (File.Open(cache.SnapshotPointerPathForTest, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    Assert.False(cache.FlushNow(100));
+                    Assert.False(cache.IsFullyFlushed);
+                    Assert.Equal(originalGeneration, cache.FlushedGeneration);
+                    Assert.Equal(originalPointer, File.ReadAllText(cache.SnapshotPointerPathForTest));
+                }
+
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+                Assert.True(cache.IsFullyFlushed);
+                var reloaded = new IndexCacheService();
+                reloaded.Initialize(kbPath, proactiveLoad: false);
+                Assert.Equal("after", reloaded.GetIndex().Objects["Procedure:RetryProbe"].Description);
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
+        public void VersionedSnapshot_NewBodyRequiresItsOwnEnrichmentCertificate()
+        {
+            var cache = new IndexCacheService();
+            cache.Initialize(UniqueKbPath(), proactiveLoad: false);
+            try
+            {
+                cache.ReplaceAll(new[] { Entry("Procedure", "CertifiedBody") });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+                cache.ObserveLastUpdate(DateTime.UtcNow);
+                cache.WriteMetaSidecar(1);
+                Assert.True(cache.ValidateOnDiskCache().CanDelta);
+
+                cache.AddOrUpdateBatch(new[] { Entry("Procedure", "AwaitingEnrichment") });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+                var validation = cache.ValidateOnDiskCache();
+                Assert.True(validation.BodyPresent);
+                Assert.False(validation.MetaPresent);
+                Assert.False(validation.CanDelta);
+                Assert.False(validation.CanDeltaAcrossDll);
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
         public void VersionedSnapshot_IgnoresAbandonedRebuildSlotAndLoadsCertifiedGeneration()
         {
             string kbPath = UniqueKbPath();
