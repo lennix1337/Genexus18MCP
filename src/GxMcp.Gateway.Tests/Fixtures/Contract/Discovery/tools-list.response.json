@@ -4852,7 +4852,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Typed WorkWithPlus action, tab, and grid edits with dryRun, optimistic concurrency, exact snapshots, post-save reread, projection verification, and rollback. No lifecycle operation is implicit. Settings: embedded and separate WWP templates, paged reads and exact table-class dryRun; saves remain blocked.",
+      "description": "Typed WorkWithPlus action, tab, grid, and native structural edits with dryRun, optimistic concurrency, exact snapshots, post-save reread, projection verification, and rollback. No lifecycle operation is implicit. Settings: embedded and separate WWP templates, paged reads and exact table-class dryRun; saves remain blocked.",
       "inputSchema": {
         "$defs": {
           "wwpControl": {
@@ -4958,11 +4958,24 @@
             "caption": "Status",
             "dryRun": true,
             "name": "SampleOrderWW"
+          },
+          {
+            "action": "replace_web_component_with_user_action",
+            "caption": "&Context.EmpresaDescricao",
+            "controlType": "DropDownComponent",
+            "dryRun": true,
+            "gxobject": "WWP_MasterPageEmpresaSelectorWC",
+            "name": "WorkWithPlusWorkWithPlusMasterPage",
+            "sourceName": "EmpresaSelector",
+            "tablePath": "TableHeader > TableUserRole > EmpresaSelector",
+            "trigger": "Click",
+            "userActionName": "EmpresaSelector",
+            "webComponentLoad": "On every click"
           }
         ],
         "properties": {
           "action": {
-            "description": "WorkWithPlus action-group, tab, or grid-attribute operation to perform.",
+            "description": "WorkWithPlus action-group, tab, grid-attribute, or explicit native structural operation to perform.",
             "enum": [
               "list",
               "add_action",
@@ -4973,6 +4986,7 @@
               "move_tab",
               "remove_tab",
               "add_grid_attribute",
+              "replace_web_component_with_user_action",
               "settings_templates",
               "settings_read",
               "settings_edit"
@@ -4996,7 +5010,7 @@
             "type": "string"
           },
           "caption": {
-            "description": "Action or grid-column caption.",
+            "description": "Action caption. For a DropDownComponent pass the GeneXus expression used for the closed button, for example &Context.EmpresaDescricao.",
             "type": "string"
           },
           "children": {
@@ -5012,6 +5026,13 @@
           },
           "controlName": {
             "description": "Tab ControlName.",
+            "type": "string"
+          },
+          "controlType": {
+            "description": "replace_web_component_with_user_action: resulting UserAction ControlType.",
+            "enum": [
+              "DropDownComponent"
+            ],
             "type": "string"
           },
           "description": {
@@ -5043,6 +5064,10 @@
           },
           "guid": {
             "description": "Pattern Settings object GUID for settings_* actions.",
+            "type": "string"
+          },
+          "gxobject": {
+            "description": "replace_web_component_with_user_action: existing WebComponent Gxobject to retain; it must match the current node.",
             "type": "string"
           },
           "icon": {
@@ -5091,6 +5116,14 @@
             ],
             "type": "string"
           },
+          "sourceName": {
+            "description": "replace_web_component_with_user_action: existing WebComponent name.",
+            "type": "string"
+          },
+          "tablePath": {
+            "description": "replace_web_component_with_user_action: full breadcrumb including the source node, for example TableHeader > TableUserRole > EmpresaSelector.",
+            "type": "string"
+          },
           "template": {
             "description": "Settings catalog path, wwp:<template-guid>, or unique template name.",
             "type": "string"
@@ -5103,11 +5136,32 @@
             "description": "move_action: destination group (created when absent).",
             "type": "string"
           },
+          "trigger": {
+            "description": "DropDownComponent trigger.",
+            "enum": [
+              "Click",
+              "Hover"
+            ],
+            "type": "string"
+          },
+          "userActionName": {
+            "description": "replace_web_component_with_user_action: resulting UserAction name; defaults to sourceName.",
+            "type": "string"
+          },
           "value": {
             "type": "string"
           },
           "versionToken": {
             "description": "Backward-compatible alias for baseVersion.",
+            "type": "string"
+          },
+          "webComponentLoad": {
+            "description": "DropDownComponent load timing.",
+            "enum": [
+              "On Web Panel load",
+              "On first click",
+              "On every click"
+            ],
             "type": "string"
           }
         },
