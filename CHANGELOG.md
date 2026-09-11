@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`genexus_preview` browser driver resolution.** Resolve `chrome-devtools-axi` from the preview configuration, MCP profile, bundled runtime/dependencies, Worker/backend directories, and finally the effective PATH; Windows shims and quoted relative paths are supported, with preflight diagnostics when no candidate is available. Preview captures continue to support screenshot, console, exceptions, desktop emulation, and `buildFirst=false` without starting a build.
+
 ## v3.3.0 - 2026-09-11
 
 
