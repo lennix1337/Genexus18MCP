@@ -104,7 +104,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("rebuild", 2700)]
         public void AsyncBuildHardCap_LeavesRoomForWorkerWatchdog(string action, int expectedSeconds)
         {
-            string previousTimeout = Environment.GetEnvironmentVariable("GXMCP_BUILD_TIMEOUT_SEC");
+            string? previousTimeout = Environment.GetEnvironmentVariable("GXMCP_BUILD_TIMEOUT_SEC");
             try
             {
                 Environment.SetEnvironmentVariable("GXMCP_BUILD_TIMEOUT_SEC", null);
