@@ -25,7 +25,7 @@ const {
     compareGeneXusKbAndInstallation,
     patchClientConfig
 } = require('./lib/config');
-const { handleInit } = require('./commands/axi');
+const { handleInit, resolveMcpSmokeTarget } = require('./commands/axi');
 
 const cliPath = path.join(__dirname, 'run.js');
 const testGxPath = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-gx-'));
@@ -911,7 +911,26 @@ test('doctor --mcp-smoke adds explicit mcp_smoke check', () => {
     const parsed = JSON.parse(result.stdout);
     const smoke = parsed.ok.checks.find((c) => c.id === 'mcp_smoke');
     assert.ok(smoke);
-    assert.ok(['pass', 'warn', 'fail'].includes(smoke.status));
+    assert.ok(['pass', 'warn', 'fail', 'not_applicable'].includes(smoke.status));
+});
+
+test('doctor marks HTTP smoke not applicable for stdio-isolated runtime', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-doctor-stdio-'));
+    const configPath = path.join(tempRoot, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+        GatewayMode: 'stdio-isolated',
+        Server: { HttpPort: 0, McpStdio: true }
+    }));
+
+    try {
+        const target = resolveMcpSmokeTarget(tempRoot);
+        assert.equal(target.applicable, false);
+        assert.equal(target.status, 'not_applicable');
+        assert.equal(target.baseUrl, null);
+        assert.match(target.detail, /stdio-isolated|HTTP listener is disabled/);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
 });
 
 test('doctor reports a KB and SDK major mismatch', () => {

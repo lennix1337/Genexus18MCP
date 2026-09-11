@@ -163,16 +163,61 @@ namespace GxMcp.Worker.Helpers
             try { typeProp.SetValue(attr, enumValue, null); }
             catch { return false; }
 
-            if (length.HasValue && lenProp != null)
+            if (length.HasValue)
             {
+                if (lenProp == null) return false;
                 try { lenProp.SetValue(attr, length.Value, null); }
-                catch { /* best-effort */ }
+                catch { return false; }
             }
 
-            if (decimals.HasValue && decProp != null)
+            if (decimals.HasValue)
             {
+                if (decProp == null) return false;
                 try { decProp.SetValue(attr, decimals.Value, null); }
-                catch { /* best-effort */ }
+                catch { return false; }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Applies a property-facing primitive type value to an Attribute (or to a
+        /// TransactionAttribute that exposes its underlying Attribute). The generic
+        /// property bag setter accepts the string but does not change the SDK type;
+        /// property writes must use the typed Attribute surface instead.
+        /// </summary>
+        public static bool TryApplyType(object attributeOrOccurrence, string rawType, out string error)
+        {
+            error = null;
+            if (attributeOrOccurrence == null)
+            {
+                error = "An Attribute instance is required to set Type.";
+                return false;
+            }
+
+            object attribute = attributeOrOccurrence;
+            try
+            {
+                var attributeProperty = GetPropertyUnambiguous(attributeOrOccurrence.GetType(), "Attribute");
+                var underlying = attributeProperty?.GetValue(attributeOrOccurrence, null);
+                if (underlying != null) attribute = underlying;
+            }
+            catch
+            {
+                // A raw Attribute has no occurrence-level Attribute property; keep the input.
+            }
+
+            var spec = Parse(rawType);
+            if (!spec.Recognized || string.Equals(spec.CanonicalType, "DomainReference", StringComparison.OrdinalIgnoreCase))
+            {
+                error = $"'{rawType}' is not a primitive Attribute type. Use the Domain property for a Domain reference.";
+                return false;
+            }
+
+            if (!ApplyPrimitive(attribute, spec.CanonicalType, spec.Length, spec.Decimals))
+            {
+                error = $"The GeneXus SDK did not expose a writable Type surface for '{rawType}'.";
+                return false;
             }
 
             return true;

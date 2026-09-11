@@ -106,7 +106,7 @@ With `--full`, includes detailed paths/origin (`configPath`, `gatewayExePath`, `
 Default schema per check item (minimal):
 
 - `id`
-- `status` (`pass|warn|fail`)
+- `status` (`pass|warn|fail|not_applicable`)
 - `detail`
 
 Includes:
@@ -115,7 +115,7 @@ Includes:
 - `ok.returned` / `ok.total`
 
 With `--full`, includes runtime spawn probe.
-With `--mcp-smoke`, includes `mcp_smoke` check by running the smoke script (`initialize`, `tools/list`, `resources/list`, and follow-up probes).
+With `--mcp-smoke`, includes `mcp_smoke` check by running the smoke script (`initialize`, `tools/list`, `resources/list`, and follow-up probes). For `stdio-isolated` runtimes or configurations with stdio and no HTTP listener, the check is `not_applicable` instead of probing a disabled loopback endpoint.
 
 ## `tools list`
 

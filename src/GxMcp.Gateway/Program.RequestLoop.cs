@@ -2298,7 +2298,9 @@ namespace GxMcp.Gateway
                                     JObject? finalStatus = null;
                                     int failedPolls = 0;
                                     int pollCount = 0;
-                                    var hardCap = DateTime.UtcNow.AddMinutes(30);
+                                    int hardCapSeconds = ResolveAsyncBuildHardCapSeconds(lcAction);
+                                    var hardCap = DateTime.UtcNow.AddSeconds(hardCapSeconds);
+                                    Log($"[AsyncBuild] job={job.Id} hard cap={hardCapSeconds}s");
                                     while (DateTime.UtcNow < hardCap)
                                     {
                                         if (pollCt.IsCancellationRequested)
@@ -2339,7 +2341,7 @@ namespace GxMcp.Gateway
                                             toolName: tName, toolArgs: tArgs, trackOperation: false);
 
                                         // issue #113 — a dead worker must fail the job fast instead of
-                                        // looping until hardCap (30 min) with the caller still waiting
+                                        // looping until hardCap with the caller still waiting
                                         // on wait_until_done / transport. Any error envelope here means
                                         // the poll didn't reach the worker (crashed/exited/pipe gone);
                                         // a single miss is tolerated, consecutive misses are terminal.

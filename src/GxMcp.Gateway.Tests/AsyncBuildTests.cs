@@ -96,5 +96,14 @@ namespace GxMcp.Gateway.Tests
             // If caller passes estimated_seconds=10, they opt into sync fast-path
             Assert.True(BuildPathSelector.UseSync(estimatedSeconds: 10, thresholdSeconds: 20));
         }
+
+        [Theory]
+        [InlineData("build", 1800)]
+        [InlineData("build_all", 2700)]
+        [InlineData("rebuild", 2700)]
+        public void AsyncBuildHardCap_LeavesRoomForWorkerWatchdog(string action, int expectedSeconds)
+        {
+            Assert.Equal(expectedSeconds, Program.ResolveAsyncBuildHardCapSeconds(action));
+        }
     }
 }

@@ -1,57 +1,39 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "3.3.1",
-  "tag": "v3.3.1",
-  "collectedAtUtc": "2026-09-11T17:40:19.7272723Z",
+  "version": "3.3.2",
+  "tag": "v3.3.2",
+  "collectedAtUtc": "2026-09-11T19:25:11.7911668Z",
   "issues": [
     {
-      "number": 174,
-      "title": "[Enhancement] Detectar dependências locais ausentes e oferecer instalação confirmada",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/174",
-      "state": "OPEN",
-      "labels": [
-        "fixed-pending-release"
-      ],
+      "number": 179,
+      "title": "[Bug] genexus_properties set of Attribute Type is silently ineffective — no tracking issue exists specifically for Type",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/179",
+      "state": "open",
+      "labels": [],
       "milestone": null
     },
     {
-      "number": 176,
-      "title": "[Regression] build reports false Succeeded for an ambiguous object name — real MSBuild error hidden in fullLogPath (regression after #115 fix)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/176",
-      "state": "OPEN",
-      "labels": [
-        "fixed-pending-release"
-      ],
+      "number": 180,
+      "title": "[Not retested on 3.3.0] genexus_lifecycle build: MCP channel aborts with '1800s no response/progress' while the build itself keeps running and completes",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/180",
+      "state": "open",
+      "labels": [],
       "milestone": null
     },
     {
-      "number": 177,
-      "title": "[Bug] genexus_edit part=Styles returns false WriteNotPersisted — verifyMode default not honored (same class as #100, not covered by that fix)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/177",
-      "state": "OPEN",
-      "labels": [
-        "fixed-pending-release"
-      ],
+      "number": 182,
+      "title": "Possível falha no install.ps1 em um checkout novo sem config.json",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/182",
+      "state": "open",
+      "labels": [],
       "milestone": null
     },
     {
-      "number": 178,
-      "title": "[Bug] genexus_layout set_property with a multi-line Caption silently renames the control and reports an unrelated LayoutReadBackFailed",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/178",
-      "state": "OPEN",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 181,
-      "title": "Worker respawns with a new PID on every tool call, causing KB_NOT_OWNED and indexing never completes",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/181",
-      "state": "OPEN",
-      "labels": [
-        "fixed-pending-release"
-      ],
+      "number": 183,
+      "title": "doctor --mcp-smoke pode reportar falso negativo em runtime stdio-isolated",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/183",
+      "state": "open",
+      "labels": [],
       "milestone": null
     }
   ]

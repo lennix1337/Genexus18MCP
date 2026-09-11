@@ -118,11 +118,17 @@ try {
     Assert-True ($installerSource.Contains('-RequireManifest:$isV3Release')) 'installer gates v3 manifest validation'
     Assert-True (-not $installerSource.Contains('Remove-Item -Path (Join-Path $InstallDir ''*'')')) 'installer does not destructively wipe the live directory'
     Assert-True ($localInstallerSource.Contains('$cliRunPath, "clients", "add"')) 'local installer passes executable path as an array element'
-    Assert-True ($localInstallerSource.Contains('Save-JsonFile $configPath $config')) 'local installer persists config after build and registration'
-    $savePosition = $localInstallerSource.IndexOf('Save-JsonFile $configPath $config', [StringComparison]::Ordinal)
+    Assert-True ($localInstallerSource.Contains('Save-JsonFile $stagedConfigPath $config')) 'local installer stages config before client registration'
+    Assert-True ($localInstallerSource.Contains('$env:GX_CONFIG_PATH = $stagedConfigPath')) 'client registration receives the staged config path'
+    Assert-True ($localInstallerSource.Contains('ConvertFrom-Json')) 'local installer parses the CLI envelope instead of hiding its output'
+    Assert-True ($localInstallerSource.Contains('Remove-StagedConfig $stagedConfigPath')) 'failed registration removes the staged config'
+    Assert-True ($localInstallerSource.Contains('Move-Item -LiteralPath $stagedConfigPath -Destination $configPath -Force')) 'successful registration commits the staged config'
+    $stagePosition = $localInstallerSource.IndexOf('Save-JsonFile $stagedConfigPath $config', [StringComparison]::Ordinal)
+    $clientPosition = $localInstallerSource.IndexOf('$cliRunPath, "clients", "add"', [StringComparison]::Ordinal)
+    $commitPosition = $localInstallerSource.IndexOf('Move-Item -LiteralPath $stagedConfigPath -Destination $configPath -Force', [StringComparison]::Ordinal)
     $completePosition = $localInstallerSource.IndexOf('Installation complete.', [StringComparison]::Ordinal)
-    Assert-True ($savePosition -gt 0 -and $completePosition -gt $savePosition) 'installation completion follows final config persistence'
-    Assert-True ($localInstallerSource.Contains('client registration exited with code')) 'client registration failure is fatal'
+    Assert-True ($stagePosition -gt 0 -and $stagePosition -lt $clientPosition -and $commitPosition -gt $clientPosition -and $completePosition -gt $commitPosition) 'installation stages before registration and completes after the commit'
+    Assert-True ($localInstallerSource.Contains('client registration failed')) 'client registration failure is fatal'
     Assert-True ($releaseInstallerSource.Contains('Test-StrictSemVer')) 'release installer validates strict semver'
     Assert-True ($releaseInstallerSource.Contains('Refusing downgrade')) 'release installer rejects downgrade by default'
     Assert-True ($releaseInstallerSource.Contains('$exitCode = $LASTEXITCODE')) 'uninstall checks LASTEXITCODE before claiming success'

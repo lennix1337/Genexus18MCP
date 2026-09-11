@@ -197,6 +197,12 @@ function Save-JsonFile([string]$path, [object]$value) {
     [System.IO.File]::WriteAllText($path, $json, [System.Text.Encoding]::UTF8)
 }
 
+function Remove-StagedConfig([string]$path) {
+    if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path)) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Resolve-CommandPath([string[]]$names) {
     foreach ($name in $names) {
         $command = Get-Command $name -ErrorAction SilentlyContinue
@@ -259,34 +265,71 @@ if ($SkipClientConfig) {
     } elseif (-not (Test-Path $gatewayExePath)) {
         Fail "Gateway exe not found at $gatewayExePath - cannot register AI clients."
     } else {
+        # Stage the runtime config outside config.json so a failed registration
+        # cannot leave a partial install behind. The CLI only needs a resolvable
+        # config path for `clients add`; commit it after the complete envelope
+        # confirms that no client failed.
+        $stagedConfigPath = "$configPath.pending-$([guid]::NewGuid().ToString('N'))"
         # Point the CLI at the freshly-built gateway exe so the client launcher is a
         # direct exe path (not npx). getLauncher() in cli/lib/config.js honors this.
         $prevGatewayExe = $env:GENEXUS_MCP_GATEWAY_EXE
-        $env:GENEXUS_MCP_GATEWAY_EXE = $gatewayExePath
+        $prevConfigPath = $env:GX_CONFIG_PATH
         try {
+            Save-JsonFile $stagedConfigPath $config
+            Write-Ok "Staged runtime config for transactional client registration."
+
+            $env:GENEXUS_MCP_GATEWAY_EXE = $gatewayExePath
+            $env:GX_CONFIG_PATH = $stagedConfigPath
             $clientArgs = @(
                 $cliRunPath, "clients", "add", "--all-clients", "--format", "json"
             )
-            & $node @clientArgs | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Fail "genexus-mcp client registration exited with code $LASTEXITCODE."
+            $clientOutput = @(& $node @clientArgs 2>&1)
+            $clientExitCode = $LASTEXITCODE
+            $clientOutputText = ($clientOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+            if (-not [string]::IsNullOrWhiteSpace($clientOutputText)) {
+                Write-Host $clientOutputText
             }
+
+            $clientEnvelope = $null
+            if (-not [string]::IsNullOrWhiteSpace($clientOutputText)) {
+                try { $clientEnvelope = $clientOutputText | ConvertFrom-Json } catch { }
+            }
+            $failedClients = @()
+            if ($null -ne $clientEnvelope -and $null -ne $clientEnvelope.meta -and $null -ne $clientEnvelope.meta.failedClients) {
+                $failedClients = @($clientEnvelope.meta.failedClients)
+            }
+            if ($clientExitCode -ne 0 -or $failedClients.Count -gt 0) {
+                $failureDetail = if ($failedClients.Count -gt 0) {
+                    "$($failedClients.Count) client(s) failed"
+                } else {
+                    "exit code $clientExitCode"
+                }
+                throw "genexus-mcp client registration failed ($failureDetail). See the CLI envelope above for details."
+            }
+
+            Backup-File $configPath
+            Move-Item -LiteralPath $stagedConfigPath -Destination $configPath -Force
+            $stagedConfigPath = $null
             Write-Ok "AI clients registered with the neutral runtime (Claude Desktop/Code, Antigravity, Gemini CLI, Cursor, OpenCode, Codex, VS Code - whichever are installed)."
         } catch {
+            Remove-StagedConfig $stagedConfigPath
             Fail "AI client registration failed: $($_.Exception.Message)"
         } finally {
             if ($null -ne $prevGatewayExe) { $env:GENEXUS_MCP_GATEWAY_EXE = $prevGatewayExe }
             else { Remove-Item env:GENEXUS_MCP_GATEWAY_EXE -ErrorAction SilentlyContinue }
+            if ($null -ne $prevConfigPath) { $env:GX_CONFIG_PATH = $prevConfigPath }
+            else { Remove-Item env:GX_CONFIG_PATH -ErrorAction SilentlyContinue }
         }
     }
 }
 
-# Persist the prepared runtime only after build and optional registration both
-# succeeded. A failed build or registration therefore cannot leave a partial
-# config.json behind.
-Backup-File $configPath
-Save-JsonFile $configPath $config
-Write-Ok "neutral config.json updated."
+# When client registration was skipped, persist the prepared runtime now. The
+# normal registration path already committed its staged config above.
+if ($SkipClientConfig) {
+    Backup-File $configPath
+    Save-JsonFile $configPath $config
+    Write-Ok "neutral config.json updated."
+}
 Write-Ok "Installation complete."
 Write-Host ""
 Write-Host "Artifacts:" -ForegroundColor Cyan

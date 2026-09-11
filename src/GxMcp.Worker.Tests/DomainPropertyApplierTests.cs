@@ -18,6 +18,16 @@ namespace GxMcp.Worker.Tests
             public object DomainBasedOn { get; set; }
         }
 
+        private sealed class FailingLengthDomain
+        {
+            public string Type { get; set; }
+            public int Length
+            {
+                get { return 0; }
+                set { throw new System.InvalidOperationException("length is read-only"); }
+            }
+        }
+
         public class FakeEnumValue
         {
             public string Name { get; set; }
@@ -57,6 +67,14 @@ namespace GxMcp.Worker.Tests
         {
             var d = new FakeDomain();
             Assert.False(DomainPropertyApplier.ApplyPrimitive(d, "Nope", null, null, null));
+        }
+
+        [Fact]
+        public void ApplyPrimitive_ReturnsFalse_WhenRequestedLengthCannotBeApplied()
+        {
+            var d = new FailingLengthDomain();
+
+            Assert.False(DomainPropertyApplier.ApplyPrimitive(d, "Character", length: 10, decimals: null, signed: null));
         }
 
         [Fact]

@@ -815,6 +815,22 @@ namespace GxMcp.Gateway
             }
         }
 
+        // Keep the Gateway's async build poller alive at least until the Worker
+        // watchdog can terminalize the same build. Build All/Rebuild All use a
+        // 2400s Worker cap by default; the previous fixed 1800s Gateway cap could
+        // mark the job failed while the Worker was still legitimately running.
+        internal static int ResolveAsyncBuildHardCapSeconds(string? action)
+        {
+            bool fullKbBuild = string.Equals(action, "build_all", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(action, "rebuild", StringComparison.OrdinalIgnoreCase);
+            int workerTimeout = fullKbBuild ? 2400 : 900;
+            string? raw = Environment.GetEnvironmentVariable("GXMCP_BUILD_TIMEOUT_SEC");
+            if (!string.IsNullOrWhiteSpace(raw) && int.TryParse(raw.Trim(), out int configured) && configured > 0)
+                workerTimeout = Math.Min(Math.Max(configured, 60), 7200);
+
+            return Math.Max(1800, workerTimeout + 300);
+        }
+
         internal static int GetToolTimeoutMs(string? toolName, JObject? args)
         {
             if (toolName == "genexus_lifecycle" || toolName == "genexus_analyze" || toolName == "genexus_test")

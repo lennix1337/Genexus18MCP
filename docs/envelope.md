@@ -79,6 +79,16 @@ The `progressToken` is the value the client sent in the request's `_meta.progres
 
 Tools that emit progress today: KB index, pattern apply (projection), build/rebuild (gateway-side heartbeat). Tools that should over time: long edits, refactor, restore. Polling via `genexus_lifecycle action=status target=op:<id>` remains supported.
 
+For `genexus_lifecycle` builds without an explicit low `estimated_seconds`, the Gateway uses the accepted async path. `wait_until_done` remains bounded for each request, while the job continues to be polled independently; Build All/Rebuild All use a 2700-second Gateway hard cap, leaving the Worker’s default 2400-second watchdog time to terminalize the build. `GXMCP_BUILD_TIMEOUT_SEC` is honored with the same `[60,7200]` clamp plus a 300-second Gateway margin.
+
+## Persistence-sensitive property writes
+
+`genexus_properties` does not treat an SDK setter call as proof of persistence. Scalar writes are re-read from a freshly resolved object after `EnsureSave`/commit; a mismatch returns `error.code: "PropertyNotPersisted"` instead of a success envelope. Batch writes use the same verification for every property and only include `result.persistedVerified: true` when every property was independently confirmed.
+
+Some GeneXus SDK members are derived or immutable after creation. In particular, changing `Type` on an existing Attribute is not supported by the SDK property surface. The request returns `error.code: "UnsupportedOperation"`, with the original type preserved; clients must not retry it. Create the Attribute with the desired type or change it in the GeneXus IDE. `OutputSDT` on a Data Provider uses its typed SDK API and is also read back after commit.
+
+Batch requests reject object moves (`Folder`, `Module`, and aliases) and typed-only `OutputSDT` combinations explicitly rather than silently skipping or applying them as scalar strings. Use `action=move` for moves and a single `action=set` request for `OutputSDT`.
+
 ## Migration rules (worker services)
 
 1. **Construct via `McpResponse.Ok / .Err / .Partial / .Accepted`.** No inline `new JObject { ["status"] = "Success" }`. The helpers are the only source of envelope truth.

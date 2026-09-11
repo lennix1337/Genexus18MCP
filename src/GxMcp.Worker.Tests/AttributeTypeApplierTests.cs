@@ -1,3 +1,4 @@
+using System;
 using GxMcp.Worker.Helpers;
 using System.Reflection;
 using Xunit;
@@ -14,6 +15,16 @@ namespace GxMcp.Worker.Tests
             public int Length { get; set; }
             public int Decimals { get; set; }
             public object DomainBasedOn { get; set; }
+        }
+
+        private sealed class FailingLengthAttribute
+        {
+            public string Type { get; set; }
+            public int Length
+            {
+                get { return 0; }
+                set { throw new InvalidOperationException("length is read-only"); }
+            }
         }
 
         [Fact]
@@ -115,6 +126,27 @@ namespace GxMcp.Worker.Tests
             var fake = new FakeAttribute();
             AttributeTypeApplier.ApplyPrimitive(fake, "DateTime", null, null);
             Assert.Equal("DATETIME", fake.Type);
+        }
+
+        [Fact]
+        public void TryApplyType_MapsPropertyValueToTypedAttributeSurface()
+        {
+            var fake = new FakeAttribute { Type = "NUMERIC" };
+
+            bool applied = AttributeTypeApplier.TryApplyType(fake, "Character", out string error);
+
+            Assert.True(applied, error);
+            Assert.Equal("CHARACTER", fake.Type);
+        }
+
+        [Fact]
+        public void ApplyPrimitive_ReturnsFalse_WhenRequestedLengthCannotBeApplied()
+        {
+            var fake = new FailingLengthAttribute();
+
+            bool applied = AttributeTypeApplier.ApplyPrimitive(fake, "Character", 40, null);
+
+            Assert.False(applied);
         }
     }
 }

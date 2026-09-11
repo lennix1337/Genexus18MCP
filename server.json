@@ -6,12 +6,12 @@
     "url": "https://github.com/lennix1337/Genexus18MCP",
     "source": "github"
   },
-  "version": "3.3.1",
+  "version": "3.3.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "genexus-mcp",
-      "version": "3.3.1",
+      "version": "3.3.2",
       "transport": {
         "type": "stdio"
       }

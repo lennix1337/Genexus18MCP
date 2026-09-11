@@ -791,11 +791,14 @@ namespace GxMcp.Worker.Services
                             string val = p.Value?.ToString();
 
                             if (string.IsNullOrEmpty(controlName) && IsObjectPlacementProperty(propName))
-                                continue;
+                                throw new InvalidOperationException($"'{propName}' is an object move, not a scalar property; use genexus_properties action=move.");
                             if (string.IsNullOrEmpty(controlName) && string.Equals(propName?.Trim(), "Name", StringComparison.OrdinalIgnoreCase))
                                 throw new InvalidOperationException($"Cannot rename '{target}' via property batch setter.");
                             if (IsNonScalarProperty(propName))
                                 throw new InvalidOperationException($"'{propName}' is a structured property and cannot be set as a scalar string.");
+                            if (string.IsNullOrEmpty(controlName)
+                                && string.Equals(propName?.Trim(), "OutputSDT", StringComparison.OrdinalIgnoreCase))
+                                throw new InvalidOperationException("'OutputSDT' uses a typed Data Provider API and cannot be combined with a scalar property batch; use action=set with propertyName=OutputSDT.");
 
                             string propertyValidation = ValidatePropertyWrite(container, propName, val);
                             if (propertyValidation != null)
@@ -828,7 +831,37 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
-                return Models.McpResponse.Ok(target: target, code: "PropertiesApplied", result: new JObject { ["properties"] = properties });
+                var verifiedBefore = new JObject();
+                var verifiedRequested = new JObject();
+                var verifiedPersisted = new JObject();
+                foreach (var p in properties.Properties())
+                {
+                    string propName = p.Name;
+                    string requested = p.Value?.ToString() ?? string.Empty;
+                    beforeValues.TryGetValue(propName, out string before);
+                    string verification = VerifyPropertyPersisted(target, propName, requested, controlName, typeFilter, before, obj);
+                    if (verification == null) continue;
+
+                    var verificationEnvelope = JObject.Parse(verification);
+                    if (string.Equals(verificationEnvelope["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase))
+                        return verification;
+
+                    var diff = verificationEnvelope["result"] as JObject;
+                    if (diff == null || diff["persistedVerified"]?.ToObject<bool>() != true) continue;
+                    verifiedBefore[propName] = diff["before"]?.ToString() ?? string.Empty;
+                    verifiedRequested[propName] = diff["requested"]?.ToString() ?? requested;
+                    verifiedPersisted[propName] = diff["persisted"]?.ToString() ?? string.Empty;
+                }
+
+                var result = new JObject { ["properties"] = properties };
+                if (verifiedPersisted.Count == properties.Count)
+                {
+                    result["before"] = verifiedBefore;
+                    result["requested"] = verifiedRequested;
+                    result["persisted"] = verifiedPersisted;
+                    result["persistedVerified"] = true;
+                }
+                return Models.McpResponse.Ok(target: target, code: "PropertiesApplied", result: result);
             }
             catch (PropertyWipeException pwe)
             {
@@ -978,11 +1011,57 @@ namespace GxMcp.Worker.Services
                     }
                     catch { }
                 }
+                if (string.Equals(propName?.Trim(), "Type", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        object typedAttribute = container;
+                        if (!(typedAttribute is global::Artech.Genexus.Common.Objects.Attribute))
+                        {
+                            var attributeProperty = AttributeTypeApplier.GetPropertyUnambiguous(typedAttribute?.GetType(), "Attribute");
+                            typedAttribute = attributeProperty?.GetValue(typedAttribute, null);
+                        }
+                        if (typedAttribute is global::Artech.Genexus.Common.Objects.Attribute)
+                        {
+                            var typeProperty = AttributeTypeApplier.GetPropertyUnambiguous(typedAttribute.GetType(), "Type");
+                            persisted = typeProperty?.GetValue(typedAttribute, null)?.ToString();
+                        }
+                    }
+                    catch { }
+                }
+                if (string.Equals(propName?.Trim(), "OutputSDT", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var outputProperty = fresh.GetType().GetProperty("OutputSDT");
+                        if (outputProperty != null)
+                            persisted = outputProperty.GetValue(fresh, null)?.ToString() ?? string.Empty;
+                    }
+                    catch { }
+                }
                 if (persisted == null) persisted = TryReadPropertyString(container, propName);
                 if (persisted == null) return null; // unverifiable
 
                 if (!PersistenceVerifier.ValuesMatch(requested, persisted, IsNullablePropertyName(propName)))
                 {
+                    bool preservedExistingAttributeType = original is global::Artech.Genexus.Common.Objects.Attribute
+                        && string.Equals(propName?.Trim(), "Type", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(beforeVal)
+                        && !PersistenceVerifier.ValuesMatch(beforeVal, requested)
+                        && PersistenceVerifier.ValuesMatch(beforeVal, persisted);
+                    if (preservedExistingAttributeType)
+                    {
+                        return PersistenceVerifier.BuildNotPersistedError(
+                            code: "UnsupportedOperation",
+                            target: target,
+                            property: propName,
+                            requestedValue: requested,
+                            previousValue: beforeVal ?? string.Empty,
+                            persistedValue: persisted,
+                            message: "Changing Type on an existing Attribute is not supported through the GeneXus SDK property surface; the original type was preserved.",
+                            hint: "Do not retry this property write. Change the Attribute Type in the GeneXus IDE or import a package that already contains the desired type.");
+                    }
+
                     return PersistenceVerifier.BuildNotPersistedError(
                         code: "PropertyNotPersisted",
                         target: target,
@@ -1110,6 +1189,8 @@ namespace GxMcp.Worker.Services
                         hint: "This GeneXus build may differ; report the version from genexus_whoami.",
                         target: target);
 
+                string beforeOutput = TryReadPropertyString(obj, "OutputSDT");
+
                 var setOutput = dprvType.GetMethod("SetOutput",
                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 if (setOutput == null)
@@ -1153,8 +1234,19 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
+                string requestedOutput = sdt?.Name ?? string.Empty;
+                string verified = VerifyPropertyPersisted(
+                    target,
+                    "OutputSDT",
+                    requestedOutput,
+                    controlName: null,
+                    typeFilter: "DataProvider",
+                    beforeVal: beforeOutput,
+                    original: obj);
+                if (verified != null) return verified;
+
                 return Models.McpResponse.Ok(target: target, code: "PropertyApplied",
-                    result: new JObject { ["property"] = "OutputSDT", ["value"] = sdt?.Name ?? "" });
+                    result: new JObject { ["property"] = "OutputSDT", ["value"] = requestedOutput });
             }
             catch (Exception ex)
             {
@@ -1176,8 +1268,35 @@ namespace GxMcp.Worker.Services
         {
             Exception lastError = null;
 
+            // issue #179: the generic property bag accepts a Type string on an
+            // Attribute but does not change the typed SDK value. Route Attributes
+            // (and TransactionAttribute occurrences) through the same typed adapter
+            // used by the DSL authoring path.
+            if (string.Equals(propName?.Trim(), "Type", StringComparison.OrdinalIgnoreCase))
+            {
+                object boxedContainer = (object)container;
+                bool isAttribute = boxedContainer is global::Artech.Genexus.Common.Objects.Attribute;
+                if (!isAttribute)
+                {
+                    try
+                    {
+                        var attributeProperty = AttributeTypeApplier.GetPropertyUnambiguous(boxedContainer?.GetType(), "Attribute");
+                        isAttribute = attributeProperty?.GetValue(boxedContainer, null)
+                            is global::Artech.Genexus.Common.Objects.Attribute;
+                    }
+                    catch { }
+                }
+
+                if (isAttribute)
+                {
+                    if (!AttributeTypeApplier.TryApplyType(boxedContainer, rawValue, out string typeError))
+                        throw new InvalidOperationException(typeError);
+                    return;
+                }
+            }
+
             // issue #57: Nullable / ALLOWNULL on a Transaction or Table attribute occurrence
-            // is the typed TableAttribute.IsNullableValue (False/True/Compatible). The generic
+            // is the typed TableAttribute.IsNullableValue (False=0, True=1, Compatible=2).
             // string setter can't represent the enum ("Yes" is the converter's display string,
             // not an enum member) and an int assignment to the dynamic property throws a
             // runtime binder error — write the typed value directly. The ALLOWNULL alias is

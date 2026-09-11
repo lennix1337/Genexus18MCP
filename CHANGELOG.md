@@ -2,9 +2,25 @@
 
 ## Unreleased
 
+## v3.3.2 - 2026-09-11
+
+
+### Tracked issues
+
+- [#179](https://github.com/lennix1337/Genexus18MCP/issues/179) — [Bug] genexus_properties set of Attribute Type is silently ineffective — no tracking issue exists specifically for Type
+- [#180](https://github.com/lennix1337/Genexus18MCP/issues/180) — [Not retested on 3.3.0] genexus_lifecycle build: MCP channel aborts with '1800s no response/progress' while the build itself keeps running and completes
+- [#182](https://github.com/lennix1337/Genexus18MCP/issues/182) — Possível falha no install.ps1 em um checkout novo sem config.json
+- [#183](https://github.com/lennix1337/Genexus18MCP/issues/183) — doctor --mcp-smoke pode reportar falso negativo em runtime stdio-isolated
+
+
 ### Fixed
 
 - Preserve UTF-8 issue titles when generating release snapshots and release notes.
+- Verify every `genexus_properties` batch write from a fresh SDK object, reject silently skipped placement/typed-only properties, and return `UnsupportedOperation` when the GeneXus SDK preserves an existing Attribute `Type` instead of changing it.
+- Make Attribute and Domain type adapters fail when requested length, decimals, or signedness cannot be applied instead of reporting partial success; align async Build All/Rebuild polling with the Worker watchdog by allowing a 2700-second Gateway hard cap.
+- Make a fresh-checkout install stage the neutral runtime config before client registration, surface the CLI registration envelope, and remove the pending config when registration fails ([#182](https://github.com/lennix1337/Genexus18MCP/issues/182)).
+- Report `doctor --mcp-smoke` as `not_applicable` for stdio-isolated runtimes without an HTTP listener instead of probing the disabled loopback port ([#183](https://github.com/lennix1337/Genexus18MCP/issues/183)).
+- Keep release issue validation compatible with GitHub's lowercase `open` state and initialize the release tag before the first status write under PowerShell strict mode.
 
 ## v3.3.1 - 2026-09-11
 

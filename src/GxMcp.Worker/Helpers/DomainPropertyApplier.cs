@@ -48,9 +48,9 @@ namespace GxMcp.Worker.Helpers
             try { typeProp.SetValue(domain, enumValue, null); }
             catch { return false; }
 
-            TrySetProperty(domain, "Length", length);
-            TrySetProperty(domain, "Decimals", decimals);
-            TrySetProperty(domain, "Signed", signed);
+            if (length.HasValue && !TrySetProperty(domain, "Length", length)) return false;
+            if (decimals.HasValue && !TrySetProperty(domain, "Decimals", decimals)) return false;
+            if (signed.HasValue && !TrySetProperty(domain, "Signed", signed)) return false;
             return true;
         }
 

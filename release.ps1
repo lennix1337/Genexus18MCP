@@ -100,6 +100,7 @@ $statusState = [ordered]@{
         failed = @()
     }
 }
+$tag = $null
 $releaseUrl = $null
 $script:releaseIssueSnapshotReused = $false
 
@@ -162,7 +163,8 @@ function Get-ReleaseIssueSnapshot {
             Fail "Could not read issue #$issue before the release."
         }
         $record = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
-        if ([string]$record.state -ne 'OPEN') {
+        $recordState = ([string]$record.state).ToUpperInvariant()
+        if ($recordState -ne 'OPEN') {
             Fail "Issue #$issue is not open at release preparation time."
         }
         $records.Add([ordered]@{

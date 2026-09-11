@@ -235,21 +235,41 @@ async function probeGatewaySpawn() {
     });
 }
 
-function resolveMcpBaseUrl(cwd) {
+function resolveMcpSmokeTarget(cwd) {
     const configPath = resolveConfigPathNoMutate(cwd);
     const fallback = 'http://127.0.0.1:5000/mcp';
-    if (!configPath) return fallback;
+    if (!configPath) {
+        return { applicable: true, status: null, detail: null, baseUrl: fallback };
+    }
 
     const cfg = readJsonFileSafe(configPath);
-    if (!cfg || typeof cfg !== 'object') return fallback;
+    if (!cfg || typeof cfg !== 'object') {
+        return { applicable: true, status: null, detail: null, baseUrl: fallback };
+    }
 
     const server = cfg.Server && typeof cfg.Server === 'object' ? cfg.Server : {};
+    const gatewayMode = typeof cfg.GatewayMode === 'string' ? cfg.GatewayMode.toLowerCase() : '';
+    const rawPort = server.HttpPort;
+    const parsedPort = typeof rawPort === 'number'
+        ? rawPort
+        : Number.parseInt(String(rawPort ?? ''), 10);
+    const stdioRuntime = gatewayMode === 'stdio-isolated'
+        || gatewayMode === 'stdio'
+        || (server.McpStdio === true && (!Number.isFinite(parsedPort) || parsedPort <= 0));
+    if (stdioRuntime) {
+        return {
+            applicable: false,
+            status: 'not_applicable',
+            detail: `MCP HTTP smoke skipped: ${gatewayMode || 'stdio'} runtime has no HTTP listener.`,
+            baseUrl: null
+        };
+    }
+
     const host = server.BindAddress && typeof server.BindAddress === 'string'
         ? server.BindAddress
         : '127.0.0.1';
-    const parsedPort = Number.parseInt(String(server.HttpPort || ''), 10);
     const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 5000;
-    return `http://${host}:${port}/mcp`;
+    return { applicable: true, status: null, detail: null, baseUrl: `http://${host}:${port}/mcp` };
 }
 
 async function runMcpSmokeProbe(cwd) {
@@ -258,7 +278,11 @@ async function runMcpSmokeProbe(cwd) {
         return { status: 'warn', detail: 'MCP smoke script is missing.' };
     }
 
-    const baseUrl = resolveMcpBaseUrl(cwd);
+    const target = resolveMcpSmokeTarget(cwd);
+    if (!target.applicable) {
+        return { status: target.status, detail: target.detail };
+    }
+    const baseUrl = target.baseUrl;
     const shell = process.platform === 'win32' ? 'powershell' : 'pwsh';
     const args = process.platform === 'win32'
         ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-BaseUrl', baseUrl]
@@ -793,7 +817,7 @@ async function handleDoctor(options, ctx) {
     const summary = checks.reduce((acc, row) => {
         acc[row.status] = (acc[row.status] || 0) + 1;
         return acc;
-    }, { pass: 0, warn: 0, fail: 0 });
+    }, { pass: 0, warn: 0, fail: 0, not_applicable: 0 });
 
     // Support bundle for handing off to support: doctor output + config (with paths
     // anonymized by hash so we don't leak filesystem layout) + recent worker logs +
@@ -2608,5 +2632,6 @@ module.exports = {
     handleHelp,
     usageEnvelope,
     operationalErrorEnvelope,
+    resolveMcpSmokeTarget,
     commandHelpMap
 };
