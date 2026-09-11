@@ -100,6 +100,14 @@ Precedence is: tool `auth` argument > these env vars > built-in default.
 | Variable | Purpose |
 |----------|---------|
 | `GXMCP_SERVER_VERSION` | The gateway injects the server version into the worker's environment on spawn. Reading it in worker code is fine; setting it externally has no effect. |
+| `GXMCP_PROFILE_CONFIG_PATH` | The gateway injects the absolute profile path into the worker so preview `axiCli` values are resolved relative to the MCP profile instead of the process current directory. |
+
+## Preview browser driver
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_RUNTIME_DIR` | Optional runtime/dependency directory searched for `chrome-devtools-axi` before the Worker/backend directories. Relative values are resolved from the Worker directory. | unset |
+| `GXMCP_DEPENDENCIES_DIR` | Optional dependency directory searched for `chrome-devtools-axi` before the Worker/backend directories. Relative values are resolved from the Worker directory. | unset |
 
 > **Maintenance note:** when you add a new `GXMCP_*` / `GENEXUS_MCP_*` variable,
 > add a row here. This table is the single reference operators are pointed at
