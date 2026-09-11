@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Security.Cryptography;
-using System.Text;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -14,16 +13,16 @@ namespace GxMcp.Worker.Tests
         [InlineData("18.0.11.185416+build11")]
         [InlineData("18.0.12.186073+build12")]
         [InlineData("18.0.16.189550+build16")]
-        public void SelectedLock_AcceptsOnlyMatchingUpgradeAndFingerprint(string version)
+        public void SelectedManifest_AllowsSameMajorDriftAndReportsChangedFingerprints(string version)
         {
             using (var fixture = new SdkFixture(version, "selected-sdk"))
             {
                 Assert.True(SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => version).IsCompatible);
-                Assert.Equal("GXMCP_SDK_VERSION_MISMATCH",
-                    SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => version + "-different").Code);
+                Assert.True(SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => version + "-different").IsCompatible);
                 File.WriteAllText(Path.Combine(fixture.Root, "Artech.Architecture.Common.dll"), "different-sdk-bytes");
-                Assert.Equal("GXMCP_SDK_FINGERPRINT_MISMATCH",
-                    SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => version).Code);
+                var result = SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => version);
+                Assert.True(result.IsCompatible);
+                Assert.Contains("GXMCP_SDK_FINGERPRINT_DRIFT", result.Diagnostic);
             }
         }
 
@@ -40,15 +39,16 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void Validate_RejectsFingerprintMismatchWithStableDiagnostic()
+        public void Validate_ReportsFingerprintDriftWithTheSameProductVersionWithoutBlocking()
         {
             using (var fixture = new SdkFixture("18.0.10.184260", "supported"))
             {
                 File.WriteAllText(Path.Combine(fixture.Root, "Artech.Architecture.Common.dll"), "tampered");
                 var result = GxMcp.Worker.SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => "18.0.10.184260");
 
-                Assert.False(result.IsCompatible);
-                Assert.Equal("GXMCP_SDK_FINGERPRINT_MISMATCH", result.Code);
+                Assert.True(result.IsCompatible);
+                Assert.Equal("GXMCP_SDK_COMPATIBLE", result.Code);
+                Assert.Contains("GXMCP_SDK_FINGERPRINT_DRIFT", result.Diagnostic);
                 Assert.Contains("expectedSha256=", result.Diagnostic);
                 Assert.Contains("actualSha256=", result.Diagnostic);
             }
@@ -66,43 +66,84 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("GXMCP_SDK_PATH_MISSING path=<missing>", result.Diagnostic);
         }
 
-        [Fact]
-        public void Validate_ReportsVersionMismatchBeforeAssemblyDetails()
-        {
-            using (var fixture = new SdkFixture("18.0.10.184260", "supported"))
-            {
-                File.WriteAllText(fixture.Manifest, File.ReadAllText(fixture.Manifest).Replace("18.0.10.184260", "18.0.9.0"));
-                var result = GxMcp.Worker.SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => "18.0.10.184260");
-
-                Assert.False(result.IsCompatible);
-                Assert.Equal("GXMCP_SDK_VERSION_MISMATCH", result.Code);
-                Assert.Contains("expectedVersion=18.0.9.0", result.Diagnostic);
-                Assert.Contains("actualVersion=18.0.10.184260", result.Diagnostic);
-            }
-        }
-
-        [Fact]
-        public void Validate_AllowsDeclaredPatchDriftWithinSameMajorMinor()
+        [Theory]
+        [InlineData("17.0.10.184260")]
+        [InlineData("19.0.10.184260")]
+        [InlineData("invalid")]
+        [InlineData("")]
+        [InlineData(null)]
+        public void Validate_RejectsDifferentOrUnreadableMajorBeforeAssemblyDetails(string actualVersion)
         {
             using (var fixture = new SdkFixture("18.0.10.184260", "supported"))
             {
                 var json = JObject.Parse(File.ReadAllText(fixture.Manifest));
-                json["allowPatchVersionDrift"] = true;
+                json["assemblies"] = new JArray();
                 File.WriteAllText(fixture.Manifest, json.ToString());
-                var result = GxMcp.Worker.SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => "18.0.14.187794");
+                var result = SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => actualVersion);
+
+                Assert.False(result.IsCompatible);
+                Assert.Equal("GXMCP_SDK_VERSION_MISMATCH", result.Code);
+                Assert.Contains("expectedVersion=18.0.10.184260", result.Diagnostic);
+                Assert.Contains("actualVersion=" + actualVersion, result.Diagnostic);
+            }
+        }
+
+        [Theory]
+        [InlineData("18.0.14.187794", true)]
+        [InlineData("18.0.16.189550+build16", false)]
+        [InlineData("18.1.0.0", false)]
+        public void Validate_AllowsSameMajorDriftRegardlessOfLegacyOptIn(string actualVersion, bool legacyOptIn)
+        {
+            using (var fixture = new SdkFixture("18.0.10.184260", "supported"))
+            {
+                var json = JObject.Parse(File.ReadAllText(fixture.Manifest));
+                json["allowPatchVersionDrift"] = legacyOptIn;
+                File.WriteAllText(fixture.Manifest, json.ToString());
+                var result = SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => actualVersion);
                 Assert.True(result.IsCompatible);
-                Assert.Contains("compatible patch drift", result.Diagnostic);
+                Assert.Contains("compatible major; patch/build drift", result.Diagnostic);
             }
         }
 
         [Fact]
-        public void Validate_RejectsPatchDriftWhenManifestDoesNotOptIn()
+        public void Validate_AllowsPatchDriftWithoutLegacyOptIn()
         {
             using (var fixture = new SdkFixture("18.0.10.184260", "supported"))
             {
                 var result = GxMcp.Worker.SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => "18.0.14.187794");
+                Assert.True(result.IsCompatible);
+                Assert.Equal("GXMCP_SDK_COMPATIBLE", result.Code);
+            }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Validate_RejectsMissingRequiredAssemblyEvenWithCompatibleVersion(bool patchDrift)
+        {
+            using (var fixture = new SdkFixture("18.0.10.184260", "supported"))
+            {
+                var json = JObject.Parse(File.ReadAllText(fixture.Manifest));
+                json["assemblies"][0]["path"] = "missing-required.dll";
+                File.WriteAllText(fixture.Manifest, json.ToString());
+                var result = SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest,
+                    _ => patchDrift ? "18.0.16.189550" : "18.0.10.184260");
                 Assert.False(result.IsCompatible);
-                Assert.Equal("GXMCP_SDK_VERSION_MISMATCH", result.Code);
+                Assert.Equal("GXMCP_SDK_ASSEMBLY_MISSING", result.Code);
+            }
+        }
+
+        [Fact]
+        public void Validate_RejectsManifestWithoutRequiredAssemblies()
+        {
+            using (var fixture = new SdkFixture("18.0.10.184260", "supported"))
+            {
+                var json = JObject.Parse(File.ReadAllText(fixture.Manifest));
+                json["assemblies"] = new JArray();
+                File.WriteAllText(fixture.Manifest, json.ToString());
+                var result = SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => "18.0.16.189550");
+                Assert.False(result.IsCompatible);
+                Assert.Equal("GXMCP_SDK_MANIFEST_INVALID", result.Code);
             }
         }
 
