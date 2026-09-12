@@ -145,6 +145,25 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void IsIndexMissing_RecognizesCertifiedSlotAsAvailable()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                cache.ReplaceAll(new[] { Entry("Procedure", "CertifiedAvailable") });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+
+                var reloaded = new IndexCacheService();
+                reloaded.Initialize(kbPath, proactiveLoad: false);
+                Assert.False(reloaded.IsIndexMissing);
+                Assert.True(reloaded.GetIndex().Objects.ContainsKey("Procedure:CertifiedAvailable"));
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
         public void VersionedSnapshot_IgnoresAbandonedRebuildSlotAndLoadsCertifiedGeneration()
         {
             string kbPath = UniqueKbPath();
@@ -270,6 +289,34 @@ namespace GxMcp.Worker.Tests
             {
                 cache.DeleteOnDiskSnapshot();
             }
+        }
+
+        [Fact]
+        public void WarmStart_RoundTrip_PreservesFolderStorageKey()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                var folder = new SearchIndex.IndexEntry
+                {
+                    Name = "DirectionsServices",
+                    Type = "Folder",
+                    Path = "Root Module/GeneXus/Common/DirectionsServices",
+                    Guid = Guid.NewGuid().ToString()
+                };
+                cache.ReplaceAll(new[] { folder });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+
+                var reloaded = new IndexCacheService();
+                reloaded.Initialize(kbPath, proactiveLoad: false);
+                Assert.False(reloaded.IsIndexMissing);
+                var idx = reloaded.GetIndex();
+                Assert.True(idx.Objects.ContainsKey("Folder:Root Module/GeneXus/Common/DirectionsServices"));
+                Assert.Equal(folder.Guid, idx.Objects["Folder:Root Module/GeneXus/Common/DirectionsServices"].Guid);
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
         }
 
         [Fact]

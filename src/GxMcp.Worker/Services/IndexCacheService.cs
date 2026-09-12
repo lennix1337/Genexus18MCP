@@ -516,9 +516,13 @@ namespace GxMcp.Worker.Services
                  {
                      if (string.IsNullOrEmpty(_indexPath)) return true;
                      // PERFORMANCE (W-A3): accept the gzipped (legacy) snapshot, the plain
-                     // (older legacy) snapshot, or (plan 003) a sharded snapshot's manifest.
+                     // (older legacy) snapshot, a (plan 003) sharded snapshot's manifest,
+                     // or the certified-slot pointer published by the atomic snapshot path.
+                     // The latter is the normal post-sharding path; ignoring it forces a
+                     // full lite walk on every worker boot even though GetIndex() can load it.
+                     bool certifiedSlotPresent = TrySelectCertifiedSlot();
                      bool shardManifestPresent = !string.IsNullOrEmpty(_shardManifestPath) && File.Exists(_shardManifestPath);
-                     if (!File.Exists(_indexPathGz) && !File.Exists(_indexPath) && !shardManifestPresent) return true;
+                     if (!File.Exists(_indexPathGz) && !File.Exists(_indexPath) && !shardManifestPresent && !certifiedSlotPresent) return true;
 
                      var index = GetIndex();
                      return index == null || index.Objects.Count == 0;
@@ -1396,7 +1400,7 @@ namespace GxMcp.Worker.Services
                     var entry = property.Value.ToObject<SearchIndex.IndexEntry>();
                     if (entry == null || string.IsNullOrEmpty(entry.Name) || string.IsNullOrEmpty(entry.Type))
                         throw new ShardedIntegrityException("invalid shard entry: " + property.Name);
-                    string derivedKey = $"{entry.Type}:{entry.Name}";
+                    string derivedKey = GetEntryStorageKeyStatic(entry);
                     if (!string.Equals(property.Name, derivedKey, StringComparison.OrdinalIgnoreCase)
                         || ShardOf(property.Name) != id)
                         throw new ShardedIntegrityException("key stored in wrong shard: " + property.Name);
