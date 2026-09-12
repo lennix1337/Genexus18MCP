@@ -1,40 +1,7 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "3.3.2",
-  "tag": "v3.3.2",
-  "collectedAtUtc": "2026-09-11T19:25:11.7911668Z",
-  "issues": [
-    {
-      "number": 179,
-      "title": "[Bug] genexus_properties set of Attribute Type is silently ineffective — no tracking issue exists specifically for Type",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/179",
-      "state": "open",
-      "labels": [],
-      "milestone": null
-    },
-    {
-      "number": 180,
-      "title": "[Not retested on 3.3.0] genexus_lifecycle build: MCP channel aborts with '1800s no response/progress' while the build itself keeps running and completes",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/180",
-      "state": "open",
-      "labels": [],
-      "milestone": null
-    },
-    {
-      "number": 182,
-      "title": "Possível falha no install.ps1 em um checkout novo sem config.json",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/182",
-      "state": "open",
-      "labels": [],
-      "milestone": null
-    },
-    {
-      "number": 183,
-      "title": "doctor --mcp-smoke pode reportar falso negativo em runtime stdio-isolated",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/183",
-      "state": "open",
-      "labels": [],
-      "milestone": null
-    }
-  ]
+  "version": "3.4.0",
+  "tag": "v3.4.0",
+  "collectedAtUtc": "2026-09-12T12:52:03.5164985Z",
+  "issues": []
 }

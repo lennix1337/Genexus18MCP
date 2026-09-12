@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v3.4.0 - 2026-09-12
+
+
 ### Fixed
 
 - Capture installer client-registration stdout and stderr separately, parse only the JSON envelope, and fail closed when it is missing or invalid instead of committing a staged config after an ambiguous registration.
