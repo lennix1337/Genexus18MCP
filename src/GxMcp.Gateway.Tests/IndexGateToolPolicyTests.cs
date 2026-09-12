@@ -35,5 +35,20 @@ namespace GxMcp.Gateway.Tests
             Assert.True(Program.IsTransientResponseForCacheForTest(
                 JObject.Parse("{'status':'Indexing','code':'IndexNotReady'}")));
         }
+
+        [Theory]
+        [InlineData("IndexNotReady")]
+        [InlineData("Reindexing")]
+        [InlineData("IndexCold")]
+        [InlineData("Indexing")]
+        [InlineData("Timeout")]
+        [InlineData("Cancelled")]
+        [InlineData("BuildPlanTooLarge")]
+        [InlineData("Running")]
+        public void CanonicalTransientCodes_AreNeverSemanticCached(string code)
+        {
+            Assert.True(Program.IsTransientResponseForCacheForTest(
+                JObject.Parse($"{{'status':'ok','code':'{code}'}}")));
+        }
     }
 }

@@ -52,7 +52,16 @@ namespace GxMcp.Gateway
                 || string.Equals(status, "Cancelled", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(status, "BuildPlanTooLarge", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(code, "IndexNotReady", StringComparison.OrdinalIgnoreCase);
+                // Canonical worker envelopes use status="ok" plus a transient code.
+                // Inspect both fields or IndexCold can enter the semantic cache.
+                || string.Equals(code, "IndexNotReady", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "Reindexing", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "IndexCold", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "Indexing", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "Timeout", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "BuildPlanTooLarge", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, "Running", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

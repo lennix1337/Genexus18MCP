@@ -33,6 +33,10 @@ namespace GxMcp.Worker.Services
         // starts at -1 so a clean index still gets one real write on FlushNow().
         private long _dirtyGeneration = 0;
         private long _flushedGeneration = -1;
+        // Last non-source mutation. A source-only flush may carry forward the previous
+        // enrichment certificate; any ordinary index mutation must create an uncertified
+        // body until its caller explicitly writes a new sidecar.
+        private long _lastNonSourceDirtyGeneration = 0;
 
         // Plan 003: bare MarkDirty() (no key known at the call site) conservatively marks
         // every shard dirty — used by whole-index replace paths (ReplaceAll/UpdateIndex).
@@ -43,8 +47,25 @@ namespace GxMcp.Worker.Services
         // após o Increment tem garantia (fence do Interlocked) de enxergar os shards já
         // marcados; na ordem inversa, um flush podia capturar a geração nova sem o shard
         // e gravar _flushedGeneration sem a mutação (stale-index-forever).
-        internal void MarkDirty() { MarkAllShardsDirty(); System.Threading.Interlocked.Increment(ref _dirtyGeneration); }
-        internal void MarkDirtyForKey(string storageKey) { MarkShardDirty(storageKey); System.Threading.Interlocked.Increment(ref _dirtyGeneration); }
+        private long MarkNonSourceDirty()
+        {
+            long generation = System.Threading.Interlocked.Increment(ref _dirtyGeneration);
+            System.Threading.Interlocked.Exchange(ref _lastNonSourceDirtyGeneration, generation);
+            return generation;
+        }
+
+        internal void MarkDirty() { MarkAllShardsDirty(); MarkNonSourceDirty(); }
+        internal void MarkDirtyForKey(string storageKey) { MarkShardDirty(storageKey); MarkNonSourceDirty(); }
+
+        // FullSource is already a complete primary source read. It does not change the
+        // object set, lifecycle high-water-mark, or enrichment state, so this narrow dirty
+        // path may retain the previous sidecar and make the promotion useful after restart.
+        internal void MarkSourceDirtyForKey(string storageKey)
+        {
+            MarkShardDirty(storageKey);
+            System.Threading.Interlocked.Increment(ref _dirtyGeneration);
+        }
+
         internal long DirtyGeneration => System.Threading.Interlocked.Read(ref _dirtyGeneration);
 
         // ── Sharded on-disk snapshot (plan 003) ─────────────────────────────────
@@ -1793,7 +1814,7 @@ namespace GxMcp.Worker.Services
         // popped from _dirtyShards BEFORE its content is read/written, so any mutation
         // landing concurrently (even mid-write) re-marks the shard dirty for the next
         // round instead of being silently dropped by an end-of-round clear.
-        private void FlushVersionedSlot(SearchIndex snapshot, List<int> idsToWrite, long generation)
+        private void FlushVersionedSlot(SearchIndex snapshot, List<int> idsToWrite, long generation, bool preservePreviousMeta)
         {
             string slots = _snapshotSlotsPath;
             if (string.IsNullOrEmpty(slots)) throw new InvalidOperationException("Index snapshot path is not initialized.");
@@ -1835,9 +1856,16 @@ namespace GxMcp.Worker.Services
                     if (idsToWrite.Contains(id)) _shardWriteCounts.AddOrUpdate(id, 1, (k, v) => v + 1);
                 }
 
-                // Do not inherit the previous generation's enrichment certificate.
-                // Its caller must certify this body with WriteMetaSidecar after enrichment/delta completes.
                 WriteShardManifestAt(tempSlot, snapshot.Objects.Count);
+                // A source-only promotion does not invalidate the previous enrichment
+                // baseline. Carry its sidecar into this new generation; ordinary mutations
+                // deliberately leave the new body uncertified until an explicit sidecar write.
+                if (preservePreviousMeta && sourceDir != null)
+                {
+                    string previousMeta = Path.Combine(sourceDir, "meta.json");
+                    if (File.Exists(previousMeta))
+                        File.Copy(previousMeta, Path.Combine(tempSlot, "meta.json"));
+                }
                 Directory.Move(tempSlot, finalSlot);
                 string pointerTemp = _snapshotPointerPath + ".tmp-" + Guid.NewGuid().ToString("N");
                 try
@@ -1896,6 +1924,8 @@ namespace GxMcp.Worker.Services
             // happened-before this read is visible to the serializer below, so on
             // success the on-disk body provably contains generation `gen`.
             long gen = System.Threading.Interlocked.Read(ref _dirtyGeneration);
+            long flushedBefore = System.Threading.Interlocked.Read(ref _flushedGeneration);
+            bool sourceOnly = System.Threading.Interlocked.Read(ref _lastNonSourceDirtyGeneration) <= flushedBefore;
 
             var idsToWrite = new List<int>();
             foreach (var id in _dirtyShards.Keys.ToArray())
@@ -1903,7 +1933,7 @@ namespace GxMcp.Worker.Services
 
             try
             {
-                FlushVersionedSlot(snapshot, idsToWrite, gen);
+                FlushVersionedSlot(snapshot, idsToWrite, gen, sourceOnly);
                 System.Threading.Interlocked.Exchange(ref _consecutiveFlushFailures, 0);
                 _lastFlushSuccessUtc = DateTime.UtcNow;
                 _lastFlushErrorMessage = null;
@@ -1955,6 +1985,36 @@ namespace GxMcp.Worker.Services
         private static string SafeReadString(Func<string> read)
         {
             try { return read(); } catch { return null; }
+        }
+
+        // SourceSearchService already paid the SDK read for this complete primary source.
+        // Promote it into the existing index snapshot so a later worker process can
+        // answer the same literal search without reopening every candidate source.
+        // Keep the same 256 KiB bound as the raw read cache: large sources stay available
+        // for the current request but must not inflate the persisted index unexpectedly.
+        internal bool PromoteSourceForSearch(SearchIndex.IndexEntry entry, string source)
+        {
+            if (entry == null || string.IsNullOrEmpty(source) || source.Length > 256 * 1024) return false;
+            var index = TryGetLoadedIndex();
+            if (index?.Objects == null) return false;
+
+            string key = GetEntryStorageKeyStatic(entry);
+            if (!index.Objects.TryGetValue(key, out var current) || current == null) return false;
+            if (!string.IsNullOrEmpty(entry.Guid)
+                && !string.Equals(current.Guid, entry.Guid, StringComparison.OrdinalIgnoreCase)) return false;
+            lock (current)
+            {
+                if (!string.IsNullOrEmpty(current.FullSource)) return false;
+                current.FullSource = source;
+            }
+
+            // EnsureSourceTokenIndex creates this map before a literal source search;
+            // if a caller used a non-literal regex, the next literal search rebuilds it
+            // from the now-persisted FullSource field.
+            if (index.SourceTokenIndex != null) AddSourceTokens(index.SourceTokenIndex, current);
+            MarkSourceDirtyForKey(key);
+            if (_initialized) ScheduleThrottledFlush();
+            return true;
         }
 
         public void UpdateEntry(global::Artech.Architecture.Common.Objects.KBObject obj)
@@ -2618,7 +2678,7 @@ namespace GxMcp.Worker.Services
             {
                 idx.LastUpdated = DateTime.UtcNow;
                 TouchGraph(idx);
-                System.Threading.Interlocked.Increment(ref _dirtyGeneration);
+                MarkNonSourceDirty();
             }
         }
 

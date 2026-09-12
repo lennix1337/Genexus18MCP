@@ -366,6 +366,15 @@ namespace GxMcp.Worker.Services
                 var entries = query
                     .Where(e => string.IsNullOrEmpty(c.TypeFilter) || string.Equals(e.Type, c.TypeFilter, StringComparison.OrdinalIgnoreCase))
                     .ToList();
+                // When complete source postings already fill the requested page, visit
+                // them before the conservative SDK fallback candidates. This preserves
+                // completeness (the fallback tail is still scanned when the page is not
+                // full) while avoiding needless STA/COM reads for the common capped page.
+                if (indexedSourceScope && literals.Count > 0 && index.SourceTokenIndex != null
+                    && objectNameSet == null && !hasIdentityScope)
+                {
+                    entries = PrioritizeCompleteSourceCandidates(entries, c.MaxResults);
+                }
                 Logger.Info($"[SEARCH-SOURCE-PHASE] candidateFilterMs={searchSw.ElapsedMilliseconds} candidates={entries.Count} literals={literals.Count} partial={partialIndex}");
 
                 // issue #36.7 — an objectName scope that resolved to zero entries must say so
@@ -393,6 +402,7 @@ namespace GxMcp.Worker.Services
                 int scanned = 0;
                 int sourceCacheHits = 0;
                 int sourceCacheMisses = 0;
+                int sourceIndexPromotions = 0;
                 int sdkResolutions = 0;
                 long sdkResolutionTicks = 0;
                 long sourceReadTicks = 0;
@@ -508,7 +518,12 @@ namespace GxMcp.Worker.Services
                             src = _objectService != null
                                 ? _objectService.ReadPartSourceRaw(obj, part)
                                 : TryGetPartSource(obj, part);
+                            haveSrc = src != null;
                             sourceReadTicks += System.Diagnostics.Stopwatch.GetTimestamp() - sourceReadStart;
+                        }
+                        if (haveSrc && indexedSourceScope && IsSourceAlias(part) && e.FullSource == null)
+                        {
+                            if (_index.PromoteSourceForSearch(e, src)) sourceIndexPromotions++;
                         }
                         if (string.IsNullOrEmpty(src)) continue;
 
@@ -769,7 +784,7 @@ namespace GxMcp.Worker.Services
                     resultPayload["unresolvedObjects"] = unresolvedObjects;
                     resultPayload["unresolvedHint"] = "The index listed these objects, but the active SDK could not resolve their native identity; no source was inferred for them.";
                 }
-                Logger.Info($"[SEARCH-SOURCE-PHASE] sdkResolveMs={(long)(sdkResolutionTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency)} sourceReadMs={(long)(sourceReadTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency)} resolutions={sdkResolutions} cacheHits={sourceCacheHits} cacheMisses={sourceCacheMisses} scanned={scanned} totalMs={searchSw.ElapsedMilliseconds}");
+                Logger.Info($"[SEARCH-SOURCE-PHASE] sdkResolveMs={(long)(sdkResolutionTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency)} sourceReadMs={(long)(sourceReadTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency)} resolutions={sdkResolutions} cacheHits={sourceCacheHits} cacheMisses={sourceCacheMisses} promotions={sourceIndexPromotions} scanned={scanned} totalMs={searchSw.ElapsedMilliseconds}");
                 if (hits.Count > 0 && hits[0] is JObject topHit)
                 {
                     resultPayload["_meta"] = new JObject
@@ -989,6 +1004,21 @@ namespace GxMcp.Worker.Services
                 }
             }
             return false;
+        }
+
+        internal static List<Models.SearchIndex.IndexEntry> PrioritizeCompleteSourceCandidates(
+            IEnumerable<Models.SearchIndex.IndexEntry> candidates, int maxResults)
+        {
+            var ordered = candidates?.ToList()
+                ?? new List<Models.SearchIndex.IndexEntry>();
+            if (maxResults <= 0) return ordered;
+
+            int completeCount = ordered.Count(e => e != null && e.FullSource != null);
+            if (completeCount < maxResults) return ordered;
+
+            return ordered
+                .OrderByDescending(e => e != null && e.FullSource != null)
+                .ToList();
         }
 
         private static bool IsIndexedSourceScope(List<string> scope)

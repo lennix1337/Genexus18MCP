@@ -121,6 +121,38 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void SourcePromotion_PreservesCertifiedSidecarAcrossSnapshotGeneration()
+        {
+            string kbPath = UniqueKbPath();
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                var entry = Entry("Procedure", "SourcePromotion");
+                cache.ReplaceAll(new[] { entry });
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+                cache.ObserveLastUpdate(DateTime.UtcNow);
+                cache.WriteMetaSidecar(1);
+                Assert.True(cache.ValidateOnDiskCache().CanDelta);
+
+                const string source = "parm(in:&Value);";
+                Assert.True(cache.PromoteSourceForSearch(entry, source));
+                Assert.True(cache.FlushNow(), IndexCacheService.LastFlushErrorMessage ?? "no error");
+
+                var validation = cache.ValidateOnDiskCache();
+                Assert.True(validation.MetaPresent);
+                Assert.True(validation.CanDelta);
+
+                var reloaded = new IndexCacheService();
+                reloaded.Initialize(kbPath, proactiveLoad: false);
+                var restored = reloaded.GetIndex().Objects["Procedure:SourcePromotion"];
+                Assert.Equal(source, restored.FullSource);
+                Assert.True(reloaded.ValidateOnDiskCache().CanDelta);
+            }
+            finally { cache.DeleteOnDiskSnapshot(); }
+        }
+
+        [Fact]
         public void VersionedSnapshot_NewBodyRequiresItsOwnEnrichmentCertificate()
         {
             var cache = new IndexCacheService();

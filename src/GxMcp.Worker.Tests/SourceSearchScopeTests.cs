@@ -150,6 +150,49 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void CompleteSourceCandidates_FillPageBeforeSdkFallbackCandidates()
+        {
+            var index = new IndexCacheService();
+            var entries = new List<SearchIndex.IndexEntry>
+            {
+                // This candidate has no persisted source and would require the SDK.
+                new SearchIndex.IndexEntry { Name = "ColdCandidate", Type = "Procedure" },
+                new SearchIndex.IndexEntry
+                {
+                    Name = "IndexedOne",
+                    Type = "Procedure",
+                    FullSource = "parm(in:&One)"
+                },
+                new SearchIndex.IndexEntry
+                {
+                    Name = "IndexedTwo",
+                    Type = "Procedure",
+                    FullSource = "parm(in:&Two)"
+                }
+            };
+            index.LoadFromEntries(entries);
+            index.MarkIndexComplete(entries.Count);
+
+            var json = new SourceSearchService(index, objectService: null).SearchAsJson(
+                new SourceSearchCriteria
+                {
+                    Pattern = "parm",
+                    MaxResults = 2,
+                    TimeoutMs = 30000
+                });
+
+            var result = JObject.Parse(json)["result"]!;
+            Assert.Equal(2, result["count"]!.Value<int>());
+            // The complete indexed candidates fill the page before the unresolved
+            // candidate can force the SDK fallback path.
+            Assert.Equal(2, result["scannedObjects"]!.Value<int>());
+            var hits = (JArray)result["hits"]!;
+            Assert.Equal(2, hits.Count);
+            Assert.Contains(hits, hit => hit!["objectName"]!.ToString() == "IndexedOne");
+            Assert.Contains(hits, hit => hit!["objectName"]!.ToString() == "IndexedTwo");
+        }
+
+        [Fact]
         public void StartIndex_BeyondEnd_CompletesEmpty()
         {
             var index = Build10kIndex();
