@@ -3708,21 +3708,21 @@ namespace GxMcp.Worker.Services
 
         public string ReadPartSourceRaw(KBObject obj, string partName)
         {
-            if (obj == null) return string.Empty;
+            if (obj == null) return null;
             string key = BuildRawSourceCacheKey(obj.Guid, partName);
             if (TryGetReadCache(key, out string cached)) return cached;
             if (TryGetLargeRawSourceCache(key, out cached)) return cached;
 
             string normalizedPart = NormalizeRawSourcePart(partName);
             string src = ReadPartSourceUncached(obj, normalizedPart);
-            if (src == null) return string.Empty;
+            if (src == null) return null;
             if (src.Length == 0)
                 SetEmptyRawSourceCache(key);
             else if (src.Length <= RawSourceCacheMaxBytes)
                 SetReadCache(key, src);
             else if (src.Length <= LargeRawSourceCacheMaxBytes)
                 SetLargeRawSourceCache(key, src);
-            return src ?? string.Empty;
+            return src;
         }
 
         // PERFORMANCE (perf round 2): cache-only probe used by SourceSearchService's scan

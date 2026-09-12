@@ -1990,11 +1990,13 @@ namespace GxMcp.Worker.Services
         // SourceSearchService already paid the SDK read for this complete primary source.
         // Promote it into the existing index snapshot so a later worker process can
         // answer the same literal search without reopening every candidate source.
-        // Keep the same 256 KiB bound as the raw read cache: large sources stay available
-        // for the current request but must not inflate the persisted index unexpectedly.
+        // Keep the same 256 KiB bound as the persisted raw read cache: large sources stay
+        // available through the bounded in-memory search cache but must not inflate the
+        // persisted index unexpectedly. An empty string is a valid complete-source marker
+        // when the SDK confirmed that this object has no source part.
         internal bool PromoteSourceForSearch(SearchIndex.IndexEntry entry, string source)
         {
-            if (entry == null || string.IsNullOrEmpty(source) || source.Length > 256 * 1024) return false;
+            if (entry == null || source == null || source.Length > 256 * 1024) return false;
             var index = TryGetLoadedIndex();
             if (index?.Objects == null) return false;
 
@@ -2004,7 +2006,7 @@ namespace GxMcp.Worker.Services
                 && !string.Equals(current.Guid, entry.Guid, StringComparison.OrdinalIgnoreCase)) return false;
             lock (current)
             {
-                if (!string.IsNullOrEmpty(current.FullSource)) return false;
+                if (current.FullSource != null) return false;
                 current.FullSource = source;
             }
 

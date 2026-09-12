@@ -119,6 +119,27 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void PromoteSourceForSearch_RecordsConfirmedEmptySource()
+        {
+            var svc = new IndexCacheService();
+            svc.AddOrUpdateBatch(new[]
+            {
+                new SearchIndex.IndexEntry { Name = "EmptyProc", Type = "Procedure", Guid = "empty-guid" }
+            });
+            svc.EnsureSourceTokenIndex();
+            var entry = svc.TryGetLoadedIndex().Objects["Procedure:EmptyProc"];
+
+            Assert.True(svc.PromoteSourceForSearch(entry, string.Empty));
+            Assert.NotNull(entry.FullSource);
+            Assert.Empty(entry.FullSource);
+            Assert.DoesNotContain("Procedure:EmptyProc", svc.TryGetLoadedIndex().SourceTokenIndex.Values.SelectMany(keys => keys));
+
+            var reloaded = SearchIndex.FromJson(svc.TryGetLoadedIndex().ToJson());
+            Assert.NotNull(reloaded.Objects["Procedure:EmptyProc"].FullSource);
+            Assert.Empty(reloaded.Objects["Procedure:EmptyProc"].FullSource);
+        }
+
+        [Fact]
         public void PromoteSourceForSearch_RejectsOversizedSource()
         {
             var svc = new IndexCacheService();
