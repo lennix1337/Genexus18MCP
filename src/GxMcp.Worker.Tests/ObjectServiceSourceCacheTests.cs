@@ -11,6 +11,25 @@ namespace GxMcp.Worker.Tests
     public class ObjectServiceSourceCacheTests
     {
         [Fact]
+        public void EmptyRawSourceCache_HitSkipsSourceResolution_AndCanBeInvalidated()
+        {
+            var guid = Guid.NewGuid();
+            string key = guid.ToString("N") + "|source|raw";
+            var setter = typeof(ObjectService).GetMethod(
+                "SetEmptyRawSourceCache",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(setter);
+            setter.Invoke(null, new object[] { key });
+
+            var service = new ObjectService(null, null);
+            Assert.True(service.TryGetPartSourceRaw(guid.ToString(), "Source", out string source));
+            Assert.Equal(string.Empty, source);
+
+            ObjectService.InvalidateAllReadCaches();
+            Assert.False(service.TryGetPartSourceRaw(guid.ToString(), "Source", out _));
+        }
+
+        [Fact]
         public void FullMcpReadSeedsRawSourceCache()
         {
             var guid = Guid.NewGuid();
@@ -25,6 +44,43 @@ namespace GxMcp.Worker.Tests
             var service = new GxMcp.Worker.Services.ObjectService(null, null);
             Assert.True(service.TryGetPartSourceRaw(guid.ToString(), "Source", out string source));
             Assert.Equal("parm(&CustomerId);", source);
+        }
+
+        [Fact]
+        public void LargeFullMcpRead_SeedsBoundedSearchCache_WithoutPersistingFullSource()
+        {
+            var guid = Guid.NewGuid();
+            string source = new string('x', 256 * 1024 + 1);
+            var payload = new JObject
+            {
+                ["source"] = source,
+                ["truncated"] = false,
+                ["isTruncatedByWorker"] = false,
+                ["isBase64"] = false
+            };
+
+            Assert.True(ObjectService.CacheRawSourceFromReadPayload(
+                guid, "Source", payload, offset: null, client: "mcp", minimize: false));
+
+            var service = new GxMcp.Worker.Services.ObjectService(null, null);
+            Assert.True(service.TryGetPartSourceRaw(guid.ToString(), "Source", out string cached));
+            Assert.Equal(source, cached);
+
+            var indexCache = new IndexCacheService();
+            indexCache.LoadFromEntries(new[]
+            {
+                new GxMcp.Worker.Models.SearchIndex.IndexEntry
+                {
+                    Guid = guid.ToString(),
+                    Name = "LargeReadNotPersisted",
+                    Type = "Procedure"
+                }
+            });
+            indexCache.MarkIndexComplete(1);
+            var indexedService = new ObjectService(new KbService(indexCache), null);
+            Assert.False(indexedService.TryPromoteCompleteSourceRead(
+                guid, "Source", payload, offset: null, client: "mcp", minimize: false));
+            Assert.Null(indexCache.GetIndex().Objects.Values.Single().FullSource);
         }
 
         [Fact]

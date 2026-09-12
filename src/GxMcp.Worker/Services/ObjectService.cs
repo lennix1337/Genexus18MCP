@@ -26,6 +26,14 @@ namespace GxMcp.Worker.Services
 
         private static readonly ConcurrentDictionary<string, ReadCacheEntry> _readCache =
             new ConcurrentDictionary<string, ReadCacheEntry>(StringComparer.OrdinalIgnoreCase);
+        // Large source bodies are useful to repeat source searches but must not share the
+        // general JSON/read cache: one response can be megabytes and the normal cache has
+        // no size-aware eviction. Keep a tiny, TTL-bound side cache for search-only reuse;
+        // persisted FullSource remains capped separately at 256 KiB.
+        private static readonly ConcurrentDictionary<string, ReadCacheEntry> _largeRawSourceCache =
+            new ConcurrentDictionary<string, ReadCacheEntry>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, DateTime> _emptyRawSourceCache =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         // PERFORMANCE: ReadCacheTtl extended to 300s (5 minutes) default, with GXMCP_READ_CACHE_TTL_SEC
         // override. Since writes already perform deterministic cache invalidation (MarkReadCacheDirty /
         // InvalidateCache), retaining read cache across multi-turn agent reasoning avoids redundant
@@ -3616,7 +3624,12 @@ namespace GxMcp.Worker.Services
 
         // Managed cache only: safe even when an interrupted SDK save poisoned the
         // session. Strict persisted-state verification uses the public SDK cache API.
-        internal static void InvalidateAllReadCaches() => _readCache.Clear();
+        internal static void InvalidateAllReadCaches()
+        {
+            _readCache.Clear();
+            _largeRawSourceCache.Clear();
+            _emptyRawSourceCache.Clear();
+        }
 
         public void MarkReadCacheDirty(KBObject obj, string partName = null)
         {
@@ -3650,6 +3663,28 @@ namespace GxMcp.Worker.Services
                 _readCache.TryRemove(key, out _);
             }
 
+            foreach (var kvp in _largeRawSourceCache)
+            {
+                string key = kvp.Key;
+                if (!key.StartsWith(objectPrefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (normalizedPart != null
+                    && !key.StartsWith(objectPrefix + normalizedPart + "|", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                _largeRawSourceCache.TryRemove(key, out _);
+            }
+
+            foreach (var kvp in _emptyRawSourceCache)
+            {
+                string key = kvp.Key;
+                if (!key.StartsWith(objectPrefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (normalizedPart != null
+                    && !key.StartsWith(objectPrefix + normalizedPart + "|", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                _emptyRawSourceCache.TryRemove(key, out _);
+            }
+
             // SDK object cache invalidation is expensive; do it only after writes.
             InvalidateCache(obj);
         }
@@ -3662,24 +3697,31 @@ namespace GxMcp.Worker.Services
         // from BuildReadCacheKey's 6-segment JSON keys, and matched by the same guid prefix).
         // Full, non-minimized MCP reads seed this cache too, avoiding a duplicate SDK read
         // when an agent reads a source and then searches it.
-        // Returns empty string when the part has no source (also not cached — SetReadCache
-        // skips empty payloads, so a genuinely empty object is re-probed, which is cheap).
-        // Oversized sources (> 256 KB) are deliberately NOT cached: _readCache is a TTL-only
-        // unbounded dictionary, and a single huge WebForm/layout XML would occupy it for the
-        // full 60s TTL while contributing nothing to repeat-hit rate. The limit is compared
-        // against string.Length (UTF-16 code units, ~bytes for the ASCII-heavy GeneXus
-        // sources); only caching is skipped, never the returned source.
+        // A null result means the SDK read failed and is never cached. A successfully read
+        // empty part is kept in a short-lived negative cache, so repeated scans do not pay
+        // the same SDK round-trip for objects that have no source. Ordinary raw sources up
+        // to 256 KiB use _readCache; larger bodies use the bounded side cache below up to
+        // 2 MiB. The persisted FullSource promotion still accepts only 256 KiB.
         private const int RawSourceCacheMaxBytes = 256 * 1024;
+        private const int LargeRawSourceCacheMaxBytes = 2 * 1024 * 1024;
+        private const int LargeRawSourceCacheMaxEntries = 4;
 
         public string ReadPartSourceRaw(KBObject obj, string partName)
         {
             if (obj == null) return string.Empty;
             string key = BuildRawSourceCacheKey(obj.Guid, partName);
             if (TryGetReadCache(key, out string cached)) return cached;
+            if (TryGetLargeRawSourceCache(key, out cached)) return cached;
 
             string normalizedPart = NormalizeRawSourcePart(partName);
             string src = ReadPartSourceUncached(obj, normalizedPart);
-            if (src != null && src.Length <= RawSourceCacheMaxBytes) SetReadCache(key, src);
+            if (src == null) return string.Empty;
+            if (src.Length == 0)
+                SetEmptyRawSourceCache(key);
+            else if (src.Length <= RawSourceCacheMaxBytes)
+                SetReadCache(key, src);
+            else if (src.Length <= LargeRawSourceCacheMaxBytes)
+                SetLargeRawSourceCache(key, src);
             return src ?? string.Empty;
         }
 
@@ -3704,11 +3746,12 @@ namespace GxMcp.Worker.Services
             string normalizedPart = NormalizeRawSourcePart(partName);
             string key = normalizedGuid + "|" + normalizedPart + "|raw";
             if (TryGetReadCache(key, out src)) return true;
+            if (TryGetLargeRawSourceCache(key, out src)) return true;
+            if (TryGetEmptyRawSourceCache(key)) return true;
 
-            // Large sources are intentionally excluded from the separate raw cache to
-            // avoid duplicating them in the TTL dictionary. They still live in the full
-            // JSON read cache, so use that payload as a zero-SDK fallback and only seed
-            // the compact raw cache when it fits the cap.
+            // Large sources are kept in the bounded side cache above. As a final fallback,
+            // consult the JSON read cache and seed the ordinary raw cache only when the
+            // cached payload is within the compact-cache limit.
             return TryGetFullReadSourceCache(normalizedGuid, normalizedPart, out src);
         }
 
@@ -3802,11 +3845,11 @@ namespace GxMcp.Worker.Services
                         return transaction.Rules?.Source ?? "";
                     if (obj is WebPanel webPanel)
                         return webPanel.Rules?.Source ?? "";
-                    try { return ((dynamic)obj).Rules?.Source ?? ""; } catch { return ""; }
+                    try { return ((dynamic)obj).Rules?.Source ?? ""; } catch { return null; }
                 }
                 if (normalizedPart == "conditions")
                 {
-                    try { return ((dynamic)obj).Conditions?.Source ?? ""; } catch { return ""; }
+                    try { return ((dynamic)obj).Conditions?.Source ?? ""; } catch { return null; }
                 }
                 if (normalizedPart == "events")
                 {
@@ -3814,14 +3857,14 @@ namespace GxMcp.Worker.Services
                         return transaction.Events?.Source ?? "";
                     if (obj is WebPanel webPanel)
                         return webPanel.Events?.Source ?? "";
-                    try { return ((dynamic)obj).Events?.Source ?? ""; } catch { return ""; }
+                    try { return ((dynamic)obj).Events?.Source ?? ""; } catch { return null; }
                 }
                 if (normalizedPart == "webform" || normalizedPart == "layout")
                 {
-                    try { return GxMcp.Worker.Helpers.WebFormXmlHelper.ReadEditableXml(obj) ?? ""; } catch { return ""; }
+                    try { return GxMcp.Worker.Helpers.WebFormXmlHelper.ReadEditableXml(obj) ?? ""; } catch { return null; }
                 }
             }
-            catch { }
+            catch { return null; }
             return "";
         }
 
@@ -4349,11 +4392,75 @@ namespace GxMcp.Worker.Services
                 return;
             }
 
+            _emptyRawSourceCache.TryRemove(key, out _);
             _readCache[key] = new ReadCacheEntry
             {
                 Payload = payload,
                 UpdatedUtc = DateTime.UtcNow
             };
+        }
+
+        private static bool TryGetLargeRawSourceCache(string key, out string source)
+        {
+            source = string.Empty;
+            if (string.IsNullOrWhiteSpace(key)) return false;
+            if (!_largeRawSourceCache.TryGetValue(key, out var entry) || entry == null)
+                return false;
+            if (DateTime.UtcNow - entry.UpdatedUtc > ReadCacheTtl)
+            {
+                _largeRawSourceCache.TryRemove(key, out _);
+                return false;
+            }
+            source = entry.Payload;
+            return !string.IsNullOrEmpty(source);
+        }
+
+        private static void SetLargeRawSourceCache(string key, string source)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrEmpty(source)
+                || source.Length > LargeRawSourceCacheMaxBytes)
+                return;
+
+            _emptyRawSourceCache.TryRemove(key, out _);
+            _largeRawSourceCache[key] = new ReadCacheEntry
+            {
+                Payload = source,
+                UpdatedUtc = DateTime.UtcNow
+            };
+
+            if (_largeRawSourceCache.Count <= LargeRawSourceCacheMaxEntries) return;
+            string oldestKey = null;
+            DateTime oldest = DateTime.MaxValue;
+            foreach (var kvp in _largeRawSourceCache)
+            {
+                if (kvp.Value == null || kvp.Value.UpdatedUtc < oldest)
+                {
+                    oldest = kvp.Value?.UpdatedUtc ?? DateTime.MinValue;
+                    oldestKey = kvp.Key;
+                }
+            }
+            if (oldestKey != null) _largeRawSourceCache.TryRemove(oldestKey, out _);
+        }
+
+        private static bool TryGetEmptyRawSourceCache(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key)
+                || !_emptyRawSourceCache.TryGetValue(key, out DateTime cachedUtc))
+                return false;
+            if (DateTime.UtcNow - cachedUtc > ReadCacheTtl)
+            {
+                _emptyRawSourceCache.TryRemove(key, out _);
+                return false;
+            }
+            return true;
+        }
+
+        private static void SetEmptyRawSourceCache(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return;
+            _readCache.TryRemove(key, out _);
+            _largeRawSourceCache.TryRemove(key, out _);
+            _emptyRawSourceCache[key] = DateTime.UtcNow;
         }
 
         private static bool TryGetCacheablePayload(string payload, out JObject parsedPayload)
@@ -4396,9 +4503,13 @@ namespace GxMcp.Worker.Services
             if (payload["error"] != null) return false;
 
             if (!TryGetCompleteSource(payload, out string source)
-                || source.Length > RawSourceCacheMaxBytes) return false;
+                || source.Length > LargeRawSourceCacheMaxBytes) return false;
 
-            SetReadCache(BuildRawSourceCacheKey(objectGuid, partName), source);
+            string cacheKey = BuildRawSourceCacheKey(objectGuid, partName);
+            if (source.Length <= RawSourceCacheMaxBytes)
+                SetReadCache(cacheKey, source);
+            else
+                SetLargeRawSourceCache(cacheKey, source);
             return true;
         }
 
