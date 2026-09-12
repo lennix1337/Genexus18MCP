@@ -8,6 +8,7 @@
 - Make primitive Attribute type application all-or-nothing: restore previously written Type, Length, and Decimals when a later SDK setter fails, preventing parser paths from persisting partial mutations.
 - Isolate async build hard-cap default assertions from an ambient `GXMCP_BUILD_TIMEOUT_SEC` override and restore the process environment after each test.
 - **`genexus_preview` browser driver resolution.** Resolve `chrome-devtools-axi` from the preview configuration, MCP profile, bundled runtime/dependencies, Worker/backend directories, and finally the effective PATH; Windows shims and quoted relative paths are supported, with preflight diagnostics when no candidate is available. Preview captures continue to support screenshot, console, exceptions, desktop emulation, and `buildFirst=false` without starting a build.
+- Reuse complete MCP source reads in `search_source` through the raw/JSON read caches, while excluding truncated, minimized, Base64, empty, oversized, and error payloads from the raw cache.
 
 ## v3.3.2 - 2026-09-11
 
