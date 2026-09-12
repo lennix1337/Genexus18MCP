@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Reflection;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Xunit;
 using GxMcp.Worker.Services;
@@ -42,6 +43,66 @@ namespace GxMcp.Worker.Tests
 
             var service = new GxMcp.Worker.Services.ObjectService(null, null);
             Assert.False(service.TryGetPartSourceRaw(guid.ToString(), "Source", out _));
+        }
+
+        [Fact]
+        public void FullMcpRead_CanPromoteCompleteSourceToLoadedIndex()
+        {
+            var indexCache = new IndexCacheService();
+            var guid = Guid.NewGuid();
+            indexCache.LoadFromEntries(new[]
+            {
+                new GxMcp.Worker.Models.SearchIndex.IndexEntry
+                {
+                    Guid = guid.ToString(),
+                    Name = "ReadPromoted",
+                    Type = "Procedure"
+                }
+            });
+            indexCache.MarkIndexComplete(1);
+
+            var service = new ObjectService(new KbService(indexCache), null);
+            var payload = new JObject
+            {
+                ["source"] = "parm(&CustomerId);",
+                ["truncated"] = false,
+                ["isTruncatedByWorker"] = false,
+                ["isBase64"] = false
+            };
+
+            Assert.True(service.TryPromoteCompleteSourceRead(
+                guid, "Source", payload, offset: null, client: "mcp", minimize: false));
+            Assert.Equal("parm(&CustomerId);", indexCache.GetIndex().Objects.Values.Single().FullSource);
+        }
+
+        [Fact]
+        public void PaginatedRead_CannotPromoteCompleteSourceToLoadedIndex()
+        {
+            var indexCache = new IndexCacheService();
+            var guid = Guid.NewGuid();
+            indexCache.LoadFromEntries(new[]
+            {
+                new GxMcp.Worker.Models.SearchIndex.IndexEntry
+                {
+                    Guid = guid.ToString(),
+                    Name = "ReadNotPromoted",
+                    Type = "Procedure"
+                }
+            });
+            indexCache.MarkIndexComplete(1);
+
+            var service = new ObjectService(new KbService(indexCache), null);
+            var payload = new JObject
+            {
+                ["source"] = "parm(&CustomerId);",
+                ["truncated"] = true,
+                ["isTruncatedByWorker"] = true,
+                ["isBase64"] = false
+            };
+
+            Assert.False(service.TryPromoteCompleteSourceRead(
+                guid, "Source", payload, offset: null, client: "mcp", minimize: false));
+            Assert.Null(indexCache.GetIndex().Objects.Values.Single().FullSource);
         }
 
         [Fact]

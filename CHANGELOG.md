@@ -11,6 +11,7 @@
 - Reuse complete MCP source reads in `search_source` through the raw/JSON read caches, while excluding truncated, minimized, Base64, empty, oversized, and error payloads from the raw cache.
 - Recognize certified sharded index slots during warm-start validation and derive Folder/Module storage keys from their scoped paths, avoiding an unnecessary full lite walk on every boot.
 - Prioritize complete `FullSource` token postings before conservative SDK fallback candidates, including multi-hit sources that can fill a capped page alone; the fallback tail remains available when indexed sources do not close the page, and source-only promotions stay bounded to 256 KiB while preserving the prior enrichment sidecar.
+- Promote complete, non-minimized MCP `genexus_read` source payloads into the already-loaded `FullSource`/`SourceTokenIndex`, so a later Worker restart can answer the same search without reopening that object through the SDK; truncated, Base64, error, non-Source, and oversized payloads remain excluded.
 - Keep transient `IndexCold`, `Reindexing`, `Timeout`, and `Cancelled` envelopes out of the Gateway semantic cache.
 
 ## v3.3.2 - 2026-09-11

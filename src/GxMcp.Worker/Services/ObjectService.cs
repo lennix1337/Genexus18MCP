@@ -3210,8 +3210,16 @@ namespace GxMcp.Worker.Services
                     // raw-source cache as well so a subsequent search_source call can
                     // reuse the exact text instead of resolving and reading every
                     // candidate a second time.
-                    CacheRawSourceFromReadPayload(
+                    bool cachedRawSource = CacheRawSourceFromReadPayload(
                         obj.Guid, resolvedPart, parsedPayload, offset, client, minimize);
+                    if (cachedRawSource)
+                    {
+                        // Persist only the same bounded, complete source accepted by the
+                        // raw cache. The helper uses the already-loaded index and never
+                        // forces a cold index load from the read hot path.
+                        TryPromoteCompleteSourceRead(
+                            obj.Guid, resolvedPart, parsedPayload, offset, client, minimize);
+                    }
                 }
 
                 return payload;
@@ -4392,6 +4400,35 @@ namespace GxMcp.Worker.Services
 
             SetReadCache(BuildRawSourceCacheKey(objectGuid, partName), source);
             return true;
+        }
+
+        internal bool TryPromoteCompleteSourceRead(
+            Guid objectGuid,
+            string partName,
+            JObject payload,
+            int? offset,
+            string client,
+            bool minimize)
+        {
+            if (objectGuid == Guid.Empty || payload == null || minimize
+                || !string.Equals(client, "mcp", StringComparison.OrdinalIgnoreCase)
+                || (offset.HasValue && offset.Value != 0)
+                || !string.Equals(NormalizeRawSourcePart(partName), "source", StringComparison.OrdinalIgnoreCase)
+                || !TryGetCompleteSource(payload, out string source)
+                || source.Length > RawSourceCacheMaxBytes)
+            {
+                return false;
+            }
+
+            IndexCacheService indexCache = _kbService?.GetIndexCache();
+            SearchIndex index = indexCache?.TryGetLoadedIndex();
+            if (index?.Objects == null) return false;
+
+            string guid = objectGuid.ToString();
+            SearchIndex.IndexEntry entry = index.Objects.Values.FirstOrDefault(candidate =>
+                candidate != null
+                && string.Equals(candidate.Guid, guid, StringComparison.OrdinalIgnoreCase));
+            return entry != null && indexCache.PromoteSourceForSearch(entry, source);
         }
 
         private void ProcessSourceContent(KBObject obj, string content, int? offset, int? limit, JObject result, string client = "ide")
