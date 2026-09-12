@@ -10,7 +10,7 @@
 - **`genexus_preview` browser driver resolution.** Resolve `chrome-devtools-axi` from the preview configuration, MCP profile, bundled runtime/dependencies, Worker/backend directories, and finally the effective PATH; Windows shims and quoted relative paths are supported, with preflight diagnostics when no candidate is available. Preview captures continue to support screenshot, console, exceptions, desktop emulation, and `buildFirst=false` without starting a build.
 - Reuse complete MCP source reads in `search_source` through the raw/JSON read caches, while excluding truncated, minimized, Base64, empty, oversized, and error payloads from the raw cache.
 - Recognize certified sharded index slots during warm-start validation and derive Folder/Module storage keys from their scoped paths, avoiding an unnecessary full lite walk on every boot.
-- Prioritize complete `FullSource` token postings when they already fill `search_source.maxResults`, avoiding needless SDK/STA reads while retaining the conservative fallback for incomplete pages; source-only promotions remain bounded to 256 KiB and preserve the prior enrichment sidecar.
+- Prioritize complete `FullSource` token postings before conservative SDK fallback candidates, including multi-hit sources that can fill a capped page alone; the fallback tail remains available when indexed sources do not close the page, and source-only promotions stay bounded to 256 KiB while preserving the prior enrichment sidecar.
 - Keep transient `IndexCold`, `Reindexing`, `Timeout`, and `Cancelled` envelopes out of the Gateway semantic cache.
 
 ## v3.3.2 - 2026-09-11

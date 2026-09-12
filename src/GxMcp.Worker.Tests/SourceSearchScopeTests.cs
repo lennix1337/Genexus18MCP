@@ -150,6 +150,37 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void OneCompleteSource_WithMultipleHits_IsPrioritizedBeforeSdkFallback()
+        {
+            var index = new IndexCacheService();
+            var entries = new List<SearchIndex.IndexEntry>
+            {
+                new SearchIndex.IndexEntry { Name = "ColdCandidate", Type = "Procedure" },
+                new SearchIndex.IndexEntry
+                {
+                    Name = "IndexedMany",
+                    Type = "Procedure",
+                    FullSource = "parm(in:&One)\nparm(in:&Two)"
+                }
+            };
+            index.LoadFromEntries(entries);
+            index.MarkIndexComplete(entries.Count);
+
+            var json = new SourceSearchService(index, objectService: null).SearchAsJson(
+                new SourceSearchCriteria
+                {
+                    Pattern = "parm",
+                    MaxResults = 2,
+                    TimeoutMs = 30000
+                });
+
+            var result = JObject.Parse(json)["result"]!;
+            Assert.Equal(2, result["count"]!.Value<int>());
+            Assert.Equal(1, result["scannedObjects"]!.Value<int>());
+            Assert.Null(result["unresolvedObjects"]);
+        }
+
+        [Fact]
         public void CompleteSourceCandidates_FillPageBeforeSdkFallbackCandidates()
         {
             var index = new IndexCacheService();

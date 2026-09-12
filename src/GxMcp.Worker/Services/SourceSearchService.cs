@@ -366,10 +366,10 @@ namespace GxMcp.Worker.Services
                 var entries = query
                     .Where(e => string.IsNullOrEmpty(c.TypeFilter) || string.Equals(e.Type, c.TypeFilter, StringComparison.OrdinalIgnoreCase))
                     .ToList();
-                // When complete source postings already fill the requested page, visit
-                // them before the conservative SDK fallback candidates. This preserves
-                // completeness (the fallback tail is still scanned when the page is not
-                // full) while avoiding needless STA/COM reads for the common capped page.
+                // When complete source postings exist, visit them before the
+                // conservative SDK fallback candidates. This preserves completeness
+                // (the fallback tail is still scanned when the page is not full) while
+                // avoiding needless STA/COM reads whenever indexed sources can fill it.
                 if (indexedSourceScope && literals.Count > 0 && index.SourceTokenIndex != null
                     && objectNameSet == null && !hasIdentityScope)
                 {
@@ -1014,7 +1014,7 @@ namespace GxMcp.Worker.Services
             if (maxResults <= 0) return ordered;
 
             int completeCount = ordered.Count(e => e != null && e.FullSource != null);
-            if (completeCount < maxResults) return ordered;
+            if (completeCount == 0) return ordered;
 
             return ordered
                 .OrderByDescending(e => e != null && e.FullSource != null)
