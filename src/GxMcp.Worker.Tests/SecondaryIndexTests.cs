@@ -140,7 +140,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void PromoteSourceForSearch_RejectsOversizedSource()
+        public void PromoteSourceForSearch_AllowsBoundedLargeSource()
         {
             var svc = new IndexCacheService();
             svc.AddOrUpdateBatch(new[]
@@ -149,7 +149,42 @@ namespace GxMcp.Worker.Tests
             });
             var entry = svc.TryGetLoadedIndex().Objects["Procedure:Proc1"];
 
-            Assert.False(svc.PromoteSourceForSearch(entry, new string('x', 256 * 1024 + 1)));
+            string source = new string('x', 256 * 1024 + 1);
+            Assert.True(svc.PromoteSourceForSearch(entry, source));
+            Assert.Equal(source, entry.FullSource);
+        }
+
+        [Fact]
+        public void PromoteSourceForSearch_RejectsSourceOverPerEntryBound()
+        {
+            var svc = new IndexCacheService();
+            svc.AddOrUpdateBatch(new[]
+            {
+                new SearchIndex.IndexEntry { Name = "Proc1", Type = "Procedure", Guid = "g1" }
+            });
+            var entry = svc.TryGetLoadedIndex().Objects["Procedure:Proc1"];
+
+            Assert.False(svc.PromoteSourceForSearch(entry, new string('x', 2 * 1024 * 1024 + 1)));
+            Assert.Null(entry.FullSource);
+        }
+
+        [Fact]
+        public void PromoteSourceForSearch_RejectsSourceWhenAggregateBudgetIsFull()
+        {
+            var entries = Enumerable.Range(0, 5)
+                .Select(i => new SearchIndex.IndexEntry
+                {
+                    Name = "Proc" + i,
+                    Type = "Procedure",
+                    Guid = "g" + i,
+                    FullSource = i < 4 ? new string('x', 2 * 1024 * 1024) : null
+                })
+                .ToArray();
+            var svc = new IndexCacheService();
+            svc.AddOrUpdateBatch(entries);
+            var entry = svc.TryGetLoadedIndex().Objects["Procedure:Proc4"];
+
+            Assert.False(svc.PromoteSourceForSearch(entry, "new source"));
             Assert.Null(entry.FullSource);
         }
 

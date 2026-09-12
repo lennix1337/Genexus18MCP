@@ -1990,13 +1990,14 @@ namespace GxMcp.Worker.Services
         // SourceSearchService already paid the SDK read for this complete primary source.
         // Promote it into the existing index snapshot so a later worker process can
         // answer the same literal search without reopening every candidate source.
-        // Keep the same 256 KiB bound as the persisted raw read cache: large sources stay
-        // available through the bounded in-memory search cache but must not inflate the
-        // persisted index unexpectedly. An empty string is a valid complete-source marker
-        // when the SDK confirmed that this object has no source part.
+        // Keep persisted source memory bounded: each source is capped at 2 MiB and the
+        // aggregate FullSource budget is capped at 8 MiB. An empty string is a valid
+        // complete-source marker when the SDK confirmed that this object has no source part.
+        private const int PersistedFullSourceMaxChars = 2 * 1024 * 1024;
+        private const long PersistedFullSourceBudgetChars = 8L * 1024 * 1024;
         internal bool PromoteSourceForSearch(SearchIndex.IndexEntry entry, string source)
         {
-            if (entry == null || source == null || source.Length > 256 * 1024) return false;
+            if (entry == null || source == null || source.Length > PersistedFullSourceMaxChars) return false;
             var index = TryGetLoadedIndex();
             if (index?.Objects == null) return false;
 
@@ -2004,6 +2005,12 @@ namespace GxMcp.Worker.Services
             if (!index.Objects.TryGetValue(key, out var current) || current == null) return false;
             if (!string.IsNullOrEmpty(entry.Guid)
                 && !string.Equals(current.Guid, entry.Guid, StringComparison.OrdinalIgnoreCase)) return false;
+            long storedChars = 0;
+            foreach (var candidate in index.Objects.Values)
+            {
+                if (candidate?.FullSource != null) storedChars += candidate.FullSource.Length;
+            }
+            if (storedChars + source.Length > PersistedFullSourceBudgetChars) return false;
             lock (current)
             {
                 if (current.FullSource != null) return false;
