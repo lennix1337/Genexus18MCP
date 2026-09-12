@@ -911,7 +911,10 @@ namespace GxMcp.Worker.Services
             return false;
         }
 
-        private static readonly Regex LiteralTokenRegex = new Regex(@"[A-Za-z0-9_]{3,}", RegexOptions.Compiled);
+        // Do not start a candidate token on the alphabetic character that names a regex
+        // escape (e.g. `bparm` from `\bparm`). The engine can still start at the actual
+        // literal (`parm`), keeping the pre-filter conservative without false negatives.
+        private static readonly Regex LiteralTokenRegex = new Regex(@"(?<!\\)[A-Za-z0-9_]{3,}", RegexOptions.Compiled);
         private static readonly char[] ObjectNameSeparators = { ',', ';', '\n', '\r' };
 
         // Alphanumeric runs >=3 chars; final regex.IsMatch still gates output so a

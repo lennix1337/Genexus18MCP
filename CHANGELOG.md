@@ -14,6 +14,7 @@
 - Recognize certified sharded index slots during warm-start validation and derive Folder/Module storage keys from their scoped paths, avoiding an unnecessary full lite walk on every boot.
 - Prioritize complete `FullSource` token postings before conservative SDK fallback candidates, including multi-hit sources that can fill a capped page alone; the fallback tail remains available when indexed sources do not close the page, and source-search promotions use a 2 MiB per-entry / 8 MiB aggregate budget while preserving the prior enrichment sidecar.
 - Promote complete, non-minimized MCP `genexus_read` source payloads into the already-loaded `FullSource`/`SourceTokenIndex`, so a later Worker restart can answer the same search without reopening that object through the SDK; truncated, Base64, error, non-Source, and oversized payloads remain excluded.
+- Treat regex escape prefixes such as `\b` as syntax rather than literal-token text, so indexed `search_source` keeps valid word-boundary hits instead of filtering every candidate out.
 - Keep transient `IndexCold`, `Reindexing`, `Timeout`, and `Cancelled` envelopes out of the Gateway semantic cache.
 
 ## v3.3.2 - 2026-09-11

@@ -3701,7 +3701,8 @@ namespace GxMcp.Worker.Services
         // empty part is kept in a short-lived negative cache, so repeated scans do not pay
         // the same SDK round-trip for objects that have no source. Ordinary raw sources up
         // to 256 KiB use _readCache; larger bodies use the bounded side cache below up to
-        // 2 MiB. The persisted FullSource promotion still accepts only 256 KiB.
+        // 2 MiB. Direct MCP-read promotion remains limited to 256 KiB; source-search promotion
+        // applies its separate 2 MiB per-entry / 8 MiB aggregate persisted-source budget.
         private const int RawSourceCacheMaxBytes = 256 * 1024;
         private const int LargeRawSourceCacheMaxBytes = 2 * 1024 * 1024;
         private const int LargeRawSourceCacheMaxEntries = 4;

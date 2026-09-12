@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -29,6 +30,15 @@ namespace GxMcp.Worker.Tests
             svc.LoadFromEntries(entries);
             svc.MarkIndexComplete(entries.Count);
             return svc;
+        }
+
+        [Fact]
+        public void ExtractLiteralTokens_IgnoresRegexWordBoundaryEscapes()
+        {
+            var tokens = SourceSearchService.ExtractLiteralTokens(@"\bparm\b", null);
+
+            Assert.Contains("parm", tokens, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("bparm", tokens, StringComparer.OrdinalIgnoreCase);
         }
 
         [Fact]
@@ -147,6 +157,36 @@ namespace GxMcp.Worker.Tests
             var hits = (JArray)obj["result"]!["hits"]!;
             Assert.Single(hits);
             Assert.Equal("Target", hits[0]!["objectName"]!.ToString());
+        }
+
+        [Fact]
+        public void WordBoundaryPattern_DoesNotDropIndexedSourceHits()
+        {
+            var index = new IndexCacheService();
+            var entries = new List<SearchIndex.IndexEntry>
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Name = "IndexedParm",
+                    Type = "Procedure",
+                    FullSource = "parm(in:&Value)"
+                }
+            };
+            index.LoadFromEntries(entries);
+            index.MarkIndexComplete(entries.Count);
+
+            var json = new SourceSearchService(index, objectService: null).SearchAsJson(
+                new SourceSearchCriteria
+                {
+                    Pattern = @"\bparm\b",
+                    MaxResults = 10,
+                    TimeoutMs = 30000
+                });
+
+            var result = JObject.Parse(json)["result"]!;
+            Assert.Equal(1, result["count"]!.Value<int>());
+            Assert.Equal(1, result["scannedObjects"]!.Value<int>());
+            Assert.Equal("IndexedParm", result["hits"]![0]!["objectName"]!.ToString());
         }
 
         [Fact]
