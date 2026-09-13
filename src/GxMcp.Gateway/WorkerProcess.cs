@@ -784,6 +784,13 @@ namespace GxMcp.Gateway
                 string scopedOperationalDir = Path.GetDirectoryName(CrashLedger.ResolveScopedPath(StateScope.ProcessScopeId, Kb.KbId, Kb.ContextGeneration))!;
                 startInfo.EnvironmentVariables["GXMCP_LOG_DIR"] = scopedOperationalDir;
                 startInfo.EnvironmentVariables["GXMCP_CRASH_LEDGER_PATH"] = Path.Combine(scopedOperationalDir, "crash-ledger.jsonl");
+                if (!string.IsNullOrWhiteSpace(_config.Server?.ArtifactOutputDirectory))
+                {
+                    // The Worker adds its KB identity below this root. Do not pass a
+                    // KB-specific path here: the same configured root is safe for every
+                    // worker because the Worker resolves the per-KB scope.
+                    startInfo.EnvironmentVariables["GXMCP_ARTIFACT_OUTPUT_DIR"] = _config.Server.ArtifactOutputDirectory;
+                }
                 // v2.8.5: hand the worker the authoritative server version so
                 // genexus_doctor reports the same number as whoami (the worker
                 // assembly version can lag the package version between releases).

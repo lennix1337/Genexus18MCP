@@ -302,7 +302,7 @@ namespace GxMcp.Gateway
             {
                 "HttpPort", "McpStdio", "BindAddress", "AllowedOrigins", "SessionIdleTimeoutMinutes",
                 "WorkerIdleTimeoutMinutes", "WedgedCommandTimeoutMinutes", "WorkerHeapRecycleMB",
-                "IdempotencyTtlMinutes", "IdempotencyCacheSize", "BuildSyncThresholdSeconds", "MaxOpenKbs",
+                "ArtifactOutputDirectory", "IdempotencyTtlMinutes", "IdempotencyCacheSize", "BuildSyncThresholdSeconds", "MaxOpenKbs",
                 "ToolProfile", "EmitStructuredContent", "TerseResponses"
             }, StringComparer.Ordinal), "Server", path);
             if (server["HttpPort"]?.Type != JTokenType.Integer || server["McpStdio"]?.Type != JTokenType.Boolean)
@@ -477,6 +477,12 @@ namespace GxMcp.Gateway
         // Only fires when the worker is idle (no in-flight/queued work), so it never interrupts
         // an active operation. Set to 0 to disable.
         public int WorkerHeapRecycleMB { get; set; } = 1500;
+        /// <summary>
+        /// Optional root for generated wiki and visualizer files. The Worker always adds a
+        /// stable per-KB scope below this root. When omitted, artifacts go to the durable
+        /// %LOCALAPPDATA%\\GxMcp\\Artifacts root instead of the installed Worker directory.
+        /// </summary>
+        public string? ArtifactOutputDirectory { get; set; }
         public int IdempotencyTtlMinutes { get; set; } = 15;
         public int IdempotencyCacheSize { get; set; } = 1000;
         /// <summary>

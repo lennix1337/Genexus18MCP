@@ -94,13 +94,20 @@ try {
     $passed++
 
     $install = Join-Path $root 'install'
+    $artifactRoot = Join-Path $root 'artifact-output'
+    $artifactFile = Join-Path $artifactRoot 'kb-demo\docs\Customer.md'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $artifactFile) -Force | Out-Null
+    Set-Content -LiteralPath $artifactFile -Value 'artifact-before-upgrade' -Encoding utf8
     New-Item -ItemType Directory -Path $install -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $install 'GxMcp.Gateway.exe') -Value 'old-gateway' -Encoding ascii
-    Set-Content -LiteralPath (Join-Path $install 'config.json') -Value '{"kb":"operator"}' -Encoding ascii
+    $artifactConfigValue = $artifactRoot.Replace('\', '\\')
+    $artifactConfig = '{"kb":"operator","Server":{"ArtifactOutputDirectory":"' + $artifactConfigValue + '"}}'
+    Set-Content -LiteralPath (Join-Path $install 'config.json') -Value $artifactConfig -Encoding ascii
     Set-Content -LiteralPath (Join-Path $install 'version.txt') -Value 'v2.57.0' -Encoding ascii
     $swap = Invoke-ValidatedInstall -ZipPath $validZip -InstallDirectory $install -Version 'v3.0.0' -RequireManifest -Probe { param($path) $true }
     Assert-True ((Get-Content -LiteralPath (Join-Path $install 'GxMcp.Gateway.exe') -Raw).Trim() -eq 'gateway-v3') 'validated install swaps staged gateway'
-    Assert-True ((Get-Content -LiteralPath (Join-Path $install 'config.json') -Raw).Trim() -eq '{"kb":"operator"}') 'validated install preserves config'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $install 'config.json') -Raw).Trim() -eq $artifactConfig) 'validated install preserves artifact output config'
+    Assert-True ((Get-Content -LiteralPath $artifactFile -Raw).Trim() -eq 'artifact-before-upgrade') 'validated upgrade leaves external artifacts in place'
     Assert-True ($swap.BackupDirectory -and (Test-Path -LiteralPath $swap.BackupDirectory)) 'validated install retains previous directory'
     $passed++
 

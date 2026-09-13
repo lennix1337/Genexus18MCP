@@ -5,6 +5,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
+using GxMcp.Worker.Utils;
 
 namespace GxMcp.Worker.Services
 {
@@ -181,8 +182,9 @@ namespace GxMcp.Worker.Services
             _indexCacheService = new IndexCacheService();
             _buildService = new BuildService();
             _kbService = new KbService(_indexCacheService);
-            _visualizerService = new VisualizerService();
-            _healthService = new HealthService();
+            var artifactPaths = new ArtifactPathResolver(_kbService.GetKbPath);
+            _visualizerService = new VisualizerService(_indexCacheService, artifactPaths);
+            _healthService = new HealthService(_indexCacheService);
             _formatService = new FormatService();
             _objectService = new ObjectService(_kbService, _buildService);
             _assetService = new AssetService(_buildService);
@@ -214,7 +216,7 @@ namespace GxMcp.Worker.Services
             _batchService = new BatchService(_kbService, _writeService, _patchService, _objectService);
             _forgeService = new ForgeService(_kbService);
             _testService = new TestService(_kbService, _buildService);
-            _wikiService = new WikiService(_objectService, _searchService);
+            _wikiService = new WikiService(_objectService, _searchService, artifactPaths);
             _historyService = new HistoryService(_objectService, _writeService);
             _saveSpecifyOrchestrator = new SaveSpecifyOrchestrator(_buildService, _historyService);
             _linterService = new LinterService(_objectService, _navigationService);

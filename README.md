@@ -498,7 +498,8 @@ The installer writes a `config.json` for you. To customize networking, timeouts,
     "BindAddress": "127.0.0.1",
     "SessionIdleTimeoutMinutes": 10,
     "WorkerIdleTimeoutMinutes": 60,
-    "MaxOpenKbs": 3
+    "MaxOpenKbs": 3,
+    "ArtifactOutputDirectory": "C:\\GenexusMCP\\Artifacts"
   },
   "GeneXus": {
     "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
@@ -515,6 +516,10 @@ The installer writes a `config.json` for you. To customize networking, timeouts,
 ```
 
 > **Backward compatibility:** old configs with a single `Environment.KBPath` keep working — the gateway auto-migrates them to `KBs[]` + `DefaultKb` at load time.
+
+### Generated documentation artifacts
+
+`genexus_doc` keeps generated files outside the Worker installation so an update does not strand them in the install backup. By default the root is `%LOCALAPPDATA%\GxMcp\Artifacts`; each KB gets a stable `kb-<identity>` directory with `docs` and `html` children. Set `Server.ArtifactOutputDirectory` to choose another root; the per-KB child is still added. `GXMCP_ARTIFACT_OUTPUT_DIR` is the equivalent override for a directly launched Worker. Wiki responses report `result.file`; visualizer responses report `result.url`; both also report `result.outputDirectory`. Visualizer and health consume the active KB's canonical `IndexCacheService` snapshot, not a shared install-relative cache.
 
 ### Working with multiple KBs
 

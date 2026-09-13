@@ -10,11 +10,20 @@ namespace GxMcp.Worker.Services
 {
     public class HealthService
     {
-        private readonly string _indexPath;
+        private readonly IndexCacheService _indexCacheService;
+        private readonly string _legacyIndexPath;
 
         public HealthService()
         {
-            _indexPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
+            // Keep the parameterless constructor's old direct-use behavior for callers that
+            // instantiate the service outside the Worker composition root. The production
+            // dispatcher uses the injected constructor below, which has the KB-scoped cache.
+            _legacyIndexPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
+        }
+
+        public HealthService(IndexCacheService indexCacheService)
+        {
+            _indexCacheService = indexCacheService ?? throw new ArgumentNullException(nameof(indexCacheService));
         }
 
         public string Ping()
@@ -28,33 +37,69 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                if (!File.Exists(_indexPath))
+                SearchIndex index;
+                if (_legacyIndexPath != null)
                 {
-                    return McpResponse.Err(
-                        code: "SearchIndexMissing",
-                        message: "Search Index not found.",
-                        hint: "Run the KB indexing flow before requesting the health report.",
-                        nextSteps: new JArray(
-                            McpResponse.NextStep(
-                                tool: "genexus_lifecycle",
-                                args: new JObject { ["action"] = "index" },
-                                why: "Builds the on-disk SearchIndex this report reads.")),
-                        retryAfterMs: 10000);
-                }
+                    if (!File.Exists(_legacyIndexPath))
+                    {
+                        return McpResponse.Err(
+                            code: "SearchIndexMissing",
+                            message: "Search Index not found.",
+                            hint: "Run the KB indexing flow before requesting the health report.",
+                            nextSteps: new JArray(
+                                McpResponse.NextStep(
+                                    tool: "genexus_lifecycle",
+                                    args: new JObject { ["action"] = "index" },
+                                    why: "Builds the on-disk SearchIndex this report reads.")),
+                            retryAfterMs: 10000);
+                    }
 
-                var index = SearchIndex.FromJson(File.ReadAllText(_indexPath));
-                if (index == null || index.Objects.Count == 0)
+                    index = SearchIndex.FromJson(File.ReadAllText(_legacyIndexPath));
+                    if (index == null || index.Objects == null || index.Objects.Count == 0)
+                    {
+                        return McpResponse.Err(
+                            code: "SearchIndexEmpty",
+                            message: "Search Index is empty.",
+                            hint: "The health report needs an indexed KB; rebuild the index after opening a populated KB.",
+                            nextSteps: new JArray(
+                                McpResponse.NextStep(
+                                    tool: "genexus_lifecycle",
+                                    args: new JObject { ["action"] = "index", ["force"] = true },
+                                    why: "Forces a full rebuild of the SearchIndex on the active KB.")),
+                            retryAfterMs: 10000);
+                    }
+                }
+                else
                 {
-                    return McpResponse.Err(
-                        code: "SearchIndexEmpty",
-                        message: "Search Index is empty.",
-                        hint: "The health report needs an indexed KB; rebuild the index after opening a populated KB.",
-                        nextSteps: new JArray(
-                            McpResponse.NextStep(
-                                tool: "genexus_lifecycle",
-                                args: new JObject { ["action"] = "index", ["force"] = true },
-                                why: "Forces a full rebuild of the SearchIndex on the active KB.")),
-                        retryAfterMs: 10000);
+                    index = _indexCacheService.GetIndex();
+                    if (index == null || index.Objects == null || index.Objects.Count == 0)
+                    {
+                        bool missing = _indexCacheService.IsIndexMissing;
+                        if (missing)
+                        {
+                            return McpResponse.Err(
+                                code: "SearchIndexMissing",
+                                message: "Search Index not found.",
+                                hint: "Run the KB indexing flow before requesting the health report.",
+                                nextSteps: new JArray(
+                                    McpResponse.NextStep(
+                                        tool: "genexus_lifecycle",
+                                        args: new JObject { ["action"] = "index" },
+                                        why: "Builds the on-disk SearchIndex this report reads.")),
+                                retryAfterMs: 10000);
+                        }
+
+                        return McpResponse.Err(
+                            code: "SearchIndexEmpty",
+                            message: "Search Index is empty.",
+                            hint: "The health report needs an indexed KB; rebuild the index after opening a populated KB.",
+                            nextSteps: new JArray(
+                                McpResponse.NextStep(
+                                    tool: "genexus_lifecycle",
+                                    args: new JObject { ["action"] = "index", ["force"] = true },
+                                    why: "Forces a full rebuild of the SearchIndex on the active KB.")),
+                            retryAfterMs: 10000);
+                    }
                 }
 
                 var report = new JObject();

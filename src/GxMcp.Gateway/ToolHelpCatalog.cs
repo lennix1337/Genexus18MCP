@@ -379,11 +379,12 @@ namespace GxMcp.Gateway
                 "# genexus_doc\n\n" +
                 "Generate structured documentation and visual assets for Knowledge Base objects.\n\n" +
                 "## Actions\n" +
-                "- `wiki` — generate complete Markdown wiki pages for target objects and modules. Writes documentation files to disk under the documentation target directory.\n" +
-                "- `visualize` — generate dependency and call graphs (Mermaid / visual format) for target objects.\n" +
-                "- `health` — compile a KB-wide or object-specific health report evaluating code metrics, dead code, and documentation coverage.\n\n" +
+                "- `wiki` — generate complete Markdown wiki pages for target objects and modules. Writes documentation files to disk under the durable per-KB artifact directory. The response returns `result.file` and `result.outputDirectory`.\n" +
+                "- `visualize` — generate dependency and call graphs (Mermaid / visual format) for target objects. Each response writes a unique HTML file and returns its `result.url` plus `result.outputDirectory`.\n" +
+                "- `health` — compile a KB-wide or object-specific health report evaluating code metrics, dead code, and documentation coverage from the active KB's canonical IndexCacheService snapshot.\n\n" +
                 "## Operational Notes\n" +
-                "`action=wiki` writes documentation files to disk; it is not purely in-memory read-only. Use `genexus_analyze` for structured programmatic inspections.\n",
+                "Generated files are scoped below `%LOCALAPPDATA%\\GxMcp\\Artifacts\\kb-<identity>` by default, with separate `docs` and `html` directories. Set `Server.ArtifactOutputDirectory` in config.json (or `GXMCP_ARTIFACT_OUTPUT_DIR` for a directly launched Worker) to choose another root; the Worker still adds the per-KB scope. The root is outside the installed Worker directory, so package upgrades do not hide prior artifacts.\n" +
+                "`action=wiki` writes documentation files to disk; it is not purely in-memory read-only. Object names are validated as single path components; path separators and traversal are rejected rather than sanitized.\n",
 
             ["genexus_recipe"] =
                 "# genexus_recipe\n\n" +

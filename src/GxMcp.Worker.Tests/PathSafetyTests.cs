@@ -59,6 +59,18 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void TryResolveWithinRoot_FileSystemRoot_UsesRootBoundary()
+        {
+            string root = Path.GetPathRoot(Path.GetFullPath(Path.GetTempPath()));
+            string candidate = Path.Combine(root, "gxmcp-pathsafety-root-test", "file.txt");
+
+            bool ok = PathSafety.TryResolveWithinRoot(root, candidate, out string fullPath);
+
+            Assert.True(ok);
+            Assert.Equal(Path.GetFullPath(candidate), fullPath);
+        }
+
+        [Fact]
         public void TryResolveWithinRoot_SameCasingDifference_IsCaseInsensitive()
         {
             string root = NewRoot();

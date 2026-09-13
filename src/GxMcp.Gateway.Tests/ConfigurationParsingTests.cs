@@ -350,6 +350,30 @@ namespace GxMcp.Gateway.Tests
             }
         }
 
+        [Fact]
+        public void ParseConfig_StrictV2_AcceptsArtifactOutputDirectory()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "gxmcp-gw-tests-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string configPath = Path.Combine(tempDir, "config.json");
+            try
+            {
+                string json = StrictStdioJson().Replace(
+                    "\"Server\": { \"HttpPort\": 0, \"McpStdio\": true }",
+                    "\"Server\": { \"HttpPort\": 0, \"McpStdio\": true, \"ArtifactOutputDirectory\": \"C:\\\\Artifacts\" }");
+                File.WriteAllText(configPath, json);
+
+                var cfg = ParseConfig(configPath);
+
+                Assert.NotNull(cfg.Server);
+                Assert.Equal(@"C:\Artifacts", cfg.Server!.ArtifactOutputDirectory);
+            }
+            finally
+            {
+                TryDeleteDirectory(tempDir);
+            }
+        }
+
         private static string StrictStdioJson()
         {
             return @"{

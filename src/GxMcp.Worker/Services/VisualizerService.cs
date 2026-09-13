@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using GxMcp.Worker.Models;
+using GxMcp.Worker.Utils;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -11,13 +12,20 @@ namespace GxMcp.Worker.Services
 {
     public class VisualizerService
     {
-        private readonly string _indexPath;
-        private readonly string _outputDir;
+        private readonly IndexCacheService _indexCacheService;
+        private readonly ArtifactPathResolver _artifactPaths;
 
         public VisualizerService()
+            : this(
+                new IndexCacheService(),
+                new ArtifactPathResolver(() => Environment.GetEnvironmentVariable("GX_KB_PATH")))
         {
-            _indexPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
-            _outputDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "html");
+        }
+
+        public VisualizerService(IndexCacheService indexCacheService, ArtifactPathResolver artifactPaths)
+        {
+            _indexCacheService = indexCacheService ?? throw new ArgumentNullException(nameof(indexCacheService));
+            _artifactPaths = artifactPaths ?? throw new ArgumentNullException(nameof(artifactPaths));
         }
 
         // Safely extract the substring after the first ':' in a "Type:Name" key.
@@ -54,20 +62,24 @@ namespace GxMcp.Worker.Services
                 {
                     filterDomain = payload ?? "All";
                 }
-                if (!File.Exists(_indexPath))
-                    return McpResponse.Err(
-                        code: "SearchIndexMissing",
-                        message: "Search index not found.",
-                        hint: "Build the search index before generating the dependency graph.",
-                        nextSteps: new JArray(McpResponse.NextStep(
-                            tool: "genexus_lifecycle",
-                            args: new JObject { ["action"] = "index" },
-                            why: "Builds the on-disk search index required for the dependency graph.")),
-                        retryAfterMs: 10000,
-                        target: filterName ?? payload);
+                SearchIndex index = _indexCacheService.GetIndex();
+                if (index == null || index.Objects == null || index.Objects.Count == 0)
+                {
+                    bool missing = _indexCacheService.IsIndexMissing;
+                    if (missing)
+                    {
+                        return McpResponse.Err(
+                            code: "SearchIndexMissing",
+                            message: "Search index not found.",
+                            hint: "Build the search index before generating the dependency graph.",
+                            nextSteps: new JArray(McpResponse.NextStep(
+                                tool: "genexus_lifecycle",
+                                args: new JObject { ["action"] = "index" },
+                                why: "Builds the on-disk search index required for the dependency graph.")),
+                            retryAfterMs: 10000,
+                            target: filterName ?? payload);
+                    }
 
-                var index = SearchIndex.FromJson(File.ReadAllText(_indexPath));
-                if (index == null || index.Objects.Count == 0)
                     return McpResponse.Err(
                         code: "SearchIndexEmpty",
                         message: "Search index is empty.",
@@ -78,6 +90,7 @@ namespace GxMcp.Worker.Services
                             why: "Forces a full rebuild of the search index on the active KB.")),
                         retryAfterMs: 10000,
                         target: filterName ?? payload);
+                }
 
                 var nodes = new List<object>();
                 var edges = new List<object>();
@@ -165,9 +178,15 @@ namespace GxMcp.Worker.Services
 
                 var jsonGraph = JsonConvert.SerializeObject(new { nodes, edges });
                 string html = GetHtmlTemplate(jsonGraph);
-                
-                if (!Directory.Exists(_outputDir)) Directory.CreateDirectory(_outputDir);
-                string filePath = Path.Combine(_outputDir, "graph.html");
+                ArtifactPaths artifactPaths = _artifactPaths.Resolve();
+                Directory.CreateDirectory(artifactPaths.HtmlDirectory);
+                // Never use a shared graph.html: each generation gets a unique safe name and
+                // remains durable for callers that need to open a prior graph.
+                string graphName = string.Format(
+                    "graph-{0:yyyyMMddHHmmssfff}-{1}.html",
+                    DateTime.UtcNow,
+                    Guid.NewGuid().ToString("N"));
+                string filePath = _artifactPaths.ResolveFile(ArtifactKind.Html, graphName);
                 File.WriteAllText(filePath, html);
 
                 // Build Mermaid fallback
@@ -187,10 +206,20 @@ namespace GxMcp.Worker.Services
                     result: new JObject
                     {
                         ["url"] = filePath.Replace("\\", "/"),
+                        ["outputDirectory"] = artifactPaths.HtmlDirectory,
+                        ["kbArtifactScope"] = artifactPaths.KbScopeDirectory,
                         ["mermaid"] = mermaid.ToString(),
                         ["nodes"] = nodes.Count,
                         ["edges"] = edges.Count
                     });
+            }
+            catch (ArtifactPathException ex)
+            {
+                return McpResponse.Err(
+                    code: "ArtifactPathRejected",
+                    message: ex.Message,
+                    hint: "Configure a writable artifact root; generated filenames are kept within the KB-scoped output directory.",
+                    target: payload);
             }
             catch (Exception ex)
             {

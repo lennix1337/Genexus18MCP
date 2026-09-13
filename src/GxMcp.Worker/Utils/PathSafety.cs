@@ -26,8 +26,7 @@ namespace GxMcp.Worker.Utils
             if (string.IsNullOrWhiteSpace(root))
                 throw new ArgumentException("root is required.", nameof(root));
 
-            string rootFull = Path.GetFullPath(root)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string rootFull = NormalizeRoot(root);
 
             string resolved = string.IsNullOrWhiteSpace(candidate)
                 ? rootFull
@@ -37,10 +36,22 @@ namespace GxMcp.Worker.Utils
 
             fullPath = resolved;
 
-            string rootWithSeparator = rootFull + Path.DirectorySeparatorChar;
+            string rootWithSeparator = rootFull.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? rootFull
+                : rootFull + Path.DirectorySeparatorChar;
             bool isSamePath = string.Equals(resolved, rootFull, StringComparison.OrdinalIgnoreCase);
             bool isChildPath = resolved.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase);
             return isSamePath || isChildPath;
+        }
+
+        private static string NormalizeRoot(string root)
+        {
+            string full = Path.GetFullPath(root);
+            string pathRoot = Path.GetPathRoot(full);
+            if (!string.IsNullOrEmpty(pathRoot)
+                && string.Equals(full, pathRoot, StringComparison.OrdinalIgnoreCase))
+                return full;
+            return full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
         /// <summary>
@@ -56,7 +67,7 @@ namespace GxMcp.Worker.Utils
             string resolved;
             try
             {
-                rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                rootFull = NormalizeRoot(root);
                 resolved = Path.GetFullPath(fullPath);
             }
             catch
@@ -67,7 +78,9 @@ namespace GxMcp.Worker.Utils
             if (string.Equals(rootFull, resolved, StringComparison.OrdinalIgnoreCase))
                 return ".";
 
-            string rootWithSeparator = rootFull + Path.DirectorySeparatorChar;
+            string rootWithSeparator = rootFull.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? rootFull
+                : rootFull + Path.DirectorySeparatorChar;
             return resolved.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase)
                 ? resolved.Substring(rootWithSeparator.Length).Replace('\\', '/')
                 : fullPath;

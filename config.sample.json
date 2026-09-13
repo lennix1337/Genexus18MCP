@@ -6,7 +6,8 @@
   "Server": {
     "HttpPort": 5000,
     "McpStdio": true,
-    "BindAddress": "127.0.0.1"
+    "BindAddress": "127.0.0.1",
+    "ArtifactOutputDirectory": "C:\\GenexusMCP\\Artifacts"
   },
   "Logging": {
     "Level": "Debug",

@@ -7,6 +7,7 @@ using Newtonsoft.Json.Linq;
 using Artech.Architecture.Common.Objects;
 using Artech.Genexus.Common.Objects;
 using Artech.Genexus.Common.Parts;
+using GxMcp.Worker.Utils;
 
 namespace GxMcp.Worker.Services
 {
@@ -14,11 +15,18 @@ namespace GxMcp.Worker.Services
     {
         private readonly ObjectService _objectService;
         private readonly SearchService _searchService;
+        private readonly ArtifactPathResolver _artifactPaths;
 
         public WikiService(ObjectService objectService, SearchService searchService)
+            : this(objectService, searchService, new ArtifactPathResolver(() => Environment.GetEnvironmentVariable("GX_KB_PATH")))
+        {
+        }
+
+        public WikiService(ObjectService objectService, SearchService searchService, ArtifactPathResolver artifactPaths)
         {
             _objectService = objectService;
             _searchService = searchService;
+            _artifactPaths = artifactPaths ?? throw new ArgumentNullException(nameof(artifactPaths));
         }
 
         public string Generate(string target)
@@ -116,18 +124,29 @@ namespace GxMcp.Worker.Services
                 md.AppendLine(source.Length > 3000 ? source.Substring(0, 3000) + "\n// ... (truncated for brevity)" : source);
                 md.AppendLine("```");
 
-                // Save
-                string docsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "docs");
-                if (!Directory.Exists(docsDir)) Directory.CreateDirectory(docsDir);
-                string filePath = Path.Combine(docsDir, $"{target.Replace(":", "_")}.md");
+                // Save outside the Worker installation. The configured/default root is scoped by
+                // the resolved KB identity, and the filename is a single validated component.
+                ArtifactPaths artifactPaths = _artifactPaths.Resolve();
+                Directory.CreateDirectory(artifactPaths.DocumentationDirectory);
+                string filePath = _artifactPaths.ResolveFile(ArtifactKind.Documentation, obj.Name.Replace(":", "_") + ".md");
                 File.WriteAllText(filePath, md.ToString(), Encoding.UTF8);
 
                 return Models.McpResponse.Ok(target: target, code: "WikiGenerated", result: new JObject
                 {
                     ["file"] = filePath,
+                    ["outputDirectory"] = artifactPaths.DocumentationDirectory,
+                    ["kbArtifactScope"] = artifactPaths.KbScopeDirectory,
                     ["dependencies"] = new JArray(references.Distinct().ToList()),
                     ["markdown"] = md.ToString()
                 });
+            }
+            catch (ArtifactPathException ex)
+            {
+                return Models.McpResponse.Err(
+                    code: "ArtifactPathRejected",
+                    message: ex.Message,
+                    hint: "Configure a writable artifact root and use an object name without path separators.",
+                    target: target);
             }
             catch (Exception ex)
             {

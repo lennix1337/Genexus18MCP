@@ -24,6 +24,17 @@ All are optional. Unset means the documented default applies.
 | `GXMCP_TERSE` | Set to `1` (or `true`) for terse responses: omits `next_legal_actions` and the `_meta.tokens` block from tool results, keeping only the payload plus error hints. Equivalent config: `Server.TerseResponses: true`. Env wins over config. | unset (full UX sugar emitted) |
 | `GXMCP_PROFILE` | Tool profile for `tools/list` surface (`core`, `authoring`, `devops`, `ui`, `db`, `all`). Lean profiles like `core` (11 tools) or `authoring` (29 tools) drastically reduce initial system prompt tokens vs the full 52-tool surface. | `all` |
 
+## Generated documentation artifacts (`genexus_doc`)
+
+`genexus_doc action=wiki` and `action=visualize` write durable files outside the installed Worker directory. The default root is `%LOCALAPPDATA%\GxMcp\Artifacts`; each open KB gets a stable `kb-<identity>` child with separate `docs` and `html` directories. This per-KB scope is applied even when a custom root is configured, so two KBs cannot silently share `Customer.md` or a graph file. Package upgrades can replace the Worker installation without moving this output.
+
+| Setting | Purpose | Default |
+|---------|---------|---------|
+| `Server.ArtifactOutputDirectory` | Optional config.json root for generated wiki/HTML files. The Worker adds the per-KB scope below it. | `%LOCALAPPDATA%\GxMcp\Artifacts` |
+| `GXMCP_ARTIFACT_OUTPUT_DIR` | Worker-only/environment override when the Worker is launched directly, or when `Server.ArtifactOutputDirectory` is omitted. An explicit Server setting wins when the Gateway starts a Worker. | unset |
+
+The effective path remains in every successful response: wiki returns `result.file` and `result.outputDirectory`; visualize returns `result.url` and `result.outputDirectory`. Visualizer/health read the active KB's canonical `IndexCacheService` snapshot. Generated filenames are validated as single path components; separators and traversal are rejected rather than sanitized.
+
 ## AI-completion proxy (`genexus_ai_complete`)
 
 | Variable | Purpose | Default |
