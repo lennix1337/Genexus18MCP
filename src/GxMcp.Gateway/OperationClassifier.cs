@@ -62,6 +62,7 @@ namespace GxMcp.Gateway
         // classified by a substring such as "edit" or "create".
         private static readonly HashSet<string> ModeDependentTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
+            "genexus_analyze", // mode/fix controls whether linter analysis mutates
             "genexus_sdk_probe",
             "genexus_run_object",
             "genexus_merge"

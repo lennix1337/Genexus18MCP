@@ -4,8 +4,8 @@
     "src/GxMcp.Gateway/tool_definitions.json",
     "src/GxMcp.Gateway/OperationClassifier.cs"
   ],
-  "toolCount": 50,
-  "actionCount": 231,
+  "toolCount": 54,
+  "actionCount": 247,
   "tools": [
     {
       "tool": "genexus_data_view",
@@ -232,11 +232,11 @@
       "actions": [
         {
           "action": null,
-          "kind": "readOnly",
-          "effects": "kb.read",
-          "execution": "worker",
-          "retry": "safe",
-          "cache": "semantic",
+          "kind": "modeDependent",
+          "effects": "unknown",
+          "execution": "unknown",
+          "retry": "never",
+          "cache": "never",
           "invalidation": []
         }
       ],
@@ -1204,6 +1204,45 @@
         },
         {
           "action": "close",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
+          "action": "select",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
+          "action": "set_session_default",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
+          "action": "set_persistent_default",
           "kind": "mutating",
           "effects": "kb.write",
           "execution": "worker",
@@ -2323,6 +2362,54 @@
           ]
         },
         {
+          "action": "export_kb_to_text",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
+          "action": "import_text_to_kb",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
+          "action": "validate_kb_text_files",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": []
+        },
+        {
+          "action": "delete_kb_objects",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
           "action": "export_unified",
           "kind": "mutating",
           "effects": "kb.write",
@@ -2979,6 +3066,143 @@
         },
         {
           "action": "add_grid_attribute",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
+          "action": "replace_web_component_with_user_action",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
+          "action": "settings_templates",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": []
+        },
+        {
+          "action": "settings_read",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": []
+        },
+        {
+          "action": "settings_edit",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        }
+      ],
+      "inputExamples": 0,
+      "outputSchema": false
+    },
+    {
+      "tool": "genexus_kb_diff",
+      "router": "SystemRouter",
+      "actions": [
+        {
+          "action": null,
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": []
+        }
+      ],
+      "inputExamples": 0,
+      "outputSchema": false
+    },
+    {
+      "tool": "genexus_kb_import",
+      "router": "SystemRouter",
+      "actions": [
+        {
+          "action": null,
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        }
+      ],
+      "inputExamples": 0,
+      "outputSchema": false
+    },
+    {
+      "tool": "genexus_sandbox",
+      "router": "OperationsRouter",
+      "actions": [
+        {
+          "action": "create",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        },
+        {
+          "action": "remove",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ]
+        }
+      ],
+      "inputExamples": 0,
+      "outputSchema": false
+    },
+    {
+      "tool": "genexus_worker_pool",
+      "router": "OperationsRouter",
+      "actions": [
+        {
+          "action": "warm_spares",
           "kind": "mutating",
           "effects": "kb.write",
           "execution": "worker",

@@ -23,8 +23,8 @@ class OperationContractInventoryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
         self.assertEqual(inventory["schemaVersion"], "genexus-operation-inventory/1")
-        self.assertEqual(inventory["toolCount"], 50)
-        self.assertGreaterEqual(inventory["actionCount"], 200)
+        self.assertEqual(inventory["toolCount"], 54)
+        self.assertGreaterEqual(inventory["actionCount"], 247)
         self.assertTrue(all(row["actions"] for row in inventory["tools"]))
         for tool in inventory["tools"]:
             for action in tool["actions"]:
