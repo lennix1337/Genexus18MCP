@@ -30,6 +30,10 @@
             "description": "mode=context: continuation cursor returned by a budgeted context page.",
             "type": "string"
           },
+          "dryRun": {
+            "description": "mode=linter: with fix=true, reject the unsupported combination before any SDK read; with fix=false, lint remains read-only.",
+            "type": "boolean"
+          },
           "fix": {
             "description": "mode=linter: apply automatic fixes to the KB.",
             "type": "boolean"

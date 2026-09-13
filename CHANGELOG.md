@@ -6,7 +6,7 @@
 
 - Keep the published MCP contract aligned with the Analyze, Search, and Object routers: expose `genexus_analyze`'s mode-dependent `fix`, `waitTimeoutMs`, and `top`, `genexus_query.exactMatch`, `genexus_edit` `mode=ops` `module`, the existing `genexus_inspect.verbose` router option, and the intentional `deep_context` Analyze alias; refresh discovery coverage ([#186](https://github.com/lennix1337/Genexus18MCP/issues/186)).
 - Drive worker-crash retry safety from `OperationClassifier`, so mutating Analyze linter fixes and the default SDK surface probe are never replayed, while read-only modes retain the existing single retry ([#186](https://github.com/lennix1337/Genexus18MCP/issues/186)).
-- Count variables referenced only by a WebForm as used without mutating the visual part during lint reads; explicitly reject the unsupported `mode=linter fix=true dryRun=true` combination while preserving the existing `symbol`/`snippet` fix resolution ([#187](https://github.com/lennix1337/Genexus18MCP/issues/187)).
+- Count variables referenced only by a WebForm as used without mutating the visual part during lint reads; publish the linter `dryRun` input and explicitly reject the unsupported `mode=linter fix=true dryRun=true` combination while preserving the existing `symbol`/`snippet` fix resolution ([#187](https://github.com/lennix1337/Genexus18MCP/issues/187)).
 - Isolate `genexus_doc` wiki and visualizer artifacts under a durable per-KB scope, keep the effective `file`/`url` path in successful responses, generate collision-free graph filenames, reject path components explicitly, and make Visualizer/Health consume the active KB's canonical `IndexCacheService` snapshot ([#188](https://github.com/lennix1337/Genexus18MCP/issues/188)).
 
 ### Changed
