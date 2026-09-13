@@ -31,6 +31,9 @@ $phase = if ($status.phase) { $status.phase } else { 'unknown' }
 $state = if ($status.state) { $status.state } else { 'unknown' }
 Write-Host ("version={0} tag={1} phase={2} state={3}" -f $status.version, $status.tag, $phase, $state)
 Write-Host ("updatedAtUtc={0} pid={1} exitCode={2}" -f $status.updatedAtUtc, $status.pid, $status.exitCode)
+if ($status.statusFile) { Write-Host "statusFile=$($status.statusFile)" }
+if ($status.stdoutLog) { Write-Host "stdoutLog=$($status.stdoutLog)" }
+if ($status.stderrLog) { Write-Host "stderrLog=$($status.stderrLog)" }
 if ($status.releaseUrl) { Write-Host "releaseUrl=$($status.releaseUrl)" }
 if ($status.workflowRunId) { Write-Host "workflowRunId=$($status.workflowRunId)" }
 if ($status.error) { Write-Host "error=$($status.error)" -ForegroundColor Red }

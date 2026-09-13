@@ -42,8 +42,9 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipTests,
     [switch]$AllowDirty,
-    # Issues explicitly completed by this release. Each issue receives the
-    # release URL before it is closed; omitted issues are never touched.
+    # Issues explicitly completed by this release. Each issue must carry
+    # fixed-pending-release, receives the release URL, and is then closed;
+    # omitted issues are never touched.
     [int[]]$CloseIssues,
     # Optional text file with one issue number per line (commas are accepted).
     # Its entries are combined with -CloseIssues and deduplicated.
@@ -62,7 +63,9 @@ param(
     # short command timeout (e.g. 30 s) would kill the foreground run mid-way,
     # leaving a half-bumped tree. With -Detach stdout/stderr go to
     # %TEMP%\gxmcp-release*.log; poll the log, don't wait on the call.
-    [switch]$Detach
+    [switch]$Detach,
+    [Parameter(DontShow = $true)][string]$DetachedStdoutLog,
+    [Parameter(DontShow = $true)][string]$DetachedStderrLog
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,6 +78,7 @@ $OutputEncoding = $utf8
 $root = $PSScriptRoot
 . (Join-Path $root 'scripts\gx-version-catalog.ps1')
 $gxCatalog = Get-GxVersionCatalog -Root $root
+. (Join-Path $root 'scripts/release-issues.ps1') -DefineOnly
 $statusToken = if ([string]::IsNullOrWhiteSpace($Version)) { 'pending' } else { $Version -replace '[^0-9A-Za-z.-]', '-' }
 if ([string]::IsNullOrWhiteSpace($StatusFile)) {
     $StatusFile = Join-Path $env:TEMP ("gxmcp-release-status-$statusToken-$PID.json")
@@ -88,6 +92,9 @@ $statusState = [ordered]@{
     state = 'running'
     pid = $PID
     updatedAtUtc = [DateTime]::UtcNow.ToString('o')
+    statusFile = $StatusFile
+    stdoutLog = $DetachedStdoutLog
+    stderrLog = $DetachedStderrLog
     releaseUrl = $null
     workflowRunId = $null
     exitCode = $null
@@ -149,6 +156,9 @@ function Get-ReleaseIssueSnapshot {
             $existing = Get-Content -LiteralPath $releaseIssuesSnapshotPath -Raw | ConvertFrom-Json
             if ($existing.schema -eq 'gxmcp-release-issues/1' -and
                 $existing.version -eq $Version -and $existing.tag -eq $tag) {
+                foreach ($record in @($existing.issues)) {
+                    Assert-ReleaseIssueAction -Action 'CloseAfterRelease' -IssueNumber ([int]$record.number) -IssueData $record
+                }
                 $script:releaseIssueSnapshotReused = $true
                 return @($existing.issues)
             }
@@ -167,6 +177,7 @@ function Get-ReleaseIssueSnapshot {
         if ($recordState -ne 'OPEN') {
             Fail "Issue #$issue is not open at release preparation time."
         }
+        Assert-ReleaseIssueAction -Action 'CloseAfterRelease' -IssueNumber $issue -IssueData $record
         $records.Add([ordered]@{
             number = [int]$record.number
             title = [string]$record.title
@@ -282,13 +293,9 @@ function Close-ReleaseIssues {
     if (-not $DryRun) {
         foreach ($issue in $issues) {
             if ($issue -le 0) { Fail "Issue number must be positive: $issue" }
-            $state = (gh issue view $issue --json state --jq '.state' 2>$null).Trim().ToLowerInvariant()
-            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($state)) {
-                Fail "Could not pre-validate issue #$issue before closing the release issue batch."
-            }
-            if ($state -ne 'open') {
-                Fail "Issue #$issue is '$state' during release issue pre-validation; no issue was closed."
-            }
+            $record = Get-ReleaseIssueData -IssueNumber $issue
+            try { Assert-ReleaseIssueAction -Action 'CloseAfterRelease' -IssueNumber $issue -IssueData $record }
+            catch { Fail $_.Exception.Message }
         }
         Ok "Pre-validated $($issues.Count) release issue(s); beginning closure batch."
         $statusState.issues.validated = @($issues)
@@ -305,8 +312,8 @@ function Close-ReleaseIssues {
         $statusState.issues.commented = @($statusState.issues.commented + $issue | Select-Object -Unique)
         Write-ReleaseStatus -Phase "issue-$issue-commented" -State 'running'
         Invoke-Cmd 'gh' @('issue', 'close', [string]$issue, '--reason', 'completed')
-        $verifiedState = (gh issue view $issue --json state --jq '.state' 2>$null).Trim().ToLowerInvariant()
-        if ($LASTEXITCODE -ne 0 -or $verifiedState -ne 'closed') {
+        $verifiedState = ([string](Get-ReleaseIssueData -IssueNumber $issue).state).Trim().ToLowerInvariant()
+        if ($verifiedState -ne 'closed') {
             Fail "Issue #$issue was not verified as closed after the release comment."
         }
         $statusState.issues.closed = @($statusState.issues.closed + $issue | Select-Object -Unique)
@@ -330,6 +337,7 @@ if ($Detach) {
     $stderrLog = "$logBase.err.log"
     $forwarded = Get-ForwardedArgs -BoundParams $PSBoundParameters -Exclude @('Detach')
     if ($forwarded -notcontains '-StatusFile') { $forwarded += @('-StatusFile', $StatusFile) }
+    $forwarded += @('-DetachedStdoutLog', $stdoutLog, '-DetachedStderrLog', $stderrLog)
     $argItems = @('-NoProfile', '-File', $PSCommandPath) + $forwarded
     $argString = (($argItems | ForEach-Object {
         if ($_ -match '\s') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
@@ -346,6 +354,8 @@ if ($Detach) {
     Write-Host "  watch:      Get-Content -Wait $stdoutLog"
     Write-Host "  status:     pwsh -NoProfile -File scripts/release-status.ps1 -Path $StatusFile"
     Write-Host "  The parent shell may close; the release keeps running."
+    $statusState.stdoutLog = $stdoutLog
+    $statusState.stderrLog = $stderrLog
     Write-ReleaseStatus -Phase 'detached' -State 'running' -ProcessId $child.Id
     exit 0
 }

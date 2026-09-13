@@ -6,6 +6,7 @@ function Write-TestStatus([string]$State) {
     [ordered]@{
         version = '3.0.1'; tag = 'v3.0.1'; phase = 'complete'; state = $State
         pid = 123; updatedAtUtc = [DateTime]::UtcNow.ToString('o')
+        statusFile = $path; stdoutLog = 'C:\temp\release.stdout.log'; stderrLog = 'C:\temp\release.stderr.log'
         releaseUrl = 'https://example.invalid/release'; workflowRunId = '42'; exitCode = if ($State -eq 'failed') { 1 } else { $null }
         error = if ($State -eq 'failed') { 'mock failure' } else { $null }
     } | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding utf8
@@ -13,7 +14,7 @@ function Write-TestStatus([string]$State) {
 try {
     Write-TestStatus 'succeeded'
     $output = @(& pwsh -NoProfile -File (Join-Path $root 'scripts\release-status.ps1') -Path $path)
-    if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch 'state=succeeded' -or ($output -join "`n") -notmatch 'workflowRunId=42') {
+    if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch 'state=succeeded' -or ($output -join "`n") -notmatch 'workflowRunId=42' -or ($output -join "`n") -notmatch 'stdoutLog=C:\\temp\\release.stdout.log' -or ($output -join "`n") -notmatch 'stderrLog=C:\\temp\\release.stderr.log') {
         throw 'Successful status was not rendered or returned with exit 0.'
     }
     Write-TestStatus 'failed'
@@ -23,8 +24,8 @@ try {
     & pwsh -NoProfile -File (Join-Path $root 'scripts\release-status.ps1') -Path $path -WaitSeconds 0 *> $null
     if ($LASTEXITCODE -ne 2) { throw 'Running status must return timeout/in-progress exit 2.' }
     $releaseSource = Get-Content (Join-Path $root 'release.ps1') -Raw
-    if ($releaseSource -notmatch '\[DRY-RUN\] would create GitHub release' -or $releaseSource -notmatch 'if \(\$DryRun\)') {
-        throw 'Dry-run release wording is still ambiguous.'
+    foreach ($marker in @('\[DRY-RUN\] would create GitHub release', 'if \(\$DryRun\)', 'DetachedStdoutLog', 'DetachedStderrLog', 'stdoutLog', 'stderrLog', 'StatusFile')) {
+        if ($releaseSource -notmatch $marker) { throw "Detached release handoff is missing: $marker" }
     }
     Write-Host 'release-status: success, failure, timeout and dry-run wording checks passed' -ForegroundColor Green
 }

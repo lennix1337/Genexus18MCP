@@ -51,6 +51,11 @@ class OperationContractInventoryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.build_inventory(temp_path, module.CLASSIFIER)
 
+    def test_mode_dependent_analyze_is_registered_in_inventory(self):
+        inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
+        analyze = next(row for row in inventory["tools"] if row["tool"] == "genexus_analyze")
+        self.assertEqual(analyze["actions"][0]["kind"], "modeDependent")
+
 
 if __name__ == "__main__":
     unittest.main()

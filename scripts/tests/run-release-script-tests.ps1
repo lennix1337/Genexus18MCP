@@ -8,6 +8,7 @@ $tests = @(
     'test-live-fixture-manifest.ps1',
     'test-live.test.ps1',
     'test-release-entrypoint.ps1',
+    'test-release-issues.ps1',
     'test-release-orchestration.ps1',
     'test-release-preflight.ps1',
     'test-pr-preflight-ripwire.ps1',

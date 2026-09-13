@@ -33,7 +33,16 @@ built on Windows with that supported GeneXus installation.
 
 At release time, all open issues labeled `fixed-pending-release` are collected
 automatically into `release-issues.txt`, included in the changelog, and closed
-after publication. To add explicit issues as well, pass them directly:
+after publication. Marking an issue for that release is a separate operation
+and never closes it:
+
+```powershell
+pwsh -NoProfile -File ./scripts/release-issues.ps1 `
+  -Action MarkFixedPendingRelease -Issue 184,185
+```
+
+The helper reads the issue back and verifies that it remains open. To add
+already-labeled explicit issues as well, pass them directly:
 
 ```powershell
 ./release.ps1 -Version <X.Y.Z> -CloseIssues 146,148
@@ -47,11 +56,12 @@ accepted) and pass the file alongside any inline numbers:
 ```
 
 The release script deduplicates the combined list and adds a `Tracked issues`
-section with links to the promoted changelog entry. In `-DryRun` it reports the
-planned links without editing the changelog. Issues are still commented and
-closed only after GitHub confirms that the release and its assets were created.
-Use `-SkipLabeledIssues` only when a release must exclude the automatic label
-collection.
+section with links to the promoted changelog entry. Every explicit issue must
+be open and carry `fixed-pending-release`; the release refuses to close an
+unlabeled issue. In `-DryRun` it reports the planned links without editing the
+changelog. Issues are still commented and closed only after GitHub confirms
+that the release and its assets were created. Use `-SkipLabeledIssues` only
+when a release must exclude the automatic label collection.
 
 Before any issue mutation, the release performs a read-only pre-validation of
 the complete batch. It writes `release-issues.json` with the issue titles and
@@ -82,14 +92,19 @@ pwsh -NoProfile -File .\scripts\release-preflight.ps1 -GxPath $env:GX_PATH `
 
 The summary uses schema `gxmcp-release-preflight/1` and records each phase's
 `name`, `command`, `status`, `exitCode`, `durationSeconds`, timestamps, and an
-optional `reason`. Live KB validation is skipped with an explicit reason when
-no verified fixture is configured; set `GXMCP_REQUIRE_LIVE_BUILD_ALL=1` to make
-the live Build All gate mandatory.
+optional `reason`. Contract, inventory, and script checks run before the
+expensive build/test phases. On a local Windows SDK machine, the preflight
+automatically selects `C:/KBs/KBTeste` for GeneXus 18 or `C:/KBs/KBTeste17`
+for GeneXus 17 when `GXMCP_TEST_KB` is unset. `GXMCP_TEST_FIXTURE` is optional
+for normal live validation and is only needed for attested benchmark
+populations. Set `GXMCP_REQUIRE_LIVE_BUILD_ALL=1` to make the live Build All
+gate mandatory.
 
 Release progress is written atomically to a status file under `%TEMP%` by
-default. Read it with `scripts/release-status.ps1`; terminal states are
-`succeeded` and `failed`, while exit code 2 means the run is still in progress
-or the requested wait elapsed.
+default. Detached runs record that status path plus their stdout/stderr log
+paths in the same JSON handoff. Read it with `scripts/release-status.ps1`;
+terminal states are `succeeded` and `failed`, while exit code 2 means the run is
+still in progress or the requested wait elapsed.
 
 The release script synchronizes `server.json`, `config.sample.json`,
 `README.md`, `AGENTS.md`, and `docs/generated/supported-versions.md` from the
@@ -167,15 +182,19 @@ evidence of isolation:
 To validate every SDK major from the catalog against the same built
 Gateway/Worker artifact, use the catalog-driven matrix. It builds the artifact
 once with the catalog primary SDK unless `-SkipBuild` is supplied, then runs the
-same fixture gate once per selected major:
+same explicitly selected fixture gate once per selected major:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\test-live-matrix.ps1 `
   -KbPath $env:GXMCP_TEST_KB `
-  -FixtureManifest $env:GXMCP_TEST_FIXTURE `
   -RequireBuildAll -RunBenchmark -Iterations 100 `
   -SummaryPath "$env:TEMP\gxmcp-live-matrix.json"
 ```
+
+Add `-FixtureManifest $env:GXMCP_TEST_FIXTURE` only when comparing an attested
+The matrix requires an explicit `-KbPath`; when invoked through
+`release-preflight.ps1`, `GXMCP_TEST_KB` supplies that path. The single-major
+release preflight is the path that autodetects `C:/KBs/KBTeste*`.
 
 Use `-Majors 17,18` to select a subset and `-GxPathMap
 '17=C:\Program Files (x86)\GeneXus\GeneXus17Trial;18=C:\Program Files (x86)\GeneXus\GeneXus18'`

@@ -17,21 +17,79 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'scripts\gx-version-catalog.ps1')
 $gxCatalog = Get-GxVersionCatalog -Root $root
+
+function Get-LocalLiveKbPath {
+    param(
+        [Parameter(Mandatory = $true)][object]$Catalog,
+        [string]$GxPath,
+        [string]$KbRoot = 'C:/KBs'
+    )
+
+    $major = [string]$Catalog.primaryMajor
+    if (-not [string]::IsNullOrWhiteSpace($GxPath)) {
+        try {
+            $normalizedGxPath = ([IO.Path]::GetFullPath($GxPath)).TrimEnd('\', '/')
+            foreach ($entry in @($Catalog.supportedMajors)) {
+                if ([string]::IsNullOrWhiteSpace([string]$entry.defaultInstallPath)) { continue }
+                $normalizedDefault = ([IO.Path]::GetFullPath([string]$entry.defaultInstallPath)).TrimEnd('\', '/')
+                if ([string]::Equals($normalizedGxPath, $normalizedDefault, [StringComparison]::OrdinalIgnoreCase)) {
+                    $major = [string]$entry.major
+                    break
+                }
+            }
+        } catch { }
+        $leaf = Split-Path -Leaf $GxPath
+        if ($leaf -match '^GeneXus(?<major>\d+)') { $major = $Matches.major }
+    }
+
+    $fixtureName = switch ($major) {
+        '17' { 'KBTeste17'; break }
+        '18' { 'KBTeste'; break }
+        default { "KBTeste$major"; break }
+    }
+    $candidate = Join-Path $KbRoot $fixtureName
+    if (-not (Test-Path -LiteralPath $candidate -PathType Container)) { return $null }
+    [pscustomobject]@{
+        path = (Resolve-Path -LiteralPath $candidate).Path
+        major = $major
+        source = 'auto-local'
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = (Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
 }
 if ([string]::IsNullOrWhiteSpace($GxPath)) {
     $GxPath = if (-not [string]::IsNullOrWhiteSpace($env:GX_PATH)) { $env:GX_PATH } else { Get-GxPrimaryInstallPath -Catalog $gxCatalog }
 }
-if ([string]::IsNullOrWhiteSpace($LiveKbPath)) { $LiveKbPath = $env:GXMCP_TEST_KB }
-if ([string]::IsNullOrWhiteSpace($LiveFixtureManifest)) { $LiveFixtureManifest = $env:GXMCP_TEST_FIXTURE }
-if (@($LiveMajors).Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:GXMCP_LIVE_MAJORS)) {
+if (@($LiveMajors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:GXMCP_LIVE_MAJORS)) {
     $LiveMajors = @($env:GXMCP_LIVE_MAJORS -split '[,;\s]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
-if (@($LiveGxPathMap).Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:GXMCP_LIVE_GX_PATH_MAP)) {
+if (@($LiveGxPathMap | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:GXMCP_LIVE_GX_PATH_MAP)) {
     $LiveGxPathMap = @($env:GXMCP_LIVE_GX_PATH_MAP -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 if (-not $RequireBuildAll -and $env:GXMCP_REQUIRE_LIVE_BUILD_ALL -eq '1') { $RequireBuildAll = $true }
+
+$liveKbSource = if ([string]::IsNullOrWhiteSpace($LiveKbPath)) { 'none' } else { 'explicit' }
+if ([string]::IsNullOrWhiteSpace($LiveKbPath)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:GXMCP_TEST_KB)) {
+        $LiveKbPath = $env:GXMCP_TEST_KB
+        $liveKbSource = 'environment'
+    } elseif (@($LiveMajors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0 -and @($LiveGxPathMap | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0) {
+        $localFixture = Get-LocalLiveKbPath -Catalog $gxCatalog -GxPath $GxPath
+        if ($null -ne $localFixture) {
+            $LiveKbPath = [string]$localFixture.path
+            $liveKbSource = [string]$localFixture.source
+        }
+    } else {
+        $liveKbSource = 'matrix-explicit-required'
+    }
+}
+$liveFixtureSource = if ([string]::IsNullOrWhiteSpace($LiveFixtureManifest)) { 'none' } else { 'explicit' }
+if ([string]::IsNullOrWhiteSpace($LiveFixtureManifest) -and -not [string]::IsNullOrWhiteSpace($env:GXMCP_TEST_FIXTURE)) {
+    $LiveFixtureManifest = $env:GXMCP_TEST_FIXTURE
+    $liveFixtureSource = 'environment'
+}
 if ([string]::IsNullOrWhiteSpace($SummaryPath)) {
     $SummaryPath = Join-Path $env:TEMP ('gxmcp-release-preflight-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json')
 }
@@ -43,7 +101,11 @@ $summary = [ordered]@{
     endedAtUtc = $null
     root = $root
     gxPath = $GxPath
-    liveMode = if (@($LiveMajors).Count -gt 0 -or @($LiveGxPathMap).Count -gt 0) { 'matrix' } else { 'single' }
+    liveKbPath = $LiveKbPath
+    liveKbSource = $liveKbSource
+    liveFixtureManifest = $LiveFixtureManifest
+    liveFixtureSource = $liveFixtureSource
+    liveMode = if (@($LiveMajors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or @($LiveGxPathMap | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) { 'matrix' } else { 'single' }
     version = $Version
     dryRun = [bool]$DryRun
     phases = New-Object System.Collections.Generic.List[object]
@@ -136,19 +198,28 @@ Write-Host "Release preflight summary: $SummaryPath" -ForegroundColor DarkGray
 $env:GX_PATH = $GxPath
 
 Invoke-PreflightPhase -Name 'release metadata parity' -Executable 'python' -Arguments @((Join-Path $root 'scripts\verify-release-metadata.py'), '--root', $root, '--version', $Version) | Out-Null
-Invoke-PreflightPhase -Name 'solution build and tests' -Executable 'dotnet' -Arguments @('test', (Join-Path $root 'Genexus18MCP.sln'), '-c', 'Release', '-v:minimal') | Out-Null
-Invoke-PreflightPhase -Name 'CLI tests' -Executable 'npm' -Arguments @('test') | Out-Null
-Invoke-PreflightPhase -Name 'CLI lint' -Executable 'npm' -Arguments @('run', 'lint') | Out-Null
-Invoke-PreflightPhase -Name 'Nexus IDE checks' -Executable 'npm' -Arguments @('--prefix', (Join-Path $root 'src\nexus-ide'), 'run', 'check') | Out-Null
 Invoke-PreflightPhase -Name 'tool contract validation' -Executable 'python' -Arguments @((Join-Path $root 'scripts\validate-tool-contracts.py')) | Out-Null
 Invoke-PreflightPhase -Name 'operation contract inventory' -Executable 'python' -Arguments @((Join-Path $root 'scripts\generate-operation-contract-inventory.py'), '--check') | Out-Null
 Invoke-PreflightPhase -Name 'v3 plan readiness' -Executable 'python' -Arguments @((Join-Path $root 'scripts\validate-v3-plan.py'), '--require-ready') | Out-Null
 Invoke-PreflightPhase -Name 'Python script tests' -Executable 'python' -Arguments @('-m', 'unittest', 'discover', '-s', (Join-Path $root 'scripts\tests'), '-v') | Out-Null
 Invoke-PreflightPhase -Name 'PowerShell script tests' -Executable 'pwsh' -Arguments @('-NoProfile', '-File', (Join-Path $root 'scripts\tests\run-release-script-tests.ps1')) | Out-Null
+Invoke-PreflightPhase -Name 'CLI tests' -Executable 'npm' -Arguments @('test') | Out-Null
+Invoke-PreflightPhase -Name 'CLI lint' -Executable 'npm' -Arguments @('run', 'lint') | Out-Null
+Invoke-PreflightPhase -Name 'Nexus IDE checks' -Executable 'npm' -Arguments @('--prefix', (Join-Path $root 'src\nexus-ide'), 'run', 'check') | Out-Null
+Invoke-PreflightPhase -Name 'solution build and tests' -Executable 'dotnet' -Arguments @('test', (Join-Path $root 'Genexus18MCP.sln'), '-c', 'Release', '-v:minimal') | Out-Null
 Invoke-PreflightPhase -Name 'Release warning baseline' -Executable 'pwsh' -Arguments @('-NoProfile', '-File', (Join-Path $root 'scripts\check-build-warning-baseline.ps1'), '-BaselineFile', (Join-Path $root 'docs\build_warning_baseline.json'), '-GxPath', $GxPath) | Out-Null
 
 $liveRequested = -not $SkipLive
-$liveMissing = [string]::IsNullOrWhiteSpace($LiveKbPath) -or [string]::IsNullOrWhiteSpace($LiveFixtureManifest)
+$missingLiveReasons = New-Object System.Collections.Generic.List[string]
+if ([string]::IsNullOrWhiteSpace($LiveKbPath)) {
+    [void]$missingLiveReasons.Add('No explicit, environment, or local C:/KBs live KB was found.')
+} elseif (-not (Test-Path -LiteralPath $LiveKbPath -PathType Container)) {
+    [void]$missingLiveReasons.Add("Live KB directory was not found: $LiveKbPath")
+}
+if (-not [string]::IsNullOrWhiteSpace($LiveFixtureManifest) -and -not (Test-Path -LiteralPath $LiveFixtureManifest -PathType Leaf)) {
+    [void]$missingLiveReasons.Add("Fixture manifest was not found: $LiveFixtureManifest")
+}
+$liveMissing = $missingLiveReasons.Count -gt 0
 if (-not $liveRequested) {
     if ($RequireLive -or $RequireBuildAll) {
         Invoke-PreflightPhase -Name 'live KB gate' -Executable 'pwsh' -Arguments @() -SkipReason 'live gate disabled while it is required' | Out-Null
@@ -159,7 +230,7 @@ if (-not $liveRequested) {
     }
     Invoke-PreflightPhase -Name 'live KB gate' -Executable 'pwsh' -Arguments @() -SkipReason 'disabled by -SkipLive' | Out-Null
 } elseif ($liveMissing) {
-    $reason = 'GXMCP_TEST_KB and GXMCP_TEST_FIXTURE are required for live validation.'
+    $reason = $missingLiveReasons -join ' '
     if ($RequireLive -or $RequireBuildAll) {
         Invoke-PreflightPhase -Name 'live KB gate' -Executable 'pwsh' -Arguments @() -SkipReason $reason | Out-Null
         $summary.status = 'failed'
@@ -169,25 +240,26 @@ if (-not $liveRequested) {
     }
     Invoke-PreflightPhase -Name 'live KB gate' -Executable 'pwsh' -Arguments @() -SkipReason $reason | Out-Null
 } else {
-    $matrixMode = @($LiveMajors).Count -gt 0 -or @($LiveGxPathMap).Count -gt 0
+    $matrixMode = @($LiveMajors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or @($LiveGxPathMap | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0
     $liveArgs = if ($matrixMode) {
         @(
-            '-NoProfile', '-File', (Join-Path $root 'scripts\test-live-matrix.ps1'),
+            '-NoProfile', '-File', (Join-Path $root 'scripts/test-live-matrix.ps1'),
             '-KbPath', $LiveKbPath,
-            '-FixtureManifest', $LiveFixtureManifest,
             '-SkipBuild',
             '-SummaryPath', "$SummaryPath.matrix.json"
         )
     } else {
         @(
-            '-NoProfile', '-File', (Join-Path $root 'scripts\test-live.ps1'),
+            '-NoProfile', '-File', (Join-Path $root 'scripts/test-live.ps1'),
             '-KbPath', $LiveKbPath,
-            '-FixtureManifest', $LiveFixtureManifest,
             '-GxPath', $GxPath,
             '-SkipBuild'
         )
     }
-    if ($matrixMode -and @($LiveMajors).Count -gt 0) {
+    if (-not [string]::IsNullOrWhiteSpace($LiveFixtureManifest)) {
+        $liveArgs += @('-FixtureManifest', $LiveFixtureManifest)
+    }
+    if ($matrixMode -and @($LiveMajors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
         $liveArgs += '-Majors'
         $liveArgs += @($LiveMajors)
     }
@@ -198,7 +270,7 @@ if (-not $liveRequested) {
             $LiveGxPathMap = @($LiveGxPathMap) + ("{0}={1}" -f $primaryMajor, $GxPath)
         }
     }
-    if ($matrixMode -and @($LiveGxPathMap).Count -gt 0) {
+    if ($matrixMode -and @($LiveGxPathMap | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
         $liveArgs += '-GxPathMap'
         $liveArgs += @($LiveGxPathMap)
     }

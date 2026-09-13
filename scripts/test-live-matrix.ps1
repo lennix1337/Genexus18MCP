@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$KbPath,
-    [Parameter(Mandatory = $true)][string]$FixtureManifest,
+    [string]$FixtureManifest,
     [string[]]$Majors,
     [string[]]$GxPathMap,
     [switch]$SkipBuild,
@@ -197,12 +197,14 @@ try {
         $testArgs = @(
             '-NoProfile', '-File', (Join-Path $root 'scripts\test-live.ps1'),
             '-KbPath', $KbPath,
-            '-FixtureManifest', $FixtureManifest,
             '-GxPath', $candidate.path,
             '-SkipBuild',
             '-RpcTimeoutSeconds', $RpcTimeoutSeconds,
             '-TestFilter', $TestFilter
         )
+        if (-not [string]::IsNullOrWhiteSpace($FixtureManifest)) {
+            $testArgs += @('-FixtureManifest', $FixtureManifest)
+        }
         if ($GatewayOnly) { $testArgs += '-GatewayOnly' }
         if ($RequireBuildAll) { $testArgs += '-RequireBuildAll' }
         if ($RunBenchmark) {

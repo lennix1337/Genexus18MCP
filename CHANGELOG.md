@@ -10,6 +10,14 @@
 - Keep Worker dirty tracking and per-target write timestamps independent for uncertain `WriteNotPersisted` outcomes, including partial persistence, rollback failure, and empty-persist guards; record confirmed batch variable removals ([#184](https://github.com/lennix1337/Genexus18MCP/issues/184), [#185](https://github.com/lennix1337/Genexus18MCP/issues/185)).
 - Classify `genexus_analyze mode=linter fix=true` as mutating, accept legacy `GX008` snippets when resolving variables to remove, and invalidate semantic-cache entries without changing read-only linter analysis ([#185](https://github.com/lennix1337/Genexus18MCP/issues/185)).
 
+### Changed
+
+- Run release contract, inventory, and script checks before the expensive build/test phases, and automatically select the compatible local live KB when one is available.
+
+### Internal
+
+- Separate marking an issue `fixed-pending-release` from closing it after publication, require the label before release closure, and include detached release status and log paths in the machine-readable handoff.
+
 ## v3.4.0 - 2026-09-12
 
 

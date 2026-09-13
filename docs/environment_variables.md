@@ -58,8 +58,8 @@ Precedence is: tool `auth` argument > these env vars > built-in default.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `GXMCP_TEST_KB` | Absolute path to the verified disposable synthetic KB used by `scripts/test-live.ps1` and the release preflight. | unset (live gate skipped) |
-| `GXMCP_TEST_FIXTURE` | Path to the fixture attestation JSON matching `GXMCP_TEST_KB`; it must prove synthetic data and database isolation. | unset (live gate skipped) |
+| `GXMCP_TEST_KB` | Absolute path to the disposable KB used by `scripts/test-live.ps1` and the release preflight. `release-preflight.ps1` auto-selects `C:/KBs/KBTeste` for GeneXus 18 or `C:/KBs/KBTeste17` for GeneXus 17 when this is unset. | unset (local compatible fixture autodetected; live gate skipped when none exists) |
+| `GXMCP_TEST_FIXTURE` | Optional fixture attestation JSON matching `GXMCP_TEST_KB`; required for benchmark population comparisons, not normal live validation. | unset |
 | `GXMCP_LIVE_MAJORS` | Comma-, semicolon-, or whitespace-separated catalog majors for the live matrix used by `scripts/release-preflight.ps1` and CI. When set, the matrix validates only these majors; the standalone matrix command validates every catalog major when no `-Majors` flag is supplied. | unset (single-major preflight; all catalog majors for standalone matrix) |
 | `GXMCP_LIVE_GX_PATH_MAP` | Semicolon-separated `major=absolute-path` overrides for SDK installations used by the live matrix, for example `17=C:\Program Files (x86)\GeneXus\GeneXus17Trial;18=C:\Program Files (x86)\GeneXus\GeneXus18`. | unset (catalog default paths) |
 | `GXMCP_TEAMDEV_PENDING_NAME` | Name of a pre-seeded object with an IDE-created Team Development pending change for the opt-in Gateway regression test. | unset (IDE-origin regression skipped) |

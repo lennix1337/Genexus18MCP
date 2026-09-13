@@ -55,7 +55,7 @@ try {
     $statusStartIndex = $releaseSource.IndexOf("Write-ReleaseStatus -Phase 'starting'", [StringComparison]::Ordinal)
     $tagInitIndex = $releaseSource.IndexOf('$tag = $null', [StringComparison]::Ordinal)
     if ($statusStartIndex -lt 0 -or $tagInitIndex -lt 0 -or $tagInitIndex -gt $statusStartIndex) { throw 'Release status must initialize the tag before the first status write.' }
-    foreach ($marker in @('CloseIssuesFile', 'Get-ReleaseIssueNumbers', 'Get-LabeledReleaseIssues', 'release-issues.txt', 'release-issues.json', 'gh api --paginate', 'repos/{owner}/{repo}/issues/$issue', 'per_page=100', 'OutputEncoding', 'Console]::OutputEncoding', 'ReleaseMilestone', 'Tracked issues', 'deduplicated', 'SkipLabeledIssues', 'hasTrackedIssuesInUnreleased', 'pre-validate issue', 'issues = [ordered]', 'ToUpperInvariant()')) {
+    foreach ($marker in @('CloseIssuesFile', 'Get-ReleaseIssueNumbers', 'Get-LabeledReleaseIssues', 'release-issues.txt', 'release-issues.json', 'gh api --paginate', 'repos/{owner}/{repo}/issues/$issue', 'per_page=100', 'OutputEncoding', 'Console]::OutputEncoding', 'ReleaseMilestone', 'Tracked issues', 'deduplicated', 'SkipLabeledIssues', 'hasTrackedIssuesInUnreleased', 'release-issues.ps1', 'Get-ReleaseIssueData', 'Assert-ReleaseIssueAction', 'CloseAfterRelease', 'issues = [ordered]', 'ToUpperInvariant()')) {
         if ($releaseSource -notmatch [regex]::Escape($marker)) { throw "Release issue batch support is missing: $marker" }
     }
     Write-Host 'release-orchestration: exact provenance, dirty rejection and checksum asset checks passed' -ForegroundColor Green

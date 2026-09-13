@@ -55,7 +55,6 @@ $runtimeSummary = Join-Path $env:TEMP ('gxmcp-live-matrix-contract-' + [guid]::N
 try {
     & pwsh -NoProfile -File $scriptPath `
         -KbPath 'C:\missing-gxmcp-matrix-kb' `
-        -FixtureManifest 'C:\missing-gxmcp-matrix-fixture.json' `
         -Majors '17' `
         -GxPathMap '17=C:\missing-gxmcp-matrix-sdk' `
         -SkipBuild -SummaryPath $runtimeSummary *> $null
