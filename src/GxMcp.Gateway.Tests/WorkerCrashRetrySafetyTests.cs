@@ -13,7 +13,6 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_analyze")]
         [InlineData("genexus_list_objects")]
         [InlineData("genexus_search_source")]
-        [InlineData("genexus_navigation")]
         [InlineData("genexus_whoami")]
         [InlineData("genexus_doctor")]
         public void PureReadTools_AreRetrySafe(string toolName)
@@ -61,6 +60,40 @@ namespace GxMcp.Gateway.Tests
         public void MutatingTools_AreNeverRetrySafe(string toolName)
         {
             Assert.False(Program.IsRetrySafeOperation(toolName, new JObject()));
+        }
+
+        [Fact]
+        public void ModeDependentMutationsFollowOperationClassifierForRetry()
+        {
+            Assert.True(Program.IsRetrySafeOperation("genexus_analyze", new JObject
+            {
+                ["mode"] = "linter",
+                ["fix"] = false
+            }));
+            Assert.False(Program.IsRetrySafeOperation("genexus_analyze", new JObject
+            {
+                ["mode"] = "linter",
+                ["fix"] = true
+            }));
+
+            Assert.True(Program.IsRetrySafeOperation("genexus_sdk_probe", new JObject
+            {
+                ["mode"] = "capabilities"
+            }));
+            Assert.False(Program.IsRetrySafeOperation("genexus_sdk_probe", new JObject
+            {
+                ["mode"] = "surface"
+            }));
+        }
+
+        [Fact]
+        public void ActionMutationsFollowOperationClassifierForRetry()
+        {
+            var args = new JObject { ["action"] = "view" };
+
+            Assert.Equal(OperationClassifier.OperationKind.Mutating,
+                OperationClassifier.Describe("genexus_navigation", args).Kind);
+            Assert.False(Program.IsRetrySafeOperation("genexus_navigation", args));
         }
 
         [Fact]

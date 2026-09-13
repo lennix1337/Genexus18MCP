@@ -31,7 +31,8 @@ namespace GxMcp.Gateway
                 "- `genexus_read`, `genexus_edit`, `genexus_list_objects`, and `genexus_lifecycle` are index-independent.\n\n" +
                 "## Defaults\n" +
                 "- `axiCompact: true` — pass `false` to get the full payload.\n" +
-                "- `limit: 50`, `offset: 0`.\n\n" +
+                "- `limit: 50`, `offset: 0`.\n" +
+                "- `exactMatch: true` restricts results to the exact object name after the query is normalized.\n\n" +
                 "## Examples\n" +
                 "- `{ query: 'type:Procedure', limit: 20 }`\n" +
                 "- `{ query: 'usedby:InvoiceProc' }`\n" +
@@ -74,6 +75,7 @@ namespace GxMcp.Gateway
                 "## Required\n" +
                 "- Either `name` (single object) **or** `targets` (array) — never both.\n" +
                 "- `mode`: `full` (replace whole part) or `patch` (Replace/Insert_After/Append over a context anchor).\n" +
+                "- `mode: 'ops'` applies semantic operations; for modular objects pass `module` to select the Transaction module.\n" +
                 "- `dryRun: true` first for either mode. A preview is synchronous, never calls Save, and never starts a lifecycle action.\n\n" +
                 "## Output\n" +
                 "- Returns `post_state.diff` (unified diff) by default.\n" +
@@ -118,7 +120,10 @@ namespace GxMcp.Gateway
                 "# genexus_analyze\n\n" +
                 "Semantic analysis across one or more objects.\n\n" +
                 "## Modes\n" +
+                "- `context` (alias `deep_context`) — 360° task context in one call.\n" +
                 "- `impact` — callers, callees, blast radius, risk level, affected entry points.\n" +
+                "- `linter` — static analysis; pass `fix: true` only when the automatic fix should be applied to the KB.\n" +
+                "- `code_metrics` — KB-wide source metrics; `top` limits the returned results (default 25).\n" +
                 "- `dependencies` — typed dependency graph.\n" +
                 "- `complexity` — line/cyclomatic counts.\n" +
                 "- `naming` — naming-convention audit.\n" +
@@ -129,7 +134,7 @@ namespace GxMcp.Gateway
                 "- Single-object metadata: `genexus_inspect`.\n" +
                 "- Cross-object reasoning: `genexus_analyze`.\n\n" +
                 "## Notes\n" +
-                "- `impact` waits up to 30s for the index to be ready unless `waitForIndex: false`.\n" +
+                "- `impact` waits up to 30s for the index to be ready unless `waitForIndex: false`; set `waitTimeoutMs` to override that wait bound.\n" +
                 "- Returns `callersTruncated: true` and `_meta.partial` when the graph is incomplete.\n\n" +
                 "## Examples\n" +
                 "- `{ mode: 'impact', target: 'InvoiceProc' }`\n" +

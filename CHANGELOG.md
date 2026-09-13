@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- Keep the published MCP contract aligned with the Analyze, Search, and Object routers: expose `genexus_analyze`'s mode-dependent `fix`, `waitTimeoutMs`, and `top`, `genexus_query.exactMatch`, `genexus_edit` `mode=ops` `module`, the existing `genexus_inspect.verbose` router option, and the intentional `deep_context` Analyze alias; refresh discovery coverage ([#186](https://github.com/lennix1337/Genexus18MCP/issues/186)).
+- Drive worker-crash retry safety from `OperationClassifier`, so mutating Analyze linter fixes and the default SDK surface probe are never replayed, while read-only modes retain the existing single retry ([#186](https://github.com/lennix1337/Genexus18MCP/issues/186)).
+
+### Changed
+
+- Add a fail-closed, keyed allowlist gate for undeclared parameters consumed by the Analyze, Search, and Object routers. Freeze the existing 75 top-level property-description gaps, reject new gaps, and require descriptions for every top-level `action` property. The schema remains under the existing 28,250-token budget; no bulk description cleanup is included ([#186](https://github.com/lennix1337/Genexus18MCP/issues/186)).
+
+### Internal
+
+- Contract premise for #186: `deep_context` is retained and published because the current router and plan intentionally define it as a compatibility alias of `context`; `cancelToken` remains an allowlisted Gateway-injected infrastructure field rather than a caller-facing schema property. Nested description debt remains outside this incremental gate.
+
 ## v3.4.1 - 2026-09-12
 
 

@@ -5,11 +5,11 @@
     {
       "annotations": {
         "destructiveHint": false,
-        "idempotentHint": true,
+        "idempotentHint": false,
         "openWorldHint": false,
-        "readOnlyHint": true
+        "readOnlyHint": false
       },
-      "description": "Use this for cross-object semantic analysis. mode=context returns 360° task context in 1 call (object + called procedures' parm signatures + referenced tables' schemas/PKs + SDTs + callers). Other modes: impact, callers, hierarchy, navigation, linter, summary, explain. mode=explain is compatibility-only: it preserves the legacy response envelope and returns NotImplemented; use mode=summary for a concise overview, mode=context for 360° task context, or genexus_read for source. Requires Ready index for impact/callers.",
+      "description": "Use this for cross-object semantic analysis. mode=context (alias deep_context) returns 360° task context in 1 call (object + called procedures' parm signatures + referenced tables' schemas/PKs + SDTs + callers). Other modes: impact, callers, hierarchy, navigation, linter, summary, explain. mode=explain is compatibility-only: it preserves the legacy response envelope and returns NotImplemented; use mode=summary for a concise overview, mode=context for 360° task context, or genexus_read for source. Requires Ready index for impact/callers.",
       "inputSchema": {
         "examples": [
           {
@@ -30,6 +30,10 @@
             "description": "mode=context: continuation cursor returned by a budgeted context page.",
             "type": "string"
           },
+          "fix": {
+            "description": "mode=linter: apply automatic fixes to the KB.",
+            "type": "boolean"
+          },
           "format": {
             "description": "mode=dependency_heatmap: ascii adds rendered bar chart.",
             "enum": [
@@ -49,6 +53,7 @@
           "mode": {
             "enum": [
               "context",
+              "deep_context",
               "linter",
               "navigation",
               "hierarchy",
@@ -71,10 +76,18 @@
           "name": {
             "type": "string"
           },
+          "top": {
+            "description": "mode=code_metrics: maximum results (default 25).",
+            "type": "integer"
+          },
           "waitForIndex": {
             "default": true,
             "description": "mode=impact: block up to 30s for Ready index (default true).",
             "type": "boolean"
+          },
+          "waitTimeoutMs": {
+            "description": "mode=impact: maximum index wait in milliseconds.",
+            "type": "integer"
           }
         },
         "required": [
@@ -1505,6 +1518,10 @@
             ],
             "type": "string"
           },
+          "module": {
+            "description": "mode=ops: Transaction module for modular objects.",
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -2243,6 +2260,10 @@
           },
           "type": {
             "type": "string"
+          },
+          "verbose": {
+            "description": "Include verbose diagnostic fields.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -3491,6 +3512,10 @@
           "domainFilter": {
             "type": "string"
           },
+          "exactMatch": {
+            "description": "Require an exact object-name match.",
+            "type": "boolean"
+          },
           "inline_read_top": {
             "description": "0-3. Inline reads of top N.",
             "type": "integer"
@@ -3841,6 +3866,7 @@
         ],
         "properties": {
           "action": {
+            "description": "Sandbox operation to create or remove a KB directory.",
             "enum": [
               "create",
               "remove"
@@ -3868,9 +3894,9 @@
     {
       "annotations": {
         "destructiveHint": false,
-        "idempotentHint": true,
+        "idempotentHint": false,
         "openWorldHint": false,
-        "readOnlyHint": true
+        "readOnlyHint": false
       },
       "description": "Read the GeneXus SDK surface. mode=surface dumps types/methods/props to docs/sdk-probe/; mode=capabilities returns an in-memory capability matrix with honest signature-probe status.",
       "inputSchema": {
@@ -4785,6 +4811,7 @@
         ],
         "properties": {
           "action": {
+            "description": "Worker-pool operation to warm spare workers.",
             "enum": [
               "warm_spares"
             ],

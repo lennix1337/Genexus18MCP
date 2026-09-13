@@ -179,6 +179,23 @@ namespace GxMcp.Gateway.Tests
             }
         }
 
+        [Theory]
+        [InlineData("genexus_analyze", "{mode:'linter',fix:true}")]
+        [InlineData("genexus_sdk_probe", "{mode:'surface'}")]
+        public void SchemaAnnotationsDoNotClaimReadOnlyForMutatingModes(string toolName, string json)
+        {
+            var tool = LoadToolDefinitions().Single(item =>
+                string.Equals(item["name"]?.ToString(), toolName, StringComparison.OrdinalIgnoreCase));
+            var args = JObject.Parse(json);
+
+            Assert.Equal(OperationClassifier.OperationKind.Mutating,
+                OperationClassifier.ClassifyTool(toolName, args));
+            Assert.False(tool["annotations"]?["readOnlyHint"]?.Value<bool>() == true,
+                $"{toolName} cannot advertise readOnlyHint=true for a mutating mode");
+            Assert.False(tool["annotations"]?["idempotentHint"]?.Value<bool>() == true,
+                $"{toolName} cannot advertise idempotentHint=true for a mutating mode");
+        }
+
         private static string? CodeToken(string cell)
         {
             var match = Regex.Match(cell, "`([^`]+)`", RegexOptions.CultureInvariant);

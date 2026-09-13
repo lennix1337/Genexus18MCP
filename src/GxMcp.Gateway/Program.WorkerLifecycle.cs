@@ -482,36 +482,14 @@ namespace GxMcp.Gateway
         // Generous (cold-start is ~50s); only caps a wedged/never-ready worker.
         private const int WorkerSdkReadyCeilingMs = 180000;
 
-        // issue #25 #2: read-only / idempotent tools that are safe to re-send once
-        // after a worker crash. Writes/edits/builds are deliberately excluded — a
-        // blind resend of a mutation could double-apply. The gateway already eagerly
-        // respawns the worker; this retry hides the transient "crashed/exited" error
-        // from the client for reads so the agent doesn't have to reconnect + re-issue.
-        private static readonly HashSet<string> RetrySafeReadTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "genexus_read", "genexus_list_objects", "genexus_inspect", "genexus_query",
-            "genexus_search_source", "genexus_analyze", "genexus_navigation",
-            "genexus_whoami", "genexus_doctor"
-        };
-
-        private static readonly HashSet<string> StructureReadOnlyActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "get_visual", "get_indexes", "get_logic", "check_subtypes"
-        };
-
+        // issue #25 #2: re-send only operations that the canonical classifier
+        // proves are read-only. Mutating modes (for example analyze/linter with
+        // fix=true and sdk_probe/surface) must never inherit a stale read allowlist.
         internal static bool IsRetrySafeOperation(string toolName, JObject? toolArgs)
         {
             if (string.IsNullOrWhiteSpace(toolName)) return false;
-
-            if (RetrySafeReadTools.Contains(toolName)) return true;
-
-            if (string.Equals(toolName, "genexus_structure", StringComparison.OrdinalIgnoreCase))
-            {
-                string? action = toolArgs?["action"]?.ToString();
-                return !string.IsNullOrWhiteSpace(action) && StructureReadOnlyActions.Contains(action);
-            }
-
-            return false;
+            return OperationClassifier.Describe(toolName, toolArgs).Kind
+                == OperationClassifier.OperationKind.ReadOnly;
         }
 
         private static bool IsWorkerCrashEnvelope(JObject workerResponse)

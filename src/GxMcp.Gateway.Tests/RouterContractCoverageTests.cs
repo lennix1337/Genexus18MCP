@@ -214,6 +214,74 @@ namespace GxMcp.Gateway.Tests
             AssertRoute(new AnalyzeRouter().ConvertToolCall("genexus_analyze", args), module, action);
         }
 
+        [Fact]
+        public void Issue186_published_schemas_declare_routed_parameters_and_alias()
+        {
+            var tools = JArray.Parse(File.ReadAllText(FindToolDefinitionsJson()));
+
+            AssertSchemaProperty(tools, "genexus_analyze", "fix");
+            AssertSchemaProperty(tools, "genexus_analyze", "waitTimeoutMs");
+            AssertSchemaProperty(tools, "genexus_analyze", "top");
+            AssertSchemaProperty(tools, "genexus_query", "exactMatch");
+            AssertSchemaProperty(tools, "genexus_edit", "module");
+            AssertSchemaProperty(tools, "genexus_inspect", "verbose");
+
+            var analyzeModes = tools.First(tool => (string?)tool["name"] == "genexus_analyze")
+                ["inputSchema"]?["properties"]?["mode"]?["enum"] as JArray;
+            Assert.NotNull(analyzeModes);
+            Assert.Contains("deep_context", analyzeModes!.Values<string>());
+        }
+
+        [Fact]
+        public void Issue186_mode_dependent_router_parameters_are_forwarded()
+        {
+            var analyze = new AnalyzeRouter();
+
+            var inspect = JObject.FromObject(analyze.ConvertToolCall(
+                "genexus_inspect",
+                new JObject { ["name"] = "Customer", ["verbose"] = true })!);
+            Assert.True((bool?)inspect["verbose"]);
+
+            var linter = JObject.FromObject(analyze.ConvertToolCall(
+                "genexus_analyze",
+                new JObject { ["mode"] = "linter", ["fix"] = true })!);
+            Assert.True((bool?)linter["params"]?["fix"]);
+
+            var impact = JObject.FromObject(analyze.ConvertToolCall(
+                "genexus_analyze",
+                new JObject { ["mode"] = "impact", ["waitTimeoutMs"] = 1234 })!);
+            Assert.Equal(1234, (int?)impact["waitTimeoutMs"]);
+
+            var metrics = JObject.FromObject(analyze.ConvertToolCall(
+                "genexus_analyze",
+                new JObject { ["mode"] = "code_metrics", ["top"] = 7 })!);
+            Assert.Equal(7, (int?)metrics["top"]);
+
+            AssertRoute(analyze.ConvertToolCall(
+                "genexus_analyze", new JObject { ["mode"] = "deep_context" }),
+                "Analyze", "Get360Context");
+        }
+
+        [Fact]
+        public void Issue186_query_and_edit_forward_the_new_contract_parameters()
+        {
+            var query = JObject.FromObject(new SearchRouter().ConvertToolCall(
+                "genexus_query",
+                new JObject { ["query"] = "Customer", ["exactMatch"] = true })!);
+            Assert.True((bool?)query["exactMatch"]);
+
+            var edit = JObject.FromObject(new ObjectRouter().ConvertToolCall(
+                "genexus_edit",
+                new JObject
+                {
+                    ["name"] = "Customer",
+                    ["mode"] = "ops",
+                    ["module"] = "Sales",
+                    ["ops"] = new JArray(new JObject { ["op"] = "set_property" })
+                })!);
+            Assert.Equal("Sales", (string?)edit["transactionModule"]);
+        }
+
         [Theory]
         [InlineData("genexus_inspect", "Analyze", "GetConversionContext")]
         [InlineData("genexus_inject_context", "Analyze", "InjectContext")]
@@ -387,6 +455,16 @@ namespace GxMcp.Gateway.Tests
             var routed = JObject.FromObject(result!);
             Assert.Equal(module, (string?)routed["module"]);
             Assert.Equal(action, (string?)routed["action"]);
+        }
+
+        private static void AssertSchemaProperty(JArray tools, string toolName, string propertyName)
+        {
+            var tool = tools.FirstOrDefault(item => (string?)item["name"] == toolName);
+            Assert.NotNull(tool);
+            var properties = tool!["inputSchema"]?["properties"] as JObject;
+            Assert.NotNull(properties);
+            Assert.True(properties!.ContainsKey(propertyName),
+                $"{toolName} schema is missing routed parameter '{propertyName}'");
         }
     }
 }
