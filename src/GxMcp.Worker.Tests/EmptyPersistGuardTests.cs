@@ -80,6 +80,8 @@ namespace GxMcp.Worker.Tests
             // The follow-up flag must be set so the next identical write doesn't
             // get stuck on a phantom WriteNoChange.
             Assert.True(WriteService.IsEmptyPersistPending("ProcImg", "Source"));
+            Assert.True(result["partialPersistenceDetected"]?.Value<bool>() == true);
+            Assert.True(WriteService.ShouldMarkTargetDirty(result.ToString()));
         }
 
         [Fact]

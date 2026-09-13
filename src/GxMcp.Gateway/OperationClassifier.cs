@@ -41,7 +41,6 @@ namespace GxMcp.Gateway
             "genexus_list_objects",
             "genexus_read",
             "genexus_inspect",
-            "genexus_analyze",
             "genexus_whoami",
             "genexus_doctor",
             "genexus_search_source",
@@ -315,6 +314,16 @@ namespace GxMcp.Gateway
 
         private static OperationKind ClassifyCanonicalTool(string toolName, JObject args)
         {
+            if (string.Equals(toolName, "genexus_analyze", StringComparison.OrdinalIgnoreCase))
+            {
+                bool linterFix = string.Equals(
+                    args["mode"]?.ToString(),
+                    "linter",
+                    StringComparison.OrdinalIgnoreCase)
+                    && args["fix"]?.ToObject<bool?>() == true;
+                return linterFix ? OperationKind.Mutating : OperationKind.ReadOnly;
+            }
+
             if (ModeDependentTools.Contains(toolName))
             {
                 if (string.Equals(toolName, "genexus_sdk_probe", StringComparison.OrdinalIgnoreCase))

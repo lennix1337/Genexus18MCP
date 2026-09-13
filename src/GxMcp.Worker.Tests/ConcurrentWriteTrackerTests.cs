@@ -41,6 +41,19 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void StampPerTargetWrite_UpdatesTimestampWithoutMarkingDirty()
+        {
+            string target = "TgtStamp_" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            var entered = DateTime.UtcNow;
+            Thread.Sleep(5);
+
+            WriteService.StampPerTargetWrite(target);
+
+            Assert.True(WriteService.WasTargetWrittenSince(target, entered));
+            Assert.DoesNotContain(target, EditDirtyTracker.GetDirty(null));
+        }
+
+        [Fact]
         public void AcquirePerTargetLock_SameTarget_SameInstance()
         {
             string target = "TgtD_" + Guid.NewGuid().ToString("N").Substring(0, 6);

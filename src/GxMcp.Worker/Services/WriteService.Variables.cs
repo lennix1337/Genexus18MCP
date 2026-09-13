@@ -46,7 +46,9 @@ namespace GxMcp.Worker.Services
         /// Skips framework-managed names. Returns per-name outcomes plus aggregate counts.
         public string DeleteVariables(string target, System.Collections.Generic.IEnumerable<string> varNames)
         {
-            return WrapWithPersistedState(DeleteVariablesInternal(target, varNames), target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
+            string raw = DeleteVariablesInternal(target, varNames);
+            MarkDirtyIfSuccess(raw, target);
+            return WrapWithPersistedState(raw, target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
         }
 
         private string DeleteVariablesInternal(string target, System.Collections.Generic.IEnumerable<string> varNames)
@@ -133,7 +135,7 @@ namespace GxMcp.Worker.Services
         // v2.6.9 — parse the typed-writer raw response for a confirmed mutation.
         // WriteNoChange and changed=false are not writes, even though the typed
         // writer reports them with status=ok.
-        private static void MarkDirtyIfSuccess(string raw, string target)
+        internal static void MarkDirtyIfSuccess(string raw, string target)
         {
             if (string.IsNullOrWhiteSpace(raw) || string.IsNullOrWhiteSpace(target)) return;
             try

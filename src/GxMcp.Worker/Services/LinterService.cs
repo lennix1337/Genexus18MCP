@@ -39,7 +39,7 @@ namespace GxMcp.Worker.Services
             foreach (var issue in issues)
             {
                 string code = issue["code"]?.ToString();
-                string symbol = issue["symbol"]?.ToString();
+                string symbol = ResolveFixSymbol(issue);
                 if (code == "GX008" && !string.IsNullOrEmpty(symbol) && symbol.StartsWith("&"))
                     toRemove.Add(symbol.TrimStart('&'));
                 else
@@ -50,6 +50,16 @@ namespace GxMcp.Worker.Services
             report["fixed"] = JsonUtil.SafeParse(batchResult);
             report["skipped"] = skipped;
             return report.ToString();
+        }
+
+        internal static string ResolveFixSymbol(JToken issue)
+        {
+            if (issue == null || !string.Equals(issue["code"]?.ToString(), "GX008", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            // Older linter reports expose the variable as the issue snippet;
+            // newer reports may provide the explicit symbol field.
+            return issue["symbol"]?.ToString() ?? issue["snippet"]?.ToString();
         }
 
         public string Lint(string target, string specificPart = null)

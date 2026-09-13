@@ -133,6 +133,21 @@ namespace GxMcp.Gateway.Tests
                 $"expected {toolName} (no action) to be treated as read-only");
         }
 
+        [Fact]
+        public void AnalyzeLinterFix_InvalidatesSemanticCacheOnlyWhenEnabled()
+        {
+            Assert.True(Program.IsMutatingTool("genexus_analyze", new JObject
+            {
+                ["mode"] = "linter",
+                ["fix"] = true
+            }));
+            Assert.False(Program.IsMutatingTool("genexus_analyze", new JObject
+            {
+                ["mode"] = "linter",
+                ["fix"] = false
+            }));
+        }
+
         [Theory]
         [InlineData("genexus_properties", "get")]
         [InlineData("genexus_asset", "read")]

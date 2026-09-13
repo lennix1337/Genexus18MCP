@@ -111,6 +111,22 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void AnalyzeLinterFix_IsMutatingOnlyWhenFixEnabled()
+        {
+            var readOnly = new JObject { ["mode"] = "linter", ["fix"] = false };
+            var mutating = new JObject { ["mode"] = "linter", ["fix"] = true };
+
+            Assert.Equal(OperationClassifier.OperationKind.ReadOnly,
+                OperationClassifier.ClassifyTool("genexus_analyze", readOnly));
+            Assert.False(OperationClassifier.IsMutationCandidate("genexus_analyze", readOnly));
+
+            Assert.Equal(OperationClassifier.OperationKind.Mutating,
+                OperationClassifier.ClassifyTool("genexus_analyze", mutating));
+            Assert.True(OperationClassifier.IsMutationCandidate("genexus_analyze", mutating));
+            Assert.False(OperationClassifier.IsReadOnly("genexus_analyze", mutating));
+        }
+
+        [Fact]
         public void ActionlessPublishedToolsUseExplicitModePolicies()
         {
             Assert.Equal(OperationClassifier.OperationKind.ReadOnly,

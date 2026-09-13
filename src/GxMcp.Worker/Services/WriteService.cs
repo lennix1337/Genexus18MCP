@@ -454,7 +454,7 @@ namespace GxMcp.Worker.Services
         // Keep the write timestamp independent from dirty classification. The timestamp is
         // needed immediately after the SDK call to detect concurrent writes, while dirty state
         // must wait for persisted-state wrapping and rollback classification.
-        private static void StampPerTargetWrite(string target)
+        internal static void StampPerTargetWrite(string target)
         {
             if (string.IsNullOrWhiteSpace(target)) return;
             _lastWriteAtUtc[target] = DateTime.UtcNow;
@@ -490,6 +490,11 @@ namespace GxMcp.Worker.Services
 
             string status = response["status"]?.ToString();
             string code = response["code"]?.ToString() ?? response["error"]?["code"]?.ToString();
+            bool conservativePersistenceEvidence = response["partialPersistenceDetected"]?.Value<bool>() == true
+                || response["rollbackFailed"]?.Value<bool>() == true
+                || response["error"]?["partialPersistenceDetected"]?.Value<bool>() == true;
+            if (conservativePersistenceEvidence) return true;
+
             if (string.Equals(code, "WriteNoChange", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(code, "WriteNotPersisted", StringComparison.OrdinalIgnoreCase))
                 return false;
@@ -500,13 +505,9 @@ namespace GxMcp.Worker.Services
                     && response["persisted"]?.Value<bool>() == true
                     && response["changed"]?.Value<bool?>() != false;
 
-            // Preserve a conservative dirty mark when a post-save failure or an inconclusive
-            // rollback may have left a mutation on disk. Pre-mutation errors have none of these
-            // evidence fields and therefore do not create a false dirty entry.
-            return response["partialPersistenceDetected"]?.Value<bool>() == true
-                || response["rollbackFailed"]?.Value<bool>() == true
-                || response["persisted"]?.Value<bool>() == true
-                || response["error"]?["partialPersistenceDetected"]?.Value<bool>() == true;
+            // Preserve a conservative dirty mark for other post-save envelopes that carry
+            // persisted evidence. Pre-mutation errors have none of these fields and remain clean.
+            return response["persisted"]?.Value<bool>() == true;
         }
 
         // Resolved lazily via the WriteService instance ctor so the static
@@ -609,7 +610,11 @@ namespace GxMcp.Worker.Services
                 {
                     ["part"] = normPart,
                     ["inputLength"] = inputCode.Length,
-                    ["persistedHash"] = persistedHash
+                    ["persistedHash"] = persistedHash,
+                    // The SDK accepted the write but the re-read lost its content. Keep an
+                    // explicit conservative signal so dirty tracking cannot mistake this
+                    // reconstructed WriteNotPersisted envelope for a pre-mutation refusal.
+                    ["partialPersistenceDetected"] = true
                 });
         }
 
@@ -1169,6 +1174,10 @@ namespace GxMcp.Worker.Services
                     Logger.Info($"[OBJ-SAVE-SLOW] {sw.ElapsedMilliseconds}ms target='{target}' part='{partName}' codeLen={code?.Length ?? 0} dryRun={dryRun}");
                 }
             }
+            // Keep the concurrency timestamp independent from the final dirty classification.
+            // PatchService needs to detect a write that landed while it was running even when
+            // post-save verification later classifies the result as WriteNotPersisted.
+            if (!dryRun) StampPerTargetWrite(target);
             // v2.3.8 Task 3.4: every edit response carries persistedHash + persistedSnippet
             // (success, no-change, dry-run, rollback, or error).
             // Default sdkPath = typed-sdk; deeper writers (LayoutService raw-XML) tag their own
@@ -1221,10 +1230,9 @@ namespace GxMcp.Worker.Services
                     catch (Exception ex) { Logger.Debug("[SNAPSHOT] no-op cleanup failed: " + ex.Message); }
                 }
             }
-            // Record the timestamp and dirty state only after persisted-state verification and
-            // any rollback have classified the final outcome. This keeps no-op/pre-mutation
-            // failures out of both cache/concurrency invalidation and build dirty tracking.
-            if (!dryRun && ShouldMarkTargetDirty(wrapped)) NotePerTargetWrite(target);
+            // Dirty state waits for persisted-state verification and any rollback classification.
+            // The write timestamp above intentionally remains independent from this decision.
+            if (!dryRun && ShouldMarkTargetDirty(wrapped)) MarkTargetDirty(target);
             return wrapped;
             } // end lock (AcquirePerTargetLock)
         }
