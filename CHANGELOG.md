@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v3.4.2 - 2026-09-13
+
+
+### Tracked issues
+
+- [#186](https://github.com/lennix1337/Genexus18MCP/issues/186) — [Melhoria] Divergências entre o schema publicado e o que os routers aceitam, e um gate para travá-las
+- [#187](https://github.com/lennix1337/Genexus18MCP/issues/187) — [Bug] Com o auto-fix ativado na v3.4.1, `mode=linter fix=true` pode remover variável usada apenas no WebForm
+- [#188](https://github.com/lennix1337/Genexus18MCP/issues/188) — [Melhoria] `genexus_doc` grava os artefatos sob o diretório do executável, e eles ficam para trás na atualização do pacote
+
+
 ### Fixed
 
 - Keep the published MCP contract aligned with the Analyze, Search, and Object routers: expose `genexus_analyze`'s mode-dependent `fix`, `waitTimeoutMs`, and `top`, `genexus_query.exactMatch`, `genexus_edit` `mode=ops` `module`, the existing `genexus_inspect.verbose` router option, and the intentional `deep_context` Analyze alias; refresh discovery coverage ([#186](https://github.com/lennix1337/Genexus18MCP/issues/186)).

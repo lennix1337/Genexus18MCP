@@ -1,7 +1,38 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "3.4.1",
-  "tag": "v3.4.1",
-  "collectedAtUtc": "2026-09-13T02:30:00.9691380Z",
-  "issues": []
+  "version": "3.4.2",
+  "tag": "v3.4.2",
+  "collectedAtUtc": "2026-09-13T07:14:12.0143248Z",
+  "issues": [
+    {
+      "number": 186,
+      "title": "[Melhoria] Divergências entre o schema publicado e o que os routers aceitam, e um gate para travá-las",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/186",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 187,
+      "title": "[Bug] Com o auto-fix ativado na v3.4.1, `mode=linter fix=true` pode remover variável usada apenas no WebForm",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/187",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 188,
+      "title": "[Melhoria] `genexus_doc` grava os artefatos sob o diretório do executável, e eles ficam para trás na atualização do pacote",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/188",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    }
+  ]
 }
