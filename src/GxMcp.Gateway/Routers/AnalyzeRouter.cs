@@ -29,7 +29,8 @@ namespace GxMcp.Gateway.Routers
                             return new { module = "Analyze", action = "Get360Context", target = target, type = type };
                         case "linter":
                             bool linterFix = args?["fix"]?.ToObject<bool?>() ?? false;
-                            return new { module = "Linter", action = "linter", target = target, type = type, @params = new JObject { ["fix"] = linterFix } };
+                            bool linterDryRun = args?["dryRun"]?.ToObject<bool?>() ?? false;
+                            return new { module = "Linter", action = "linter", target = target, type = type, @params = new JObject { ["fix"] = linterFix, ["dryRun"] = linterDryRun } };
                         case "navigation":
                             return new { module = "Analyze", action = "GetNavigation", target = target, type = type };
                         case "hierarchy":

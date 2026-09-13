@@ -1817,7 +1817,8 @@ namespace GxMcp.Worker.Services
         private string Handle_Linter(JObject request, string method, string action, string target, string payload, JObject args)
         {
             bool linterFix = args?["fix"]?.ToObject<bool?>() ?? false;
-            if (linterFix) return _linterService.LintAndFix(target);
+            bool dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false;
+            if (linterFix) return _linterService.LintAndFix(target, dryRun);
             return _linterService.Lint(target);
         }
 

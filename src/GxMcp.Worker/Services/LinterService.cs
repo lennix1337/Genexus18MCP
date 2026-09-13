@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Xml;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
 using Artech.Architecture.Common.Objects;
+using Artech.Genexus.Common;
 using Artech.Genexus.Common.Objects;
 using Artech.Genexus.Common.Parts;
 
@@ -26,8 +28,18 @@ namespace GxMcp.Worker.Services
 
         /// Run Lint, then auto-fix the safe issues (GX008 unused vars that aren't framework-managed)
         /// via the existing DeleteVariable path. Returns the lint report plus a fixed[] array.
-        public string LintAndFix(string target)
+        /// The ambiguous fix=true + dryRun=true combination is rejected before any SDK read.
+        public string LintAndFix(string target, bool dryRun = false)
         {
+            if (dryRun)
+            {
+                return Models.McpResponse.Err(
+                    code: "LinterFixDryRunUnsupported",
+                    message: "mode=linter fix=true does not support dryRun=true; omit dryRun or set fix=false.",
+                    hint: "Use fix=false for a read-only lint report, or omit dryRun to apply GX008 fixes.",
+                    target: target);
+            }
+
             var raw = Lint(target);
             JObject report;
             try { report = JObject.Parse(raw); } catch { return raw; }
@@ -60,6 +72,71 @@ namespace GxMcp.Worker.Services
             // Older linter reports expose the variable as the issue snippet;
             // newer reports may provide the explicit symbol field.
             return issue["symbol"]?.ToString() ?? issue["snippet"]?.ToString();
+        }
+
+        // WebFormPart exposes its visual references through the SDK's read-only
+        // IHasVariableReferences surface. Keep the SDK enumeration behind this
+        // delegate so a failed/unsupported visual projection cannot turn a lint
+        // read into a write or produce an unsafe GX008 finding.
+        internal static IEnumerable<string> ReadVisualVariableNames(Func<IEnumerable<string>> readReferences)
+        {
+            if (readReferences == null) return null;
+
+            var names = new List<string>();
+            try
+            {
+                IEnumerable<string> references = readReferences();
+                if (references == null) return names;
+                foreach (var rawName in references)
+                {
+                    string name = rawName?.Trim();
+                    if (!string.IsNullOrEmpty(name))
+                        names.Add(name.TrimStart('&'));
+                }
+            }
+            catch
+            {
+                // The caller treats a missing projection as an incomplete
+                // visual read and suppresses unsafe GX008 findings.
+                return null;
+            }
+            return names;
+        }
+
+        internal static IReadOnlyCollection<string> FindUnusedVariableNames(
+            IEnumerable<string> declaredNames,
+            IEnumerable<string> sourceTexts,
+            IEnumerable<IEnumerable<string>> visualVariableNames)
+        {
+            var usedVariables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string allCode = string.Join("\n", sourceTexts ?? Enumerable.Empty<string>());
+            string cleanAllCode = StripComments(allCode);
+            foreach (Match match in Regex.Matches(cleanAllCode, @"&(\w+)\b", RegexOptions.IgnoreCase))
+                usedVariables.Add(match.Groups[1].Value);
+
+            if (visualVariableNames != null)
+            {
+                bool visualReadIncomplete = false;
+                foreach (var references in visualVariableNames)
+                {
+                    if (references == null)
+                    {
+                        visualReadIncomplete = true;
+                        continue;
+                    }
+                    foreach (var name in references)
+                    {
+                        if (!string.IsNullOrWhiteSpace(name))
+                            usedVariables.Add(name.Trim().TrimStart('&'));
+                    }
+                }
+                if (visualReadIncomplete) return Array.Empty<string>();
+            }
+
+            return (declaredNames ?? Enumerable.Empty<string>())
+                .Where(name => !string.IsNullOrWhiteSpace(name) && !usedVariables.Contains(name.Trim()))
+                .Select(name => name.Trim())
+                .ToList();
         }
 
         public string Lint(string target, string specificPart = null)
@@ -281,21 +358,24 @@ namespace GxMcp.Worker.Services
         {
             var varPart = obj.Parts.Get<VariablesPart>();
             if (varPart == null) return;
-            
-            string allCode = "";
-            foreach (var p in obj.Parts)
-                if (p is ISource s) allCode += (s.Source ?? "") + "\n";
-            
-            string cleanAllCode = StripComments(allCode);
-            var usedVariables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var matches = Regex.Matches(cleanAllCode, @"&(\w+)\b", RegexOptions.IgnoreCase);
-            foreach (Match m in matches) usedVariables.Add(m.Groups[1].Value);
+
+            var parts = obj.Parts.Cast<KBObjectPart>().ToList();
+            var sourceTexts = parts.OfType<ISource>().Select(source => source.Source ?? "");
+            var visualReferences = parts
+                .OfType<WebFormPart>()
+                .OfType<IHasVariableReferences>()
+                .Select(webFormPart => ReadVisualVariableNames(
+                    () => webFormPart.GetReferencedVariables().Select(reference => reference?.Name)));
+            var unusedNames = new HashSet<string>(FindUnusedVariableNames(
+                varPart.Variables.Select(variable => variable.Name),
+                sourceTexts,
+                visualReferences), StringComparer.OrdinalIgnoreCase);
             string variablesText = VariableInjector.GetVariablesAsText(varPart);
             foreach (var v in varPart.Variables)
             {
                 if (GxMcp.Worker.Helpers.FrameworkManagedVariables.ShouldSkipUnusedCheck(v.Name)) continue;
                 int declarationLine = FindVariableDeclarationLine(variablesText, v.Name);
-                if (!usedVariables.Contains(v.Name))
+                if (unusedNames.Contains(v.Name))
                     issues.Add(CreateIssue("GX008", "Unused variable", "Warning", $"Variable '&{v.Name}' is never used.", "&" + v.Name, declarationLine, "Variables"));
             }
         }
@@ -353,14 +433,15 @@ namespace GxMcp.Worker.Services
             {
                 if (!(obj is WebPanel || obj is Transaction)) return;
                 var webFormPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p is WebFormPart) as WebFormPart;
-                if (webFormPart?.Document?.DocumentElement == null) return;
+                var document = CloneReadOnlyWebFormDocument(webFormPart);
+                if (document?.DocumentElement == null) return;
 
                 var eventsPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p =>
                     p.TypeDescriptor?.Name?.Equals("Events", StringComparison.OrdinalIgnoreCase) == true);
                 string eventsSrc = (eventsPart as ISource)?.Source ?? string.Empty;
                 bool hasEventEnter = Regex.IsMatch(eventsSrc, @"(?i)\bEvent\s+Enter\b");
 
-                var buttons = webFormPart.Document.DocumentElement.SelectNodes("//*[local-name()='gxButton']");
+                var buttons = document.DocumentElement.SelectNodes("//*[local-name()='gxButton']");
                 if (buttons == null || buttons.Count == 0) return;
                 foreach (System.Xml.XmlNode btn in buttons)
                 {
@@ -401,10 +482,11 @@ namespace GxMcp.Worker.Services
             {
                 if (!(obj is WebPanel || obj is Transaction)) return;
                 var webFormPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p is WebFormPart) as WebFormPart;
-                if (webFormPart?.Document?.DocumentElement == null) return;
+                var document = CloneReadOnlyWebFormDocument(webFormPart);
+                if (document?.DocumentElement == null) return;
 
                 // Use SelectNodes with XPath that matches any element whose local-name has no gx prefix.
-                var nodes = webFormPart.Document.DocumentElement.SelectNodes("//*");
+                var nodes = document.DocumentElement.SelectNodes("//*");
                 if (nodes == null) return;
                 foreach (System.Xml.XmlNode node in nodes)
                 {
@@ -425,6 +507,18 @@ namespace GxMcp.Worker.Services
                 }
             }
             catch (Exception ex) { Logger.Debug("CheckLayoutNonPrefixedElements: " + ex.Message); }
+        }
+
+        private static XmlDocument CloneReadOnlyWebFormDocument(WebFormPart webFormPart)
+        {
+            try
+            {
+                return webFormPart?.Document?.Clone() as XmlDocument;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private void CheckOutParmEnabled(KBObject obj, JArray issues)
@@ -484,7 +578,7 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private string StripComments(string code)
+        private static string StripComments(string code)
         {
             return Regex.Replace(code, @"/\*.*?\*/|//.*?\n", " ", RegexOptions.Singleline);
         }
