@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v3.4.1 - 2026-09-12
+
+
 ### Fixed
 
 - Keep Worker dirty tracking and per-target write timestamps independent for uncertain `WriteNotPersisted` outcomes, including partial persistence, rollback failure, and empty-persist guards; record confirmed batch variable removals ([#184](https://github.com/lennix1337/Genexus18MCP/issues/184), [#185](https://github.com/lennix1337/Genexus18MCP/issues/185)).
