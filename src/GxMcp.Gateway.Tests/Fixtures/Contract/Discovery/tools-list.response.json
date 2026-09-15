@@ -2343,6 +2343,7 @@
             "type": "boolean"
           },
           "includeBase64": {
+            "description": "include Base64 response",
             "type": "boolean"
           },
           "includeContent": {
@@ -2362,7 +2363,7 @@
             "type": "integer"
           },
           "maxBytes": {
-            "description": "asset_read/read_blob: inline byte limit.",
+            "description": "inline limit",
             "type": "integer"
           },
           "module": {
@@ -2374,9 +2375,11 @@
             "type": "string"
           },
           "outputPath": {
+            "description": "path",
             "type": "string"
           },
           "overwrite": {
+            "description": "replace file",
             "type": "boolean"
           },
           "part": {
