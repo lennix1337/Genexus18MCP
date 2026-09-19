@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Tracked issues
+
+- [#244](https://github.com/lennix1337/Genexus18MCP/issues/244) — `genexus_edit mode=patch` pode apagar uma Source inteira e responder sucesso com verificação não confirmada
+
+### Fixed
+
+- [#244](https://github.com/lennix1337/Genexus18MCP/issues/244) **Text patches now fail closed when persistence cannot be independently confirmed.** Write snapshots always use the uncached verification path, post-save reads reject error/truncated/incomplete envelopes, cache invalidation failures and same-instance SDK reads return `FreshReadUnavailable`, and unverified writes no longer expose `saved:true`. Confirmed responses expose the complete source returned by the fresh read; indeterminate writes return `WriteVerificationUnavailable` with `saveAttempted:true`, `saved:false`, and no implicit lifecycle action. Explicit rollback is version-fenced and PatternInstance verification refreshes the resolved WorkWithPlus child.
+
 ## v3.7.0 - 2026-09-19
 
 

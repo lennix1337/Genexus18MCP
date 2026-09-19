@@ -179,6 +179,48 @@ namespace GxMcp.Worker.Services
             return ExtractEditablePatternXml(part, resolvedObject);
         }
 
+        /// <summary>
+        /// Reads a PatternInstance through a fresh SDK resolution for both the
+        /// requested object and the resolved WorkWithPlus instance. Verification
+        /// must not invalidate only the parent and then re-use a cached child.
+        /// </summary>
+        public string ReadPatternPartXmlFresh(KBObject obj, string partName, out KBObject resolvedObject, out string resolvedPartName)
+        {
+            resolvedObject = ResolveWWPInstanceFresh(obj);
+            resolvedPartName = partName;
+            if (resolvedObject == null) return null;
+
+            var part = FindPatternPart(resolvedObject, partName);
+            if (part == null) return null;
+
+            resolvedPartName = !string.IsNullOrWhiteSpace(part.Name) ? part.Name : partName;
+            return ExtractEditablePatternXml(part, resolvedObject);
+        }
+
+        private KBObject ResolveWWPInstanceFresh(KBObject obj)
+        {
+            if (obj == null) return null;
+            if (obj.TypeDescriptor?.Name?.Equals("WorkWithPlus", StringComparison.OrdinalIgnoreCase) == true)
+                return obj;
+
+            string instanceName = "WorkWithPlus" + obj.Name;
+            var namedMatch = _objectService?.FindObjectFresh(instanceName, "WorkWithPlus");
+            if (namedMatch != null) return namedMatch;
+
+            try
+            {
+                var childMatch = obj.Model?.Objects.GetChildren(obj)
+                    .FirstOrDefault(o => o.TypeDescriptor?.Name?.Equals("WorkWithPlus", StringComparison.OrdinalIgnoreCase) == true);
+                if (childMatch != null)
+                    return _objectService?.FindObjectFresh(childMatch.Name, "WorkWithPlus");
+            }
+            catch
+            {
+            }
+
+            return null;
+        }
+
         public string BuildPatternPartEnvelope(KBObject obj, string partName, string innerXml, out KBObject resolvedObject, out KBObjectPart resolvedPart)
         {
             resolvedObject = ResolveWWPInstance(obj);

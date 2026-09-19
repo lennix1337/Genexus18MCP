@@ -235,7 +235,7 @@ namespace GxMcp.Worker.Services
                 JArray patternShadowWarnings = BuildPatternShadowWarningsIfAny(target, partName, typeFilter);
 
                 string cacheKey = BuildCacheKey(target, partName, typeFilter);
-                bool sourceFromCache = false;
+                const bool sourceFromCache = false;
                 long readMs = 0;
                 string originalSource = null;
                 string snapshotVersion = null;
@@ -253,66 +253,39 @@ namespace GxMcp.Worker.Services
                 // at all (e.g. straight filesystem touches).
                 // A caller that requests optimistic concurrency or rollback needs a
                 // fresh snapshot; a cache entry is not sufficient evidence for either.
-                bool requireFreshSnapshot = !string.IsNullOrWhiteSpace(baseVersion) || rollbackOnFailure || verifyRollback;
-                if (!requireFreshSnapshot && _sourceCache.TryGetValue(cacheKey, out var cacheEntry) && cacheEntry != null)
+                // A write patch must always match the live SDK source. A cached snapshot can
+                // still contain a unique oldString after an IDE/worker write under another
+                // alias, turning a narrow edit into a last-writer-wins overwrite.
+                _objectService.MarkReadCacheDirty(_objectService.FindObject(target, typeFilter), partName);
+                var readStopwatch = Stopwatch.StartNew();
+                string currentResponse = _objectService.ReadObjectSourceForVerification(target, partName, typeFilter);
+                readStopwatch.Stop();
+                readMs = readStopwatch.ElapsedMilliseconds;
+                if (!TryReadCompleteSource(currentResponse, out JObject readJson, out originalSource, out string readError))
                 {
-                    bool ttlOk = (DateTime.UtcNow - cacheEntry.UpdatedUtc) < SourceCacheTtl;
-                    bool noConcurrentWrite = !WriteService.WasTargetWrittenSince(target, cacheEntry.UpdatedUtc);
-                    if (ttlOk && noConcurrentWrite)
-                    {
-                        originalSource = cacheEntry.Source;
-                        snapshotVersion = cacheEntry.VersionToken;
-                        sourceFromCache = true;
-                    }
-                    else
-                    {
-                        _sourceCache.TryRemove(cacheKey, out _);
-                        _objectService.MarkReadCacheDirty(_objectService.FindObject(target, typeFilter), partName);
-                    }
+                    string readCode = TryExtractErrorCode(currentResponse);
+                    return Models.McpResponse.Err(
+                        // Keep the patch API's stable top-level failure contract while
+                        // retaining the more specific read diagnosis for callers that
+                        // need to distinguish a warming index from another read error.
+                        code: "PatchReadFailed",
+                        message: "Patch read failed: " + (readError ?? "The complete source could not be read."),
+                        hint: "Ensure the target object and part exist in the active KB and that the source read is complete.",
+                        nextSteps: new JArray(Models.McpResponse.NextStep(
+                            tool: "genexus_read",
+                            args: new JObject { ["name"] = target, ["part"] = partName },
+                            why: "Verify the part is accessible and not truncated before patching.")),
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["readCode"] = readCode,
+                            ["readCompleted"] = false,
+                            ["readError"] = readError
+                        });
                 }
-                else
-                {
-                    _objectService.MarkReadCacheDirty(_objectService.FindObject(target, typeFilter), partName);
-                }
-                if (originalSource == null)
-                {
-                    var readStopwatch = Stopwatch.StartNew();
-                    string currentResponse = requireFreshSnapshot
-                        ? _objectService.ReadObjectSourceForVerification(target, partName, typeFilter)
-                        : ReadSourceFast(target, partName, typeFilter);
-                    readStopwatch.Stop();
-                    readMs = readStopwatch.ElapsedMilliseconds;
-                    string readError = TryExtractError(currentResponse);
-                    if (!string.IsNullOrWhiteSpace(readError))
-                    {
-                        return Models.McpResponse.Err(
-                            code: "PatchReadFailed",
-                            message: "Patch read failed: " + readError,
-                            hint: "Ensure the target object and part exist in the active KB.",
-                            nextSteps: new JArray(Models.McpResponse.NextStep(
-                                tool: "genexus_read",
-                                args: new JObject { ["name"] = target, ["part"] = partName },
-                                why: "Verify the part is accessible before patching.")),
-                            target: target);
-                    }
 
-                    var json = JObject.Parse(currentResponse);
-                    originalSource = json["source"]?.ToString();
-                    snapshotVersion = json["versionToken"]?.ToString();
-                    if (originalSource == null)
-                    {
-                        return Models.McpResponse.Err(
-                            code: "PatchReadSourceNull",
-                            message: "Could not retrieve source for the requested part.",
-                            hint: "The part may not expose a text source. Use genexus_read to inspect available parts.",
-                            nextSteps: new JArray(Models.McpResponse.NextStep(
-                                tool: "genexus_read",
-                                args: new JObject { ["name"] = target },
-                                why: "Lists available parts for this object.")),
-                            target: target);
-                    }
-                    UpdateCachedSource(cacheKey, originalSource, snapshotVersion);
-                }
+                snapshotVersion = readJson["versionToken"]?.ToString();
+                UpdateCachedSource(cacheKey, originalSource, snapshotVersion);
 
                 if (!string.IsNullOrWhiteSpace(baseVersion) &&
                     !string.Equals(baseVersion, snapshotVersion, StringComparison.Ordinal))
@@ -407,54 +380,6 @@ namespace GxMcp.Worker.Services
                 long patchMs = patchStopwatch.ElapsedMilliseconds;
 
                 // One guarded retry against stale cache: refresh source once and recompute.
-                if (sourceFromCache &&
-                    string.IsNullOrEmpty(updatedSource) &&
-                    (string.Equals(status, "NoMatch", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(status, "Ambiguous", StringComparison.OrdinalIgnoreCase)))
-                {
-                    var refreshReadSw = Stopwatch.StartNew();
-                    string refreshedResponse = ReadSourceFast(target, partName, typeFilter);
-                    refreshReadSw.Stop();
-                    readMs += refreshReadSw.ElapsedMilliseconds;
-                    string refreshedError = TryExtractError(refreshedResponse);
-                    if (string.IsNullOrWhiteSpace(refreshedError))
-                    {
-                        var refreshedJson = JObject.Parse(refreshedResponse);
-                        string refreshedSource = refreshedJson["source"]?.ToString();
-                        string refreshedVersion = refreshedJson["versionToken"]?.ToString();
-                        if (refreshedSource != null)
-                        {
-                            UpdateCachedSource(cacheKey, refreshedSource, refreshedVersion);
-                            if (!string.IsNullOrWhiteSpace(refreshedVersion)) snapshotVersion = refreshedVersion;
-                            originalSource = refreshedSource;
-                            workSource = originalSource.Replace("\r\n", "\n").Replace("\r", "\n");
-                            sourceLines = workSource.Split('\n');
-                            patchStopwatch.Restart();
-                            if (protectedPatch)
-                            {
-                                // The refreshed source can move the anchors, so the scope is
-                                // re-resolved against the new content before re-matching.
-                                scopedOutcome = RunScopedReplace(target, sourceLines, scope, contextLines ?? new string[0], workContent, expectedCount, replaceAll, out string retryError);
-                                if (retryError != null) return retryError;
-                                updatedSource = scopedOutcome.UpdatedSource;
-                                status = scopedOutcome.Status;
-                                details = scopedOutcome.Details;
-                                matchCount = scopedOutcome.MatchCount;
-                            }
-                            else if (normalizedOperation == "replace")
-                            {
-                                updatedSource = TryReplace(sourceLines, contextLines ?? new string[0], workContent, expectedCount, out status, out details, out matchCount, replaceAll);
-                            }
-                            else if (normalizedOperation == "insert_after")
-                            {
-                                updatedSource = TryInsertAfter(sourceLines, contextLines ?? new string[0], workContent, expectedCount, out status, out details, out matchCount);
-                            }
-                            patchStopwatch.Stop();
-                            patchMs += patchStopwatch.ElapsedMilliseconds;
-                        }
-                    }
-                }
-
                 // An empty updated source is a valid result when Replace matched the
                 // complete part and the requested replacement is empty. Match failures
                 // also return an empty string, so status (not payload length) is the
@@ -935,22 +860,89 @@ namespace GxMcp.Worker.Services
 
                 bool primaryWriteSuccess = string.Equals(writePayload["_internalStatus"]?.ToString(), "Success", StringComparison.OrdinalIgnoreCase);
                 bool writeReportedVerificationMismatch = string.Equals(writePayload["code"]?.ToString(), "WriteNotPersisted", StringComparison.OrdinalIgnoreCase);
+                bool writeReportedVerificationUnavailable = string.Equals(writePayload["code"]?.ToString(), "WriteVerificationUnavailable", StringComparison.OrdinalIgnoreCase);
+                bool writeReportedApplied = string.Equals(writePayload["code"]?.ToString(), "WriteApplied", StringComparison.OrdinalIgnoreCase);
+                bool writeReportedNoChange = string.Equals(writePayload["code"]?.ToString(), "WriteNoChange", StringComparison.OrdinalIgnoreCase);
                 bool writeReportedVersionConflict = string.Equals(writePayload["code"]?.ToString(), "StaleObject", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(writePayload["code"]?.ToString(), "VersionConflict", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(writePayload["code"]?.ToString(), "VersionCheckUnavailable", StringComparison.OrdinalIgnoreCase);
                 bool persistedMatches = false;
-                bool saveReported = primaryWriteSuccess || writeReportedVerificationMismatch;
+                bool saveReported = (primaryWriteSuccess && !writeReportedNoChange)
+                    || writeReportedVerificationMismatch
+                    || writeReportedVerificationUnavailable;
                 string confirmedPersistedSource = null;
                 bool isPatternPart = Services.PatternAnalysisService.IsPatternPart(partName);
 
-                if (primaryWriteSuccess && isPatternPart)
+                if (writeReportedVerificationUnavailable)
+                {
+                    bool writeAttempted = writePayload["saveAttempted"]?.Value<bool?>()
+                        ?? writePayload["error"]?["saveAttempted"]?.Value<bool?>()
+                        ?? true;
+                    PatchPersistenceReceipt.MarkVerificationUnavailable(
+                        writePayload,
+                        saveAttempted: writeAttempted,
+                        reason: writePayload["postSaveVerification"]?["reason"]?.ToString()
+                            ?? writePayload["error"]?["postSaveVerification"]?["reason"]?.ToString()
+                            ?? writePayload["verification"]?["reason"]?.ToString()
+                            ?? writePayload["error"]?["verification"]?["reason"]?.ToString()
+                            ?? writePayload["persistedVerifyError"]?.ToString()
+                            ?? writePayload["error"]?["message"]?.ToString()
+                            ?? "WriteService could not complete a post-save read.");
+                    if (writeAttempted) WriteService.NotePerTargetWrite(target);
+                    if (rollbackOnFailure)
+                        PatchPersistenceReceipt.MarkRollbackNotAttempted(
+                            writePayload,
+                            "Rollback was not attempted because the post-save state is unknown.");
+                }
+                else if (primaryWriteSuccess && isPatternPart)
                 {
                     // Pattern XML is reconciled before persistence and is already checked with
                     // XML equivalence inside WriteService. Text verify modes intentionally apply
                     // only to Source/Rules-like parts.
-                    persistedMatches = true;
-                    writePayload["persistedVerified"] = true;
-                    writePayload["persisted"] = true;
+                    var patternVerification = writePayload["postSaveVerification"] as JObject;
+                    bool patternReadConfirmed = patternVerification?["reReadConfirmed"]?.Value<bool?>() == true
+                        && writePayload["persisted"]?.Value<bool?>() == true
+                        && writePayload["mutation"]?["diff"]?["matches"]?.Value<bool?>() != false;
+                    bool patternVerificationWarning = writePayload["verificationWarning"] != null;
+                    bool patternReadUnavailable = patternVerification == null
+                        || patternVerification["reReadConfirmed"]?.Value<bool?>() != true
+                        || patternVerificationWarning;
+                    if (patternReadConfirmed && !patternVerificationWarning)
+                    {
+                        persistedMatches = true;
+                        writePayload["persistedVerified"] = true;
+                        writePayload["persisted"] = true;
+                    }
+                    else
+                    {
+                        persistedMatches = false;
+                        if (patternReadUnavailable)
+                        {
+                            PatchPersistenceReceipt.MarkVerificationUnavailable(
+                                writePayload,
+                                saveReported,
+                                patternVerificationWarning
+                                    ? "The post-save PatternInstance read was indeterminate."
+                                    : "The post-save PatternInstance read was not confirmed.");
+                            if (saveReported) WriteService.NotePerTargetWrite(target);
+                            if (rollbackOnFailure)
+                                PatchPersistenceReceipt.MarkRollbackNotAttempted(
+                                    writePayload,
+                                    "Rollback was not attempted because the post-save PatternInstance state is unknown.");
+                        }
+                        else
+                        {
+                            PatchPersistenceReceipt.MarkNotPersisted(
+                                writePayload,
+                                saveReported,
+                                "The post-save PatternInstance content does not match the requested content.");
+                            if (rollbackOnFailure)
+                                PatchPersistenceReceipt.MarkRollbackNotAttempted(
+                                    writePayload,
+                                    "Rollback for PatternInstance is unavailable without a verified version fence.",
+                                    verificationUnavailable: false);
+                        }
+                    }
                 }
                 else if (!writeReportedVersionConflict && (primaryWriteSuccess || writeReportedVerificationMismatch || requireObjectSave))
                 {
@@ -959,6 +951,7 @@ namespace GxMcp.Worker.Services
                     TextPersistenceVerifier.Result verification = ReadAndVerifyPersistedSource(
                         target, partName, typeFilter, finalCode, resolvedVerifyMode, out persistedSource, out verifyError);
 
+                    bool verificationUnavailable = false;
                     if (verification != null)
                     {
                         confirmedPersistedSource = persistedSource;
@@ -976,11 +969,14 @@ namespace GxMcp.Worker.Services
                     }
                     else
                     {
+                        verificationUnavailable = true;
                         writePayload["verification"] = new JObject
                         {
                             ["mode"] = resolvedVerifyMode,
                             ["matchCount"] = matchCount,
-                            ["reReadConfirmed"] = false
+                            ["reReadConfirmed"] = false,
+                            ["readCompleted"] = false,
+                            ["reason"] = verifyError ?? "unknown"
                         };
                     }
 
@@ -989,35 +985,93 @@ namespace GxMcp.Worker.Services
                         // A WriteService false negative is superseded by the mandatory forced
                         // re-read. No second write is performed.
                         PatchPersistenceReceipt.MarkVerified(writePayload, saveReported);
+                        if (writeReportedVerificationMismatch || writeReportedApplied)
+                            WriteService.NotePerTargetWrite(target);
                     }
                     else if (!persistedMatches)
                     {
-                        PatchPersistenceReceipt.MarkNotPersisted(writePayload, saveReported, verifyError, commentOnlyChange);
-
-                        // Rollback is never implicit. It is attempted once only when explicitly
-                        // requested and the fresh pre-write snapshot is available.
-                        if (PatchPersistenceReceipt.ShouldRollback(persistedMatches, rollbackOnFailure) && originalSource != null)
+                        if (verificationUnavailable)
                         {
-                            string rollbackResult = _writeService.WriteObject(target, partName, originalSource, typeFilter, autoValidate: false, preferFastSourceSave: false, autoInjectVariables: false);
-                            JObject rollbackPayload = ParseWriteResult(rollbackResult);
-                            // WriteService's legacy verifier may call a durable rollback
-                            // WriteNotPersisted solely because it applies a different text
-                            // equivalence rule. In both cases the SDK save completed, so always
-                            // perform this operation's selected-mode forced re-read.
-                            bool rollbackSaved = string.Equals(rollbackPayload["_internalStatus"]?.ToString(), "Success", StringComparison.OrdinalIgnoreCase)
-                                || string.Equals(rollbackPayload["code"]?.ToString(), "WriteNotPersisted", StringComparison.OrdinalIgnoreCase);
-                            string rollbackPersisted = null;
-                            string rollbackError = null;
-                            TextPersistenceVerifier.Result rollbackVerification = null;
-                            if (rollbackSaved)
-                                rollbackVerification = ReadAndVerifyPersistedSource(target, partName, typeFilter, originalSource, resolvedVerifyMode, out rollbackPersisted, out rollbackError);
-                            bool rollbackVerified = rollbackVerification != null && rollbackVerification.Matches;
-                            writePayload["rollback"] = PatchPersistenceReceipt.BuildRollback(
-                                rollbackSaved,
-                                rollbackVerification,
-                                rollbackError ?? rollbackPayload["message"]?.ToString());
-                            writePayload["rolledBack"] = rollbackVerified;
-                            if (rollbackVerified) UpdateCachedSource(cacheKey, originalSource, snapshotVersion);
+                            // The save may have landed, but an incomplete/error/stale read
+                            // cannot prove either outcome. Never label this as a mismatch and
+                            // never run an automatic rollback against an unknown state.
+                            PatchPersistenceReceipt.MarkVerificationUnavailable(writePayload, saveReported, verifyError);
+                            if (saveReported) WriteService.NotePerTargetWrite(target);
+                            if (rollbackOnFailure)
+                                PatchPersistenceReceipt.MarkRollbackNotAttempted(
+                                    writePayload,
+                                    "Rollback was not attempted because the post-save state is unknown.");
+                        }
+                        else
+                        {
+                            PatchPersistenceReceipt.MarkNotPersisted(writePayload, saveReported, verifyError, commentOnlyChange);
+                            if (confirmedPersistedSource != null
+                                && originalSource != null
+                                && !string.Equals(
+                                    NormalizeForPartCompare(partName, confirmedPersistedSource),
+                                    NormalizeForPartCompare(partName, originalSource),
+                                    StringComparison.Ordinal))
+                            {
+                                WriteService.NotePerTargetWrite(target);
+                            }
+
+                            // Rollback is never implicit. It is attempted once only when explicitly
+                            // requested and the fresh pre-write snapshot is available. A read
+                            // failure is handled above because rollback would target unknown state.
+                            string rollbackBaseVersion = writePayload["postSaveVerification"]?["versionToken"]?.ToString();
+                            if (string.IsNullOrWhiteSpace(rollbackBaseVersion))
+                                rollbackBaseVersion = writePayload["verification"]?["versionToken"]?.ToString();
+                            if (PatchPersistenceReceipt.CanAttemptRollback(
+                                    persistedMatches,
+                                    rollbackOnFailure,
+                                    rollbackBaseVersion)
+                                && originalSource != null)
+                            {
+                                string rollbackResult = _writeService.WriteObject(
+                                    target,
+                                    partName,
+                                    originalSource,
+                                    typeFilter,
+                                    autoValidate: false,
+                                    preferFastSourceSave: false,
+                                    autoInjectVariables: false,
+                                    baseVersion: rollbackBaseVersion);
+                                JObject rollbackPayload = ParseWriteResult(rollbackResult);
+                                // WriteService's legacy verifier may call a durable rollback
+                                // WriteNotPersisted solely because it applies a different text
+                                // equivalence rule. In both cases the SDK save completed, so always
+                                // perform this operation's selected-mode forced re-read.
+                                bool rollbackVerificationUnavailable = string.Equals(rollbackPayload["code"]?.ToString(), "WriteVerificationUnavailable", StringComparison.OrdinalIgnoreCase);
+                                bool rollbackSaved = string.Equals(rollbackPayload["_internalStatus"]?.ToString(), "Success", StringComparison.OrdinalIgnoreCase)
+                                    || string.Equals(rollbackPayload["code"]?.ToString(), "WriteNotPersisted", StringComparison.OrdinalIgnoreCase)
+                                    || rollbackVerificationUnavailable;
+                                string rollbackPersisted = null;
+                                string rollbackError = null;
+                                TextPersistenceVerifier.Result rollbackVerification = null;
+                                if (rollbackSaved)
+                                    rollbackVerification = ReadAndVerifyPersistedSource(target, partName, typeFilter, originalSource, resolvedVerifyMode, out rollbackPersisted, out rollbackError);
+                                bool rollbackVerified = rollbackVerification != null && rollbackVerification.Matches;
+                                writePayload["rollback"] = PatchPersistenceReceipt.BuildRollback(
+                                    rollbackSaved,
+                                    rollbackVerification,
+                                    rollbackError ?? rollbackPayload["message"]?.ToString());
+                                ((JObject)writePayload["rollback"])["saveAttempted"] = rollbackSaved;
+                                ((JObject)writePayload["rollback"])["verificationUnavailable"] = rollbackVerificationUnavailable
+                                    || (rollbackSaved && rollbackVerification == null);
+                                ((JObject)writePayload["rollback"])["baseVersion"] = rollbackBaseVersion;
+                                writePayload["rolledBack"] = rollbackVerified;
+                                if (rollbackVerified) UpdateCachedSource(cacheKey, originalSource, snapshotVersion);
+                            }
+                            else if (PatchPersistenceReceipt.ShouldRollback(persistedMatches, rollbackOnFailure)
+                                && originalSource != null)
+                            {
+                                // A rollback without the version observed after the failed
+                                // write could overwrite a concurrent edit. Refuse that recovery
+                                // path and surface the missing fence instead of guessing.
+                                PatchPersistenceReceipt.MarkRollbackNotAttempted(
+                                    writePayload,
+                                    "Rollback was not attempted because the post-save version token was unavailable.");
+                            }
                         }
                     }
                 }
@@ -1069,7 +1123,7 @@ namespace GxMcp.Worker.Services
 
                 if (string.Equals(writePayload["_internalStatus"]?.ToString(), "Success", StringComparison.OrdinalIgnoreCase) && persistedMatches)
                 {
-                    UpdateCachedSource(cacheKey, finalCode, versionToken);
+                    UpdateCachedSource(cacheKey, confirmedPersistedSource ?? finalCode, versionToken);
                 }
 
                 // v2.8.0: convert the WriteService legacy envelope (status=Success/Error) to canonical shape.
@@ -1121,8 +1175,11 @@ namespace GxMcp.Worker.Services
                     string writeCode = writePayload["code"]?.ToString();
                     string errCode = !string.IsNullOrWhiteSpace(writeCode) ? writeCode : "PatchWriteFailed";
                     bool objectSaveIncomplete = string.Equals(errCode, "ObjectSaveIncomplete", StringComparison.OrdinalIgnoreCase);
+                    bool verificationUnavailable = string.Equals(errCode, "WriteVerificationUnavailable", StringComparison.OrdinalIgnoreCase);
                     string recoveryHint = objectSaveIncomplete
                         ? writePayload["manualRecovery"]?.ToString()
+                        : verificationUnavailable
+                            ? writePayload["hint"]?.ToString()
                         : "Re-read the object source and verify the part is writable, then retry.";
                     var canonical = JObject.Parse(Models.McpResponse.Err(
                         code: errCode,
@@ -1459,6 +1516,22 @@ namespace GxMcp.Worker.Services
                     // code (e.g. "AmbiguousObjectName") behind a generic one.
                     if (jo["code"] == null && jo["error"]?["code"] != null)
                         jo["code"] = jo["error"]["code"];
+
+                    // Preserve persistence evidence from canonical error extras so the
+                    // patch receipt can distinguish an unknown read from a real mismatch.
+                    var errorObject = jo["error"] as JObject;
+                    if (errorObject != null)
+                    {
+                        foreach (string evidenceName in new[]
+                        {
+                            "postSaveVerification", "verification", "saveAttempted", "saved",
+                            "persisted", "source", "content", "persistedHash", "persistedSnippet"
+                        })
+                        {
+                            if (jo[evidenceName] == null && errorObject[evidenceName] != null)
+                                jo[evidenceName] = errorObject[evidenceName].DeepClone();
+                        }
+                    }
                 }
                 return jo;
             }
@@ -1487,6 +1560,10 @@ namespace GxMcp.Worker.Services
                 }
                 // Legacy error: { "status":"Error", "message":"..." }
                 if (string.Equals(status, "Error", StringComparison.OrdinalIgnoreCase))
+                    return json["message"]?.ToString() ?? json["error"]?.ToString() ?? "error";
+                // Some SDK read paths return { error: ... } without a status field.
+                // Never interpret that diagnostic as an empty source.
+                if (json["error"] != null)
                     return json["message"]?.ToString() ?? json["error"]?.ToString() ?? "error";
                 return null; // ok / partial / accepted — not an error
             }
@@ -1521,9 +1598,20 @@ namespace GxMcp.Worker.Services
                 // PatternAnalysisService so patch-mode can read & rewrite pattern XML.
                 if (_patternAnalysisService != null && PatternAnalysisService.IsPatternPart(resolvedPart))
                 {
-                    string patternXml = _patternAnalysisService.ReadPatternPartXml(obj, resolvedPart, out _, out var resolvedPatternPartName);
+                    string patternXml = _patternAnalysisService.ReadPatternPartXmlFresh(obj, resolvedPart, out _, out var resolvedPatternPartName);
                     if (patternXml == null)
                     {
+                        var freshDiagnostic = _objectService.GetLastResolutionDiagnostic();
+                        if (string.Equals(freshDiagnostic?["code"]?.ToString(), "FreshReadUnavailable", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return Models.McpResponse.Err(
+                                code: "FreshReadUnavailable",
+                                message: freshDiagnostic["message"]?.ToString(),
+                                hint: freshDiagnostic["hint"]?.ToString(),
+                                target: target,
+                                errorExtra: freshDiagnostic);
+                        }
+
                         return Models.McpResponse.Err(
                             code: "PatternPartNotFound",
                             message: "The object does not expose the requested pattern part.",
@@ -1756,11 +1844,7 @@ namespace GxMcp.Worker.Services
                 string verifyKey = BuildCacheKey(target, partName, typeFilter);
                 _sourceCache.TryRemove(verifyKey, out _);
                 string readResponse = _objectService.ReadObjectSourceForVerification(target, partName, typeFilter);
-                error = TryExtractError(readResponse);
-                if (!string.IsNullOrWhiteSpace(error)) return null;
-
-                var readJson = JObject.Parse(readResponse);
-                persistedSource = readJson["source"]?.ToString() ?? string.Empty;
+                if (!TryReadCompleteSource(readResponse, out _, out persistedSource, out error)) return null;
                 return TextPersistenceVerifier.Evaluate(expectedSource, persistedSource, verifyMode, partName);
             }
             catch (Exception ex)
@@ -1768,6 +1852,73 @@ namespace GxMcp.Worker.Services
                 error = ex.Message;
                 return null;
             }
+        }
+
+        private static string TryExtractErrorCode(string response)
+        {
+            try
+            {
+                var json = JObject.Parse(response);
+                return json["code"]?.ToString() ?? json["error"]?["code"]?.ToString();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        internal static bool TryReadCompleteSource(
+            string response,
+            out JObject readJson,
+            out string source,
+            out string error)
+        {
+            readJson = null;
+            source = null;
+            error = null;
+            if (string.IsNullOrWhiteSpace(response))
+            {
+                error = "The verification read returned no response.";
+                return false;
+            }
+
+            try
+            {
+                readJson = JObject.Parse(response);
+            }
+            catch
+            {
+                error = "The verification read returned invalid JSON.";
+                return false;
+            }
+
+            error = TryExtractError(response);
+            if (!string.IsNullOrWhiteSpace(error)) return false;
+            if (readJson["isBase64"]?.Value<bool?>() == true
+                || readJson["serializedPart"]?.Value<bool?>() == true
+                || readJson["projected"]?.Value<bool?>() == true)
+            {
+                error = readJson["isBase64"]?.Value<bool?>() == true
+                    ? "The verification read returned base64 content instead of complete text."
+                    : "The verification read returned a serialized or projected part, not an editable text source.";
+                return false;
+            }
+            if (readJson["truncated"]?.Value<bool?>() == true
+                || readJson["isTruncatedByWorker"]?.Value<bool?>() == true)
+            {
+                error = "The verification read was truncated.";
+                return false;
+            }
+
+            JToken sourceToken = readJson["source"] ?? readJson["content"];
+            if (sourceToken == null || sourceToken.Type != JTokenType.String)
+            {
+                error = "The verification read did not return a complete text source.";
+                return false;
+            }
+
+            source = sourceToken.ToString();
+            return true;
         }
 
         private bool VerifyPersistedSource(string target, string partName, string typeFilter, string expectedSource, out string error)

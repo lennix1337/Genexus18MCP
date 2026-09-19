@@ -176,9 +176,30 @@ namespace GxMcp.Worker.Tests
             Services.PatchPersistenceReceipt.MarkNotPersisted(payload, saved: true, verifyError: "different");
 
             Assert.Equal("WriteNotPersisted", payload["code"]?.ToString());
-            Assert.True(payload["saved"]?.Value<bool>());
+            Assert.False(payload["saved"]?.Value<bool>());
+            Assert.True(payload["saveAttempted"]?.Value<bool>());
+            Assert.False(payload["persisted"]?.Value<bool>());
             Assert.False(payload["verified"]?.Value<bool>());
             Assert.Equal("different", payload["persistedVerifyError"]?.ToString());
+        }
+
+        [Fact]
+        public void Receipt_VerificationUnavailableDoesNotExposeRequestedTextAsSaved()
+        {
+            var payload = new JObject();
+            Services.PatchPersistenceReceipt.AttachContentEvidence(
+                payload, requestedSource: "new", savedSource: "new", reReadSource: null);
+
+            Services.PatchPersistenceReceipt.MarkVerificationUnavailable(
+                payload, saveAttempted: true, reason: "FreshReadUnavailable");
+
+            Assert.Equal("WriteVerificationUnavailable", payload["code"]?.ToString());
+            Assert.False(payload["saved"]?.Value<bool>());
+            Assert.True(payload["saveAttempted"]?.Value<bool>());
+            Assert.False(payload["persisted"]?.Value<bool>());
+            Assert.Null(payload["content"]?["saved"]?.Value<string>());
+            Assert.Null(payload["content"]?["reRead"]?.Value<string>());
+            Assert.Equal("FreshReadUnavailable", payload["persistedVerifyError"]?.ToString());
         }
 
         [Fact]

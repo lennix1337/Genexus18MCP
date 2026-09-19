@@ -135,6 +135,14 @@ write count, transaction behavior, and the prohibition on implicit KB lifecycle
 actions. New typed failure codes may be added only when they replace an
 ambiguous or false-success result without changing the write semantics.
 
+For textual patches, `saved=true` is reserved for a complete post-save read that
+also verifies the requested content; `saveAttempted` reports the SDK write
+attempt separately. An explicit rollback is fenced with the version observed
+after the failed write. If that version is unavailable, rollback is refused to
+avoid overwriting a concurrent edit. PatternInstance verification refreshes the
+resolved WorkWithPlus child as well as the requested parent, so a fresh parent
+read cannot silently reuse a cached pattern object.
+
 ## Gateway responsibilities
 
 - MCP routing

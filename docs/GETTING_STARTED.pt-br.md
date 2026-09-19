@@ -141,6 +141,9 @@ Para desativar uma instrução no `Source`, leia primeiro a parte e reutilize o
   comentário solicitado;
 - a resposta separa `saved` de `verified`, inclui os hashes solicitado e relido
   e informa `implicitOperations: []`;
+- `saved: true` só aparece quando a releitura completa confirma o conteúdo;
+  `saveAttempted` informa separadamente que o SDK recebeu uma tentativa de
+  gravação;
 - se a releitura divergir, retorna `CommentOnlyWriteNotPersisted`; com
   `rollbackOnFailure=true`, restaura e verifica o snapshot anterior.
 

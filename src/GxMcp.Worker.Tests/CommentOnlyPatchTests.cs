@@ -90,6 +90,7 @@ namespace GxMcp.Worker.Tests
             Assert.True(payload["replacementPresent"]?.Value<bool>());
             Assert.True(payload["reReadConfirmed"]?.Value<bool>());
             Assert.Equal("fresh-sdk-read", payload["verification"]?["source"]?.ToString());
+            Assert.Equal(after, payload["source"]?.ToString());
             Assert.NotNull(payload["content"]?["requested"]?["hash"]);
             Assert.NotNull(payload["content"]?["saved"]?["hash"]);
             Assert.NotNull(payload["content"]?["reRead"]?["hash"]);
@@ -104,13 +105,37 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void RollbackPolicyRequiresVersionFenceForConcurrentSafety()
+        {
+            Assert.True(PatchPersistenceReceipt.CanAttemptRollback(false, true, "version-after-save"));
+            Assert.False(PatchPersistenceReceipt.CanAttemptRollback(false, true, null));
+            Assert.False(PatchPersistenceReceipt.CanAttemptRollback(false, true, ""));
+            Assert.False(PatchPersistenceReceipt.CanAttemptRollback(true, true, "version-after-save"));
+        }
+
+        [Fact]
+        public void RollbackReceiptDistinguishesUnknownStateFromVerifiedMismatch()
+        {
+            var payload = new JObject();
+
+            PatchPersistenceReceipt.MarkRollbackNotAttempted(payload, "unknown", verificationUnavailable: true);
+            Assert.True(payload["rollback"]?["verificationUnavailable"]?.Value<bool>());
+            Assert.False(payload["rollback"]?["attempted"]?.Value<bool>());
+
+            PatchPersistenceReceipt.MarkRollbackNotAttempted(payload, "mismatch", verificationUnavailable: false);
+            Assert.False(payload["rollback"]?["verificationUnavailable"]?.Value<bool>());
+        }
+
+        [Fact]
         public void Receipt_CommentOnlyMismatchUsesTypedError()
         {
             var payload = new JObject();
             PatchPersistenceReceipt.MarkNotPersisted(payload, saved: true, verifyError: null, commentOnly: true);
 
             Assert.Equal("CommentOnlyWriteNotPersisted", payload["code"]?.ToString());
-            Assert.True(payload["saved"]?.Value<bool>());
+            Assert.False(payload["saved"]?.Value<bool>());
+            Assert.True(payload["saveAttempted"]?.Value<bool>());
+            Assert.False(payload["persisted"]?.Value<bool>());
             Assert.False(payload["verified"]?.Value<bool>());
         }
     }

@@ -11,6 +11,7 @@ namespace GxMcp.Worker.Tests
         [InlineData("{\"status\":\"error\",\"error\":{\"code\":\"WriteNotPersisted\"},\"partialPersistenceDetected\":true}", true)]
         [InlineData("{\"status\":\"error\",\"error\":{\"code\":\"WriteNotPersisted\"},\"rollbackFailed\":true}", true)]
         [InlineData("{\"status\":\"error\",\"error\":{\"code\":\"WriteNotPersisted\"}}", false)]
+        [InlineData("{\"status\":\"error\",\"error\":{\"code\":\"WriteVerificationUnavailable\"}}", true)]
         [InlineData("{\"status\":\"error\",\"error\":{\"code\":\"ValidationFailed\"}}", false)]
         [InlineData("{\"status\":\"error\",\"partialPersistenceDetected\":true}", true)]
         [InlineData("{\"status\":\"error\",\"rollbackFailed\":true}", true)]
@@ -27,9 +28,20 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void InvalidResponseFailsClosedWithoutDirtyMark()
+        public void UnknownPostSaveStateNeverTriggersAutomaticRollback()
         {
-            Assert.False(WriteService.ShouldMarkTargetDirty("not-json"));
+            Assert.True(WriteService.IsPostSaveVerificationIndeterminate(
+                "{\"status\":\"error\",\"error\":{\"code\":\"WriteVerificationUnavailable\"}}"));
+            Assert.True(WriteService.IsPostSaveVerificationIndeterminate(
+                "{\"status\":\"error\",\"postSaveVerification\":{\"reReadConfirmed\":false}}"));
+            Assert.False(WriteService.IsPostSaveVerificationIndeterminate(
+                "{\"status\":\"error\",\"postSaveVerification\":{\"reReadConfirmed\":true}}"));
+        }
+
+        [Fact]
+        public void InvalidResponseMarksTargetDirtyBecauseWriteOutcomeIsUnknown()
+        {
+            Assert.True(WriteService.ShouldMarkTargetDirty("not-json"));
         }
     }
 }

@@ -481,7 +481,7 @@ namespace GxMcp.Worker.Services
         {
             JObject response;
             try { response = JObject.Parse(responseJson); }
-            catch { return false; }
+            catch { return true; }
 
             var rollback = response["rollback"] as JObject;
             if (rollback?["rolledBack"]?.Value<bool>() == true
@@ -498,6 +498,12 @@ namespace GxMcp.Worker.Services
             if (string.Equals(code, "WriteNoChange", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(code, "WriteNotPersisted", StringComparison.OrdinalIgnoreCase))
                 return false;
+
+            // The SDK may have committed a write even when the independent
+            // post-save read was unavailable. Keep the target dirty so a later
+            // build cannot take the compile-only fast path on unknown state.
+            if (string.Equals(code, "WriteVerificationUnavailable", StringComparison.OrdinalIgnoreCase))
+                return true;
 
             if (string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(status, "success", StringComparison.OrdinalIgnoreCase))
@@ -1199,7 +1205,7 @@ namespace GxMcp.Worker.Services
             // (success, no-change, dry-run, rollback, or error).
             // Default sdkPath = typed-sdk; deeper writers (LayoutService raw-XML) tag their own
             // sdkPath first and WrapWithPersistedState is idempotent so it preserves that.
-            string wrapped = WrapWithPersistedState(raw, target, string.IsNullOrWhiteSpace(partName) ? "Source" : partName, GxMcp.Worker.Helpers.WriteResultMeta.TypedSdk, snapshot?.PriorContent, code);
+            string wrapped = WrapWithPersistedState(raw, target, string.IsNullOrWhiteSpace(partName) ? "Source" : partName, GxMcp.Worker.Helpers.WriteResultMeta.TypedSdk, snapshot?.PriorContent, code, typeFilter);
 
             // Issue #24 — never report WriteApplied when a non-empty source write
             // landed as an empty part on disk. Runs against the persistedHash the
@@ -1363,18 +1369,22 @@ namespace GxMcp.Worker.Services
                 string priorContent = null;
                 try
                 {
-                    // issue #43 #2 (incomplete snapshot): read the FULL part. The old call
-                    // passed offset=null/limit=null with client="mcp", which triggers the
-                    // ~200-line / 16KB MCP pagination default — so the pre-write .bak captured
-                    // only the head of a large part and could NOT restore it. offset=0/limit=0 is
-                    // the explicit "no pagination, return everything" opt-out (ReadPagination).
-                    // typeFilter is forwarded so a homonym Transaction/Table snapshots the right object.
-                    string readJson = _objectService.ReadObjectSource(target, resolvedPart, 0, 0, "mcp", false, typeFilter);
-                    if (!string.IsNullOrWhiteSpace(readJson))
+                    // issue #43 #2 (incomplete snapshot): read the FULL part. Use the same
+                    // uncached verification path as patch matching so the recovery snapshot
+                    // cannot preserve a stale pre-edit source from the read cache.
+                    string readJson = _objectService.ReadObjectSourceForVerification(target, resolvedPart, typeFilter);
+                    if (!string.IsNullOrWhiteSpace(readJson)
+                        && !TryReadCompleteVerificationSource(
+                            readJson,
+                            resolvedPart,
+                            out priorContent,
+                            out _,
+                            out _,
+                            out string snapshotReadFailure,
+                            allowSerializedPart: true))
                     {
-                        var parsed = JObject.Parse(readJson);
-                        priorContent = parsed["source"]?.ToString()
-                            ?? parsed["content"]?.ToString();
+                        Logger.Debug("[SNAPSHOT] complete prior-read unavailable for " + target + "/" + resolvedPart + ": " + snapshotReadFailure);
+                        return null;
                     }
                 }
                 catch (Exception readEx)

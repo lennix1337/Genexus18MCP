@@ -177,13 +177,20 @@ namespace GxMcp.Worker.Services
         /// Failures to re-read are swallowed — the original envelope is still augmented with
         /// an empty hash/snippet so downstream parsers always find the keys.
         /// </summary>
-        private string WrapWithPersistedState(string responseJson, string target, string partName, string sdkPath = null, string priorSource = null, string requestedContent = null)
+        private string WrapWithPersistedState(string responseJson, string target, string partName, string sdkPath = null, string priorSource = null, string requestedContent = null, string typeFilter = null)
         {
             JObject parsed = null;
             try { parsed = JObject.Parse(responseJson); }
             catch
             {
-                parsed = new JObject { ["raw"] = responseJson ?? "" };
+                parsed = new JObject
+                {
+                    ["status"] = "error",
+                    ["code"] = "WriteVerificationUnavailable",
+                    ["message"] = "The write response was not valid JSON, so its persistence outcome is unknown.",
+                    ["saveAttempted"] = true,
+                    ["raw"] = responseJson ?? ""
+                };
             }
 
             GxMcp.Worker.Helpers.WriteResultMeta.TagSdkPath(parsed, sdkPath);
@@ -213,18 +220,21 @@ namespace GxMcp.Worker.Services
                     else
                     {
                         string readJson = isDryRun
-                            ? _objectService.ReadObjectSource(target, partName, offset: 0, limit: 0, client: "mcp", minimize: false)
-                            : _objectService.ReadObjectSourceForVerification(target, partName);
+                            ? _objectService.ReadObjectSource(target, partName, offset: 0, limit: 0, client: "mcp", minimize: false, typeFilter: typeFilter)
+                            : _objectService.ReadObjectSourceForVerification(target, partName, typeFilter);
                         if (!string.IsNullOrWhiteSpace(readJson))
                         {
-                            var readObj = JObject.Parse(readJson);
-                            verificationReadTruncated = readObj["truncated"]?.ToObject<bool?>() == true
-                                || readObj["isTruncatedByWorker"]?.ToObject<bool?>() == true;
-                            finalSource = readObj["source"]?.ToString()
-                                ?? readObj["content"]?.ToString()
-                                ?? readObj["parts"]?[partName ?? "Source"]?.ToString()
-                                ?? "";
-                            finalVersionToken = readObj["versionToken"]?.ToString();
+                            if (!TryReadCompleteVerificationSource(
+                                readJson,
+                                partName,
+                                out finalSource,
+                                out finalVersionToken,
+                                out verificationReadTruncated,
+                                out verificationReadFailure,
+                                allowSerializedPart: true))
+                            {
+                                finalSource = "";
+                            }
                         }
                         else
                         {
@@ -311,9 +321,27 @@ namespace GxMcp.Worker.Services
                             || string.Equals(responseCode, "WriteNoChange", StringComparison.OrdinalIgnoreCase);
                 if (successful && applied && verification.IsIndeterminate)
                 {
-                    parsed["verificationWarning"] = verification.Reason == "truncation"
-                        ? "Post-write verification returned a truncated source. The save result is preserved and verification is indeterminate; re-read the complete part before deciding whether to undo."
-                        : "Post-write verification could not read the complete persisted part. The save result is preserved and verification is indeterminate; re-read before deciding whether to undo.";
+                    bool saveAttempted = !string.Equals(responseCode, "WriteNoChange", StringComparison.OrdinalIgnoreCase);
+                    return Models.McpResponse.Err(
+                        code: "WriteVerificationUnavailable",
+                        message: saveAttempted
+                            ? (verification.Reason == "truncation"
+                                ? "The SDK save completed, but the post-save source read was truncated and persistence could not be confirmed."
+                                : "The SDK save completed, but the post-save source read could not be confirmed.")
+                            : "The operation did not report a new save, and the post-save source read could not confirm the persisted state.",
+                        hint: "Do not retry blindly. Re-read the complete part or recover from the pre-write snapshot before attempting another edit.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["part"] = partName,
+                            ["saved"] = false,
+                            ["saveAttempted"] = saveAttempted,
+                            ["verified"] = false,
+                            ["persisted"] = false,
+                            ["postSaveVerification"] = parsed["postSaveVerification"]?.DeepClone(),
+                            ["verification"] = verification.State,
+                            ["implicitLifecycleActions"] = new JArray()
+                        });
                 }
                 else if (successful && applied && !verification.Matches)
                 {
@@ -393,6 +421,9 @@ namespace GxMcp.Worker.Services
                 && !string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
                 return responseJson;
 
+            if (IsPostSaveVerificationIndeterminate(response.ToString(Newtonsoft.Json.Formatting.None)))
+                return responseJson;
+
             string current = response["source"]?.ToString();
             if (current != null && string.Equals(current, priorSource, StringComparison.Ordinal))
             {
@@ -435,9 +466,17 @@ namespace GxMcp.Worker.Services
             string afterVersion = null;
             try
             {
-                JObject read = JObject.Parse(_objectService.ReadObjectSourceForVerification(target, partName));
-                after = read["source"]?.ToString() ?? read["content"]?.ToString();
-                afterVersion = read["versionToken"]?.ToString();
+                if (!TryReadCompleteVerificationSource(
+                    _objectService.ReadObjectSourceForVerification(target, partName, typeFilter),
+                    partName,
+                    out after,
+                    out afterVersion,
+                    out bool truncated,
+                    out string readFailure,
+                    allowSerializedPart: true))
+                {
+                    if (restoreError == null) restoreError = readFailure ?? (truncated ? "Rollback re-read was truncated." : "Rollback re-read was incomplete.");
+                }
             }
             catch (Exception ex)
             {
@@ -463,6 +502,26 @@ namespace GxMcp.Worker.Services
             if (!restored)
                 response["rollbackFailed"] = true;
             return response.ToString(Newtonsoft.Json.Formatting.None);
+        }
+
+        internal static bool IsPostSaveVerificationIndeterminate(string responseJson)
+        {
+            try
+            {
+                var response = JObject.Parse(responseJson);
+                string code = response["code"]?.ToString()
+                    ?? response["error"]?["code"]?.ToString();
+                if (string.Equals(code, "WriteVerificationUnavailable", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                var postSave = response["postSaveVerification"] as JObject
+                    ?? response["error"]?["postSaveVerification"] as JObject;
+                return postSave != null && postSave["reReadConfirmed"]?.Value<bool?>() != true;
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         internal sealed class PersistedVerificationResult
@@ -802,6 +861,72 @@ namespace GxMcp.Worker.Services
                 ["length"] = content.Length,
                 ["snippet"] = snippet
             };
+        }
+
+        internal static bool TryReadCompleteVerificationSource(
+            string response,
+            string partName,
+            out string source,
+            out string versionToken,
+            out bool truncated,
+            out string failure,
+            bool allowSerializedPart = false)
+        {
+            source = null;
+            versionToken = null;
+            truncated = false;
+            failure = null;
+            try
+            {
+                var json = JObject.Parse(response);
+                string status = json["status"]?.ToString();
+                if (string.Equals(status, "error", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(status, "Error", StringComparison.OrdinalIgnoreCase)
+                    || json["error"] != null)
+                {
+                    failure = json["error"]?["message"]?.ToString()
+                        ?? json["error"]?.ToString()
+                        ?? json["message"]?.ToString()
+                        ?? "The source read returned an error.";
+                    return false;
+                }
+
+                truncated = json["truncated"]?.Value<bool?>() == true
+                    || json["isTruncatedByWorker"]?.Value<bool?>() == true;
+                if (truncated)
+                {
+                    failure = "The source read was truncated.";
+                    return false;
+                }
+
+                if (json["isBase64"]?.Value<bool?>() == true
+                    || (!allowSerializedPart && json["serializedPart"]?.Value<bool?>() == true)
+                    || json["projected"]?.Value<bool?>() == true)
+                {
+                    failure = json["isBase64"]?.Value<bool?>() == true
+                        ? "The source read returned base64 content instead of complete text."
+                        : "The source read returned a serialized or projected part, not an editable text source.";
+                    return false;
+                }
+
+                JToken sourceToken = json["source"]
+                    ?? json["content"]
+                    ?? json["parts"]?[partName ?? "Source"];
+                if (sourceToken == null || sourceToken.Type != JTokenType.String)
+                {
+                    failure = "The source read did not return a complete text source.";
+                    return false;
+                }
+
+                source = sourceToken.ToString();
+                versionToken = json["versionToken"]?.ToString();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                failure = ex.GetType().Name;
+                return false;
+            }
         }
     }
 }

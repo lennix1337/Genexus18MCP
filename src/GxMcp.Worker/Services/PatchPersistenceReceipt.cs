@@ -73,6 +73,9 @@ namespace GxMcp.Worker.Services
             verificationJson["source"] = "fresh-sdk-read";
             payload["verification"] = verificationJson;
             AttachContentEvidence(payload, savedSource, savedSource, persistedSource);
+            payload["source"] = persistedSource;
+            payload.Remove("partialPersistenceDetected");
+            payload.Remove("verificationWarning");
             return verified;
         }
 
@@ -93,6 +96,13 @@ namespace GxMcp.Worker.Services
         internal static bool ShouldRollback(bool persistedMatches, bool rollbackOnFailure)
             => !persistedMatches && rollbackOnFailure;
 
+        internal static bool CanAttemptRollback(
+            bool persistedMatches,
+            bool rollbackOnFailure,
+            string observedPersistedVersion)
+            => ShouldRollback(persistedMatches, rollbackOnFailure)
+                && !string.IsNullOrWhiteSpace(observedPersistedVersion);
+
         internal static void MarkVerified(JObject payload, bool saved)
         {
             payload.Remove("error");
@@ -112,14 +122,76 @@ namespace GxMcp.Worker.Services
                 ? "The SDK save completed, but the forced Source re-read did not contain the requested comment-only change."
                 : "The post-save re-read does not contain the requested patched content.";
             if (!string.IsNullOrWhiteSpace(verifyError)) payload["persistedVerifyError"] = verifyError;
+            payload["saveAttempted"] = saved;
             AttachOutcome(payload, saved, verified: false);
+        }
+
+        internal static void MarkVerificationUnavailable(JObject payload, bool saveAttempted, string reason)
+        {
+            var verification = payload["verification"] as JObject ?? new JObject();
+            payload.Remove("error");
+            payload.Remove("mutation");
+            payload.Remove("source");
+            payload.Remove("persistedHash");
+            payload.Remove("persistedSnippet");
+            payload.Remove("changed");
+            payload.Remove("partialPersistenceDetected");
+            payload.Remove("verificationWarning");
+            payload["_internalStatus"] = "Error";
+            payload["code"] = "WriteVerificationUnavailable";
+            payload["message"] = saveAttempted
+                ? "The SDK save completed, but the complete post-save read could not confirm persistence."
+                : "The operation did not report a new save, and the complete post-save read could not confirm persistence.";
+            payload["hint"] = "Do not retry blindly. Re-read the complete part or recover from the pre-write snapshot before attempting another edit.";
+            payload["verificationUnavailable"] = true;
+            verification["readCompleted"] = false;
+            verification["reReadConfirmed"] = false;
+            verification["reason"] = reason ?? "unknown";
+            payload["verification"] = verification;
+            payload["postSaveVerification"] = new JObject
+            {
+                ["reReadConfirmed"] = false,
+                ["reason"] = reason ?? "unknown"
+            };
+            if (!string.IsNullOrWhiteSpace(reason)) payload["persistedVerifyError"] = reason;
+            var content = payload["content"] as JObject;
+            if (content != null)
+            {
+                content["saved"] = JValue.CreateNull();
+                content["reRead"] = JValue.CreateNull();
+            }
+            AttachOutcome(payload, saved: false, verified: false);
+            payload["saveAttempted"] = saveAttempted;
+        }
+
+        internal static void MarkRollbackNotAttempted(
+            JObject payload,
+            string reason,
+            bool verificationUnavailable = true)
+        {
+            if (payload == null) return;
+            payload["rollback"] = new JObject
+            {
+                ["requested"] = true,
+                ["snapshotValid"] = true,
+                ["attempted"] = false,
+                ["saveAttempted"] = false,
+                ["verified"] = false,
+                ["rolledBack"] = false,
+                ["verificationUnavailable"] = verificationUnavailable,
+                ["error"] = reason ?? "Rollback was not attempted."
+            };
+            payload["rolledBack"] = false;
         }
 
         internal static void AttachOutcome(JObject payload, bool saved, bool verified)
         {
             payload["persistedVerified"] = verified;
             payload["persisted"] = verified;
-            payload["saved"] = saved;
+            // `saved` is a persistence claim, not an SDK call-return signal. A
+            // write whose post-save read did not confirm the requested content
+            // must never be exposed as saved=true.
+            payload["saved"] = saved && verified;
             payload["verified"] = verified;
         }
 
@@ -206,6 +278,7 @@ namespace GxMcp.Worker.Services
             {
                 ["requested"] = true,
                 ["snapshotValid"] = true,
+                ["attempted"] = true,
                 ["saved"] = saved,
                 ["verified"] = verified,
                 ["requestedHash"] = verification?.RequestedHash,

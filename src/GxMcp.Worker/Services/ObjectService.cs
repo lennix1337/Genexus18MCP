@@ -3142,18 +3142,58 @@ namespace GxMcp.Worker.Services
 
         internal KBObject FindObjectFresh(string target, string typeFilter = null)
         {
+            _lastResolutionDiagnostic = null;
             var seed = FindObject(target, typeFilter);
             if (seed == null) return null;
 
-            MarkReadCacheDirty(seed);
+            if (!InvalidateCache(seed))
+            {
+                _lastResolutionDiagnostic = new JObject
+                {
+                    ["code"] = "FreshReadUnavailable",
+                    ["message"] = "The SDK object cache could not be invalidated; a verification read was not attempted.",
+                    ["hint"] = "Retry after the Worker has exclusive access to the KB, or use a separate Worker for independent verification."
+                };
+                return null;
+            }
+
+            InvalidateAllReadCaches();
             var kb = _kbService.GetKB();
             try
             {
                 var byEntityKey = kb?.DesignModel.Objects.Get(seed.Key);
-                if (byEntityKey != null) return byEntityKey;
+                if (byEntityKey != null)
+                {
+                    if (object.ReferenceEquals(byEntityKey, seed))
+                    {
+                        _lastResolutionDiagnostic = new JObject
+                        {
+                            ["code"] = "FreshReadUnavailable",
+                            ["message"] = "The SDK returned the same in-memory object for a requested fresh verification read.",
+                            ["hint"] = "Retry after the Worker has exclusive access to the KB, or use a separate Worker for independent verification."
+                        };
+                        return null;
+                    }
+                    return byEntityKey;
+                }
             }
             catch { }
-            try { return kb?.DesignModel.Objects.Get(seed.Guid); } catch { return seed; }
+            try
+            {
+                var byGuid = kb?.DesignModel.Objects.Get(seed.Guid);
+                if (byGuid != null && object.ReferenceEquals(byGuid, seed))
+                {
+                    _lastResolutionDiagnostic = new JObject
+                    {
+                        ["code"] = "FreshReadUnavailable",
+                        ["message"] = "The SDK returned the same in-memory object for a requested fresh verification read.",
+                        ["hint"] = "Retry after the Worker has exclusive access to the KB, or use a separate Worker for independent verification."
+                    };
+                    return null;
+                }
+                return byGuid;
+            }
+            catch { return null; }
         }
 
         private string FormatReadNotFound(string target)
@@ -3386,7 +3426,20 @@ namespace GxMcp.Worker.Services
         internal string ReadObjectSourceForVerification(string target, string partName, string typeFilter = null)
         {
             var obj = FindObjectFresh(target, typeFilter);
-            if (obj == null) return FormatReadNotFound(target);
+            if (obj == null)
+            {
+                var diagnostic = GetLastResolutionDiagnostic();
+                if (string.Equals(diagnostic?["code"]?.ToString(), "FreshReadUnavailable", StringComparison.OrdinalIgnoreCase))
+                {
+                    return McpResponse.Err(
+                        code: "FreshReadUnavailable",
+                        message: diagnostic["message"]?.ToString(),
+                        hint: diagnostic["hint"]?.ToString(),
+                        target: target,
+                        errorExtra: diagnostic);
+                }
+                return FormatReadNotFound(target);
+            }
 
             string resolvedPart = ResolvePartName(obj, partName);
             string response = ReadObjectSourceInternal(
@@ -3400,6 +3453,13 @@ namespace GxMcp.Worker.Services
             {
                 var payload = JObject.Parse(response);
                 payload["verificationSource"] = "fresh-sdk-read";
+                if (payload["versionToken"] == null
+                    && payload["source"]?.Type == JTokenType.String)
+                {
+                    payload["versionToken"] = WriteService.ComputeContentVersionToken(
+                        obj,
+                        payload["source"].ToString());
+                }
                 return payload.ToString(Newtonsoft.Json.Formatting.None);
             }
             catch { return response; }
@@ -4486,9 +4546,20 @@ namespace GxMcp.Worker.Services
                 {
                     global::Artech.Architecture.Common.Objects.KBObject resolvedObject = null;
                     string resolvedPartName = partName;
-                    string patternXml = _patternAnalysisService?.ReadPatternPartXml(obj, partName, out resolvedObject, out resolvedPartName);
+                    string patternXml = _patternAnalysisService?.ReadPatternPartXmlFresh(obj, partName, out resolvedObject, out resolvedPartName);
                     if (string.IsNullOrEmpty(patternXml))
                     {
+                        var freshDiagnostic = GetLastResolutionDiagnostic();
+                        if (string.Equals(freshDiagnostic?["code"]?.ToString(), "FreshReadUnavailable", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return McpResponse.Err(
+                                code: "FreshReadUnavailable",
+                                message: freshDiagnostic["message"]?.ToString(),
+                                hint: freshDiagnostic["hint"]?.ToString(),
+                                target: targetName,
+                                errorExtra: freshDiagnostic);
+                        }
+
                         // PatternVirtual fallback: serialise the matching part directly when the WWP+ analyser bails.
                         try
                         {
@@ -4537,6 +4608,12 @@ namespace GxMcp.Worker.Services
                     }
 
                     ProcessTextResponse(patternXml, patternResult, client);
+                    try
+                    {
+                        var versionObject = resolvedObject ?? obj;
+                        patternResult["versionToken"] = WriteService.ComputeContentVersionToken(versionObject, patternXml);
+                    }
+                    catch { }
                     return patternResult.ToString();
                 }
 
@@ -4665,6 +4742,8 @@ namespace GxMcp.Worker.Services
                     {
                         string xml = part.SerializeToXml();
                         ProcessTextResponse(xml, result, client);
+                        result["serializedPart"] = true;
+                        result["patchable"] = false;
                         Logger.Info("ReadSource (XML) SUCCESS");
 
                         // issue #29: SDPanel layout/variables/conditions are WorkWithDevices
@@ -5222,21 +5301,22 @@ namespace GxMcp.Worker.Services
             catch { /* keep "Unknown" on failure */ }
         }
 
-        private static void InvalidateCache(object obj)
+        private static bool InvalidateCache(object obj)
         {
             try
             {
                 var type = typeof(Artech.Architecture.Common.Objects.KBObject).Assembly.GetType("Artech.Architecture.Common.Cache.SingleInstanceModelObjectCache");
-                if (type != null)
-                {
-                    var method = type.GetMethod("Invalidate", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                    method?.Invoke(null, new object[] { obj });
-                    Logger.Debug("InvalidateCache: Object invalidated via reflection.");
-                }
+                if (type == null) return false;
+                var method = type.GetMethod("Invalidate", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                if (method == null) return false;
+                method.Invoke(null, new object[] { obj });
+                Logger.Debug("InvalidateCache: Object invalidated via reflection.");
+                return true;
             }
             catch (Exception ex)
             {
                 Logger.Debug("InvalidateCache reflection failed: " + ex.Message);
+                return false;
             }
         }
     }
