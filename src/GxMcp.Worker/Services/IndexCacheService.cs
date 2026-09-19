@@ -235,9 +235,10 @@ namespace GxMcp.Worker.Services
 
         public IndexState GetState()
         {
+            IndexState snapshot;
             lock (_stateLock)
             {
-                return new IndexState
+                snapshot = new IndexState
                 {
                     Status = _state.Status,
                     Freshness = _state.Freshness,
@@ -250,6 +251,23 @@ namespace GxMcp.Worker.Services
                     EnrichmentStartedUtc = _state.EnrichmentStartedUtc
                 };
             }
+
+            // KbService owns the worker activity lease; keep it out of the cache
+            // state machine so a stalled build remains observable without changing
+            // Ready/Reindexing availability semantics.
+            var kb = KbService;
+            if (kb != null)
+            {
+                snapshot.OperationId = kb.IndexOperationId;
+                snapshot.OperationState = kb.IndexBuildState;
+                snapshot.WorkerAlive = kb.IndexWorkerAlive;
+                snapshot.Recoverable = kb.IndexRecoveryAvailable
+                    || string.Equals(snapshot.Status, "Cold", StringComparison.OrdinalIgnoreCase);
+                snapshot.Stalled = string.Equals(snapshot.OperationState, "Stalled", StringComparison.OrdinalIgnoreCase);
+                snapshot.LastProgressAtUtc = kb.IndexLastProgressAtUtc;
+                snapshot.StalledAtUtc = kb.IndexStalledAtUtc;
+            }
+            return snapshot;
         }
 
         public void MarkReindexStarted(int totalEstimated)

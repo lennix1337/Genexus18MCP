@@ -760,7 +760,16 @@ namespace GxMcp.Worker.Services
             meta["index_total_estimated"] = total;
             meta["indexed_pct"] = pct;
             meta["progress_token"] = "genexus-mcp-bulk-index";
-            meta["retry_hint"] = "Indexing in background. Re-run query for more results; read/edit/build/list tools work without the index.";
+            var state = _indexCacheService.GetState();
+            bool recoverable = state?.Recoverable == true
+                || string.Equals(state?.Status, "Cold", StringComparison.OrdinalIgnoreCase);
+            meta["operationId"] = state?.OperationId != null ? (JToken)state.OperationId : JValue.CreateNull();
+            meta["operationState"] = state?.OperationState ?? "Unknown";
+            meta["workerAlive"] = state?.WorkerAlive ?? false;
+            meta["recoverable"] = recoverable;
+            meta["retry_hint"] = recoverable
+                ? "The index worker is stalled or unavailable. Recover with genexus_lifecycle action=index force=true, then retry query."
+                : "Indexing in background. Re-run query for more results; read/edit/build/list tools work without the index.";
             responseObj["_meta"] = meta;
         }
 

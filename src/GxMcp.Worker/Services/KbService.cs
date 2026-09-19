@@ -31,13 +31,24 @@ namespace GxMcp.Worker.Services
         private Thread _enrichIndexThread;
         private Thread _deltaIndexThread;
         private IndexBuildWatchdog _indexWatchdog;
+        private readonly IndexOperationCoordinator _indexOperations = new IndexOperationCoordinator();
 
-        private void MarkIndexProgressHeartbeat()
+        private void MarkIndexProgressHeartbeat(int generation)
         {
+            if (!_indexOperations.MarkProgress(generation)) return;
             _indexWatchdog?.Beat();
+            if (string.Equals(_currentStatus, "Index worker stalled: no observable progress", StringComparison.Ordinal))
+                _currentStatus = "Index worker resumed";
         }
 
-        private string CancelStalledIndexBuild()
+        private void MarkIndexStalled(int generation)
+        {
+            if (!_indexOperations.MarkStalled(generation)) return;
+            _currentStatus = "Index worker stalled: no observable progress";
+            Logger.Warn("[INDEX-STALLED] worker remains alive without observable progress; recovery requires action=index force=true.");
+        }
+
+        private void CancelStalledIndexBuild()
         {
             int processed = _processedCount;
             DateTime last = _indexWatchdog?.LastProgressUtc ?? DateTime.UtcNow;
@@ -54,22 +65,95 @@ namespace GxMcp.Worker.Services
             try { _indexCacheService.MarkIndexFailed(); } catch { }
             _currentStatus = "Error: index build cancelled after no progress";
             _isIndexing = false;
-            return Models.McpResponse.Ok(
-                code: "IndexRecoveryStarted",
-                result: new JObject
-                {
-                    ["cancelled"] = true,
-                    ["processed"] = processed,
-                    ["lastProgressAtUtc"] = last.ToString("o"),
-                    ["noProgressTimeoutSec"] = IndexBuildWatchdog.ResolveNoProgressSeconds(),
-                    ["hint"] = "The stalled index build was cancelled. Re-issue force=true to start a fresh build; the last certified snapshot remains available on disk."
-                });
+            Logger.Info("[INDEX-RECOVERY] cancelled stalled operation; processed=" + processed
+                + " lastProgressAtUtc=" + last.ToString("o"));
         }
 
-        private void StartIndexWatchdog()
+        private void StartIndexWatchdog(int generation)
         {
-            _indexWatchdog = new IndexBuildWatchdog(cancelBuild: () => CancelStalledIndexBuild());
+            _indexWatchdog = new IndexBuildWatchdog(
+                cancelBuild: () => CancelStalledIndexBuild(),
+                onStalled: () => MarkIndexStalled(generation));
             _indexWatchdog.Start();
+        }
+
+        private bool IsIndexWorkerAlive()
+        {
+            return _isIndexing && new[] { _liteIndexThread, _enrichIndexThread, _deltaIndexThread }
+                .Any(thread => thread != null && thread.IsAlive);
+        }
+
+        private bool FinishIndexOperation(int generation)
+        {
+            bool completed = _indexOperations.Complete(generation);
+            if (!completed) return false;
+            _indexWatchdog?.Stop();
+            _isIndexing = false;
+            return true;
+        }
+
+        private bool IsCurrentIndexOperation(int generation)
+        {
+            return _indexOperations.IsCurrent(generation);
+        }
+
+        private void MarkIndexOperationFailed(int generation, string message)
+        {
+            if (!IsCurrentIndexOperation(generation)) return;
+            try { _indexCacheService.MarkIndexFailed(); } catch { }
+            _currentStatus = "Error: " + message;
+        }
+
+        public string IndexOperationId
+        {
+            get { return _indexOperations.GetSnapshot(IsIndexWorkerAlive()).OperationId; }
+        }
+
+        public string IndexBuildState
+        {
+            get { return _indexOperations.GetSnapshot(IsIndexWorkerAlive()).State; }
+        }
+
+        public bool IndexWorkerAlive
+        {
+            get { return IsIndexWorkerAlive(); }
+        }
+
+        public bool IndexRecoveryAvailable
+        {
+            get
+            {
+                var snapshot = _indexOperations.GetSnapshot(IsIndexWorkerAlive());
+                return snapshot.Recoverable;
+            }
+        }
+
+        public DateTime? IndexStalledAtUtc
+        {
+            get { return _indexOperations.GetSnapshot(IsIndexWorkerAlive()).StalledAtUtc; }
+        }
+
+        public DateTime? IndexLastProgressAtUtc
+        {
+            get
+            {
+                DateTime last = _indexWatchdog?.LastProgressUtc ?? default(DateTime);
+                return last == default(DateTime) ? (DateTime?)null : last;
+            }
+        }
+
+        private JObject BuildIndexOperationResult(string operationId, string hint, bool reused)
+        {
+            var snapshot = _indexOperations.GetSnapshot(IsIndexWorkerAlive());
+            return new JObject
+            {
+                ["operationId"] = operationId,
+                ["operationState"] = snapshot.State,
+                ["reused"] = reused,
+                ["workerAlive"] = snapshot.WorkerAlive,
+                ["recoverable"] = snapshot.Recoverable,
+                ["hint"] = hint
+            };
         }
 
         // Fase 0 instrumentation: last KB-open / datastore-probe elapsed, so Program.cs
@@ -554,12 +638,17 @@ namespace GxMcp.Worker.Services
             }
 
             Logger.Info($"BulkIndex(force={force}) requested — fast index path (lite + lazy enrichment).");
-            if (_isIndexing)
+            var lease = _indexOperations.Acquire(force, IsIndexWorkerAlive(), CancelStalledIndexBuild);
+            string operationId = lease.OperationId;
+            int operationGeneration = lease.Generation;
+            if (lease.Reused)
             {
-                if (force) return CancelStalledIndexBuild();
                 return Models.McpResponse.Ok(
                     code: "AlreadyInProgress",
-                    result: new JObject { ["hint"] = "An index build is already running; poll genexus_whoami for progress." });
+                    result: BuildIndexOperationResult(
+                        operationId,
+                        "An index build is already running; poll genexus_lifecycle action=status for progress.",
+                        reused: true));
             }
 
             // Wait briefly for the KB to open — same warm-up window as the legacy path.
@@ -614,20 +703,20 @@ namespace GxMcp.Worker.Services
                         {
                             try { _indexCacheService.MarkIndexRefreshing(); } catch { }
                             _isIndexing = true;
-                            StartDeltaRefreshThread(validation.HighWaterMark, loaded.Objects.Count);
-                            StartIndexWatchdog();
+                            StartIndexWatchdog(operationGeneration);
+                            StartDeltaRefreshThread(validation.HighWaterMark, loaded.Objects.Count, operationGeneration);
                             Logger.Info($"BulkIndex(fast): warm cache delta-eligible ({loaded.Objects.Count} objects, hwm={validation.HighWaterMark:o}, dllRebaseline={dllRebaseline}) — delta refresh started.");
+                            var deltaResult = BuildIndexOperationResult(
+                                operationId,
+                                "Snapshot restored; the delta refresh is running. Wait with action=status wait=30 freshness=current.",
+                                reused: false);
+                            deltaResult["objects"] = loaded.Objects.Count;
+                            // Issue #209: a warm snapshot is restored but not current until
+                            // this delta publishes its fresh high-water mark.
+                            deltaResult["hint"] = "Snapshot restored from the warm cache; index-dependent reads stay blocked until freshness=current. Wait with genexus_lifecycle action=status wait=30 freshness=current.";
                             return Models.McpResponse.Ok(
                                 code: "DeltaStarted",
-                                result: new JObject
-                                {
-                                    ["objects"] = loaded.Objects.Count,
-                                    // Issue #209: the warm cache is RESTORED, not certified. Index-dependent
-                                    // reads stay blocked by the gateway gate until the delta republishes
-                                    // Freshness=current, so the hint must not promise otherwise — it names
-                                    // the wait that observes completion (whoami only reports progress).
-                                    ["hint"] = "Snapshot restored from the warm cache; objects changed since the last index are being refreshed in the background. Index-dependent reads stay blocked until freshness=current — wait with genexus_lifecycle action=status wait=30 freshness=current (genexus_whoami observes progress)."
-                                });
+                                result: deltaResult);
                         }
                         Logger.Info($"BulkIndex(fast): cache present but not delta-eligible (canDelta={validation.CanDelta} canDeltaAcrossDll={validation.CanDeltaAcrossDll} metaPresent={validation.MetaPresent} schemaMatch={validation.SchemaMatch} dllMatch={validation.DllMatch}) — full rebuild to re-establish the delta baseline.");
                     }
@@ -650,8 +739,8 @@ namespace GxMcp.Worker.Services
                     dynamic kb = GetKB();
                     if (kb == null)
                     {
-                        _isIndexing = false;
-                        _currentStatus = "Error: KB not open";
+                        MarkIndexOperationFailed(operationGeneration, "KB not open");
+                        FinishIndexOperation(operationGeneration);
                         return;
                     }
 
@@ -677,6 +766,7 @@ namespace GxMcp.Worker.Services
 
                     foreach (global::Artech.Architecture.Common.Objects.KBObject obj in objectList)
                     {
+                        if (!IsCurrentIndexOperation(operationGeneration)) return;
                         long objStart = Stopwatch.GetTimestamp();
                         _totalCount++;
                         // issue #25 #1: keep the observable "processed" counter moving
@@ -685,7 +775,7 @@ namespace GxMcp.Worker.Services
                         // showed processed:0 with no way to gauge progress. In the lite
                         // pass every walked object IS processed, so track them together.
                         _processedCount = _totalCount;
-                        MarkIndexProgressHeartbeat();
+                        MarkIndexProgressHeartbeat(operationGeneration);
                         string typeName = null;
                         try { typeName = obj.TypeDescriptor?.Name; } catch { }
                         if (string.IsNullOrEmpty(typeName)) typeName = obj.GetType().Name;
@@ -772,6 +862,7 @@ namespace GxMcp.Worker.Services
                         }
                     }
 
+                    if (!IsCurrentIndexOperation(operationGeneration)) return;
                     _indexCacheService.ReplaceAll(liteEntries);
                     _indexCacheService.MarkLitePassComplete(_totalCount);
 
@@ -827,11 +918,11 @@ namespace GxMcp.Worker.Services
                         // specific target. The lite-complete sidecar already persisted above keeps
                         // warm start delta-eligible.
                         _processedCount = _totalCount;
+                        if (!IsCurrentIndexOperation(operationGeneration)) return;
                         _indexCacheService.MarkIndexComplete(_totalCount);
                         bulkSw.Stop();
                         _currentStatus = "Complete";
-                        _indexWatchdog?.Stop();
-                        _isIndexing = false;
+                        FinishIndexOperation(operationGeneration);
                         Logger.Info($"[ENRICH-LAZY] eager drain skipped — {_totalCount} objects catalogued, enrichment on-demand. litePassMs={liteSw.ElapsedMilliseconds}");
                         return;
                     }
@@ -848,6 +939,7 @@ namespace GxMcp.Worker.Services
                                 (proc, tot) => { _processedCount = proc; _indexCacheService.MarkEnrichmentProgress(proc, tot); })
                                 .GetAwaiter().GetResult();
                             _processedCount = _totalCount;
+                            if (!IsCurrentIndexOperation(operationGeneration)) return;
                             _indexCacheService.MarkIndexComplete(_totalCount);
                             // Fase 0.5: coalesced final flush — the per-object enrichment
                             // flushes are now throttled (30s), so force one write here to
@@ -873,10 +965,9 @@ namespace GxMcp.Worker.Services
                         catch (Exception ex)
                         {
                             Logger.Error("[BULK-INDEX-ENRICH-FAIL] error=" + ex.Message);
-                            try { _indexCacheService.MarkIndexFailed(); } catch { }
-                            _currentStatus = "Error: " + ex.Message;
+                            MarkIndexOperationFailed(operationGeneration, ex.Message);
                         }
-                        finally { _indexWatchdog?.Stop(); _isIndexing = false; }
+                        finally { FinishIndexOperation(operationGeneration); }
                     }) {
                         IsBackground = true,
                         Priority = ThreadPriority.BelowNormal,
@@ -888,12 +979,11 @@ namespace GxMcp.Worker.Services
                 }
                 catch (Exception ex)
                 {
-                    _indexCacheService.EndLiteWalk();
+                    if (IsCurrentIndexOperation(operationGeneration))
+                        _indexCacheService.EndLiteWalk();
                     Logger.Error("[BULK-INDEX-LITE-FAIL] error=" + ex.Message);
-                    try { _indexCacheService.MarkIndexFailed(); } catch { }
-                    _currentStatus = "Error: " + ex.Message;
-                    _indexWatchdog?.Stop();
-                    _isIndexing = false;
+                    MarkIndexOperationFailed(operationGeneration, ex.Message);
+                    FinishIndexOperation(operationGeneration);
                 }
             }) {
                 IsBackground = true,
@@ -902,12 +992,16 @@ namespace GxMcp.Worker.Services
             };
             liteThread.SetApartmentState(ApartmentState.STA);
             _liteIndexThread = liteThread;
+            _indexOperations.MarkWorkerStarted(operationGeneration);
             liteThread.Start();
-            StartIndexWatchdog();
+            StartIndexWatchdog(operationGeneration);
 
             return Models.McpResponse.Ok(
                 code: "LiteStarted",
-                result: new JObject { ["hint"] = "list_objects is usable after a few seconds; analyze impact uses on-demand enrichment." });
+                result: BuildIndexOperationResult(
+                    operationId,
+                    "list_objects is usable after a few seconds; analyze impact uses on-demand enrichment.",
+                    reused: false));
         }
 
         // Shared enrich-one-entry closure used by the lite-pass queue, the delta resume queue,
@@ -953,22 +1047,23 @@ namespace GxMcp.Worker.Services
         // re-persist. This replaces the full 38k re-walk on every warm start.
         // The refresh also performs a count/change-gated Guid sweep so deletions and
         // rename-to-new-key cases do not linger indefinitely in the restored index.
-        private void StartDeltaRefreshThread(DateTime highWaterMark, int loadedCount)
+        private void StartDeltaRefreshThread(DateTime highWaterMark, int loadedCount, int operationGeneration)
         {
             var deltaThread = new Thread(() =>
             {
                 var sw = Stopwatch.StartNew();
                 int changed = 0;
+                bool retryScheduled = false;
                 try
                 {
-                    MarkIndexProgressHeartbeat();
+                    MarkIndexProgressHeartbeat(operationGeneration);
                     dynamic kb = GetKB();
                     if (kb == null)
                     {
                         // Issue #209: a delta that cannot even start must leave an observable
                         // terminal state (Cold/stale), not just a descriptive status string.
-                        _currentStatus = "Error: KB not open";
-                        try { _indexCacheService.MarkIndexFailed(); } catch { }
+                        MarkIndexOperationFailed(operationGeneration, "KB not open");
+                        FinishIndexOperation(operationGeneration);
                         return;
                     }
 
@@ -990,6 +1085,7 @@ namespace GxMcp.Worker.Services
                     var changedKeys = kb.DesignModel.Objects.GetKeys(safeHwm);
                     foreach (var key in (System.Collections.IEnumerable)changedKeys)
                     {
+                        if (!IsCurrentIndexOperation(operationGeneration)) return;
                         try
                         {
                             var obj = kb.DesignModel.Objects.Get((Artech.Udm.Framework.EntityKey)key);
@@ -997,7 +1093,7 @@ namespace GxMcp.Worker.Services
                             DateTime objectLastUpdate = SdkTimestampNormalizer.NormalizeUtc(obj.LastUpdate);
                             if (objectLastUpdate <= safeHwm) continue; // re-filter like KbWatcherService
                             _indexCacheService.UpdateEntry(obj);
-                            MarkIndexProgressHeartbeat();
+                            MarkIndexProgressHeartbeat(operationGeneration);
                             if (objectLastUpdate > newHwm) newHwm = objectLastUpdate;
                             changed++;
                         }
@@ -1034,6 +1130,7 @@ namespace GxMcp.Worker.Services
                     catch (Exception dex) { Logger.Warn("Delta deletion sweep failed: " + dex.Message); }
 
                     int effectiveCount = _indexCacheService.GetIndex().Objects.Count;
+                    if (!IsCurrentIndexOperation(operationGeneration)) return;
                     _indexCacheService.ObserveLastUpdate(newHwm);
                     _indexCacheService.MarkIndexComplete(effectiveCount);
                     // Persist the merged body + refreshed sidecar (advances the hwm baseline).
@@ -1076,11 +1173,24 @@ namespace GxMcp.Worker.Services
                     // Freshness=refreshing forever, indistinguishable from a refresh still in
                     // progress, with nothing pointing at the manual recovery path.
                     Logger.Error("[DELTA-REFRESH-FAIL] error=" + ex.Message);
-                    _currentStatus = "Error: " + ex.Message;
-                    try { _indexCacheService.MarkIndexFailed(); } catch { }
-                    ScheduleDeltaRetry(highWaterMark, loadedCount);
+                    if (IsCurrentIndexOperation(operationGeneration))
+                    {
+                        MarkIndexOperationFailed(operationGeneration, ex.Message);
+                        retryScheduled = ScheduleDeltaRetry(highWaterMark, loadedCount, operationGeneration);
+                    }
                 }
-                finally { _isIndexing = false; }
+                finally
+                {
+                    if (retryScheduled)
+                    {
+                        _indexWatchdog?.Stop();
+                        _isIndexing = false;
+                    }
+                    else
+                    {
+                        FinishIndexOperation(operationGeneration);
+                    }
+                }
             })
             {
                 IsBackground = true,
@@ -1089,6 +1199,7 @@ namespace GxMcp.Worker.Services
             };
             deltaThread.SetApartmentState(ApartmentState.STA);
             _deltaIndexThread = deltaThread;
+            _indexOperations.MarkWorkerStarted(operationGeneration);
             deltaThread.Start();
         }
 
@@ -1099,7 +1210,7 @@ namespace GxMcp.Worker.Services
         private const int DeltaRetryMaxAttempts = 3;
         private static readonly int[] DeltaRetryBackoffMs = { 5000, 15000, 60000 };
 
-        private void ScheduleDeltaRetry(DateTime highWaterMark, int loadedCount)
+        private bool ScheduleDeltaRetry(DateTime highWaterMark, int loadedCount, int operationGeneration)
         {
             int attempt = Interlocked.Increment(ref _deltaRetryAttempt);
             if (attempt > DeltaRetryMaxAttempts)
@@ -1107,11 +1218,12 @@ namespace GxMcp.Worker.Services
                 Logger.Error(
                     $"[DELTA-RETRY] giving up after {DeltaRetryMaxAttempts} attempts — the index stays Cold/stale. "
                     + "Recover with genexus_lifecycle action=index force=true.");
-                return;
+                return false;
             }
 
             int delayMs = DeltaRetryBackoffMs[Math.Min(attempt - 1, DeltaRetryBackoffMs.Length - 1)];
             Logger.Warn($"[DELTA-RETRY] scheduling attempt {attempt}/{DeltaRetryMaxAttempts} in {delayMs}ms.");
+            if (!_indexOperations.MarkRetryPending(operationGeneration, pending: true)) return false;
 
             var retryThread = new Thread(() =>
             {
@@ -1122,16 +1234,33 @@ namespace GxMcp.Worker.Services
                     if (_isIndexing)
                     {
                         Logger.Info("[DELTA-RETRY] an index run is already in progress — retry dropped.");
+                        if (_indexOperations.IsCurrent(operationGeneration))
+                        {
+                            _indexOperations.MarkRetryPending(operationGeneration, pending: false);
+                            FinishIndexOperation(operationGeneration);
+                        }
                         return;
                     }
+                    if (!_indexOperations.IsCurrent(operationGeneration)) return;
                     if (GetKB() == null)
                     {
                         Logger.Warn("[DELTA-RETRY] KB is no longer open — retry abandoned.");
+                        FinishIndexOperation(operationGeneration);
                         return;
                     }
-                    StartDeltaRefreshThread(highWaterMark, loadedCount);
+                    _isIndexing = true;
+                    StartIndexWatchdog(operationGeneration);
+                    StartDeltaRefreshThread(highWaterMark, loadedCount, operationGeneration);
                 }
-                catch (Exception ex) { Logger.Warn("[DELTA-RETRY] scheduling failed: " + ex.Message); }
+                catch (Exception ex)
+                {
+                    Logger.Warn("[DELTA-RETRY] scheduling failed: " + ex.Message);
+                    if (_indexOperations.IsCurrent(operationGeneration))
+                    {
+                        _indexOperations.MarkRetryPending(operationGeneration, pending: false);
+                        FinishIndexOperation(operationGeneration);
+                    }
+                }
             })
             {
                 IsBackground = true,
@@ -1140,6 +1269,7 @@ namespace GxMcp.Worker.Services
             };
             retryThread.SetApartmentState(ApartmentState.STA);
             retryThread.Start();
+            return true;
         }
 
         // v2.3.8 (post-self-review) — force flag closes the "stale snapshot" gap.
@@ -1151,9 +1281,18 @@ namespace GxMcp.Worker.Services
         private string BulkIndexLegacy(bool force)
         {
             Logger.Info($"BulkIndex(force={force}) requested.");
-            if (_isIndexing) return Models.McpResponse.Ok(
-                code: "AlreadyInProgress",
-                result: new JObject { ["hint"] = "An index build is already running; poll genexus_whoami for progress." });
+            var lease = _indexOperations.Acquire(force, IsIndexWorkerAlive(), CancelStalledIndexBuild);
+            string operationId = lease.OperationId;
+            int operationGeneration = lease.Generation;
+            if (lease.Reused)
+            {
+                return Models.McpResponse.Ok(
+                    code: "AlreadyInProgress",
+                    result: BuildIndexOperationResult(
+                        operationId,
+                        "An index build is already running; poll genexus_lifecycle action=status for progress.",
+                        reused: true));
+            }
 
             // Wait briefly for the KB to open. The Gateway fires BulkIndex from the
             // initialize hook before the worker has opened the KB, so IsIndexMissing
@@ -1192,13 +1331,15 @@ namespace GxMcp.Worker.Services
                         // where the index was already in memory before the BulkIndex call.
                         try { _indexCacheService.MarkIndexComplete(loaded.Objects.Count); } catch { }
                         Logger.Info($"BulkIndex skipped — cache already populated ({loaded.Objects.Count} objects). Pass force=true to rebuild.");
+                        var alreadyIndexed = BuildIndexOperationResult(
+                            operationId,
+                            "Pass force=true to force a full SDK rescan when entries are missing edges or new objects exist.",
+                            reused: false);
+                        alreadyIndexed["objects"] = loaded.Objects.Count;
+                        FinishIndexOperation(operationGeneration);
                         return Models.McpResponse.Ok(
                             code: "AlreadyIndexed",
-                            result: new JObject
-                            {
-                                ["objects"] = loaded.Objects.Count,
-                                ["hint"] = "Pass force=true to force a full SDK rescan when entries are missing edges or new objects exist."
-                            });
+                            result: alreadyIndexed);
                     }
                 }
             }
@@ -1216,8 +1357,8 @@ namespace GxMcp.Worker.Services
                 try {
                     dynamic kb = GetKB();
                     if (kb == null) {
-                        _isIndexing = false;
-                        _currentStatus = "Error: KB not open";
+                        MarkIndexOperationFailed(operationGeneration, "KB not open");
+                        FinishIndexOperation(operationGeneration);
                         return;
                     }
 
@@ -1243,6 +1384,7 @@ namespace GxMcp.Worker.Services
                     var indexSw = Stopwatch.StartNew();
                     foreach (var snapshotEntry in objectSnapshot)
                     {
+                        if (!IsCurrentIndexOperation(operationGeneration)) return;
                         try {
                             // Fetch object safely by stable identity. Name-based dynamic dispatch
                             // can bind to the wrong GeneXus SDK overload during bulk indexing.
@@ -1251,6 +1393,7 @@ namespace GxMcp.Worker.Services
 
                             _indexCacheService.UpdateEntry(obj);
                             _processedCount++;
+                            MarkIndexProgressHeartbeat(operationGeneration);
                             
                             int notifyInterval = Math.Max(500, _totalCount / 100);
                             if (_processedCount % notifyInterval == 0 || _processedCount == _totalCount) {
@@ -1287,21 +1430,21 @@ namespace GxMcp.Worker.Services
                         }
                     }
 
+                    if (!IsCurrentIndexOperation(operationGeneration)) return;
                     _currentStatus = "Complete";
-                    _isIndexing = false;
                     bulkSw.Stop();
                     // v2.3.8 (Task 1.1): publish completion to IndexState.
                     try { _indexCacheService?.MarkIndexComplete(_processedCount); } catch { }
+                    FinishIndexOperation(operationGeneration);
                     Logger.Info($"[BULK-INDEX] elapsedMs={bulkSw.ElapsedMilliseconds} processed={_processedCount} total={_totalCount}");
                 } catch (Exception ex) {
                     bulkSw.Stop();
                     Logger.Error($"[BULK-INDEX-FAIL] elapsedMs={bulkSw.ElapsedMilliseconds} error={ex.Message}");
-                    _isIndexing = false;
-                    _currentStatus = "Error: " + ex.Message;
                     // v2.3.8 (Task 1.1 review): reset IndexState on failure so callers don't
                     // see a permanent "Reindexing" status when bulk indexing throws after
                     // MarkReindexStarted. Wrapped in try/catch for resilience.
-                    try { _indexCacheService?.MarkIndexFailed(); } catch { }
+                    MarkIndexOperationFailed(operationGeneration, ex.Message);
+                    FinishIndexOperation(operationGeneration);
                 }
             }) { 
                 IsBackground = true, 
@@ -1309,11 +1452,17 @@ namespace GxMcp.Worker.Services
                 Priority = ThreadPriority.BelowNormal 
             };
             indexThread.SetApartmentState(ApartmentState.STA);
+            _liteIndexThread = indexThread;
+            _indexOperations.MarkWorkerStarted(operationGeneration);
             indexThread.Start();
+            StartIndexWatchdog(operationGeneration);
 
             return Models.McpResponse.Ok(
                 code: "Started",
-                result: new JObject { ["hint"] = "Full SDK index started in the background; poll genexus_whoami for progress." });
+                result: BuildIndexOperationResult(
+                    operationId,
+                    "Full SDK index started in the background; poll genexus_lifecycle action=status for progress.",
+                    reused: false));
         }
 
         public string GetIndexStatus()
@@ -1329,20 +1478,29 @@ namespace GxMcp.Worker.Services
             json["totalKnown"] = !_isIndexing;
             json["objectsWalked"] = _totalCount;
             json["status"] = _currentStatus;
-            DateTime? lastProgress = _indexWatchdog?.LastProgressUtc;
+            var operation = _indexOperations.GetSnapshot(IsIndexWorkerAlive());
+            json["operationId"] = operation.OperationId != null ? (JToken)operation.OperationId : JValue.CreateNull();
+            json["operationState"] = operation.State;
+            json["workerAlive"] = operation.WorkerAlive;
+            json["recoverable"] = operation.Recoverable
+                || string.Equals(_indexCacheService?.GetState()?.Status, "Cold", StringComparison.OrdinalIgnoreCase);
+            if (operation.StalledAtUtc.HasValue)
+                json["stalledAtUtc"] = operation.StalledAtUtc.Value.ToUniversalTime().ToString("o");
+            DateTime? lastProgress = IndexLastProgressAtUtc;
             if (lastProgress.HasValue)
             {
                 json["lastProgressAtUtc"] = lastProgress.Value.ToString("o");
-                json["noProgressTimeoutSec"] = IndexBuildWatchdog.ResolveNoProgressSeconds();
-                json["stalled"] = _isIndexing
-                    && IndexBuildWatchdog.IsProgressStalled(lastProgress.Value, DateTime.UtcNow, IndexBuildWatchdog.ResolveNoProgressSeconds());
             }
+            json["noProgressTimeoutSec"] = IndexBuildWatchdog.ResolveNoProgressSeconds();
+            json["stalled"] = operation.Stalled;
+            if (operation.Active && (operation.Stalled || !operation.WorkerAlive))
+                json["recoveryAction"] = "genexus_lifecycle action=index force=true";
             var state = _indexCacheService?.GetState();
             json["freshness"] = state?.Freshness ?? "stale";
             json["lastSuccessfulScanAt"] = state?.LastSuccessfulScanAt.HasValue == true
                 ? (JToken)state.LastSuccessfulScanAt.Value.ToUniversalTime().ToString("o")
                 : JValue.CreateNull();
-            json["isBusy"] = _isIndexing || _isOpenInProgress;
+            json["isBusy"] = _isIndexing || operation.Active || _isOpenInProgress;
             // Issue #27 item 3 (measured): when the index is loaded from the warm/delta
             // cache, the in-session walk counters (_totalCount/_processedCount) are never
             // set, so this reported total:0 / processed:0 / objectsWalked:0 even with a

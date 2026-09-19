@@ -247,9 +247,21 @@ namespace GxMcp.Worker.Services
                      || string.Equals(status, "Reindexing", StringComparison.OrdinalIgnoreCase);
             if (cold)
             {
+                bool recoverable = state?.Recoverable == true
+                    || string.Equals(state?.Status, "Cold", StringComparison.OrdinalIgnoreCase);
                 string indexCode = string.Equals(status, "Reindexing", StringComparison.OrdinalIgnoreCase)
                     ? "Reindexing" : "IndexCold";
-                var indexResult = new JObject { ["retryAfterMs"] = state?.EtaMs ?? 5000 };
+                var indexResult = new JObject
+                {
+                    ["retryAfterMs"] = state?.EtaMs ?? 5000,
+                    ["operationId"] = state?.OperationId != null ? (JToken)state.OperationId : JValue.CreateNull(),
+                    ["operationState"] = state?.OperationState ?? "Unknown",
+                    ["workerAlive"] = state?.WorkerAlive ?? false,
+                    ["recoverable"] = recoverable,
+                    ["hint"] = recoverable
+                        ? "The index is not progressing. Recover with genexus_lifecycle action=index force=true, then retry search_source."
+                        : "Wait with genexus_lifecycle action=status wait=30 freshness=current, then retry search_source."
+                };
                 if (state?.Progress != null) indexResult["progress"] = state.Progress.Value;
                 return Models.McpResponse.Ok(code: indexCode, result: indexResult);
             }

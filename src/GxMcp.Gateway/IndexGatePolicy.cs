@@ -43,12 +43,19 @@ namespace GxMcp.Gateway
         internal const int DefaultIndexRetryAfterMs = 5000;
 
         internal static JObject BuildIndexNotReadyEnvelopeForTest(
-            string? status, string? freshness, int totalObjects, double? progress, int? etaMs)
-            => BuildIndexNotReadyEnvelope(status, freshness, totalObjects, progress, etaMs);
+            string? status, string? freshness, int totalObjects, double? progress, int? etaMs,
+            string? operationId = null, string? operationState = null, bool? workerAlive = null,
+            bool? recoverable = null, bool? stalled = null)
+            => BuildIndexNotReadyEnvelope(status, freshness, totalObjects, progress, etaMs,
+                operationId, operationState, workerAlive, recoverable, stalled);
 
         private static JObject BuildIndexNotReadyEnvelope(
-            string? status, string? freshness, int totalObjects, double? progress, int? etaMs)
+            string? status, string? freshness, int totalObjects, double? progress, int? etaMs,
+            string? operationId = null, string? operationState = null, bool? workerAlive = null,
+            bool? recoverable = null, bool? stalled = null)
         {
+            bool isRecoverable = recoverable == true
+                || IsStalledIndexStatus(status, operationState, workerAlive);
             var envelope = new JObject
             {
                 ["status"] = "Indexing",
@@ -67,11 +74,16 @@ namespace GxMcp.Gateway
                 // caller into a wait that can only time out. Mirrors whoami's indexSuggestion.
                 ["hint"] = "Wait instead of polling: genexus_lifecycle action=status wait=30 freshness=current, "
                     + "then re-issue this tool. genexus_whoami observes progress but does not block."
-                    + (IsStalledIndexStatus(status)
+                    + (isRecoverable
                         ? " This index is not progressing on its own — if that wait times out, recover with genexus_lifecycle action=index force=true."
                         : string.Empty),
-                ["retryAfterMs"] = etaMs ?? DefaultIndexRetryAfterMs
+                ["retryAfterMs"] = etaMs ?? DefaultIndexRetryAfterMs,
+                ["recoverable"] = isRecoverable,
+                ["workerAlive"] = workerAlive ?? false,
+                ["operationState"] = operationState ?? "Unknown"
             };
+            if (!string.IsNullOrWhiteSpace(operationId)) envelope["operationId"] = operationId;
+            if (stalled.HasValue) envelope["stalled"] = stalled.Value;
             if (progress != null) envelope["progress"] = progress.Value;
             if (etaMs != null) envelope["etaMs"] = etaMs.Value;
             return envelope;
@@ -79,10 +91,14 @@ namespace GxMcp.Gateway
 
         // Cold is the index state machine's "not built / failed" value (MarkIndexFailed publishes
         // it), and Unknown is the default the gateway uses before any state is known.
-        private static bool IsStalledIndexStatus(string? status)
+        private static bool IsStalledIndexStatus(string? status, string? operationState = null, bool? workerAlive = null)
             => string.IsNullOrWhiteSpace(status)
                || string.Equals(status, "Cold", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(status, "Unknown", StringComparison.OrdinalIgnoreCase);
+               || string.Equals(status, "Unknown", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(operationState, "Stalled", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(operationState, "WorkerExited", StringComparison.OrdinalIgnoreCase)
+               || (workerAlive.HasValue && !workerAlive.Value
+                   && string.Equals(operationState, "Building", StringComparison.OrdinalIgnoreCase));
 
         internal static bool IsTransientResponseForCacheForTest(JObject? response)
             => IsTransientResponseForCache(response);

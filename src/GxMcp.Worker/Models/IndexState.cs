@@ -15,6 +15,15 @@ namespace GxMcp.Worker.Models
         public int? EtaMs { get; set; }          // only when Reindexing
         public DateTime? LitePassCompletedUtc { get; set; }
         public DateTime? EnrichmentStartedUtc { get; set; }
+        // Build activity is separate from index availability. A stalled worker can
+        // keep the cache unavailable without being silently cancelled by a status poll.
+        public string OperationId { get; set; }
+        public string OperationState { get; set; } = "Idle";
+        public bool WorkerAlive { get; set; }
+        public bool Recoverable { get; set; }
+        public bool Stalled { get; set; }
+        public DateTime? LastProgressAtUtc { get; set; }
+        public DateTime? StalledAtUtc { get; set; }
     }
 
     /// <summary>

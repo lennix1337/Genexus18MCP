@@ -6,24 +6,27 @@ namespace GxMcp.Worker.Services
 {
     /// <summary>
     /// Watchdog for an in-progress index build. Owns the heartbeat clock and the
-    /// no-progress cancellation thread so KbService keeps only its build loops.
+    /// no-progress observation thread so KbService keeps only its build loops.
     ///
     /// The worker threads call <see cref="Beat"/> on every processed object; the
     /// watchdog thread polls the clock and, after <see cref="ResolveNoProgressSeconds"/>
-    /// without a beat, runs the caller-supplied cancel action once. Stopping the
-    /// watchdog (<see cref="Stop"/>) is the normal completion path; <see cref="Cancel"/>
-    /// is the recovery path for a stalled build (thread aborts are isolated here).
+    /// without a beat, reports a stall. Stopping the watchdog (<see cref="Stop"/>)
+    /// is the normal completion path; <see cref="Cancel"/> remains an explicit
+    /// recovery path for a stalled build. A status poll never cancels the worker.
     /// </summary>
     internal sealed class IndexBuildWatchdog
     {
         private readonly Action _cancelBuild;
+        private readonly Action _onStalled;
         private long _lastProgressTicks;
         private volatile bool _stopRequested;
+        private volatile bool _stallReported;
         private Thread _watchdogThread;
 
-        public IndexBuildWatchdog(Action cancelBuild)
+        public IndexBuildWatchdog(Action cancelBuild, Action onStalled = null)
         {
             _cancelBuild = cancelBuild ?? throw new ArgumentNullException(nameof(cancelBuild));
+            _onStalled = onStalled;
         }
 
         public static int ResolveNoProgressSeconds()
@@ -43,11 +46,16 @@ namespace GxMcp.Worker.Services
         public DateTime LastProgressUtc
             => new DateTime(Interlocked.Read(ref _lastProgressTicks), DateTimeKind.Utc);
 
-        public void Beat() => Interlocked.Exchange(ref _lastProgressTicks, DateTime.UtcNow.Ticks);
+        public void Beat()
+        {
+            Interlocked.Exchange(ref _lastProgressTicks, DateTime.UtcNow.Ticks);
+            _stallReported = false;
+        }
 
         public void Start()
         {
             _stopRequested = false;
+            _stallReported = false;
             Beat();
             int timeoutSeconds = ResolveNoProgressSeconds();
             _watchdogThread = new Thread(() =>
@@ -56,12 +64,12 @@ namespace GxMcp.Worker.Services
                 {
                     Thread.Sleep(1000);
                     var lastProgress = LastProgressUtc;
-                    if (IsProgressStalled(lastProgress, DateTime.UtcNow, timeoutSeconds))
+                    if (IsProgressStalled(lastProgress, DateTime.UtcNow, timeoutSeconds) && !_stallReported)
                     {
-                        Logger.Error("[INDEX-STALLED] no progress for "
-                            + (long)(DateTime.UtcNow - lastProgress).TotalSeconds + "s; cancelling build.");
-                        Cancel();
-                        break;
+                        Logger.Warn("[INDEX-STALLED] no progress for "
+                            + (long)(DateTime.UtcNow - lastProgress).TotalSeconds + "s; worker left running for explicit recovery.");
+                        _stallReported = true;
+                        try { _onStalled?.Invoke(); } catch (Exception ex) { Logger.Warn("Index stall notification failed: " + ex.Message); }
                     }
                 }
             })

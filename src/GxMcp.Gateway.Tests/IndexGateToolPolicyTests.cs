@@ -68,6 +68,21 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(0.25, indexing["progress"]?.ToObject<double>());
         }
 
+        [Fact]
+        public void IndexNotReadyEnvelope_ExposesRecoverableStalledOperation()
+        {
+            JObject stalled = Program.BuildIndexNotReadyEnvelopeForTest(
+                status: "Reindexing", freshness: "refreshing", totalObjects: 1200,
+                progress: 0.25, etaMs: null, operationId: "idx-123",
+                operationState: "Stalled", workerAlive: true);
+
+            Assert.Equal("idx-123", stalled["operationId"]?.ToString());
+            Assert.Equal("Stalled", stalled["operationState"]?.ToString());
+            Assert.True((bool)stalled["workerAlive"]);
+            Assert.True((bool)stalled["recoverable"]);
+            Assert.Contains("action=index force=true", stalled["hint"]?.ToString());
+        }
+
         [Theory]
         [InlineData("Cold", true)]
         [InlineData(null, true)]

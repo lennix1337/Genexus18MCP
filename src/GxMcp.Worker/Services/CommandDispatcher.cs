@@ -1118,6 +1118,24 @@ namespace GxMcp.Worker.Services
                     : JValue.CreateNull()
             };
 
+            // The index cache state says whether entries are usable; the KB activity
+            // state says whether its worker is still building, stalled, or gone. Keep
+            // both surfaces in the same read-only snapshot so whoami and the gateway
+            // gate can offer deterministic recovery without cancelling the worker.
+            try
+            {
+                var activity = JObject.Parse(_kbService.GetIndexStatus());
+                foreach (string field in new[]
+                {
+                    "operationId", "operationState", "workerAlive", "recoverable",
+                    "stalled", "lastProgressAtUtc", "stalledAtUtc", "recoveryAction"
+                })
+                {
+                    if (activity[field] != null) j[field] = activity[field].DeepClone();
+                }
+            }
+            catch { }
+
             // v2.6.8: top-5 recently-changed projection. Cheap O(n) scan
             // over the in-memory index; gateway forwards this into the
             // `whoami.index.recentlyChanged` block so the agent gets a

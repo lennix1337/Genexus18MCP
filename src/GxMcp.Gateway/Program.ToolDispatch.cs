@@ -256,7 +256,9 @@ namespace GxMcp.Gateway
                     return BuildToolResultContent(
                         BuildIndexNotReadyEnvelope(
                             idxSnap?.Status, idxSnap?.Freshness, idxSnap?.TotalObjects ?? 0,
-                            idxSnap?.Progress, idxSnap?.EtaMs),
+                            idxSnap?.Progress, idxSnap?.EtaMs, idxSnap?.OperationId,
+                            idxSnap?.OperationState, idxSnap?.WorkerAlive,
+                            idxSnap?.Recoverable, idxSnap?.Stalled),
                         false, tName, tArgs);
                 }
             }

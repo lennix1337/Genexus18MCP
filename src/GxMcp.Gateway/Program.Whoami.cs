@@ -105,6 +105,13 @@ namespace GxMcp.Gateway
             public int FlushFailuresConsecutive;
             public DateTime? FlushLastSuccessUtc;
             public string? FlushLastError;
+            public string? OperationId;
+            public string OperationState = "Idle";
+            public bool WorkerAlive;
+            public bool Recoverable;
+            public bool Stalled;
+            public DateTime? LastProgressAtUtc;
+            public DateTime? StalledAtUtc;
             // v2.6.8: top-5 recently-changed projection from the worker's
             // in-memory index. Cached so subsequent whoami calls don't pay
             // another round-trip — refreshed every TryRefreshIndexStateFromWorkerAsync.
@@ -174,7 +181,9 @@ namespace GxMcp.Gateway
         internal static void UpdateLastKnownIndexState(string status, int totalObjects, DateTime? lastIndexedAt, double? progress, int? etaMs,
             int flushFailuresConsecutive = 0, DateTime? flushLastSuccessUtc = null, string? flushLastError = null,
             JArray? recentlyChanged = null, string? freshness = null, DateTime? lastSuccessfulScanAt = null,
-            string? kbAlias = null)
+            string? kbAlias = null, string? operationId = null, string? operationState = null,
+            bool? workerAlive = null, bool? recoverable = null, bool? stalled = null,
+            DateTime? lastProgressAtUtc = null, DateTime? stalledAtUtc = null)
         {
             string? displayAlias = string.IsNullOrWhiteSpace(kbAlias) ? null : kbAlias.Trim();
             string? mirrorAlias = NormalizeKbAlias(displayAlias) ?? ResolveKbAliasForIndexRefresh();
@@ -201,6 +210,15 @@ namespace GxMcp.Gateway
                     FlushFailuresConsecutive = flushFailuresConsecutive,
                     FlushLastSuccessUtc = flushLastSuccessUtc,
                     FlushLastError = flushLastError,
+                    OperationId = operationId ?? previous?.OperationId,
+                    OperationState = string.IsNullOrEmpty(operationState) ? previous?.OperationState ?? "Idle" : operationState,
+                    WorkerAlive = workerAlive ?? previous?.WorkerAlive ?? false,
+                    Recoverable = recoverable ?? previous?.Recoverable ?? false,
+                    Stalled = stalled ?? previous?.Stalled ?? false,
+                    LastProgressAtUtc = lastProgressAtUtc ?? previous?.LastProgressAtUtc,
+                    StalledAtUtc = stalled == false || string.Equals(operationState, "Idle", StringComparison.OrdinalIgnoreCase)
+                        ? stalledAtUtc
+                        : stalledAtUtc ?? previous?.StalledAtUtc,
                     // Preserve prior recentlyChanged when the caller doesn't pass a fresh
                     // value — search/lifecycle pushes update telemetry without it.
                     RecentlyChanged = recentlyChanged ?? previous?.RecentlyChanged
@@ -482,6 +500,20 @@ namespace GxMcp.Gateway
                     : JValue.CreateNull(),
                 ["progress"] = snap.Progress.HasValue ? (JToken)snap.Progress.Value : JValue.CreateNull(),
                 ["etaMs"] = snap.EtaMs.HasValue ? (JToken)snap.EtaMs.Value : JValue.CreateNull(),
+                ["operationId"] = snap.OperationId != null ? (JToken)snap.OperationId : JValue.CreateNull(),
+                ["operationState"] = snap.OperationState,
+                ["workerAlive"] = snap.WorkerAlive,
+                ["recoverable"] = snap.Recoverable,
+                ["stalled"] = snap.Stalled,
+                ["lastProgressAtUtc"] = snap.LastProgressAtUtc.HasValue
+                    ? (JToken)snap.LastProgressAtUtc.Value.ToUniversalTime().ToString("o")
+                    : JValue.CreateNull(),
+                ["stalledAtUtc"] = snap.StalledAtUtc.HasValue
+                    ? (JToken)snap.StalledAtUtc.Value.ToUniversalTime().ToString("o")
+                    : JValue.CreateNull(),
+                ["recoveryAction"] = snap.Recoverable
+                    ? (JToken)"genexus_lifecycle action=index force=true"
+                    : JValue.CreateNull(),
                 // PERFORMANCE (W-M2): expose flush health so a degraded snapshot is
                 // visible without combing through worker_debug.log.
                 ["flushHealth"] = new JObject
@@ -662,10 +694,27 @@ namespace GxMcp.Gateway
             var lss = state["lastSuccessfulScanAt"];
             if (lss != null && lss.Type != JTokenType.Null)
                 lastSuccessfulScanAt = TryParseUtc(lss);
+            string? operationId = state["operationId"]?.Type == JTokenType.Null ? null : state["operationId"]?.ToString();
+            string? operationState = state["operationState"]?.ToString();
+            bool? workerAlive = TryReadBoolean(state["workerAlive"]);
+            bool? recoverable = TryReadBoolean(state["recoverable"]);
+            bool? stalled = TryReadBoolean(state["stalled"]);
+            DateTime? lastProgressAtUtc = null;
+            if (state["lastProgressAtUtc"] != null && state["lastProgressAtUtc"].Type != JTokenType.Null)
+                lastProgressAtUtc = TryParseUtc(state["lastProgressAtUtc"]);
+            DateTime? stalledAtUtc = null;
+            if (state["stalledAtUtc"] != null && state["stalledAtUtc"].Type != JTokenType.Null)
+                stalledAtUtc = TryParseUtc(state["stalledAtUtc"]);
             UpdateLastKnownIndexState(status, totalObjects, lastIndexedAt, progress, etaMs,
                 flushFailuresConsecutive, flushLastSuccessUtc, flushLastError, recentlyChanged,
-                freshness, lastSuccessfulScanAt, kbAlias);
+                freshness, lastSuccessfulScanAt, kbAlias, operationId, operationState,
+                workerAlive, recoverable, stalled, lastProgressAtUtc, stalledAtUtc);
             return true;
+        }
+
+        private static bool? TryReadBoolean(JToken? value)
+        {
+            return value?.Type == JTokenType.Boolean ? value.Value<bool>() : (bool?)null;
         }
 
         private static DateTime? TryParseUtc(JToken? value)

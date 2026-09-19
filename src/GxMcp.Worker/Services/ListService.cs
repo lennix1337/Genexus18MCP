@@ -153,6 +153,8 @@ namespace GxMcp.Worker.Services
                 if (indexNotReady)
                 {
                     _indexCacheService.EnsureLoadStarted();
+                    bool recoverable = indexState?.Recoverable == true
+                        || string.Equals(indexState?.Status, "Cold", StringComparison.OrdinalIgnoreCase);
                     var envelope = new JObject
                     {
                         ["status"] = "Indexing",
@@ -160,11 +162,17 @@ namespace GxMcp.Worker.Services
                         ["indexStatus"] = indexState?.Status ?? "Cold",
                         ["freshness"] = indexState?.Freshness ?? "stale",
                         ["totalObjects"] = indexState?.TotalObjects ?? 0,
+                        ["operationId"] = indexState?.OperationId != null ? (JToken)indexState.OperationId : JValue.CreateNull(),
+                        ["operationState"] = indexState?.OperationState ?? "Unknown",
+                        ["workerAlive"] = indexState?.WorkerAlive ?? false,
+                        ["recoverable"] = recoverable,
                         ["message"] = BuildIndexingMessage(indexState),
                         // Issue #209 (policy A): the gate is fail-closed, so the envelope must be
                         // awaitable + retryable rather than a dead end. Mirrors the retryAfterMs
                         // precedent in SourceSearchService.
-                        ["hint"] = "Wait for the index with genexus_lifecycle action=status wait=30 freshness=current, then re-issue list_objects (genexus_whoami observes progress).",
+                        ["hint"] = (recoverable
+                            ? "The index worker is stalled or unavailable. Recover with genexus_lifecycle action=index force=true, then wait with action=status wait=30 freshness=current."
+                            : "Wait for the index with genexus_lifecycle action=status wait=30 freshness=current, then re-issue list_objects (genexus_whoami observes progress)."),
                         ["retryAfterMs"] = indexState?.EtaMs ?? 5000
                     };
                     if (indexState?.Progress != null) envelope["progress"] = indexState.Progress.Value;

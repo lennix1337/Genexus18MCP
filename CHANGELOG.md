@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Index recovery now distinguishes a live build from a stalled or exited worker.** Status polling no longer cancels a slow index build. Concurrent `action=index` requests are idempotent, return the active `operationId`, and `force=true` starts a new generation only when explicit recovery is needed. Read tools expose the recoverable state and the exact recovery hint without running any GeneXus lifecycle action.
+
 ## v3.7.0 - 2026-09-19
 
 
