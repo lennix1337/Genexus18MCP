@@ -325,11 +325,12 @@ namespace GxMcp.Gateway
 
             var environment = document["Environment"] as JObject
                 ?? throw new InvalidDataException("Strict config requires an Environment object.");
-            RejectUnknown(environment, new HashSet<string>(new[] { "ResolutionPolicy", "KBPath", "DefaultKb", "ActiveKb", "KBs" }, StringComparer.Ordinal), "Environment", path);
+            RejectUnknown(environment, new HashSet<string>(new[] { "ResolutionPolicy", "KBPath", "DefaultKb", "ActiveKb", "KBs", "DataStoreAliases" }, StringComparer.Ordinal), "Environment", path);
             string? policy = environment.Value<string>("ResolutionPolicy")?.Trim().ToLowerInvariant();
             if (policy != "strict" && policy != "legacy")
                 throw new InvalidDataException("Strict config ResolutionPolicy must be 'strict' or 'legacy'.");
             ValidateStrictKbCatalog(environment["KBs"], path);
+            ValidateStrictDataStoreAliases(environment["DataStoreAliases"], "Environment.DataStoreAliases", path);
         }
 
         private static void ValidateStrictKbCatalog(JToken? token, string path)
@@ -361,8 +362,9 @@ namespace GxMcp.Gateway
 
         private static void ValidateStrictKbEntry(JObject entry, string alias, string path)
         {
-            RejectUnknown(entry, new HashSet<string>(new[] { "Alias", "Path", "Driver", "InstallationPath", "Major" }, StringComparer.Ordinal), $"Environment.KBs[{alias}]", path);
+            RejectUnknown(entry, new HashSet<string>(new[] { "Alias", "Path", "Driver", "InstallationPath", "Major", "DataStoreAliases" }, StringComparer.Ordinal), $"Environment.KBs[{alias}]", path);
             RequireString(entry, "Path", $"Environment.KBs[{alias}]");
+            ValidateStrictDataStoreAliases(entry["DataStoreAliases"], $"Environment.KBs[{alias}].DataStoreAliases", path);
             string? driver = entry.Value<string>("Driver")?.Trim();
             string? major = entry.Value<string>("Major")?.Trim();
             if (!string.IsNullOrWhiteSpace(driver)
@@ -386,6 +388,28 @@ namespace GxMcp.Gateway
                 && string.IsNullOrWhiteSpace(entry.Value<string>("InstallationPath")))
             {
                 throw new InvalidDataException($"Strict config Environment.KBs[{alias}] requires InstallationPath for legacy driver '{driver}'.");
+            }
+        }
+
+        private static void ValidateStrictDataStoreAliases(JToken? token, string label, string path)
+        {
+            if (token == null || token.Type == JTokenType.Null) return;
+            if (!(token is JObject aliases))
+                throw new InvalidDataException($"Strict config {label} must be an object in '{path}'.");
+            var allowed = new HashSet<string>(new[]
+            {
+                "DataStore", "Family", "Provider", "Server", "Database", "Schema", "Port",
+                "IntegratedSecurity", "UserIdEnvironmentVariable", "PasswordEnvironmentVariable",
+                "ConnectionStringEnvironmentVariable"
+            }, StringComparer.OrdinalIgnoreCase);
+            foreach (var alias in aliases.Properties())
+            {
+                if (!(alias.Value is JObject definition))
+                    throw new InvalidDataException($"Strict config {label}['{alias.Name}'] must be an object in '{path}'.");
+                RejectUnknown(definition, allowed, $"{label}[{alias.Name}]", path);
+                var integratedSecurity = definition["IntegratedSecurity"];
+                if (integratedSecurity != null && integratedSecurity.Type != JTokenType.Boolean)
+                    throw new InvalidDataException($"Strict config {label}['{alias.Name}'].IntegratedSecurity must be boolean.");
             }
         }
 
@@ -618,6 +642,11 @@ namespace GxMcp.Gateway
         public string? ActiveKb { get; set; }
         [JsonConverter(typeof(KbCatalogConverter))]
         public List<KbEntry> KBs { get; set; } = new List<KbEntry>();
+        /// <summary>
+        /// Optional profile-wide aliases. Use a per-KB entry when more than one KB
+        /// is configured so a connection cannot be selected ambiguously.
+        /// </summary>
+        public Dictionary<string, DataStoreAliasConfig>? DataStoreAliases { get; set; }
     }
 
     public class KbEntry
@@ -627,6 +656,26 @@ namespace GxMcp.Gateway
         public string? InstallationPath { get; set; }
         public string? Driver { get; set; }
         public string? Major { get; set; }
+        /// <summary>
+        /// Optional, non-secret connection aliases used by read-only database tools.
+        /// Credentials belong in host environment variables named by the alias entry.
+        /// </summary>
+        public Dictionary<string, DataStoreAliasConfig>? DataStoreAliases { get; set; }
+    }
+
+    public class DataStoreAliasConfig
+    {
+        public string? DataStore { get; set; }
+        public string? Family { get; set; }
+        public string? Provider { get; set; }
+        public string? Server { get; set; }
+        public string? Database { get; set; }
+        public string? Schema { get; set; }
+        public string? Port { get; set; }
+        public bool? IntegratedSecurity { get; set; }
+        public string? UserIdEnvironmentVariable { get; set; }
+        public string? PasswordEnvironmentVariable { get; set; }
+        public string? ConnectionStringEnvironmentVariable { get; set; }
     }
 
     // Accepts both schemas the codebase writes for Environment.KBs:

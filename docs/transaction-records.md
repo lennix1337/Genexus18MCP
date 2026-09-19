@@ -16,6 +16,59 @@ and primary key from the SDK Transaction structure. Attribute names are resolved
 against that metadata and values are sent as database parameters; callers cannot
 provide SQL identifiers or predicates.
 
+When the GeneXus SDK does not expose connection metadata, `records_query` can
+select an explicit SQL Server `dataStoreAlias`. Configure the alias in the MCP profile under
+`Environment.DataStoreAliases` (or under the matching
+`Environment.KBs[].DataStoreAliases` entry):
+
+```json
+{
+  "Environment": {
+    "DataStoreAliases": {
+      "production": {
+        "dataStore": "Default",
+        "family": "sqlserver",
+        "server": "SERVER\\INSTANCE",
+        "database": "APP_PROD",
+        "schema": "dbo",
+        "integratedSecurity": true
+      }
+    }
+  }
+}
+```
+
+For SQL authentication, set `integratedSecurity` to `false` and reference host
+environment variables with `userIdEnvironmentVariable` and
+`passwordEnvironmentVariable`. A `connectionStringEnvironmentVariable` is also
+accepted when the complete secret connection string is kept only in the Worker
+host environment. The value of a secret is never returned or logged by the MCP.
+The alias is available only to `records_query`; insert/update operations reject it
+before opening a connection. The alias is reread immediately before the query; a
+profile, KB, or active-datastore change is rejected as `DataStoreConfigurationChanged`
+before SQL is executed.
+The successful response includes the effective alias, masked server/database,
+`healthCheck="confirmed"`, `elapsedMs`, `rowCount`, and both the compatibility
+`records` field and the `rows` field.
+
+Example:
+
+```json
+{
+  "action": "records_query",
+  "dataStoreAlias": "production",
+  "transaction": "Order",
+  "where": { "OrderId": 1 },
+  "limit": 20,
+  "timeoutSeconds": 20
+}
+```
+
+An absent, malformed, duplicate, or cross-KB alias fails before opening the
+database. The query remains read-only and does not persist profile/configuration
+changes or run Specify, Generate, Build, Rebuild, Compile, Reorg, publication,
+execution, or tests.
+
 Writes are read-only by default. A persisted write requires a v2 `versionToken`
 returned by the same write's dry-run. Query and legacy v1 tokens cannot authorize
 writes. Receipts are single-use, expire after 15 minutes and belong to the Worker

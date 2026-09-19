@@ -125,6 +125,54 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ParseConfig_AcceptsNonSecretReadOnlyDataStoreAlias()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "gxmcp-gw-alias-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string configPath = Path.Combine(tempDir, "config.json");
+            try
+            {
+                File.WriteAllText(configPath, @"{
+  ""ConfigSchemaVersion"": 2,
+  ""GatewayMode"": ""stdio-isolated"",
+  ""GeneXus"": { ""InstallationPath"": ""C:\\GeneXus18"", ""WorkerExecutable"": ""C:\\worker.exe"" },
+  ""Server"": { ""HttpPort"": 0, ""McpStdio"": true },
+  ""Environment"": {
+    ""ResolutionPolicy"": ""strict"",
+    ""DataStoreAliases"": {
+      ""production"": {
+        ""dataStore"": ""Default"",
+        ""family"": ""sqlserver"",
+        ""server"": ""SERVER\\\\INSTANCE"",
+        ""database"": ""APP_PROD"",
+        ""schema"": ""dbo"",
+        ""integratedSecurity"": true
+      }
+    }
+  }
+}");
+
+                var cfg = ParseConfig(configPath);
+                var alias = Assert.Single(cfg.Environment!.DataStoreAliases!);
+                Assert.Equal("Default", alias.Value.DataStore);
+                Assert.Equal("SERVER\\\\INSTANCE", alias.Value.Server);
+                Assert.True(alias.Value.IntegratedSecurity == true);
+            }
+            finally
+            {
+                TryDeleteDirectory(tempDir);
+            }
+        }
+
+        [Fact]
+        public void ParseConfig_StrictModeRejectsNonBooleanAliasIntegratedSecurity()
+            => AssertStrictAliasRejected(@"{ ""dataStore"": ""Default"", ""integratedSecurity"": ""yes"" }");
+
+        [Fact]
+        public void ParseConfig_StrictModeRejectsUnknownAliasMembers()
+            => AssertStrictAliasRejected(@"{ ""dataStore"": ""Default"", ""unexpected"": true }");
+
+        [Fact]
         public void ParseConfig_PlaceholderKbPath_IsNotMigrated()
         {
             // issue #28 item 6: the shipped fallback config carries a placeholder KBPath
@@ -553,6 +601,33 @@ namespace GxMcp.Gateway.Tests
             }
             catch
             {
+            }
+        }
+
+        private static void AssertStrictAliasRejected(string aliasDefinition)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "gxmcp-gw-alias-invalid-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string configPath = Path.Combine(tempDir, "config.json");
+            try
+            {
+                File.WriteAllText(configPath, @"{
+  ""ConfigSchemaVersion"": 2,
+  ""GatewayMode"": ""stdio-isolated"",
+  ""GeneXus"": { ""InstallationPath"": ""C:\\GeneXus18"", ""WorkerExecutable"": ""C:\\worker.exe"" },
+  ""Server"": { ""HttpPort"": 0, ""McpStdio"": true },
+  ""Environment"": {
+    ""ResolutionPolicy"": ""strict"",
+    ""DataStoreAliases"": { ""production"": " + aliasDefinition + @" }
+  }
+}");
+
+                var error = Assert.Throws<InvalidDataException>(() => ParseConfig(configPath));
+                Assert.Contains("DataStoreAliases", error.Message);
+            }
+            finally
+            {
+                TryDeleteDirectory(tempDir);
             }
         }
     }

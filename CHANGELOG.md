@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- **`records_query` can use an explicit read-only profile connection alias.** When GeneXus omits server/database metadata, a `dataStoreAlias` can select non-secret connection metadata from the MCP profile while credentials remain on the Worker host. Responses include the effective alias, masked connection identifiers, a confirmed configuration reread, elapsed time, row count, and rows without returning connection strings or credentials. See `docs/transaction-records.md`.
+- Missing, duplicate, cross-KB, or invalid aliases fail closed before SQL execution; writes reject `dataStoreAlias`, and the selected read alias is reread before every `records_query` to detect profile/environment drift.
+
 ## v3.7.0 - 2026-09-19
 
 

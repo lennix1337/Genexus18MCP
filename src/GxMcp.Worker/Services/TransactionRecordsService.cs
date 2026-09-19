@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Collections;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -102,11 +104,13 @@ namespace GxMcp.Worker.Services
 
         private string Query(TransactionMetadata metadata, JObject args)
         {
+            var stopwatch = Stopwatch.StartNew();
             var filterObject = ReadObject(args, "where", "filters");
             var filters = filterObject == null ? null : NormalizeValues(metadata, filterObject);
             var fields = ResolveFields(metadata, args["fields"] as JArray);
             int limit = ClampLimit(args["limit"]?.Value<int?>() ?? DefaultLimit);
-            var db = OpenDatabase(args);
+            var db = OpenDatabase(args, allowProfileAlias: true);
+            EnsureDatabaseConfigurationUnchanged(args, db);
             using (var connection = OpenConnection(db))
             {
                 db.Bind(metadata);
@@ -115,6 +119,11 @@ namespace GxMcp.Worker.Services
                     command.CommandTimeout = ReadTimeout(args);
                     var rows = ReadRows(command, fields, db);
                     var result = BuildReadResult(metadata, db, fields, filters, rows, limit);
+                    stopwatch.Stop();
+                    result["rowCount"] = result["matchedCount"];
+                    result["elapsedMs"] = stopwatch.ElapsedMilliseconds;
+                    result["connection"] = BuildConnectionResult(db);
+                    result["healthCheck"] = "confirmed";
                     return McpResponse.Ok(target: metadata.Name, code: "TransactionRecordsRead", result: result);
                 }
             }
@@ -596,6 +605,7 @@ namespace GxMcp.Worker.Services
                 ["writePreviewRequired"] = true,
                 ["fields"] = new JArray(fields.Select(a => a.Name)),
                 ["records"] = new JArray(rows),
+                ["rows"] = new JArray(rows),
                 ["matchedCount"] = rows.Count,
                 ["limit"] = limit,
                 ["truncated"] = truncated,
@@ -850,12 +860,20 @@ namespace GxMcp.Worker.Services
             return string.IsNullOrWhiteSpace(provider) ? "unresolved" : "registered";
         }
 
-        private DatabaseMetadata OpenDatabase(JObject args)
+        private DatabaseMetadata OpenDatabase(JObject args, bool allowProfileAlias = false)
         {
+            string requestedAlias = FirstText(args, "dataStoreAlias", "datastoreAlias");
+            if (!allowProfileAlias && !string.IsNullOrWhiteSpace(requestedAlias))
+                throw new RecordOperationException("DataStoreAliasReadOnly", "Connection aliases are available only to records_query.", "Remove dataStoreAlias from records_insert/records_update; writes use the active GeneXus datastore and their existing preview-token safeguards.", "dataStoreAlias");
             if (_databaseResolver != null) return _databaseResolver(args);
             dynamic kb = _kbService?.GetKB();
             if (kb == null) throw new RecordOperationException("KbNotOpen", "No KB is currently open.", "Open the KB before accessing Transaction records.");
             string requested = FirstText(args, "dataStore", "datastore");
+            ProfileDataStoreAlias profileAlias = !allowProfileAlias || string.IsNullOrWhiteSpace(requestedAlias) ? null : ResolveProfileAlias(requestedAlias);
+            if (profileAlias != null && !string.IsNullOrWhiteSpace(requested)
+                && !string.Equals(requested, profileAlias.DataStore, StringComparison.OrdinalIgnoreCase))
+                throw new RecordOperationException("DataStoreAliasDatastoreMismatch", "The requested datastore does not match the configured connection alias.", "Use the datastore declared by dataStoreAlias, or omit dataStore.", requested);
+            if (profileAlias != null && string.IsNullOrWhiteSpace(requested)) requested = profileAlias.DataStore;
             dynamic first = null;
             dynamic selected = null;
             foreach (dynamic ds in DatabaseInfoService.EnumerateActiveEnvironmentDataStores(kb))
@@ -874,31 +892,49 @@ namespace GxMcp.Worker.Services
             string provider = DatabaseProviderResolver.GetProvider(selected);
             object dbms = DatabaseProviderResolver.GetDbmsValue(selected);
             string family = DatabaseProviderResolver.DetectFamily(provider, dbms);
+            if (profileAlias != null)
+            {
+                string configuredFamily = NormalizeFamily(profileAlias.Family);
+                if (!string.IsNullOrWhiteSpace(profileAlias.Family) && configuredFamily != family)
+                    throw new RecordOperationException("DataStoreAliasFamilyMismatch", "The profile alias family does not match the active GeneXus datastore.", "Configure the alias for the same SQL Server datastore family reported by GeneXus.", profileAlias.Alias);
+                if (family != "sqlserver")
+                    throw new RecordOperationException("DataStoreAliasProviderUnsupported", "Read-only profile aliases currently support SQL Server only.", "Use a SQL Server active datastore or omit dataStoreAlias.", profileAlias.Alias);
+                if (!string.IsNullOrWhiteSpace(profileAlias.Provider)
+                    && !string.Equals(profileAlias.Provider, provider, StringComparison.OrdinalIgnoreCase))
+                    throw new RecordOperationException("DataStoreAliasProviderMismatch", "The profile alias provider does not match the active GeneXus datastore.", "Remove Provider or set it to the provider reported by GeneXus.", profileAlias.Alias);
+            }
             if (!IsSupportedRecordFamily(family))
                 throw new RecordOperationException("DataStoreProviderUnsupported", "The active datastore provider could not be mapped to a supported SQL dialect.", "Use a datastore with a recognized SQL Server, Oracle, PostgreSQL or MySQL provider.");
-            string connectionString = FirstConnectionString(selected, "CONNECTION_STRING", "ConnectionString", "CS_CONNECTIONSTRING", "DS_DBMS_ADDINFO", "DBMS_ADDINFO");
+            int timeoutSeconds = ReadTimeout(args);
+            string connectionString = profileAlias == null
+                ? FirstConnectionString(selected, "CONNECTION_STRING", "ConnectionString", "CS_CONNECTIONSTRING", "DS_DBMS_ADDINFO", "DBMS_ADDINFO")
+                : ReadProfileConnectionString(profileAlias);
+            string server = profileAlias?.Server ?? FirstDynamicProperty(selected, "CS_SERVER", "ServerName", "Server");
+            string database = profileAlias?.Database ?? FirstDynamicProperty(selected, "CS_DBNAME", "CS_DATABASE", "DBNAME", "DATABASE", "DATABASE_NAME", "DB_NAME");
+            string schema = profileAlias?.Schema ?? FirstDynamicProperty(selected, "CS_SCHEMA", "DatabaseSchema", "Schema");
             if (string.IsNullOrWhiteSpace(connectionString))
             {
-                string server = FirstDynamicProperty(selected, "CS_SERVER", "ServerName", "Server");
-                string database = FirstDynamicProperty(selected, "CS_DBNAME", "CS_DATABASE", "DBNAME", "DATABASE", "DATABASE_NAME", "DB_NAME");
-                string schema = FirstDynamicProperty(selected, "CS_SCHEMA", "DatabaseSchema", "Schema");
-                string port = FirstDynamicProperty(selected, "CS_PORT", "PORT", "Port", "DBMS_PORT");
-                string user = FirstDynamicProperty(selected, "USER_ID", "UserId", "User");
-                string password = FirstDynamicProperty(selected, "USER_PASSWORD", "PASSWORD", "Password");
-                bool integrated = ParseYesNo(FirstDynamicProperty(selected, "TRUSTED_CONNECTION", "INTEGRATED_SECURITY", "IntegratedSecurity"));
+                string port = profileAlias?.Port ?? FirstDynamicProperty(selected, "CS_PORT", "PORT", "Port", "DBMS_PORT");
+                string user = profileAlias == null ? FirstDynamicProperty(selected, "USER_ID", "UserId", "User") : ReadProfileSecret(profileAlias.UserIdEnvironmentVariable);
+                string password = profileAlias == null ? FirstDynamicProperty(selected, "USER_PASSWORD", "PASSWORD", "Password") : ReadProfileSecret(profileAlias.PasswordEnvironmentVariable);
+                bool integrated = profileAlias == null
+                    ? ParseYesNo(FirstDynamicProperty(selected, "TRUSTED_CONNECTION", "INTEGRATED_SECURITY", "IntegratedSecurity"))
+                    : profileAlias.IntegratedSecurity ?? true;
+                if (profileAlias != null && !integrated && (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(password)))
+                    throw new RecordOperationException("DataStoreAliasInvalid", "The selected connection alias requires host credentials that are not available.", "Set the referenced user/password environment variables on the Worker host; their values are never returned.", profileAlias.Alias);
                 if (string.IsNullOrWhiteSpace(server) || (family != "oracle" && string.IsNullOrWhiteSpace(database)))
-                    throw new RecordOperationException("DataStoreConnectionUnavailable", "The selected datastore does not expose enough connection metadata for a safe native record operation.", "Use a datastore with server/database metadata; credentials and connection strings are never returned by this tool.");
+                    throw new RecordOperationException(profileAlias == null ? "DataStoreConnectionUnavailable" : "DataStoreAliasInvalid", "The selected datastore does not expose enough connection metadata for a safe native record operation.", "Configure server and database in the selected profile alias; credentials and connection strings are never returned by this tool.");
                 if (family == "sqlserver")
                 {
-                    connectionString = BuildSqlServerConnectionString(server, database, user, password, integrated);
+                    connectionString = BuildSqlServerConnectionString(server, database, user, password, integrated, timeoutSeconds);
                 }
                 else if (family == "oracle")
                 {
-                    connectionString = BuildOracleConnectionString(server, user, password);
+                    connectionString = BuildOracleConnectionString(server, user, password, timeoutSeconds);
                 }
                 else if (family == "postgres")
                 {
-                    connectionString = BuildPostgresConnectionString(server, database, schema, user, password, integrated, port);
+                    connectionString = BuildPostgresConnectionString(server, database, schema, user, password, integrated, port, timeoutSeconds);
                 }
                 else
                 {
@@ -906,18 +942,214 @@ namespace GxMcp.Worker.Services
                 }
             }
             var factory = ResolveFactory(provider, family);
-            string schemaName = FirstDynamicProperty(selected, "CS_SCHEMA", "DatabaseSchema", "Schema");
+            if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(database))
+            {
+                if (string.IsNullOrWhiteSpace(server)) server = ReadConnectionStringValue(connectionString, "Data Source", "Server", "Host");
+                if (string.IsNullOrWhiteSpace(database)) database = ReadConnectionStringValue(connectionString, "Initial Catalog", "Database");
+            }
+            if (profileAlias != null && (string.IsNullOrWhiteSpace(server) || (family != "oracle" && string.IsNullOrWhiteSpace(database))))
+                throw new RecordOperationException("DataStoreAliasInvalid", "The selected connection alias did not resolve a server and database identifier.", "Configure server/database metadata or a host connection string that exposes them; the query was not executed.", profileAlias.Alias);
             return new DatabaseMetadata
             {
+                Alias = profileAlias?.Alias ?? FirstDynamicString(selected, "Name", "Category.Name", "Type") ?? "default",
                 Name = FirstDynamicString(selected, "Name", "Category.Name", "Type") ?? "default",
                 Family = family,
                 Provider = provider,
                 Factory = factory,
                 ConnectionString = connectionString,
-                Schema = schemaName,
+                Schema = schema,
+                Server = server,
+                Database = database,
                 KbIdentity = _kbService.GetKbPath(),
                 EnvironmentIdentity = _kbService.GetActiveEnvironment()
             };
+        }
+
+        private void EnsureDatabaseConfigurationUnchanged(JObject args, DatabaseMetadata beforeQuery)
+        {
+            var reread = OpenDatabase(args, allowProfileAlias: true);
+            if (!string.Equals(beforeQuery.ConfigurationFingerprint(), reread.ConfigurationFingerprint(), StringComparison.Ordinal))
+                throw new RecordOperationException("DataStoreConfigurationChanged", "The selected connection changed before the read started.", "Retry after the profile and active environment have stabilized; no query was executed.", beforeQuery.Alias);
+        }
+
+        private static JObject BuildConnectionResult(DatabaseMetadata db)
+        {
+            return new JObject
+            {
+                ["alias"] = db.Alias ?? db.Name ?? "unresolved",
+                ["dataStore"] = db.Name ?? "unresolved",
+                ["family"] = db.Family ?? "unresolved",
+                ["server"] = MaskConnectionIdentifier(db.Server),
+                ["database"] = MaskConnectionIdentifier(db.Database),
+                ["schema"] = string.IsNullOrWhiteSpace(db.Schema) ? "unresolved" : SanitizeLabel(db.Schema)
+            };
+        }
+
+        private static string MaskConnectionIdentifier(string value)
+        {
+            string safe = SanitizeLabel(value);
+            if (safe == "unresolved") return safe;
+            int keep = Math.Max(1, safe.Length / 2);
+            return safe.Substring(0, keep) + "***";
+        }
+
+        private ProfileDataStoreAlias ResolveProfileAlias(string requestedAlias)
+        {
+            string profilePath = Environment.GetEnvironmentVariable("GXMCP_PROFILE_CONFIG_PATH");
+            if (string.IsNullOrWhiteSpace(profilePath))
+                throw new RecordOperationException("DataStoreAliasConfigurationUnavailable", "No MCP profile configuration was provided to the Worker.", "Set GXMCP_PROFILE_CONFIG_PATH through the Gateway profile and declare the connection alias there.", requestedAlias);
+            if (!File.Exists(profilePath))
+                throw new RecordOperationException("DataStoreAliasConfigurationUnavailable", "The MCP profile configuration file could not be read.", "Restore the configured profile file and retry; the query was not started.", requestedAlias);
+
+            JObject document;
+            try { document = JObject.Parse(File.ReadAllText(profilePath)); }
+            catch (Exception ex) { throw new RecordOperationException("DataStoreAliasConfigurationInvalid", "The MCP profile configuration is not valid JSON.", "Fix the profile configuration without placing credentials in the MCP response.", requestedAlias, ex); }
+
+            var matches = new List<JObject>();
+            JObject environment = document["Environment"] as JObject;
+            JToken kbCatalog = environment?["KBs"];
+            string currentKb = _kbService?.GetKbPath();
+            var profileDirectory = Path.GetDirectoryName(profilePath);
+            var kbEntries = ReadProfileKbEntries(kbCatalog).ToList();
+            if (kbEntries.Count > 0)
+            {
+                foreach (JObject kb in kbEntries)
+                {
+                    string configuredPath = ReadJsonText(kb, "Path");
+                    if (!PathsEqual(configuredPath, currentKb, profileDirectory)) continue;
+                    JObject aliases = kb["DataStoreAliases"] as JObject;
+                    JObject alias = FindAlias(aliases, requestedAlias);
+                    if (alias != null) matches.Add(alias);
+                }
+            }
+
+            JObject globalAliases = environment?["DataStoreAliases"] as JObject;
+            if (globalAliases != null)
+            {
+                JObject alias = FindAlias(globalAliases, requestedAlias);
+                if (alias != null)
+                {
+                    string configuredGlobalKb = ReadJsonText(environment, "KBPath");
+                    if (kbEntries.Count > 1)
+                        throw new RecordOperationException("DataStoreAliasAmbiguous", "A global datastore alias is ambiguous while multiple KBs are configured.", "Move the alias under the matching Environment.KBs[].DataStoreAliases entry.", requestedAlias);
+                    string configuredKb = kbEntries.Count == 1 ? ReadJsonText(kbEntries[0], "Path") : configuredGlobalKb;
+                    if (kbEntries.Count == 1 && string.IsNullOrWhiteSpace(configuredKb)) configuredKb = configuredGlobalKb;
+                    if (kbEntries.Count == 1 && !PathsEqual(configuredKb, currentKb, profileDirectory))
+                        throw new RecordOperationException("DataStoreAliasCrossKb", "The global datastore alias is not scoped to the active KB.", "Set Environment.KBPath or the matching Environment.KBs entry to the active KB, or move the alias under that KB entry.", requestedAlias);
+                    if (kbEntries.Count == 0 && !PathsEqual(configuredGlobalKb, currentKb, profileDirectory))
+                        throw new RecordOperationException("DataStoreAliasCrossKb", "The global datastore alias is not scoped to the active KB.", "Set Environment.KBPath to the active KB or move the alias under its Environment.KBs entry.", requestedAlias);
+                    matches.Add(alias);
+                }
+            }
+
+            if (matches.Count == 0)
+                throw new RecordOperationException("DataStoreAliasNotFound", "The requested datastore connection alias is not configured for the active KB.", "Declare dataStoreAlias under the matching Environment.KBs[].DataStoreAliases entry or Environment.DataStoreAliases.", requestedAlias);
+            if (matches.Count > 1)
+                throw new RecordOperationException("DataStoreAliasAmbiguous", "More than one profile entry matches the requested datastore alias.", "Keep one case-insensitive alias for the active KB and retry.", requestedAlias);
+
+            var result = ProfileDataStoreAlias.From(requestedAlias, matches[0]);
+            if (string.IsNullOrWhiteSpace(result.DataStore)) result.DataStore = "Default";
+            if (string.IsNullOrWhiteSpace(result.ConnectionStringEnvironmentVariable)
+                && (string.IsNullOrWhiteSpace(result.Server) || string.IsNullOrWhiteSpace(result.Database)))
+                throw new RecordOperationException("DataStoreAliasInvalid", "The datastore alias does not define server and database metadata or a host connection-string reference.", "Configure server/database, or ConnectionStringEnvironmentVariable, without putting credentials in config.json.", requestedAlias);
+            return result;
+        }
+
+        private static JObject FindAlias(JObject aliases, string requestedAlias)
+        {
+            if (aliases == null || string.IsNullOrWhiteSpace(requestedAlias)) return null;
+            var matches = aliases.Properties()
+                .Where(p => string.Equals(p.Name, requestedAlias.Trim(), StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matches.Count > 1)
+                throw new RecordOperationException("DataStoreAliasAmbiguous", "The profile contains duplicate connection aliases differing only by case.", "Keep one case-insensitive alias in the profile.", requestedAlias);
+            if (matches.Count == 0) return null;
+            if (!(matches[0].Value is JObject definition))
+                throw new RecordOperationException("DataStoreAliasInvalid", "The configured datastore alias must be an object.", "Define the alias with datastore metadata and host-only credential references.", requestedAlias);
+            return definition;
+        }
+
+        private static IEnumerable<JObject> ReadProfileKbEntries(JToken token)
+        {
+            if (token is JArray array)
+            {
+                foreach (JObject entry in array.OfType<JObject>()) yield return entry;
+                yield break;
+            }
+            if (token is JObject map)
+            {
+                foreach (var property in map.Properties())
+                {
+                    if (property.Value is JObject entry)
+                    {
+                        if (ReadJsonText(entry, "Alias") == null) entry["Alias"] = property.Name;
+                        yield return entry;
+                    }
+                }
+            }
+        }
+
+        private static string ReadProfileConnectionString(ProfileDataStoreAlias alias)
+        {
+            if (string.IsNullOrWhiteSpace(alias.ConnectionStringEnvironmentVariable)) return null;
+            string value = ReadProfileSecret(alias.ConnectionStringEnvironmentVariable);
+            if (!LooksLikeConnectionString(value))
+                throw new RecordOperationException("DataStoreAliasInvalid", "The configured connection-string environment variable is empty or invalid.", "Set it on the Worker host without returning its value through MCP.", alias.Alias);
+            return value;
+        }
+
+        private static string ReadProfileSecret(string environmentVariable)
+        {
+            if (string.IsNullOrWhiteSpace(environmentVariable)) return null;
+            if (environmentVariable.IndexOf('=') >= 0 || environmentVariable.IndexOf(';') >= 0)
+                throw new RecordOperationException("DataStoreAliasInvalid", "A profile credential reference must be an environment-variable name.", "Use UserIdEnvironmentVariable or PasswordEnvironmentVariable with a host variable name.", "credential reference");
+            return Environment.GetEnvironmentVariable(environmentVariable);
+        }
+
+        private static string ReadJsonText(JObject source, params string[] names)
+        {
+            if (source == null || names == null) return null;
+            foreach (string name in names)
+            {
+                string value = source.Properties().FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))?.Value?.ToString();
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            }
+            return null;
+        }
+
+        private static bool PathsEqual(string left, string right, string baseDirectory = null)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
+            try
+            {
+                string resolvedLeft = Path.IsPathRooted(left) || string.IsNullOrWhiteSpace(baseDirectory)
+                    ? left
+                    : Path.Combine(baseDirectory, left);
+                return string.Equals(Path.GetFullPath(resolvedLeft).TrimEnd('\\', '/'), Path.GetFullPath(right).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        private static string ReadConnectionStringValue(string connectionString, params string[] names)
+        {
+            if (!LooksLikeConnectionString(connectionString)) return null;
+            try
+            {
+                var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
+                foreach (string name in names)
+                    foreach (string key in builder.Keys.Cast<object>().Select(k => k.ToString()))
+                        if (string.Equals(key, name, StringComparison.OrdinalIgnoreCase)) return builder[key]?.ToString();
+            }
+            catch { }
+            return null;
+        }
+
+        private static string NormalizeFamily(string family)
+        {
+            string value = (family ?? string.Empty).Trim().ToLowerInvariant();
+            if (value == "mssql" || value == "sql-server" || value == "sql_server") return "sqlserver";
+            if (value == "postgresql") return "postgres";
+            return value;
         }
 
         internal static DbProviderFactory ResolveFactory(string provider, string family)
@@ -957,7 +1189,7 @@ namespace GxMcp.Worker.Services
                 || string.Equals(family, "postgres", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(family, "mysql", StringComparison.OrdinalIgnoreCase);
 
-        internal static string BuildPostgresConnectionString(string server, string database, string schema, string user, string password, bool integrated, string port = null)
+        internal static string BuildPostgresConnectionString(string server, string database, string schema, string user, string password, bool integrated, string port = null, int timeoutSeconds = DefaultCommandTimeoutSeconds)
         {
             var builder = new DbConnectionStringBuilder();
             builder["Host"] = server ?? string.Empty;
@@ -974,19 +1206,19 @@ namespace GxMcp.Worker.Services
             }
             if (!string.IsNullOrWhiteSpace(schema)) builder["Search Path"] = schema;
             builder["Application Name"] = "GeneXusMCP";
-            builder["Timeout"] = 15;
-            builder["Command Timeout"] = 15;
+            builder["Timeout"] = timeoutSeconds;
+            builder["Command Timeout"] = timeoutSeconds;
             return builder.ConnectionString;
         }
 
-        private static string BuildSqlServerConnectionString(string server, string database, string user, string password, bool integrated)
+        private static string BuildSqlServerConnectionString(string server, string database, string user, string password, bool integrated, int timeoutSeconds = DefaultCommandTimeoutSeconds)
         {
             var builder = new DbConnectionStringBuilder
             {
                 ["Data Source"] = server ?? string.Empty,
                 ["Initial Catalog"] = database ?? string.Empty,
                 ["Application Name"] = "GeneXusMCP",
-                ["Connect Timeout"] = 15
+                ["Connect Timeout"] = timeoutSeconds
             };
             if (integrated)
                 builder["Integrated Security"] = "SSPI";
@@ -998,14 +1230,14 @@ namespace GxMcp.Worker.Services
             return builder.ConnectionString;
         }
 
-        private static string BuildOracleConnectionString(string server, string user, string password)
+        private static string BuildOracleConnectionString(string server, string user, string password, int timeoutSeconds = DefaultCommandTimeoutSeconds)
         {
             var builder = new DbConnectionStringBuilder
             {
                 ["Data Source"] = server ?? string.Empty,
                 ["User Id"] = user ?? string.Empty,
                 ["Password"] = password ?? string.Empty,
-                ["Connection Timeout"] = 15
+                ["Connection Timeout"] = timeoutSeconds
             };
             return builder.ConnectionString;
         }
@@ -1268,12 +1500,15 @@ namespace GxMcp.Worker.Services
 
         internal sealed class DatabaseMetadata
         {
+            public string Alias;
             public string KbIdentity;
             public string EnvironmentIdentity;
             public string Name;
             public string Family;
             public string Provider;
             public string Schema;
+            public string Server;
+            public string Database;
             public DbProviderFactory Factory;
             public string ConnectionString;
             public string QualifiedTable;
@@ -1291,6 +1526,49 @@ namespace GxMcp.Worker.Services
                 string table = string.IsNullOrWhiteSpace(Schema) ? metadata.Table : Schema + "." + metadata.Table;
                 QualifiedTable = QuoteIdentifier(table, Family);
                 Table = metadata.Table;
+            }
+
+            public string ConfigurationFingerprint()
+            {
+                return string.Join("|", Alias, Name, Family, Provider, Schema, Server, Database, KbIdentity, EnvironmentIdentity, Hash(ConnectionString));
+            }
+        }
+
+        private sealed class ProfileDataStoreAlias
+        {
+            public string Alias;
+            public string DataStore;
+            public string Family;
+            public string Provider;
+            public string Server;
+            public string Database;
+            public string Schema;
+            public string Port;
+            public bool? IntegratedSecurity;
+            public string UserIdEnvironmentVariable;
+            public string PasswordEnvironmentVariable;
+            public string ConnectionStringEnvironmentVariable;
+
+            public static ProfileDataStoreAlias From(string name, JObject value)
+            {
+                bool? integrated = null;
+                string rawIntegrated = ReadJsonText(value, "IntegratedSecurity");
+                if (!string.IsNullOrWhiteSpace(rawIntegrated) && bool.TryParse(rawIntegrated, out bool parsed)) integrated = parsed;
+                return new ProfileDataStoreAlias
+                {
+                    Alias = name,
+                    DataStore = ReadJsonText(value, "DataStore", "dataStore"),
+                    Family = ReadJsonText(value, "Family", "family"),
+                    Provider = ReadJsonText(value, "Provider", "provider"),
+                    Server = ReadJsonText(value, "Server", "server"),
+                    Database = ReadJsonText(value, "Database", "database"),
+                    Schema = ReadJsonText(value, "Schema", "schema"),
+                    Port = ReadJsonText(value, "Port", "port"),
+                    IntegratedSecurity = integrated,
+                    UserIdEnvironmentVariable = ReadJsonText(value, "UserIdEnvironmentVariable", "userIdEnvironmentVariable"),
+                    PasswordEnvironmentVariable = ReadJsonText(value, "PasswordEnvironmentVariable", "passwordEnvironmentVariable"),
+                    ConnectionStringEnvironmentVariable = ReadJsonText(value, "ConnectionStringEnvironmentVariable", "connectionStringEnvironmentVariable")
+                };
             }
         }
     }

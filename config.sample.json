@@ -15,6 +15,16 @@
   },
   "Environment": {
     "KBPath": "C:\\KBs\\AcademicoHomolog1",
-    "GX_SHADOW_PATH": "C:\\Projetos\\Genexus18MCP\\.gx_mirror"
+    "GX_SHADOW_PATH": "C:\\Projetos\\Genexus18MCP\\.gx_mirror",
+    "DataStoreAliases": {
+      "production": {
+        "dataStore": "Default",
+        "family": "sqlserver",
+        "server": "SERVER\\INSTANCE",
+        "database": "APP_PROD",
+        "schema": "dbo",
+        "integratedSecurity": true
+      }
+    }
   }
 }

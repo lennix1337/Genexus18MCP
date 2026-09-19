@@ -109,6 +109,8 @@ namespace GxMcp.Gateway
             info.EnvironmentVariables["GX_KB_PATH"] = kb.Path ?? string.Empty;
             info.EnvironmentVariables["GXMCP_DRIVER"] = driver ?? string.Empty;
             info.EnvironmentVariables["GXMCP_TARGET_MAJOR"] = major ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(Configuration.CurrentConfigPath))
+                info.EnvironmentVariables["GXMCP_PROFILE_CONFIG_PATH"] = Configuration.CurrentConfigPath;
             if (!string.IsNullOrWhiteSpace(legacyProvider))
                 info.EnvironmentVariables["GXMCP_GXPUBLIC_PROVIDER"] = legacyProvider;
             info.EnvironmentVariables["GXMCP_SHARED_HOST"] = "1";

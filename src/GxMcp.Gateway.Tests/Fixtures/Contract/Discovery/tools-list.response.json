@@ -1089,7 +1089,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Database umbrella. action: drift_check|drift_report (Transaction↔DB schema drift) | optimize_analyze|optimize_suggest|optimize_report (static index advisor) | sql_ddl|sql_navigation (SQL for Transaction/Procedure) | sample_data (fake INSERTs) | records_query|records_insert|records_update (typed application rows through Transaction metadata; writes default to dryRun; direct SQL only and no GeneXus business rules) | types_list|types_describe|types_validate (Domains/SDT constraints) | reorg_impact (timestamp/deep ImpactDatabase) | reorg_preview (non-mutating logical↔physical impact diff plus exact SQL only when a current artifact is available) | translations_import.",
+      "description": "Database umbrella. Actions: drift_check|drift_report; optimize_analyze|optimize_suggest|optimize_report; sql_ddl|sql_navigation; sample_data; records_query|records_insert|records_update (typed Transaction rows; query read-only; writes dryRun; no business rules); types_list|types_describe|types_validate; reorg_impact; reorg_preview (non-mutating; deep uses ImpactDatabase); translations_import.",
       "inputSchema": {
         "examples": [
           {
@@ -1100,9 +1100,14 @@
             "name": "Customer"
           },
           {
-            "action": "reorg_preview",
-            "deep": true,
-            "name": "Customer"
+            "action": "records_query",
+            "dataStoreAlias": "production",
+            "limit": 20,
+            "timeoutSeconds": 20,
+            "transaction": "Order",
+            "where": {
+              "OrderId": 1
+            }
           }
         ],
         "properties": {
@@ -1131,6 +1136,10 @@
           },
           "dataStore": {
             "description": "records_*: existing active-environment datastore; defaults to the SDK default.",
+            "type": "string"
+          },
+          "dataStoreAlias": {
+            "description": "records_query: profile alias; no credentials.",
             "type": "string"
           },
           "databaseManagedFields": {
