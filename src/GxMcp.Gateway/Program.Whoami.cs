@@ -1458,7 +1458,10 @@ namespace GxMcp.Gateway
                     ["matchedMajor"] = GeneXusVersionCatalog.GetMatchingMajor(gxVersion),
                     ["versionMatches"] = sdkCompatibility["status"]?.ToString() == "compatible",
                     ["sdkCompatibility"] = sdkCompatibility,
-                    ["catalog"] = GeneXusVersionCatalog.ToDiagnosticObject()
+                    // Per-major entry detail is static for the session and reachable on
+                    // demand via genexus_whoami(verbose=true); echoing it on every health
+                    // check cost ~1.8KB of the whoami response.
+                    ["catalog"] = GeneXusVersionCatalog.ToDiagnosticObject(verbose)
                 },
                 ["config"] = new JObject
                 {

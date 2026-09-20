@@ -96,6 +96,45 @@ namespace GxMcp.Gateway.Tests
             Assert.NotNull(payload["geneXus"]?["catalog"]?["source"]);
         }
 
+        [Fact]
+        public void BuildWhoamiPayload_KeepsStaticCatalogEntryDetailOutOfTheDefaultHealthCheck()
+        {
+            // The per-major entry detail (displayName/driver/defaultInstallPath/registry
+            // names) is static for the whole session, so echoing it on every health check
+            // was pure response weight: measured 6063 -> 3859 wire bytes on a real KB.
+            // The identity fields the whoami contract exposes stay in both modes; the
+            // detail stays reachable through the documented verbose channel.
+            var lean = Program.BuildWhoamiPayload();
+            var leanCatalog = Assert.IsType<JObject>(lean["geneXus"]?["catalog"]);
+            Assert.Null(leanCatalog["entries"]);
+            Assert.Null(leanCatalog["legacyEntries"]);
+            Assert.Equal("18", leanCatalog["primaryMajor"]?.ToString());
+            Assert.NotNull(leanCatalog["source"]);
+            Assert.NotNull(leanCatalog["supportedMajors"]);
+            Assert.NotNull(leanCatalog["legacyMajors"]);
+            Assert.NotNull(leanCatalog["entryDetail"]);
+
+            var verbose = Program.BuildWhoamiPayload(verbose: true);
+            var verboseCatalog = Assert.IsType<JObject>(verbose["geneXus"]?["catalog"]);
+            Assert.NotNull(verboseCatalog["entries"]);
+            Assert.NotNull(verboseCatalog["legacyEntries"]);
+        }
+
+        [Fact]
+        public void ToDiagnosticObject_KeepsEntryDetailForCallersThatResolveInstallPaths()
+        {
+            // KbCreateHelper resolves a declared major to its default install path from
+            // catalog.entries, so the default projection must keep the entry detail.
+            var full = GeneXusVersionCatalog.ToDiagnosticObject();
+            Assert.NotNull(full["entries"]);
+            Assert.NotNull(full["legacyEntries"]);
+
+            var slim = GeneXusVersionCatalog.ToDiagnosticObject(includeEntryDetail: false);
+            Assert.Null(slim["entries"]);
+            Assert.NotNull(slim["source"]);
+            Assert.Equal(full["primaryMajor"]?.ToString(), slim["primaryMajor"]?.ToString());
+        }
+
         [Theory]
         [InlineData("16.0.11.144151", "16", true)]
         [InlineData("17.0.11.163677", "17", true)]
