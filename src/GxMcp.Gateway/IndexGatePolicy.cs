@@ -11,30 +11,35 @@ namespace GxMcp.Gateway
         internal static bool IsIndexDependentToolForTest(string? toolName)
             => IsIndexDependentTool(toolName);
 
-        private static bool IsIndexDependentTool(string? toolName)
-        {
-            if (string.IsNullOrWhiteSpace(toolName)) return false;
-
-            return toolName.ToLowerInvariant() switch
+        // Single source of truth for the gate's tool set. Exposed as a read-only view (not just
+        // switch arms) so the coverage guard test can assert exactly what the gate protects
+        // instead of duplicating the list in the test project — see
+        // NoNewGateEntryIsConsumedByTheLegacyAliasRewrite, which is what keeps an entry that the
+        // alias rewrite consumes from silently joining the known list below.
+        private static readonly HashSet<string> IndexDependentToolSet =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "genexus_list_objects" => true,
-                "genexus_query" => true,
-                "genexus_inspect" => true,
-                "genexus_read" => true,
-                "genexus_search_source" => true,
-                "genexus_analyze" => true,
-                "genexus_explain" => true,
-                "genexus_types" => true,
-                "genexus_navigation" => true,
-                "genexus_kb_explorer" => true,
-                "genexus_diff_generated" => true,
-                "genexus_what_if" => true,
-                "genexus_db_drift" => true,
-                "genexus_orient" => true,
-                "genexus_security" => true,
-                _ => false
+                "genexus_list_objects",
+                "genexus_query",
+                "genexus_inspect",
+                "genexus_read",
+                "genexus_search_source",
+                "genexus_analyze",
+                "genexus_explain",
+                "genexus_types",
+                "genexus_navigation",
+                "genexus_kb_explorer",
+                "genexus_diff_generated",
+                "genexus_what_if",
+                "genexus_db_drift",
+                "genexus_orient",
+                "genexus_security"
             };
-        }
+
+        internal static IReadOnlySet<string> IndexDependentTools => IndexDependentToolSet;
+
+        private static bool IsIndexDependentTool(string? toolName)
+            => !string.IsNullOrWhiteSpace(toolName) && IndexDependentToolSet.Contains(toolName);
 
         // Issue #209 (policy A): the gate stays fail-closed, but its envelope must be
         // observable, awaitable and retryable — it names the index state, points at the one

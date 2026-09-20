@@ -106,6 +106,20 @@ namespace GxMcp.Gateway
                         });
                     }
 
+                    // Open the read gate as soon as the index is genuinely current, before
+                    // anything else on this path waits on the index. See the method for why the
+                    // read gate would otherwise hold the agent for up to the mirror's 2s floor.
+                    // Published while it runs so an index-dependent call that lands in this
+                    // short window waits for it instead of returning a retry envelope.
+                    var settle = SettleIndexMirrorAfterBootstrapAsync();
+                    IndexMirrorSettleInFlight = settle;
+                    try { await settle; }
+                    finally
+                    {
+                        if (ReferenceEquals(IndexMirrorSettleInFlight, settle))
+                            IndexMirrorSettleInFlight = null;
+                    }
+
                     // The first-touch warm pass can only resolve its probe object once the
                     // index is listable. On a cold start the warmup's single list attempt runs
                     // before this bootstrap, sees the IndexNotReady envelope (no items) and
@@ -130,6 +144,122 @@ namespace GxMcp.Gateway
                     _currentOperationRequiresOwner.Value = previousOwnerRequirement;
                 }
             });
+        }
+
+        // Cold-path fix: right after a KB open the gateway's index mirror holds the snapshot
+        // restored from the warm cache — Ready but stale — because the mirror is only written by
+        // whoami / the SDK-bound self-heal path and there is no push from the worker. The worker's
+        // delta refresh republishes Freshness=current a few hundred ms later (measured 251-283ms
+        // against a 620-object KB), but the read gate only re-probes a mirror older than its 2s
+        // floor, so the agent's first list/query/read kept receiving Indexing envelopes for ~1.8s
+        // against an index that was already usable (measured: first useful result 6857ms).
+        //
+        // Settling here (bounded, and anchored to the bootstrap that just kicked the delta) opens
+        // the gate as soon as the delta actually lands: about one cheap GetIndexState round-trip
+        // instead of a fixed 2s wait. GetIndexState runs off the worker's STA thread, so this stays
+        // fast even while a cold-start BulkIndex is in flight. It also lets the first-touch warm
+        // pass below start against a listable index instead of burning its first 3s probe retry.
+        //
+        // Bounded on purpose: a genuinely cold KB (first-ever index) keeps the gate closed, and
+        // after the budget the regular gate + retryAfterMs path takes over unchanged.
+        internal const int IndexMirrorSettleMaxAttempts = 12;
+        internal const int IndexMirrorSettleDelayMs = 250;
+
+        // The settle that is currently running, or null. Read by the index gate: a call that
+        // arrives while it runs waits for it (bounded) instead of handing the agent an
+        // IndexNotReady envelope it would have to retry — measured, the envelope cost a real
+        // agent a retryAfterMs backoff and a whole wasted turn on an index that was already
+        // usable ~250ms later. Cleared by the bootstrap that published it.
+        // Deliberately not keyed by alias: the settle is short, a worker is single-KB, and the
+        // gate re-reads the snapshot for its own alias after the wait, so a caller only ever
+        // waits for a settle it would have been racing anyway.
+        internal static volatile Task? IndexMirrorSettleInFlight;
+
+        // Ceiling for the gate's wait on that settle. The settle's own budget is
+        // IndexMirrorSettleMaxAttempts x IndexMirrorSettleDelayMs plus its refresh round-trips;
+        // this guards only against a wedged refresh, so a timeout falls back to the envelope.
+        internal const int IndexMirrorSettleGateWaitCeilingMs = 6000;
+
+        // True when the mirror holds a snapshot restored from the warm cache that has not been
+        // republished as current yet: every object is already loaded, but the Worker's delta
+        // refresh — the step that flips Freshness to current — has not landed. This is the one
+        // not-ready state where the mirror is known to be WRONG rather than merely young, so the
+        // read gate settles it (see the gate) instead of trusting its staleness floor. A genuinely
+        // cold KB has no restored snapshot, reports something other than Ready here, and keeps the
+        // fast-fail plus retryAfterMs path untouched.
+        internal static bool IsRestoredSnapshotAwaitingDeltaForTest(string? status, string? freshness)
+            => IsRestoredSnapshotAwaitingDelta(status, freshness);
+
+        // Restricted to `Ready` on purpose. `Ready` means the full index walk finished (every
+        // object is loaded), so the only thing missing is the delta that flips freshness — a
+        // bounded, sub-second window. A genuinely cold build announces UltraLiteReady/LiteReady/
+        // Enriching while it streams, and those must keep the immediate envelope: a multi-minute
+        // build cannot be waited out, and settling there would block every read on it.
+        private static bool IsRestoredSnapshotAwaitingDelta(string? status, string? freshness)
+        {
+            if (!string.Equals(status, "Ready", StringComparison.OrdinalIgnoreCase)) return false;
+            // Same inference IsIndexUsableForReads uses, so the two never disagree about what an
+            // absent freshness means. (A `Ready` mirror with no freshness infers `current`, which
+            // is usable — the gate is never reached in that state.)
+            string effective = string.IsNullOrWhiteSpace(freshness)
+                ? InferIndexFreshness(status!)
+                : freshness!;
+            return !string.Equals(effective, "current", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static async Task SettleIndexMirrorAfterBootstrapAsync(
+            Func<bool>? isUsable = null,
+            Func<int, Task<bool>>? refresh = null,
+            int? delayMsOverride = null,
+            Action<int, bool>? onAttempt = null)
+        {
+            Func<bool> usableNow = isUsable
+                ?? (() => IsIndexUsableForReads(GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias)));
+            if (usableNow()) return;
+
+            int delayMs = delayMsOverride ?? IndexMirrorSettleDelayMs;
+            bool refreshed = false;
+            for (int attempt = 1; attempt <= IndexMirrorSettleMaxAttempts; attempt++)
+            {
+                if (delayMs > 0)
+                {
+                    try { await Task.Delay(delayMs).ConfigureAwait(false); }
+                    catch { return; }
+                }
+
+                try
+                {
+                    refreshed = refresh != null
+                        ? await refresh(attempt).ConfigureAwait(false)
+                        : await TryRefreshIndexStateFromWorkerAsync(
+                            timeoutMs: 1200, kbAlias: _currentKb.Value?.NormalizedAlias).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_gatewayLifetime.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch
+                {
+                    refreshed = false;
+                }
+
+                bool usable = usableNow();
+                try { onAttempt?.Invoke(attempt, usable); } catch { }
+                if (usable)
+                {
+                    Log($"[IndexBootstrap] index gate settled after {attempt} attempt(s).");
+                    return;
+                }
+            }
+
+            // Budget exhausted — a genuinely cold KB (first-ever index) is the expected case here.
+            // The gate stays closed and falls back to its regular refresh + retryAfterMs path; the
+            // line exists so "settled late" and "never settled" are distinguishable in a support
+            // log. A failed refresh (worker busy/exiting) does not shorten the budget: only the
+            // snapshot deciding the gate matters.
+            Log($"[IndexBootstrap] index mirror did not settle within {IndexMirrorSettleMaxAttempts} "
+                + $"attempt(s) (last refresh ok={refreshed}); the read gate keeps its regular "
+                + "refresh + retryAfterMs path.");
         }
 
         private static void TriggerWorkerWarmupOnce()
@@ -397,6 +527,14 @@ namespace GxMcp.Gateway
                 ("genexus_inspect", new JObject { ["name"] = probeObjectName }),
                 ("genexus_analyze", new JObject { ["mode"] = "linter", ["target"] = probeObjectName }),
                 ("genexus_analyze", new JObject { ["mode"] = "callers", ["target"] = probeObjectName }),
+                // The first Source search builds the worker's KB-wide source-scan cache on
+                // the STA thread: measured 2.7s cold against ~1ms for every later search,
+                // and the cost is pattern-independent (a zero-match pattern paid the same
+                // 2.7s, so it is the scan and not the match). Every other SDK-heavy first
+                // touch is warmed here for exactly this reason; a search was the one left
+                // paying its cost inside the agent's turn. maxResults=1 keeps the warm
+                // reply tiny — the scan is what we are paying for, not the result set.
+                ("genexus_search_source", new JObject { ["pattern"] = probeObjectName, ["maxResults"] = 1 }),
             })
             {
                 var converted = McpRouter.ConvertToolCall(new JObject
