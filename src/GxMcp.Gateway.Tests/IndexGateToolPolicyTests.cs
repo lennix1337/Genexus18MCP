@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -11,10 +14,92 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_read")]
         [InlineData("genexus_search_source")]
         [InlineData("genexus_analyze")]
+        [InlineData("genexus_inspect")]
         [InlineData("genexus_navigation")]
+        [InlineData("genexus_security")]
         public void IndexDependentReads_AreBlockedUntilIndexIsUsable(string toolName)
         {
             Assert.True(Program.IsIndexDependentToolForTest(toolName));
+        }
+
+        // The gate is applied to the name the request loop settled on, which is AFTER the legacy
+        // alias rewrite (Program.RequestLoop, default ON). A gate entry the rewrite consumes
+        // therefore never matches, and its umbrella is what actually needs the gate.
+        //
+        // KNOWN GAP (documented, deliberately not "fixed" here): the three entries below are in
+        // that state, and their umbrellas — genexus_db and genexus_versioning — are NOT gated, so
+        // the protection was silently dropped when those tools were consolidated. Closing it
+        // needs per-action gating, because the umbrellas mix index-dependent actions (types_*,
+        // drift_*, diff_generated) with ones that clearly do not (records_query runs SQL against
+        // the database, history_save writes a snapshot); gating the whole umbrella would
+        // fail-close on calls that work today. See
+        // docs/benchmarks/2026-09-20-live-rounds.md for the measurement.
+        //
+        // This list exists only to record that already-measured state. Adding to it is not a fix:
+        // a newly consumed entry fails this test instead of quietly joining the gap.
+        private static readonly string[] KnownAliasConsumedGateEntries =
+        {
+            "genexus_db_drift",
+            "genexus_types",
+            "genexus_diff_generated"
+        };
+
+        [Fact]
+        public void NoNewGateEntryIsConsumedByTheLegacyAliasRewrite()
+        {
+            var consumed = Program.IndexDependentTools
+                .Where(name => McpRouter.TryRewriteLegacyTool(name, new JObject(), out _, out _))
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+
+            Assert.Equal(KnownAliasConsumedGateEntries.OrderBy(n => n, StringComparer.Ordinal), consumed);
+        }
+
+        [Fact]
+        public void GateEntriesStillCoverTheCanonicalReadTools()
+        {
+            // Guards the other direction: a refactor that reintroduces a switch/set must not drop
+            // any tool the gate is measured and documented to protect.
+            var expected = new[]
+            {
+                "genexus_analyze", "genexus_inspect", "genexus_list_objects",
+                "genexus_navigation", "genexus_query", "genexus_read",
+                "genexus_search_source", "genexus_security"
+            };
+
+            foreach (var name in expected) Assert.Contains(name, Program.IndexDependentTools);
+        }
+
+        [Theory]
+        [InlineData("genexus_db", "drift_check", true)]
+        [InlineData("genexus_db", "drift_report", true)]
+        [InlineData("genexus_db", "types_list", true)]
+        [InlineData("genexus_db", "types_describe", true)]
+        [InlineData("genexus_db", "types_validate", true)]
+        [InlineData("genexus_db", "records_query", false)]
+        [InlineData("genexus_db", "sql_ddl", false)]
+        [InlineData("genexus_db", "sample_data", false)]
+        [InlineData("genexus_versioning", "diff_generated", true)]
+        [InlineData("genexus_versioning", "diff", false)]
+        public void CanonicalUmbrellaActionsHaveTheCorrectIndexPolicy(
+            string toolName, string action, bool expected)
+        {
+            Assert.Equal(expected, Program.IsIndexDependentToolForTest(
+                toolName, new JObject { ["action"] = action }));
+        }
+
+        [Fact]
+        public void LegacyIndexAliasesRemainGatedAfterRewrite()
+        {
+            foreach (var legacy in new[]
+            {
+                "genexus_db_drift", "genexus_types", "genexus_diff_generated"
+            })
+            {
+                Assert.True(McpRouter.TryRewriteLegacyTool(legacy, new JObject(),
+                    out string rewrittenName, out JObject rewrittenArgs));
+                Assert.True(Program.IsIndexDependentToolForTest(rewrittenName, rewrittenArgs));
+            }
         }
 
         [Theory]

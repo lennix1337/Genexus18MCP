@@ -596,7 +596,10 @@ namespace GxMcp.Gateway
         // Called from BuildWhoamiPayloadAsync; on success refreshes _lastKnownIndexState
         // so subsequent timeouts/worker outages still see the last good value.
         // Short timeout (1500ms): whoami is supposed to be near-instant.
-        private static async Task<bool> TryRefreshIndexStateFromWorkerAsync(int timeoutMs = 1500, string? kbAlias = null)
+        private static async Task<bool> TryRefreshIndexStateFromWorkerAsync(
+            int timeoutMs = 1500,
+            string? kbAlias = null,
+            CancellationToken cancellationToken = default)
         {
             if (_workerPool == null) return false;
             KbHandle? previousKb = _currentKb.Value;
@@ -623,7 +626,8 @@ namespace GxMcp.Gateway
                     (_, correlationId) => new JObject { ["__timeout"] = true, ["correlationId"] = correlationId },
                     toolName: "genexus_whoami",
                     toolArgs: null,
-                    trackOperation: false);
+                    trackOperation: false,
+                    cancellationToken: cancellationToken);
 
                 if (env == null) return false;
                 if (env["__timeout"] != null) return false;
@@ -1458,6 +1462,9 @@ namespace GxMcp.Gateway
                     ["matchedMajor"] = GeneXusVersionCatalog.GetMatchingMajor(gxVersion),
                     ["versionMatches"] = sdkCompatibility["status"]?.ToString() == "compatible",
                     ["sdkCompatibility"] = sdkCompatibility,
+                    // Preserve entries/legacyEntries in the standard health payload: clients
+                    // already consume those catalog details to resolve and explain majors.
+                    // The slim projection remains available to explicit internal callers.
                     ["catalog"] = GeneXusVersionCatalog.ToDiagnosticObject()
                 },
                 ["config"] = new JObject

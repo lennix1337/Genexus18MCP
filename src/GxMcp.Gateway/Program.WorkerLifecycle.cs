@@ -526,7 +526,8 @@ namespace GxMcp.Gateway
             string? operationIdentity = null,
             string? mcpRequestId = null,
             JToken? mcpRequestIdToken = null,
-            string? mcpSessionId = null)
+            string? mcpSessionId = null,
+            CancellationToken cancellationToken = default)
         {
             string requestId = Guid.NewGuid().ToString();
             string correlationId = Guid.NewGuid().ToString("N");
@@ -588,7 +589,8 @@ namespace GxMcp.Gateway
                 {
                     var startupSw = System.Diagnostics.Stopwatch.StartNew();
                     bool ready = await McpRouter.AwaitWithHeartbeat(
-                        worker.SdkReadyTask, WorkerSdkReadyCeilingMs, progressToken, heartbeat, $"{toolName} (worker starting)");
+                        worker.SdkReadyTask, WorkerSdkReadyCeilingMs, progressToken, heartbeat,
+                        $"{toolName} (worker starting)", cancellationToken: cancellationToken);
                     startupSw.Stop();
                     startupWaitMs += Math.Max(0L, startupSw.ElapsedMilliseconds);
                     if (!ready)
@@ -685,7 +687,8 @@ namespace GxMcp.Gateway
                 if (noClientProgressToken && !string.IsNullOrWhiteSpace(operationId) && !lifecycleStatusWait)
                     effectiveTimeoutMs = Math.Min(timeoutMs, McpRouter.SafeLongPollSecondsWithoutProgress * 1000);
                 bool workerCompleted = await McpRouter.AwaitWithHeartbeat(
-                    pending.CompletionSource.Task, effectiveTimeoutMs, progressToken, heartbeat, toolName);
+                    pending.CompletionSource.Task, effectiveTimeoutMs, progressToken, heartbeat, toolName,
+                    cancellationToken: cancellationToken);
                 if (workerCompleted)
                 {
                     var workerResponse = pending.ParsedResponse

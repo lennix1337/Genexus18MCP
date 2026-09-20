@@ -96,6 +96,42 @@ namespace GxMcp.Gateway.Tests
             Assert.NotNull(payload["geneXus"]?["catalog"]?["source"]);
         }
 
+        [Fact]
+        public void BuildWhoamiPayload_PreservesCatalogEntryDetailInTheDefaultHealthCheck()
+        {
+            // Existing clients may consume the catalog entries from the default health
+            // payload. Keep that contract stable; the internal slim projection remains
+            // available for callers that explicitly opt into it.
+            var standard = Program.BuildWhoamiPayload();
+            var standardCatalog = Assert.IsType<JObject>(standard["geneXus"]?["catalog"]);
+            Assert.NotNull(standardCatalog["entries"]);
+            Assert.NotNull(standardCatalog["legacyEntries"]);
+            Assert.Equal("18", standardCatalog["primaryMajor"]?.ToString());
+            Assert.NotNull(standardCatalog["source"]);
+            Assert.NotNull(standardCatalog["supportedMajors"]);
+            Assert.NotNull(standardCatalog["legacyMajors"]);
+
+            var verbose = Program.BuildWhoamiPayload(verbose: true);
+            var verboseCatalog = Assert.IsType<JObject>(verbose["geneXus"]?["catalog"]);
+            Assert.NotNull(verboseCatalog["entries"]);
+            Assert.NotNull(verboseCatalog["legacyEntries"]);
+        }
+
+        [Fact]
+        public void ToDiagnosticObject_KeepsEntryDetailForCallersThatResolveInstallPaths()
+        {
+            // KbCreateHelper resolves a declared major to its default install path from
+            // catalog.entries, so the default projection must keep the entry detail.
+            var full = GeneXusVersionCatalog.ToDiagnosticObject();
+            Assert.NotNull(full["entries"]);
+            Assert.NotNull(full["legacyEntries"]);
+
+            var slim = GeneXusVersionCatalog.ToDiagnosticObject(includeEntryDetail: false);
+            Assert.Null(slim["entries"]);
+            Assert.NotNull(slim["source"]);
+            Assert.Equal(full["primaryMajor"]?.ToString(), slim["primaryMajor"]?.ToString());
+        }
+
         [Theory]
         [InlineData("16.0.11.144151", "16", true)]
         [InlineData("17.0.11.163677", "17", true)]

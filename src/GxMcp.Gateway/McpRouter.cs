@@ -2127,7 +2127,8 @@ namespace GxMcp.Gateway
             JToken? progressToken,
             Func<JObject, Task>? heartbeat,
             string toolName,
-            int heartbeatIntervalSeconds = HeartbeatIntervalSeconds)
+            int heartbeatIntervalSeconds = HeartbeatIntervalSeconds,
+            CancellationToken cancellationToken = default)
         {
             bool canHeartbeat = heartbeat != null
                 && progressToken != null
@@ -2136,15 +2137,15 @@ namespace GxMcp.Gateway
 
             if (!canHeartbeat)
             {
-                var done = await Task.WhenAny(completion, Task.Delay(timeoutMs));
+                var done = await Task.WhenAny(completion, Task.Delay(timeoutMs, cancellationToken));
                 return done == completion;
             }
 
-            var deadlineTask = Task.Delay(timeoutMs);
+            var deadlineTask = Task.Delay(timeoutMs, cancellationToken);
             int elapsedSec = 0;
             while (true)
             {
-                var beatTask = Task.Delay(TimeSpan.FromSeconds(heartbeatIntervalSeconds));
+                var beatTask = Task.Delay(TimeSpan.FromSeconds(heartbeatIntervalSeconds), cancellationToken);
                 var winner = await Task.WhenAny(completion, deadlineTask, beatTask);
                 if (winner == completion) return true;
                 if (winner == deadlineTask) return false;

@@ -226,7 +226,7 @@ namespace GxMcp.Gateway
             // the on-disk snapshot, returning its own SearchIndexMissing/Empty report
             // with retry hints — far more useful than a generic IndexNotReady while
             // indexing, and it doubles as an escape hatch when the mirror is wrong.
-            if (IsIndexDependentTool(tName))
+            if (IsIndexDependentTool(tName, tArgs))
             {
                 IndexStateSnapshot idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
                 bool indexUsable = IsIndexUsableForReads(idxSnap);
@@ -253,6 +253,59 @@ namespace GxMcp.Gateway
                 }
                 if (!indexUsable)
                 {
+                    // Cold path: right after a KB open the bootstrap settles the index mirror, and
+                    // this call can land inside that short window. Joining that settle is bounded
+                    // and turns the agent's first index-dependent call into a real result instead
+                    // of an IndexNotReady envelope it must retry — measured against a real KB, the
+                    // envelope cost a full extra turn plus the advertised retryAfterMs backoff on
+                    // an index that became usable ~250ms later.
+                    //
+                    // The join alone is not enough: a call that reaches this gate in the same
+                    // instant the bootstrap publishes its settle loses the race and fast-fails
+                    // (observed intermittently with genexus_search_source as the first call). So
+                    // when the mirror reports a restored snapshot still awaiting its delta, this
+                    // gate settles the mirror itself — same bounded routine, same budget — making
+                    // the outcome independent of that race. Any other not-ready state (a genuine
+                    // first-ever build) falls straight through to the envelope below.
+                    string? currentKbAlias = _currentKb.Value?.NormalizedAlias;
+                    var settleInFlight = GetIndexMirrorSettleInFlight(currentKbAlias);
+                    if (settleInFlight != null)
+                    {
+                        if (!settleInFlight.IsCompleted)
+                        {
+                            // Link the caller's token with gateway shutdown so either one ends
+                            // the wait. A completed settle is still meaningful: do not start a
+                            // second budget-expensive refresh after it has already given up.
+                            using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(
+                                _gatewayLifetime.Token, transportCancellation);
+                            try
+                            {
+                                await Task.WhenAny(settleInFlight,
+                                    Task.Delay(IndexMirrorSettleGateWaitCeilingMs, waitCts.Token));
+                            }
+                            catch { }
+                        }
+                    }
+                    else if (IsRestoredSnapshotAwaitingDeltaForTest(idxSnap?.Status, idxSnap?.Freshness))
+                    {
+                        await SettleIndexMirrorAfterBootstrapAsync(
+                            kbAlias: currentKbAlias,
+                            cancellationToken: transportCancellation);
+                    }
+                    idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
+                    indexUsable = IsIndexUsableForReads(idxSnap);
+                }
+                if (!indexUsable)
+                {
+                    // This envelope is silent otherwise, and "which field closed the gate, and how
+                    // old is the mirror it came from" is the first question when the agent's cold
+                    // start eats Indexing envelopes against an index that is already usable.
+                    long mirrorAgeMs = idxSnap == null || idxSnap.RefreshedAtUtc == DateTime.MinValue
+                        ? -1
+                        : (long)(DateTime.UtcNow - idxSnap.RefreshedAtUtc).TotalMilliseconds;
+                    Log($"[IndexGate] closed tool={tName} status={idxSnap?.Status ?? "<null>"} "
+                        + $"freshness={idxSnap?.Freshness ?? "<null>"} "
+                        + $"opState={idxSnap?.OperationState ?? "<null>"} mirrorAgeMs={mirrorAgeMs}");
                     return BuildToolResultContent(
                         BuildIndexNotReadyEnvelope(
                             idxSnap?.Status, idxSnap?.Freshness, idxSnap?.TotalObjects ?? 0,

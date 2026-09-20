@@ -123,15 +123,42 @@ namespace GxMcp.Gateway
 
         internal static JObject ToDiagnosticObject()
         {
-            return new JObject
+            return ToDiagnosticObject(includeEntryDetail: true);
+        }
+
+        /// <summary>
+        /// Diagnostic projection of the compatibility catalog.
+        /// <paramref name="includeEntryDetail"/> adds the per-major entries
+        /// (displayName/driver/defaultInstallPath/registry names) that KB
+        /// provisioning needs to resolve an install path.
+        /// Hot-path callers such as genexus_whoami pass false: that detail is
+        /// static for the whole session and is already reachable on demand
+        /// through genexus_whoami(verbose=true), so echoing it on every health
+        /// check only inflates the response. The identity fields the whoami
+        /// contract exposes (source/primaryMajor/supportedMajors/legacyMajors)
+        /// stay present either way.
+        /// </summary>
+        internal static JObject ToDiagnosticObject(bool includeEntryDetail)
+        {
+            var result = new JObject
             {
                 ["source"] = CatalogSource,
                 ["primaryMajor"] = PrimaryMajor,
                 ["supportedMajors"] = JArray.FromObject(SupportedMajors),
-                ["legacyMajors"] = JArray.FromObject(LegacyMajors),
-                ["entries"] = Data.Entries.DeepClone(),
-                ["legacyEntries"] = Data.LegacyEntries.DeepClone()
+                ["legacyMajors"] = JArray.FromObject(LegacyMajors)
             };
+
+            if (includeEntryDetail)
+            {
+                result["entries"] = Data.Entries.DeepClone();
+                result["legacyEntries"] = Data.LegacyEntries.DeepClone();
+            }
+            else
+            {
+                result["entryDetail"] = "genexus_whoami(verbose=true)";
+            }
+
+            return result;
         }
 
         private static CatalogData Load()

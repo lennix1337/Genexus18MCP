@@ -8,32 +8,53 @@ namespace GxMcp.Gateway
         // Keep the index readiness gate limited to reads and analyses whose
         // result is backed by the search index. SDK mutations and builds have
         // their own source/object validation and remain usable during rebuilds.
-        internal static bool IsIndexDependentToolForTest(string? toolName)
-            => IsIndexDependentTool(toolName);
+        internal static bool IsIndexDependentToolForTest(string? toolName, JObject? args = null)
+            => IsIndexDependentTool(toolName, args);
 
-        private static bool IsIndexDependentTool(string? toolName)
+        // Single source of truth for the gate's tool set. Exposed as a read-only view (not just
+        // switch arms) so the coverage guard test can assert exactly what the gate protects
+        // instead of duplicating the list in the test project — see
+        // NoNewGateEntryIsConsumedByTheLegacyAliasRewrite, which is what keeps an entry that the
+        // alias rewrite consumes from silently joining the known list below.
+        private static readonly HashSet<string> IndexDependentToolSet =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "genexus_list_objects",
+                "genexus_query",
+                "genexus_inspect",
+                "genexus_read",
+                "genexus_search_source",
+                "genexus_analyze",
+                "genexus_explain",
+                "genexus_types",
+                "genexus_navigation",
+                "genexus_kb_explorer",
+                "genexus_diff_generated",
+                "genexus_what_if",
+                "genexus_db_drift",
+                "genexus_orient",
+                "genexus_security"
+            };
+
+        internal static IReadOnlySet<string> IndexDependentTools => IndexDependentToolSet;
+
+        private static bool IsIndexDependentTool(string? toolName, JObject? args = null)
         {
             if (string.IsNullOrWhiteSpace(toolName)) return false;
+            if (IndexDependentToolSet.Contains(toolName)) return true;
 
-            return toolName.ToLowerInvariant() switch
+            string? action = args?["action"]?.ToString();
+            if (string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase))
             {
-                "genexus_list_objects" => true,
-                "genexus_query" => true,
-                "genexus_inspect" => true,
-                "genexus_read" => true,
-                "genexus_search_source" => true,
-                "genexus_analyze" => true,
-                "genexus_explain" => true,
-                "genexus_types" => true,
-                "genexus_navigation" => true,
-                "genexus_kb_explorer" => true,
-                "genexus_diff_generated" => true,
-                "genexus_what_if" => true,
-                "genexus_db_drift" => true,
-                "genexus_orient" => true,
-                "genexus_security" => true,
-                _ => false
-            };
+                return string.Equals(action, "drift_check", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "drift_report", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "types_list", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "types_describe", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "types_validate", StringComparison.OrdinalIgnoreCase);
+            }
+
+            return string.Equals(toolName, "genexus_versioning", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(action, "diff_generated", StringComparison.OrdinalIgnoreCase);
         }
 
         // Issue #209 (policy A): the gate stays fail-closed, but its envelope must be
