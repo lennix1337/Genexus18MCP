@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using GxMcp.Gateway;
 using Xunit;
@@ -176,6 +177,50 @@ namespace GxMcp.Gateway.Tests
 
             Assert.Equal(0, refreshes);
             Assert.Same(before, Program.IndexMirrorSettleInFlight);
+        }
+
+        [Fact]
+        public void SettleTasks_AreScopedByKbAlias()
+        {
+            var kbA = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var replacementA = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var kbB = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                Program.SetIndexMirrorSettleForTest("KB-A", kbA.Task);
+                Program.SetIndexMirrorSettleForTest("KB-B", kbB.Task);
+
+                Assert.Same(kbA.Task, Program.GetIndexMirrorSettleInFlightForTest("KB-A"));
+                Assert.Same(kbB.Task, Program.GetIndexMirrorSettleInFlightForTest("KB-B"));
+                Assert.NotSame(Program.GetIndexMirrorSettleInFlightForTest("KB-A"),
+                    Program.GetIndexMirrorSettleInFlightForTest("KB-B"));
+
+                Program.SetIndexMirrorSettleForTest("KB-A", replacementA.Task);
+                Program.ClearIndexMirrorSettleForTest("KB-A", kbA.Task);
+                Assert.Same(replacementA.Task, Program.GetIndexMirrorSettleInFlightForTest("KB-A"));
+            }
+            finally
+            {
+                Program.ClearIndexMirrorSettleForTest("KB-A", kbA.Task);
+                Program.ClearIndexMirrorSettleForTest("KB-A", replacementA.Task);
+                Program.ClearIndexMirrorSettleForTest("KB-B", kbB.Task);
+            }
+        }
+
+        [Fact]
+        public async Task Settle_StopsPromptlyWhenCallerIsCancelled()
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            int refreshes = 0;
+
+            await Program.SettleIndexMirrorAfterBootstrapAsync(
+                isUsable: () => false,
+                refresh: _ => { refreshes++; return Task.FromResult(true); },
+                delayMsOverride: 100,
+                cancellationToken: cancellation.Token);
+
+            Assert.Equal(0, refreshes);
         }
     }
 }

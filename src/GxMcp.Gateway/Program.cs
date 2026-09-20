@@ -80,6 +80,7 @@ namespace GxMcp.Gateway
             IndexBootstrapTriggerForTest = null;
             RespawnDelayForTest = null;
             _indexBootstrapStartedByKb.Clear();
+            ClearAllIndexMirrorSettlesForTest();
             ResetIndexStateMirrorForTest();
         }
         // Plan 038: minimal accessor so McpRouter (a separate class) can resolve the

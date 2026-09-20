@@ -97,22 +97,19 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
-        public void BuildWhoamiPayload_KeepsStaticCatalogEntryDetailOutOfTheDefaultHealthCheck()
+        public void BuildWhoamiPayload_PreservesCatalogEntryDetailInTheDefaultHealthCheck()
         {
-            // The per-major entry detail (displayName/driver/defaultInstallPath/registry
-            // names) is static for the whole session, so echoing it on every health check
-            // was pure response weight: measured 6063 -> 3859 wire bytes on a real KB.
-            // The identity fields the whoami contract exposes stay in both modes; the
-            // detail stays reachable through the documented verbose channel.
-            var lean = Program.BuildWhoamiPayload();
-            var leanCatalog = Assert.IsType<JObject>(lean["geneXus"]?["catalog"]);
-            Assert.Null(leanCatalog["entries"]);
-            Assert.Null(leanCatalog["legacyEntries"]);
-            Assert.Equal("18", leanCatalog["primaryMajor"]?.ToString());
-            Assert.NotNull(leanCatalog["source"]);
-            Assert.NotNull(leanCatalog["supportedMajors"]);
-            Assert.NotNull(leanCatalog["legacyMajors"]);
-            Assert.NotNull(leanCatalog["entryDetail"]);
+            // Existing clients may consume the catalog entries from the default health
+            // payload. Keep that contract stable; the internal slim projection remains
+            // available for callers that explicitly opt into it.
+            var standard = Program.BuildWhoamiPayload();
+            var standardCatalog = Assert.IsType<JObject>(standard["geneXus"]?["catalog"]);
+            Assert.NotNull(standardCatalog["entries"]);
+            Assert.NotNull(standardCatalog["legacyEntries"]);
+            Assert.Equal("18", standardCatalog["primaryMajor"]?.ToString());
+            Assert.NotNull(standardCatalog["source"]);
+            Assert.NotNull(standardCatalog["supportedMajors"]);
+            Assert.NotNull(standardCatalog["legacyMajors"]);
 
             var verbose = Program.BuildWhoamiPayload(verbose: true);
             var verboseCatalog = Assert.IsType<JObject>(verbose["geneXus"]?["catalog"]);

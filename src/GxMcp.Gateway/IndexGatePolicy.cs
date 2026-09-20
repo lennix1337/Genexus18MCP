@@ -8,8 +8,8 @@ namespace GxMcp.Gateway
         // Keep the index readiness gate limited to reads and analyses whose
         // result is backed by the search index. SDK mutations and builds have
         // their own source/object validation and remain usable during rebuilds.
-        internal static bool IsIndexDependentToolForTest(string? toolName)
-            => IsIndexDependentTool(toolName);
+        internal static bool IsIndexDependentToolForTest(string? toolName, JObject? args = null)
+            => IsIndexDependentTool(toolName, args);
 
         // Single source of truth for the gate's tool set. Exposed as a read-only view (not just
         // switch arms) so the coverage guard test can assert exactly what the gate protects
@@ -38,8 +38,24 @@ namespace GxMcp.Gateway
 
         internal static IReadOnlySet<string> IndexDependentTools => IndexDependentToolSet;
 
-        private static bool IsIndexDependentTool(string? toolName)
-            => !string.IsNullOrWhiteSpace(toolName) && IndexDependentToolSet.Contains(toolName);
+        private static bool IsIndexDependentTool(string? toolName, JObject? args = null)
+        {
+            if (string.IsNullOrWhiteSpace(toolName)) return false;
+            if (IndexDependentToolSet.Contains(toolName)) return true;
+
+            string? action = args?["action"]?.ToString();
+            if (string.Equals(toolName, "genexus_db", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Equals(action, "drift_check", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "drift_report", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "types_list", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "types_describe", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "types_validate", StringComparison.OrdinalIgnoreCase);
+            }
+
+            return string.Equals(toolName, "genexus_versioning", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(action, "diff_generated", StringComparison.OrdinalIgnoreCase);
+        }
 
         // Issue #209 (policy A): the gate stays fail-closed, but its envelope must be
         // observable, awaitable and retryable — it names the index state, points at the one

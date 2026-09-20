@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -111,14 +112,9 @@ namespace GxMcp.Gateway
                     // read gate would otherwise hold the agent for up to the mirror's 2s floor.
                     // Published while it runs so an index-dependent call that lands in this
                     // short window waits for it instead of returning a retry envelope.
-                    var settle = SettleIndexMirrorAfterBootstrapAsync();
-                    IndexMirrorSettleInFlight = settle;
-                    try { await settle; }
-                    finally
-                    {
-                        if (ReferenceEquals(IndexMirrorSettleInFlight, settle))
-                            IndexMirrorSettleInFlight = null;
-                    }
+                    var settle = StartIndexMirrorSettle(bootstrapKey);
+                    try { await settle.ConfigureAwait(false); }
+                    finally { ClearIndexMirrorSettle(bootstrapKey, settle); }
 
                     // The first-touch warm pass can only resolve its probe object once the
                     // index is listable. On a cold start the warmup's single list attempt runs
@@ -165,15 +161,61 @@ namespace GxMcp.Gateway
         internal const int IndexMirrorSettleMaxAttempts = 12;
         internal const int IndexMirrorSettleDelayMs = 250;
 
-        // The settle that is currently running, or null. Read by the index gate: a call that
-        // arrives while it runs waits for it (bounded) instead of handing the agent an
-        // IndexNotReady envelope it would have to retry — measured, the envelope cost a real
-        // agent a retryAfterMs backoff and a whole wasted turn on an index that was already
-        // usable ~250ms later. Cleared by the bootstrap that published it.
-        // Deliberately not keyed by alias: the settle is short, a worker is single-KB, and the
-        // gate re-reads the snapshot for its own alias after the wait, so a caller only ever
-        // waits for a settle it would have been racing anyway.
-        internal static volatile Task? IndexMirrorSettleInFlight;
+        // Each WorkerPool entry has its own index mirror and bootstrap. Keep the in-flight settle
+        // keyed by normalized alias so a call for KB A never joins (or gets released by) KB B's
+        // delta refresh. A Gateway can legitimately keep several KB workers open in parallel.
+        private static readonly ConcurrentDictionary<string, Task> _indexMirrorSettlesInFlightByKb =
+            new ConcurrentDictionary<string, Task>(StringComparer.OrdinalIgnoreCase);
+
+        // Compatibility seam for existing tests/callers that run inside an AsyncLocal KB context.
+        internal static Task? IndexMirrorSettleInFlight =>
+            GetIndexMirrorSettleInFlight(_currentKb.Value?.NormalizedAlias);
+
+        internal static Task? GetIndexMirrorSettleInFlightForTest(string? kbAlias) =>
+            GetIndexMirrorSettleInFlight(kbAlias);
+
+        internal static void SetIndexMirrorSettleForTest(string kbAlias, Task settle)
+        {
+            string key = NormalizeKbAlias(kbAlias)
+                ?? throw new ArgumentException("A KB alias is required.", nameof(kbAlias));
+            _indexMirrorSettlesInFlightByKb[key] = settle ?? throw new ArgumentNullException(nameof(settle));
+        }
+
+        internal static void ClearIndexMirrorSettleForTest(string kbAlias, Task? expected = null) =>
+            ClearIndexMirrorSettle(NormalizeKbAlias(kbAlias) ?? string.Empty, expected);
+
+        internal static void ClearAllIndexMirrorSettlesForTest() =>
+            _indexMirrorSettlesInFlightByKb.Clear();
+
+        private static Task? GetIndexMirrorSettleInFlight(string? kbAlias)
+        {
+            string? key = NormalizeKbAlias(kbAlias);
+            return key != null && _indexMirrorSettlesInFlightByKb.TryGetValue(key, out Task? settle)
+                ? settle
+                : null;
+        }
+
+        private static Task StartIndexMirrorSettle(string kbAlias)
+        {
+            string key = NormalizeKbAlias(kbAlias)
+                ?? throw new ArgumentException("A KB alias is required.", nameof(kbAlias));
+            Task settle = SettleIndexMirrorAfterBootstrapAsync(kbAlias: key);
+            _indexMirrorSettlesInFlightByKb[key] = settle;
+            return settle;
+        }
+
+        private static void ClearIndexMirrorSettle(string kbAlias, Task? expected)
+        {
+            if (string.IsNullOrWhiteSpace(kbAlias)) return;
+            if (expected == null)
+            {
+                _indexMirrorSettlesInFlightByKb.TryRemove(kbAlias, out _);
+                return;
+            }
+
+            ((ICollection<KeyValuePair<string, Task>>)_indexMirrorSettlesInFlightByKb)
+                .Remove(new KeyValuePair<string, Task>(kbAlias, expected));
+        }
 
         // Ceiling for the gate's wait on that settle. The settle's own budget is
         // IndexMirrorSettleMaxAttempts x IndexMirrorSettleDelayMs plus its refresh round-trips;
@@ -211,30 +253,41 @@ namespace GxMcp.Gateway
             Func<bool>? isUsable = null,
             Func<int, Task<bool>>? refresh = null,
             int? delayMsOverride = null,
-            Action<int, bool>? onAttempt = null)
+            Action<int, bool>? onAttempt = null,
+            string? kbAlias = null,
+            CancellationToken cancellationToken = default)
         {
+            using var settleCts = CancellationTokenSource.CreateLinkedTokenSource(
+                _gatewayLifetime.Token, cancellationToken);
+            CancellationToken settleToken = settleCts.Token;
+            string? normalizedAlias = NormalizeKbAlias(kbAlias)
+                ?? NormalizeKbAlias(_currentKb.Value?.NormalizedAlias);
             Func<bool> usableNow = isUsable
-                ?? (() => IsIndexUsableForReads(GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias)));
+                ?? (() => IsIndexUsableForReads(GetLastKnownIndexState(normalizedAlias)));
             if (usableNow()) return;
 
             int delayMs = delayMsOverride ?? IndexMirrorSettleDelayMs;
             bool refreshed = false;
             for (int attempt = 1; attempt <= IndexMirrorSettleMaxAttempts; attempt++)
             {
+                if (settleToken.IsCancellationRequested) return;
                 if (delayMs > 0)
                 {
-                    try { await Task.Delay(delayMs).ConfigureAwait(false); }
-                    catch { return; }
+                    try { await Task.Delay(delayMs, settleToken).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return; }
                 }
 
                 try
                 {
+                    settleToken.ThrowIfCancellationRequested();
                     refreshed = refresh != null
                         ? await refresh(attempt).ConfigureAwait(false)
                         : await TryRefreshIndexStateFromWorkerAsync(
-                            timeoutMs: 1200, kbAlias: _currentKb.Value?.NormalizedAlias).ConfigureAwait(false);
+                            timeoutMs: 1200,
+                            kbAlias: normalizedAlias,
+                            cancellationToken: settleToken).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (_gatewayLifetime.IsCancellationRequested)
+                catch (OperationCanceledException)
                 {
                     return;
                 }
@@ -243,6 +296,7 @@ namespace GxMcp.Gateway
                     refreshed = false;
                 }
 
+                if (settleToken.IsCancellationRequested) return;
                 bool usable = usableNow();
                 try { onAttempt?.Invoke(attempt, usable); } catch { }
                 if (usable)

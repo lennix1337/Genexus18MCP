@@ -37,29 +37,23 @@ da spawn do gateway até o primeiro resultado útil.
 
 ---
 
-## Rodada 1 — eco estático do catálogo no `whoami`
+## Rodada 1 — catálogo estático do `whoami`
 
-`whoami.geneXus.catalog` devolvia o catálogo de versões inteiro
-(`entries` + `legacyEntries`: `displayName`, `driver`, `defaultInstallPath`,
-`registryNames`, `legacyRegistryVersions`) em **toda** chamada. É dado derivado
-de `config/gx-versions.json`, estático durante a sessão, e custava 2175 B dos
-2929 B do bloco `geneXus` (57% do `whoami`).
+`whoami.geneXus.catalog` mantém `entries` e `legacyEntries` no payload padrão.
+Esses campos são consumidos por clientes existentes e também são necessários por
+`KbCreateHelper` para resolver um major declarado ao caminho de instalação.
+`GeneXusVersionCatalog.ToDiagnosticObject(includeEntryDetail: false)` continua
+disponível para callers internos que optem explicitamente pelo payload slim;
+essa projeção não substitui o contrato público padrão.
 
-O detalhe por major agora só sai em `genexus_whoami(verbose=true)`, o canal que
-já existia para o dump estático (playbooks + catálogo de skills). Os campos de
-identidade que o contrato expõe (`source`, `primaryMajor`, `supportedMajors`,
-`legacyMajors`) permanecem, e `GeneXusVersionCatalog.ToDiagnosticObject()` mantém
-`entries`/`legacyEntries` por padrão para `KbCreateHelper`, que resolve um major
-declarado para o caminho de instalação.
+O benchmark de redução de bytes desta rodada foi retirado como default: medir um
+payload sem os campos existentes não seria uma comparação compatível. A redução
+de custo de primeira chamada e o warmup de `genexus_search_source` continuam
+documentados nas rodadas seguintes.
 
-| | ANTES | DEPOIS | Δ |
-|---|---|---|---|
-| `whoami` — wire bytes | 6063 | **3859** | **-36,4%** |
-| `whoami` — envelope (est. tokens) | 5114 B (~1279) | **3262 B (~816)** | **-36,2%** |
-
-`genexus_whoami` não anuncia `outputSchema` (só `genexus_lifecycle` anuncia), então
-a remoção não afeta clientes MCP estritos — o modo de falha da issue #239 exige um
-`outputSchema` anunciado.
+`genexus_whoami` não anuncia `outputSchema` (só `genexus_lifecycle` anuncia), mas
+isso não é usado para justificar remoção de campos: a compatibilidade do payload
+existente é preservada explicitamente.
 
 ---
 

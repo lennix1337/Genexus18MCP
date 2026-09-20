@@ -226,7 +226,7 @@ namespace GxMcp.Gateway
             // the on-disk snapshot, returning its own SearchIndexMissing/Empty report
             // with retry hints — far more useful than a generic IndexNotReady while
             // indexing, and it doubles as an escape hatch when the mirror is wrong.
-            if (IsIndexDependentTool(tName))
+            if (IsIndexDependentTool(tName, tArgs))
             {
                 IndexStateSnapshot idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
                 bool indexUsable = IsIndexUsableForReads(idxSnap);
@@ -267,24 +267,30 @@ namespace GxMcp.Gateway
                     // gate settles the mirror itself — same bounded routine, same budget — making
                     // the outcome independent of that race. Any other not-ready state (a genuine
                     // first-ever build) falls straight through to the envelope below.
-                    var settleInFlight = IndexMirrorSettleInFlight;
-                    if (settleInFlight != null && !settleInFlight.IsCompleted)
+                    string? currentKbAlias = _currentKb.Value?.NormalizedAlias;
+                    var settleInFlight = GetIndexMirrorSettleInFlight(currentKbAlias);
+                    if (settleInFlight != null)
                     {
-                        // Link the caller's token with gateway shutdown so either one ends the wait.
-                        // The rest of this method already honours transportCancellation, and a
-                        // cancelled request must not be held here for the whole ceiling.
-                        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(
-                            _gatewayLifetime.Token, transportCancellation);
-                        try
+                        if (!settleInFlight.IsCompleted)
                         {
-                            await Task.WhenAny(settleInFlight,
-                                Task.Delay(IndexMirrorSettleGateWaitCeilingMs, waitCts.Token));
+                            // Link the caller's token with gateway shutdown so either one ends
+                            // the wait. A completed settle is still meaningful: do not start a
+                            // second budget-expensive refresh after it has already given up.
+                            using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(
+                                _gatewayLifetime.Token, transportCancellation);
+                            try
+                            {
+                                await Task.WhenAny(settleInFlight,
+                                    Task.Delay(IndexMirrorSettleGateWaitCeilingMs, waitCts.Token));
+                            }
+                            catch { }
                         }
-                        catch { }
                     }
                     else if (IsRestoredSnapshotAwaitingDeltaForTest(idxSnap?.Status, idxSnap?.Freshness))
                     {
-                        await SettleIndexMirrorAfterBootstrapAsync();
+                        await SettleIndexMirrorAfterBootstrapAsync(
+                            kbAlias: currentKbAlias,
+                            cancellationToken: transportCancellation);
                     }
                     idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
                     indexUsable = IsIndexUsableForReads(idxSnap);

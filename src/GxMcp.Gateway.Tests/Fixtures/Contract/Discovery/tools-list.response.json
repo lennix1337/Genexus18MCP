@@ -5179,7 +5179,7 @@
         ],
         "properties": {
           "verbose": {
-            "description": "Include the static playbooks + skills catalog + per-tool stats/heatmap, plus the per-major version-catalog entry detail (displayName/driver/defaultInstallPath/registry names) under geneXus.catalog. Default false (lean health payload).",
+            "description": "Include the static playbooks + skills catalog + per-tool stats/heatmap. Default false (lean health payload).",
             "type": "boolean"
           }
         },

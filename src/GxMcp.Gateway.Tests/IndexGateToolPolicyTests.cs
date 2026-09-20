@@ -71,6 +71,38 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Theory]
+        [InlineData("genexus_db", "drift_check", true)]
+        [InlineData("genexus_db", "drift_report", true)]
+        [InlineData("genexus_db", "types_list", true)]
+        [InlineData("genexus_db", "types_describe", true)]
+        [InlineData("genexus_db", "types_validate", true)]
+        [InlineData("genexus_db", "records_query", false)]
+        [InlineData("genexus_db", "sql_ddl", false)]
+        [InlineData("genexus_db", "sample_data", false)]
+        [InlineData("genexus_versioning", "diff_generated", true)]
+        [InlineData("genexus_versioning", "diff", false)]
+        public void CanonicalUmbrellaActionsHaveTheCorrectIndexPolicy(
+            string toolName, string action, bool expected)
+        {
+            Assert.Equal(expected, Program.IsIndexDependentToolForTest(
+                toolName, new JObject { ["action"] = action }));
+        }
+
+        [Fact]
+        public void LegacyIndexAliasesRemainGatedAfterRewrite()
+        {
+            foreach (var legacy in new[]
+            {
+                "genexus_db_drift", "genexus_types", "genexus_diff_generated"
+            })
+            {
+                Assert.True(McpRouter.TryRewriteLegacyTool(legacy, new JObject(),
+                    out string rewrittenName, out JObject rewrittenArgs));
+                Assert.True(Program.IsIndexDependentToolForTest(rewrittenName, rewrittenArgs));
+            }
+        }
+
+        [Theory]
         [InlineData("genexus_edit")]
         [InlineData("genexus_edit_form")]
         [InlineData("genexus_edit_and_build")]
