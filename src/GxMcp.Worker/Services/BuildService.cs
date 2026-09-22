@@ -413,6 +413,35 @@ namespace GxMcp.Worker.Services
             return null;
         }
 
+        internal static void RecordVerificationFailure(BuildTaskStatus status, string code, string message, string category = "environment")
+        {
+            lock (status._lock)
+            {
+                status.Status = "Failed";
+                status.ExitCode = 1; // Overall operation result, not the compiler/process exit code.
+                status.PartialSuccess = false;
+                status.ErrorCount++;
+                if (status.Errors.Count < 50) status.Errors.Add("[" + code + "] " + message);
+                if (status.ErrorsDetailed.Count < 50)
+                    status.ErrorsDetailed.Add(new ErrorDetail { code = code, raw = message,
+                        phase = "Verification", category = category });
+            }
+        }
+
+        internal static InProcessBuildOutcome UnverifiedNativeBuild(BuildTaskStatus status)
+        {
+            RecordVerificationFailure(status, "NativeBuildOutcomeUnknown",
+                "The native SDK call returned without a verified compilation result or captured diagnostics. Do not retry the build automatically.", "native");
+            return InProcessBuildOutcome.FailedWithDiagnostics;
+        }
+
+        internal static InProcessBuildOutcome FailedNativeBuild(BuildTaskStatus status)
+        {
+            RecordVerificationFailure(status, "NativeBuildFailed",
+                "The native SDK build failed; compiler diagnostics were not captured on this route. No automatic retry was performed.", "native");
+            return InProcessBuildOutcome.FailedWithDiagnostics;
+        }
+
         internal static bool DidGenerationAndCompilationSucceed(string output)
         {
             if (string.IsNullOrEmpty(output)) return false;
@@ -448,7 +477,7 @@ namespace GxMcp.Worker.Services
                 || (!string.IsNullOrEmpty(output) && output.IndexOf("[GXMCP-BUILD-ALL] KB opened", StringComparison.OrdinalIgnoreCase) >= 0);
             status.BuildAllDone = status.BuildAllDone == true || HasBuildAllCompletionEvidence(output);
             status.ReorgRequired = status.ReorgRequired == true || DetectBuildAllReorgRequired(output);
-            status.MsBuildExitCode = status.ExitCode;
+            status.MsBuildExitCode = status.BuildPath == "inproc" ? (int?)null : status.ExitCode;
 
             if (status.ReorgRequired == true)
             {
@@ -525,6 +554,8 @@ namespace GxMcp.Worker.Services
 
         public class ErrorDetail
         {
+            [JsonProperty("code", NullValueHandling = NullValueHandling.Ignore)]
+            public string code { get; set; }
             public string raw { get; set; }
             public string rewritten { get; set; }
             public string phase { get; set; }
@@ -3166,8 +3197,8 @@ namespace GxMcp.Worker.Services
                 lock (status._lock)
                 {
                     status.GenerateEvidence = unresolved;
-                    status.Status = "Failed";
-                    status.ErrorCount++;
+                    RecordVerificationFailure(status, "ActiveEnvironmentOutputRootUnavailable",
+                        "The active environment output root could not be resolved; generated-file verification is unavailable.");
                     status.Warnings.Add("[generate-gap] active environment output root could not be resolved; build evidence is unavailable.");
                     status.WarningCount++;
                     if (string.IsNullOrEmpty(status.Hint))
@@ -3780,7 +3811,7 @@ namespace GxMcp.Worker.Services
                               || status.ErrorCount > 0;
                 status.Status = failed ? "Failed" : "Succeeded";
                 status.ExitCode = failed ? 1 : 0;
-                status.MsBuildExitCode = status.ExitCode;
+                status.MsBuildExitCode = null; // No MSBuild process ran on this path.
                 FinalizeBuildAllStatus(status, fullText);
                 // A1 (parity with the MSBuild.exe branch below): when the
                 // in-process pipeline reports failure but emitted zero code
@@ -3842,7 +3873,7 @@ namespace GxMcp.Worker.Services
             {
                 status.Status = "Failed";
                 status.ExitCode = 1;
-                status.MsBuildExitCode = status.ExitCode;
+                status.MsBuildExitCode = null;
                 status.Phase = "Done";
                 EmitPhaseProgress(status.Phase);
                 status.Error = "Spec-check (specifyOnly) could not run in-process (GeneXus MSBuild tasks unavailable in this worker). Not falling back to a full build. Run a normal build to see diagnostics.";

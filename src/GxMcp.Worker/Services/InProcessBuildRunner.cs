@@ -240,6 +240,8 @@ namespace GxMcp.Worker.Services
 
                         engine.ResetSectionFlags();
                         var explicitIdentityResult = ExecuteBuildWithTheseOnly(kbHandle, targets, lineSink);
+                        if (explicitIdentityResult == BatchOutcome.Unverified)
+                            return BuildService.UnverifiedNativeBuild(status);
                         if (explicitIdentityResult == BatchOutcome.Success)
                         {
                             foreach (var t in targets) EditDirtyTracker.MarkClean(kbPath, t);
@@ -248,7 +250,7 @@ namespace GxMcp.Worker.Services
                                 : InProcessBuildOutcome.FailedWithDiagnostics;
                         }
                         if (explicitIdentityResult == BatchOutcome.Failure)
-                            return InProcessBuildOutcome.FailedWithDiagnostics;
+                            return BuildService.FailedNativeBuild(status);
 
                         lineSink("[BUILD-INPROCESS] BuildWithTheseOnly could not resolve explicit target identity; falling back to MSBuild.exe.", false);
                         return InProcessBuildOutcome.CouldNotRun;
@@ -312,6 +314,8 @@ namespace GxMcp.Worker.Services
                         {
                             engine.ResetSectionFlags();
                             var withTheseOnlyResult = ExecuteBuildWithTheseOnly(kbHandle, targets, lineSink);
+                            if (withTheseOnlyResult == BatchOutcome.Unverified)
+                                return BuildService.UnverifiedNativeBuild(status);
                             if (withTheseOnlyResult == BatchOutcome.Success)
                             {
                                 lineSink("[BUILD-INPROCESS] batch BuildWithTheseOnly x" + targets.Count + " — OK (shared spec/gen/compile pipeline).", false);
@@ -326,8 +330,8 @@ namespace GxMcp.Worker.Services
                             }
                             else
                             {
-                                lineSink("[BUILD-INPROCESS] batch BuildWithTheseOnly failed — falling back to per-target BuildOne loop.", false);
-                                engine.ResetSectionFlags();
+                                lineSink("[BUILD-INPROCESS] batch BuildWithTheseOnly failed; no automatic repeat of the native build.", false);
+                                return BuildService.FailedNativeBuild(status);
                             }
                         }
 
@@ -577,7 +581,7 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private enum BatchOutcome { Success, Failure, NotApplicable }
+        private enum BatchOutcome { Success, Failure, NotApplicable, Unverified }
 
         // Multi-target batch build. Resolves all object names to EntityKeys via
         // ObjectNameHelper, builds a DevelopmentWorkingSet, and invokes the
@@ -787,12 +791,25 @@ namespace GxMcp.Worker.Services
                         return BatchOutcome.NotApplicable;
                     }
 
+                    // GX18 U16 BuildWithTheseOnly is void and discards BuildProcess's bool.
+                    // The public Build overload with options=0 invokes the same pipeline
+                    // with the same keys, while preserving its result (no BuildCalled flag).
+                    var verifiedResult = InvokeVerifiedBuild(_miBuildBuild, buildService, workingSet,
+                        typedList, _typeBuildOptions, cts.Token);
+                    if (verifiedResult.HasValue)
+                    {
+                        lineSink("[BUILD-INPROCESS] native Build(options=0) returned " + verifiedResult.Value + ".", false);
+                        return verifiedResult.Value ? BatchOutcome.Success : BatchOutcome.Failure;
+                    }
+
                     lineSink("[BUILD-INPROCESS] batch BuildWithTheseOnly: " + typedList.Count + " keys → BL.BuildWithTheseOnly (shared spec/gen/compile).", false);
                     var sw = System.Diagnostics.Stopwatch.StartNew();
                     _miBuildWithTheseOnly.Invoke(buildService, new object[] { workingSet, typedList, cts.Token });
                     sw.Stop();
                     Logger.Info("[BUILD-INPROCESS] ExecuteBuildWithTheseOnly(" + string.Join(",", keysList) + ") completed in " + sw.ElapsedMilliseconds + "ms");
-                    return BatchOutcome.Success;
+                    // This BL route does not receive the MSBuild engine/output sink.
+                    // A non-throwing Invoke is not proof that compilation succeeded.
+                    return BatchOutcome.Unverified;
                 }
             }
             catch (Exception ex)
@@ -800,6 +817,23 @@ namespace GxMcp.Worker.Services
                 LogExceptionChain("ExecuteBuildWithTheseOnly(" + string.Join(",", objectNames) + ")", ex);
                 return BatchOutcome.Failure;
             }
+        }
+
+        // Returns null only before invocation when the result-bearing overload cannot
+        // be verified. An invoked failure/exception must never cause a second build.
+        internal static bool? InvokeVerifiedBuild(MethodInfo method, object service, object workingSet,
+            object keys, Type optionsType, CancellationToken token)
+        {
+            if (method == null || method.IsStatic || method.Name != "Build"
+                || method.ReturnType != typeof(bool) || optionsType == null || !optionsType.IsEnum)
+                return null;
+            var parameters = method.GetParameters();
+            if (parameters.Length != 4 || parameters[1].ParameterType != optionsType
+                || parameters[3].ParameterType != typeof(CancellationToken)
+                || !parameters[0].ParameterType.IsInstanceOfType(workingSet)
+                || !parameters[2].ParameterType.IsInstanceOfType(keys))
+                return null;
+            return (bool)method.Invoke(service, new[] { workingSet, Enum.ToObject(optionsType, 0), keys, (object)token });
         }
 
         // Fast per-object build (IDE F5 parity). Returns true on Execute returning

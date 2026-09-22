@@ -1752,7 +1752,7 @@ namespace GxMcp.Worker.Services
             lock (_kbLock)
             {
                 if (_kb == null) return null;
-                string kbPath = Environment.GetEnvironmentVariable("GX_KB_PATH");
+                string kbPath = GetKbPath();
                 if (string.IsNullOrWhiteSpace(kbPath) || !Directory.Exists(kbPath)) return null;
 
                 object[] candidates =
@@ -1760,6 +1760,7 @@ namespace GxMcp.Worker.Services
                     TryGet(() => (object)_kb.Environment),
                     TryGet(() => (object)_kb.UserInterface?.ActiveEnvironment),
                     TryGet(() => (object)_kb.DesignModel?.Environment),
+                    TryGet(() => (object)_kb.DesignModel?.Environment?.TargetModel),
                     TryGet(() => (object)_kb.ActiveModel),
                     TryGet(() => (object)_kb.Environment?.TargetModel),
                     TryGet(() => (object)_kb.Environment?.DesignModel)
@@ -1788,8 +1789,7 @@ namespace GxMcp.Worker.Services
                     if (candidate == null) continue;
                     foreach (var propertyName in new[] { "TargetPath", "OutputPath", "WebPath", "TargetName", "Name", "EnvironmentName" })
                     {
-                        var value = TryGetMember(candidate, propertyName)?.ToString();
-                        var webPath = ResolveEnvironmentWebPath(kbPath, value);
+                        var webPath = ResolveEnvironmentOutputMember(kbPath, candidate, propertyName);
                         if (!string.IsNullOrWhiteSpace(webPath)
                             && IsCompatibleEnvironmentPath(webPath, activeName))
                             return webPath;
@@ -1798,6 +1798,14 @@ namespace GxMcp.Worker.Services
 
                 return null;
             }
+        }
+
+        internal static string ResolveEnvironmentOutputMember(string kbPath, object candidate, string propertyName)
+        {
+            var value = TryGetMember(candidate, propertyName)?.ToString();
+            var resolved = ResolveEnvironmentWebPath(kbPath, value);
+            if (resolved != null) return resolved;
+            return ResolveEnvironmentWebPath(kbPath, TryGetPropertyBagValue(candidate, propertyName)?.ToString());
         }
 
         private static string ResolveEnvironmentRoot(IEnumerable<string> roots, string activeName)
