@@ -14,7 +14,8 @@ namespace GxMcp.Gateway.Tests
         public LiveKbFactAttribute(
             bool requiresWWP = false,
             bool requiresNavigation = false,
-            bool requiresTeamDevelopmentFixture = false)
+            bool requiresTeamDevelopmentFixture = false,
+            bool requiresDesignSystemFixture = false)
         {
             string kb = Environment.GetEnvironmentVariable("GXMCP_TEST_KB");
             if (string.IsNullOrEmpty(kb))
@@ -29,6 +30,12 @@ namespace GxMcp.Gateway.Tests
                 {
                     Skip = "GXMCP_REQUIRE_WWP not set — set to 1 to run WorkWithPlus-licensed E2E tests.";
                 }
+                return;
+            }
+            if (requiresDesignSystemFixture &&
+                string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GXMCP_DSO_NAME")))
+            {
+                Skip = "GXMCP_DSO_NAME is not set — provide an existing DesignSystem with nonempty Tokens and Styles for read-only preview regression.";
                 return;
             }
             if (requiresNavigation && !HasGeneratedNavigationReport(kb))

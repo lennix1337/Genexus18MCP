@@ -6,11 +6,12 @@ namespace GxMcp.Gateway.Tests
 {
     public class LiveKbFactAttributeTests
     {
-        [Fact]
-        public void TeamDevelopment_fixture_requirement_is_a_discovery_skip()
+        [Theory]
+        [InlineData(false, "GXMCP_TEAMDEV_PENDING_NAME")]
+        [InlineData(true, "GXMCP_DSO_NAME")]
+        public void Fixture_requirement_is_a_discovery_skip(bool designSystem, string pendingVariable)
         {
             const string kbVariable = "GXMCP_TEST_KB";
-            const string pendingVariable = "GXMCP_TEAMDEV_PENDING_NAME";
             string? previousKb = Environment.GetEnvironmentVariable(kbVariable);
             string? previousPending = Environment.GetEnvironmentVariable(pendingVariable);
             string tempKb = Path.Combine(Path.GetTempPath(), "gxmcp-live-attribute-" + Guid.NewGuid().ToString("N"));
@@ -19,8 +20,10 @@ namespace GxMcp.Gateway.Tests
             {
                 Environment.SetEnvironmentVariable(kbVariable, tempKb);
                 Environment.SetEnvironmentVariable(pendingVariable, null);
-                var attribute = new LiveKbFactAttribute(requiresTeamDevelopmentFixture: true);
-                Assert.Contains("GXMCP_TEAMDEV_PENDING_NAME", attribute.Skip);
+                var attribute = new LiveKbFactAttribute(
+                    requiresTeamDevelopmentFixture: !designSystem,
+                    requiresDesignSystemFixture: designSystem);
+                Assert.Contains(pendingVariable, attribute.Skip);
             }
             finally
             {

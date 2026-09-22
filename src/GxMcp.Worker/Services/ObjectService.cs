@@ -3287,6 +3287,13 @@ namespace GxMcp.Worker.Services
                 return null;
             }
 
+            // Invalidation can refresh a retained SDK instance in place (notably
+            // DesignSystem). Evict it as well, as EventsSaveIsolation.Fresh does.
+            // Older SDKs may not support eviction; the identity/reference guard
+            // below still refuses any result that is not independently loaded.
+            try { (seed.Model.Objects as IKBModelObjectsCacheConfiguration)?.RemoveFromCaches(seed); }
+            catch (Exception ex) { Logger.Debug("Fresh-read cache eviction failed: " + ex.GetType().Name); }
+
             InvalidateAllReadCaches();
             // Resolve through the same module-aware route as genexus_read after
             // invalidation. Loading by EntityKey here bypassed that route and could

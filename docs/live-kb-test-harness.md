@@ -27,6 +27,15 @@ When an indexed read returns `IndexNotReady`, use
 
 ## Provisioning prerequisite
 
+The `LiveDesignSystemRead` regression requires `GXMCP_TEST_KB` and
+`GXMCP_DSO_NAME` naming an existing DesignSystem with nonempty Tokens and Styles.
+Run only `FullyQualifiedName~DesignSystemFreshReadLiveTests` for this read-only
+scenario: it materializes both parts, previews identical full and patch edits,
+then checks unchanged source and version tokens. It neither creates a fixture
+nor saves, selects a KB version or invokes lifecycle. Confirm the authorized
+active version before running; destination pins still apply to previews. A
+skipped live test does not establish SDK behavior or safe persistence.
+
 Create a synthetic KB through GeneXus or import a verified synthetic XPZ into a
 new KB. Independently verify both the Knowledge Base database and generated
 application datastores are dedicated to this fixture. Copying a KB directory can
