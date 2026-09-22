@@ -199,6 +199,8 @@ namespace GxMcp.Gateway
         // dryRun=true. An arbitrary dryRun flag must not hide a write.
         private static readonly HashSet<string> DryRunCapableActions = new HashSet<string>(StringComparer.Ordinal)
         {
+            "genexus_module:install",
+            "genexus_module:install_builtin",
             "genexus_connection_recover:journal_repair",
             "genexus_data_view:create",
             "genexus_data_view:update",
@@ -532,7 +534,9 @@ namespace GxMcp.Gateway
                 Kind = kind,
                 Effects = EffectsFor(canonical, kind),
                 Execution = ExecutionFor(canonical, kind),
-                Retry = kind == OperationKind.ReadOnly ? "safe" : kind == OperationKind.Mutating ? "operation_key" : "never",
+                Retry = kind == OperationKind.ReadOnly ? "safe"
+                    : canonical == "genexus_module" && (effectiveArgs["action"]?.ToString() == "install" || effectiveArgs["action"]?.ToString() == "install_builtin") ? "reconcile_inventory"
+                    : kind == OperationKind.Mutating ? "operation_key" : "never",
                 Cache = kind == OperationKind.ReadOnly ? "semantic" : "never",
                 Invalidation = InvalidationFor(canonical, kind),
                 PreviewSupported = IsActionPreviewSupported(canonical, effectiveArgs)

@@ -29,7 +29,7 @@ class OperationContractInventoryTests(unittest.TestCase):
         for tool in inventory["tools"]:
             for action in tool["actions"]:
                 self.assertIn(action["kind"], {"readOnly", "mutating", "modeDependent"})
-                self.assertIn(action["retry"], {"safe", "operation_key", "never"})
+                self.assertIn(action["retry"], {"safe", "operation_key", "never", "reconcile_inventory"})
                 self.assertIn(action["cache"], {"semantic", "never"})
 
     def test_generator_detects_new_unclassified_action(self):
@@ -106,6 +106,15 @@ class OperationContractInventoryTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 2)
         self.assertIn("published inventory differs", result.stderr)
+
+    def test_module_installations_require_inventory_reconciliation(self):
+        inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
+        module = next(row for row in inventory["tools"] if row["tool"] == "genexus_module")
+        actions = {row["action"]: row for row in module["actions"]}
+        for name in ("install", "install_builtin"):
+            self.assertEqual(actions[name]["retry"], "reconcile_inventory")
+            self.assertEqual(actions[name]["kind"], "mutating")
+        self.assertEqual(actions["list"]["retry"], "safe")
 
 
 if __name__ == "__main__":

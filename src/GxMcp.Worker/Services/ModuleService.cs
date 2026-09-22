@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using Module = Artech.Architecture.Common.Objects.Module;
 using System.Xml;
 using Artech.Architecture.Common.Objects;
@@ -23,11 +24,13 @@ namespace GxMcp.Worker.Services
     {
         private readonly KbService _kb;
         private readonly ObjectService _objects;
+        private readonly IndexCacheService _index;
 
-        public ModuleService(KbService kb, ObjectService objects)
+        public ModuleService(KbService kb, ObjectService objects, IndexCacheService index = null)
         {
             _kb = kb;
             _objects = objects;
+            _index = index;
         }
 
         public string Run(JObject args)
@@ -48,6 +51,10 @@ namespace GxMcp.Worker.Services
                     message: "Unknown action '" + action + "'.",
                     hint: "Use install, install_builtin, update, list, package, publish, restore, add_modules_server or search_modules_in_servers.");
             }
+
+            if (action == "install" || action == "install_builtin") return InstallVerified(args);
+            if (args?["dryRun"]?.Value<bool>() == true && action != "list" && action != "list_modules_servers" && action != "search_modules_in_servers")
+                return McpResponse.Err("ModuleDryRunUnsupported", "This action has no safe preview; nothing was dispatched.");
 
             KnowledgeBase kb;
             try { kb = _kb?.GetKB() as KnowledgeBase; }
@@ -70,8 +77,6 @@ namespace GxMcp.Worker.Services
             {
                 switch (action)
                 {
-                    case "install": return Install(svc, kb.DesignModel, args);
-                    case "install_builtin": return InstallBuiltIn(svc, kb.DesignModel, args);
                     case "update": return Update(svc, kb.DesignModel, args);
                     case "package": return Package(svc, kb.DesignModel, args);
                     case "publish": return Publish(svc, kb.DesignModel, args);
@@ -88,117 +93,76 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private string Install(IModuleManagerService svc, KBModel model, JObject args)
+        private string InstallVerified(JObject args)
         {
-            string opcFile = args?["opcFile"]?.ToString();
-            string name = args?["name"]?.ToString();
-            string version = args?["version"]?.ToString();
-            if (!string.IsNullOrWhiteSpace(opcFile))
-            {
-                OpcPackageIdentity package;
-                try
-                {
-                    package = ReadOpcPackage(opcFile);
-                }
-                catch (FileNotFoundException ex)
-                {
-                    return PackageValidationError("ModulePackageNotFound", ex.Message, opcFile, null,
-                        "Check the .opc path and retry; nothing was changed in the KB.");
-                }
-                catch (Exception ex) when (ex is InvalidDataException || ex is InvalidOperationException)
-                {
-                    return PackageValidationError("ModulePackageInvalid", ex.Message, opcFile, null,
-                        "Use a valid GeneXus .opc package file and retry; nothing was changed in the KB.");
-                }
-                if (IsDryRun(args)) return PreviewInstall(package, version);
-                bool presentBefore = ResolveModule(package.Name) != null;
-                int countBefore = CountModules();
-                bool ok;
-                try
-                {
-                    ok = svc.Install(model, opcFile);
-                }
-                catch (Exception ex)
-                {
-                    return InstallFailure("Install", package.Name, opcFile, null, ex, package);
-                }
-                bool presentAfter = ResolveModule(package.Name) != null;
-                int countAfter = CountModules();
-                var details = PackageResultDetails(package, version, presentBefore, presentAfter, countBefore, countAfter);
-                details["opcFile"] = opcFile;
-                if (!ok)
-                    return OperationResultWithDetails("ModuleInstallDeclined", false, details,
-                        "The SDK declined the install without throwing; inspect modulePresent/moduleCount and retry only after inspecting the worker log.");
-                return OperationResult("ModuleInstalled", true, details);
-            }
-            if (!string.IsNullOrWhiteSpace(name))
-            {
-                if (IsDryRun(args)) return PreviewInstallByName(name, version);
-                bool presentBefore = ResolveModule(name) != null;
-                int countBefore = CountModules();
-                bool ok;
-                try
-                {
-                    ok = svc.InstallByName(model, name, version);
-                }
-                catch (Exception ex)
-                {
-                    return InstallFailure("InstallByName", name, null, version, ex, null);
-                }
-                bool presentAfter = ResolveModule(name) != null;
-                int countAfter = CountModules();
-                var details = new JObject
-                {
-                    ["name"] = name,
-                    ["version"] = version,
-                    ["alreadyInstalled"] = presentBefore,
-                    ["modulePresent"] = presentAfter,
-                    ["verified"] = presentAfter,
-                    ["rereadConfirmed"] = presentAfter,
-                    ["moduleCountBefore"] = countBefore,
-                    ["moduleCountAfter"] = countAfter
-                };
-                if (!ok)
-                    return OperationResultWithDetails("ModuleInstallDeclined", false, details,
-                        "The SDK declined the install without throwing; inspect modulePresent/moduleCount and retry only after inspecting the worker log.");
-                return OperationResult("ModuleInstalled", true, details);
-            }
-            return McpResponse.Err(code: "BadArgs", message: "action=install requires either opcFile or name.", hint: "Pass opcFile=<path> or name=<module>.");
-        }
-
-        private string InstallBuiltIn(IModuleManagerService svc, KBModel model, JObject args)
-        {
-            string name = args?["name"]?.ToString();
-            if (string.IsNullOrWhiteSpace(name))
-                return McpResponse.Err(code: "BadArgs", message: "action=install_builtin requires name.", hint: "Pass the built-in module name.");
-            if (IsDryRun(args)) return PreviewInstallByName(name, null, builtIn: true);
-            bool presentBefore = ResolveModule(name) != null;
-            int countBefore = CountModules();
-            bool ok;
+            bool dispatched = false;
+            if (_kb == null) return McpResponse.Err("NoKbOpen", "No KB is open in this worker session.");
+            if (!Monitor.TryEnter(_kb.KbLock)) return McpResponse.Err("ModuleOperationBusy", "An incompatible KB operation is in progress.", retryable: false);
             try
             {
-                ok = svc.InstallBuiltIn(model, name);
+                var kb = _kb.GetKB() as KnowledgeBase;
+                if (kb?.DesignModel == null) return McpResponse.Err("NoKbOpen", "No design model is open in this worker session.");
+                var guard = WriteDestinationGuard.CheckCommand(_kb, "Module", "Run", args);
+                if (guard != null) return guard;
+                bool dryRun = args?["dryRun"]?.Value<bool>() == true;
+                bool builtin = string.Equals(args?["action"]?.ToString(), "install_builtin", StringComparison.OrdinalIgnoreCase);
+                var manager = dryRun && !builtin ? null : Helpers.SdkServiceResolver.Resolve<IModuleManagerService>();
+                if ((!dryRun || builtin) && manager == null) return McpResponse.Err("ModuleManagerServiceUnavailable", "The native module manager service is unavailable.");
+                string requestedVersion = args?["version"]?.ToString();
+                if (builtin)
+                {
+                    string name = args?["name"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(name) || !string.IsNullOrWhiteSpace(args?["opcFile"]?.ToString()))
+                        throw new ModuleInstallPlanException("BadArgs", "install_builtin requires a built-in name and does not accept opcFile.");
+                    if (!manager.IsBuiltInModule(name)) throw new ModuleInstallPlanException("ModuleBuiltinNotRegistered", "The selected SDK does not register this built-in module.");
+                    string builtinVersion = manager.GetBuiltinModuleVersion(name);
+                    if (string.IsNullOrWhiteSpace(builtinVersion)) throw new ModuleInstallPlanException("ModuleBuiltinVersionUnavailable", "The SDK did not report the built-in version.");
+                    if (!string.IsNullOrWhiteSpace(requestedVersion) && requestedVersion != builtinVersion)
+                        throw new ModuleInstallPlanException("ModuleBuiltinVersionConflict", "The requested version differs from the SDK registered built-in version.");
+                    requestedVersion = builtinVersion;
+                }
+                // Cache staging is shared by SDK sessions. Never wait behind another
+                // installation or silently restart one after a timeout.
+                using (var gate = new Mutex(false, @"Local\GxMcp.ModuleInstall"))
+                {
+                    bool entered;
+                    try { entered = gate.WaitOne(0); }
+                    catch (AbandonedMutexException) { gate.ReleaseMutex(); return McpResponse.Err("ModuleReconciliationRequired", "An earlier installation ended without a verified receipt. Inspect the module inventory before recovery.", retryable: false, reconciliationRequired: true); }
+                    if (!entered) return McpResponse.Err("ModuleOperationBusy", "Another module installation is in progress.", retryable: false);
+                    try
+                    {
+                        var sdkPath = Path.GetDirectoryName(typeof(KnowledgeBase).Assembly.Location);
+                        var packages = ModuleInstallPackage.Plan(args?["opcFile"]?.ToString(), args?["name"]?.ToString(), requestedVersion, sdkPath);
+                        var backend = new ModuleInstallSdkBackend(_kb, kb, manager, _index, packages);
+                        dispatched = !dryRun;
+                        var receipt = ModuleInstallFlow.Run(packages, dryRun, backend);
+                        receipt["sdkCache"] = backend.CacheDiagnostics;
+                        string code = receipt["code"]?.ToString();
+                        bool success = receipt["status"]?.ToString() == "ok";
+                        receipt.Remove("status");
+                        receipt.Remove("code");
+                        receipt["verificationScope"] = "module identity, version, dependency metadata and object inventory";
+                        return success ? McpResponse.Ok(code: code, result: receipt)
+                            : McpResponse.Err(code, receipt["diagnostic"]?["message"]?.ToString() ?? "The installation was not verified; inspect the reported inventory and diagnostic.",
+                                extra: receipt, retryable: false,
+                                reconciliationRequired: receipt["noMutation"]?.Value<bool>() != true);
+                    }
+                    finally { gate.ReleaseMutex(); }
+                }
+            }
+            catch (ModuleInstallPlanException ex)
+            {
+                return McpResponse.Err(ex.Code, ex.Message, extra: new JObject { ["persisted"] = false, ["implicitLifecycleOperations"] = new JArray() });
             }
             catch (Exception ex)
             {
-                return InstallFailure("InstallBuiltIn", name, null, null, ex, null);
+                return McpResponse.Err("ModulePreflightFailed", "The module installation preflight failed.",
+                    errorExtra: new JObject { ["exceptionType"] = ex.GetType().Name, ["parameter"] = (ex as ArgumentException)?.ParamName },
+                    extra: new JObject { ["persisted"] = dispatched ? JValue.CreateNull() : new JValue(false),
+                        ["persistedStateKnown"] = !dispatched, ["implicitLifecycleOperations"] = new JArray() }, retryable: false,
+                    reconciliationRequired: dispatched);
             }
-            bool presentAfter = ResolveModule(name) != null;
-            int countAfter = CountModules();
-            var details = new JObject
-            {
-                ["name"] = name,
-                ["alreadyInstalled"] = presentBefore,
-                ["modulePresent"] = presentAfter,
-                ["verified"] = presentAfter,
-                ["rereadConfirmed"] = presentAfter,
-                ["moduleCountBefore"] = countBefore,
-                ["moduleCountAfter"] = countAfter
-            };
-            if (!ok)
-                return OperationResultWithDetails("ModuleInstallDeclined", false, details,
-                    "The SDK declined the install without throwing; inspect modulePresent/moduleCount and retry only after inspecting the worker log.");
-            return OperationResult("ModuleInstalled", true, details);
+            finally { Monitor.Exit(_kb.KbLock); }
         }
 
         private string Update(IModuleManagerService svc, KBModel model, JObject args)
@@ -990,6 +954,7 @@ namespace GxMcp.Worker.Services
                     modules[identity] = new JObject
                     {
                         ["name"] = obj.Name,
+                        ["version"] = obj.GetPropertyValue<string>("ModuleVersion"),
                         ["description"] = SafeString(() => obj.Description),
                         ["guid"] = guid,
                         ["entityKey"] = entityKey,

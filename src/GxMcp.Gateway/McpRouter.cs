@@ -1986,6 +1986,7 @@ namespace GxMcp.Gateway
                 // projection so WriteNotPersisted still tells the caller what the SDK
                 // saved, what the forced re-read proved, and whether rollback landed.
                 "saved", "verified", "persisted", "persistedVerified", "requestedHash",
+                "retryable", "reconciliationRequired", "verifiedByReadback", "implicitLifecycleOperations",
                 "persistedHash", "normalizedRequestedHash", "normalizedPersistedHash",
                 "persistedMatchCount", "oldContentPresent", "verification", "rollback",
                 "rolledBack", "versionToken", "persistedVerifyError", "replacementPresent",
@@ -2017,6 +2018,26 @@ namespace GxMcp.Gateway
             {
                 var value = ResolveErrorField(error, k);
                 if (value != null) trimmed[k] = value;
+            }
+            if (code?.ToString().StartsWith("Module", StringComparison.Ordinal) == true)
+            {
+                // Module failures attach a typed receipt at the envelope root,
+                // while retry policy belongs to the canonical inner error.
+                foreach (string key in new[] { "module", "version", "dryRun", "inventory", "plan",
+                    "attemptedModules", "dependencies", "recoveryActions", "noMutation",
+                    "stateChangedSincePlan", "outsidePlanChangeDetected", "sdkCache", "warnings", "stage", "verificationScope", "retryable", "reconciliationRequired",
+                    "persisted", "persistedStateKnown", "verifiedByReadback", "implicitLifecycleOperations" })
+                {
+                    JToken value = ResolveErrorField(error, key);
+                    if (value != null) trimmed[key] = value;
+                }
+                if (ResolveErrorField(error, "diagnostic") is JObject diagnostic)
+                {
+                    var safeDiagnostic = new JObject();
+                    foreach (string key in new[] { "exceptionType", "parameter", "callSites" })
+                        if (diagnostic[key] != null) safeDiagnostic[key] = diagnostic[key];
+                    trimmed["diagnostic"] = safeDiagnostic;
+                }
             }
             string status = error["status"]?.ToString();
             if (!string.IsNullOrEmpty(status) &&

@@ -1926,7 +1926,7 @@
           "kind": "mutating",
           "effects": "kb.write",
           "execution": "worker",
-          "retry": "operation_key",
+          "retry": "reconcile_inventory",
           "cache": "never",
           "invalidation": [
             "kb",
@@ -1940,7 +1940,7 @@
           "kind": "mutating",
           "effects": "kb.write",
           "execution": "worker",
-          "retry": "operation_key",
+          "retry": "reconcile_inventory",
           "cache": "never",
           "invalidation": [
             "kb",

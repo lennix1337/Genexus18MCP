@@ -43,6 +43,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="WindowsBase" />
     <Reference Include="Artech.Packages.Patterns">
       <HintPath>$(GX_PATH)\Packages\Artech.Packages.Patterns.dll</HintPath>
       <Private>False</Private>

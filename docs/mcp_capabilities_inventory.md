@@ -103,7 +103,7 @@ The table below is the machine-checkable action contract for every umbrella tool
 | `genexus_sandbox` | — | `create`, `remove` |
 | `genexus_worker_pool` | — | `warm_spares` |
 | `genexus_edit_form` | — | `add_textblock`, `add_button`, `set_visibility`, `remove_control`, `wrap_in_fieldset` |
-| `genexus_module` | `list` (SDK identity/path-aware, deterministic), `list_modules_servers`, `search_modules_in_servers` | `install`, `install_builtin`, `update`, `package`, `publish`, `restore`, `add_modules_server` |
+| `genexus_module` | `list` (SDK identity/path-aware, deterministic), `list_modules_servers`, `search_modules_in_servers` | `install`, `install_builtin` (dryRun=true plans local dependencies/objects/exact versions; application verifies inventory, with no implicit lifecycle or automatic rollback), `update`, `package`, `publish`, `restore`, `add_modules_server` |
 | `genexus_gxserver` | `status`, `pending`, `ignored`, `conflicts`, `history`, `pipeline_list`, `pipeline_runs`, `pipeline_output` | `commit`, `update`, `lock`, `resolve`, `pipeline_run`, `pipeline_abort` |
 | `genexus_kb_version` | `list`, `changed_objects` (Design vs frozen, paginated, read-only) | `freeze`, `branch`, `set_active`, `revert` |
 | `genexus_browser` | `smoke`, `a11y`, `wcag`, `capture`, `cross`, `preview` | — |

@@ -575,13 +575,17 @@ namespace GxMcp.Gateway
                 "Inspect and manage modules through the GeneXus Module Manager.\n\n" +
                 "## Actions\n" +
                 "- `list` — read installed Module objects from the SDK, deduplicated by GUID/EntityKey and returned with `parent`, `path`, `qualifiedName`, and description so homonymous namespaces remain distinguishable.\n" +
-                "- `install` / `install_builtin` — add a module to the KB. Both accept `dryRun=true` for a read-only preview (package identity, dependencies, affected modules) without calling the SDK install; a verified repeat install is a safe no-op at the KB level.\n" +
-                "- `update` / `restore` — update or restore an installed module through the SDK. `update` also accepts `dryRun=true` for a read-only preview.\n" +
+                "- `install` / `install_builtin` - install a local `.opc` (`opcFile`) or resolve `name`/optional exact `version` from the installed SDK's built-in packages. Arbitrary remote named installation is not supported by this route. Both accept `dryRun=true` for a read-only preview (package identity, dependencies, affected modules) without calling the SDK install; a verified repeat install is a safe no-op at the KB level.\n" +
+                "- `update` / `restore` - update or restore an installed module through the SDK. `update` also accepts `dryRun=true` for a read-only preview.\n" +
                 "- `list_modules_servers` — list configured module-server metadata without contacting remote catalogs; pass one returned name to `search_modules_in_servers` to bound network work.\n" +
                 "- `package` — create an `.opc` package from a Module and its selected environments (`confirm=true`).\n" +
                 "- `publish` — publish a package or installed Module to a configured module server (`server`, `confirm=true`).\n" +
                 "- `add_modules_server` / `search_modules_in_servers` — manage and query the SDK's configured module servers.\n\n" +
-                "`list` and `search_modules_in_servers` are read-only. The remaining actions can change the KB or external module-server state; inspect the returned result before continuing with build/validation.\n",
+                "## Installation safety\n" +
+                "Use `dryRun=true` on install/install_builtin to inspect dependency-first order, package hashes, object identities and exact versions without changing the KB. Other actions reject dryRun. Default is false. Required dependencies must resolve locally; database changes and package hooks are rejected. Existing version/identity conflicts are rejected rather than upgraded.\n\n" +
+                "Application rechecks the KB/version and inventory before SDK installation, serializes installs and rejects incompatible active operations. A matching installed inventory is an idempotent no-op. Inspect `persisted`, `persistedStateKnown`, `verifiedByReadback`, `noMutation`, `inventory`, `attemptedModules` and `partialPersistenceDetected`: SDK success alone is not persistence evidence. `rollback.supported=false`; failures report observed state and explicit recovery actions, never an unverified rollback.\n\n" +
+                "No implicit Specify, Generate, Build, Rebuild, compilation, reorg, execution or tests. On timeout, persistence is unknown: wait until the Worker is no longer busy, then independently inspect module/dependency/object inventory; never automatically repeat installation. Source reads do not reconcile module installs; no asynchronous result or automatic inventory reconciliation is available.\n\n" +
+                "`list`, `list_modules_servers` and `search_modules_in_servers` are read-only. Other non-preview actions can change KB or external state.\n",
 
             ["genexus_gxserver"] =
                 "# genexus_gxserver\n\n" +

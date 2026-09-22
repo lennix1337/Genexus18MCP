@@ -143,6 +143,9 @@ namespace GxMcp.Gateway
             string tName = tcParams["name"]?.ToString() ?? "";
             var tArgs = tcParams["arguments"] as JObject;
             string kbScope = _currentKb.Value?.NormalizedAlias ?? "";
+            JObject? modulePreviewError = ValidateModulePreview(tName, tArgs);
+            if (modulePreviewError != null)
+                return BuildToolResultContent(modulePreviewError, isError: true, toolName: tName, toolArgs: tArgs);
 
             // 1. CACHE INVALIDATION: If it's a write operation or a re-index, clear the cache.
             // PERF: compute once so the semantic-cache read below can skip the
@@ -483,6 +486,7 @@ namespace GxMcp.Gateway
                 $"Timeout waiting for tool: {tName}",
                 resultObj =>
                 {
+                    NormalizeInterruptedModuleInstallation(resultObj, tName, tArgs);
                     JToken? finalResult = null;
                     var omittedMutationFields = new JArray();
                     JToken? workerPayload = resultObj["result"] ?? resultObj["error"];
@@ -686,6 +690,8 @@ namespace GxMcp.Gateway
                     };
 
                     bool recordWrite = IsTransactionRecordOperation(tName!, tArgs) && IsMutatingTool(tName!, tArgs);
+                    bool moduleInstall = IsModuleInstallation(tName, tArgs) && tArgs?["dryRun"]?.ToObject<bool?>() != true;
+                    if (moduleInstall) MarkModuleInstallOutcomeUnknown(timeoutPayload);
                     if (recordWrite) MarkRecordWriteOutcomeUnknown(timeoutPayload);
                     var timeoutError = timeoutPayload["error"] as JObject;
                     if (recordWrite && timeoutError != null)
@@ -702,10 +708,13 @@ namespace GxMcp.Gateway
                         help.Add("Do not repeat the write. Poll the original operation result, then query the record keys against the datastore.");
                     if (string.Equals(timeoutPayload["recoveryScope"]?.ToString(), "kb", StringComparison.OrdinalIgnoreCase))
                         help.Add("The manifest may have changed multiple KB objects and parts; reconcile the KB state before retrying.");
+                    if (moduleInstall)
+                        help.Add("Do not repeat installation. Wait until the Worker is no longer busy, then independently inspect installed modules, dependencies and objects. A Source read cannot reconcile a module installation; no asynchronous result or automatic inventory reconciliation is available.");
                     if (!string.IsNullOrWhiteSpace(operationId))
                     {
                         timeoutPayload["operationId"] = operationId;
-                        help.Add($"Operation is still running. Query genexus_lifecycle(action='status', target='op:{operationId}') or action='result'.");
+                        if (!moduleInstall)
+                            help.Add($"Operation is still running. Query genexus_lifecycle(action='status', target='op:{operationId}') or action='result'.");
                         if (tName != null && (tName.IndexOf("edit", StringComparison.OrdinalIgnoreCase) >= 0
                                              || tName.IndexOf("write", StringComparison.OrdinalIgnoreCase) >= 0
                                              || tName.IndexOf("variable", StringComparison.OrdinalIgnoreCase) >= 0
@@ -716,7 +725,7 @@ namespace GxMcp.Gateway
                             help.Add("For long writes the change is usually already persisted; check action='result' once, then read back instead of retrying.");
                         }
                     }
-                    else if (!recordWrite && !hasTimeoutRecoveryTargets)
+                    else if (!recordWrite && !moduleInstall && !hasTimeoutRecoveryTargets)
                     {
                         help.Add("Retry with narrower scope or lower limit.");
                     }

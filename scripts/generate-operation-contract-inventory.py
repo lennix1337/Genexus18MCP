@@ -150,11 +150,19 @@ def operation_fields(tool: str, action: str | None, kind: str, preview_actions: 
             "retry": "operation_key", "cache": "never", "invalidation": ["process", "sessions"],
             "previewSupported": preview_supported,
         }
+    # A module install cannot be repeated blindly: the SDK import is not
+    # transactional, so a retry has to reconcile the resulting inventory instead
+    # of assuming nothing happened. Classified here so the per-action and
+    # tool-level paths agree.
+    if tool == "genexus_module" and action in {"install", "install_builtin"}:
+        retry = "reconcile_inventory"
+    else:
+        retry = "safe" if kind == "readOnly" else ("operation_key" if kind == "mutating" else "never")
     return {
         "kind": kind,
         "effects": effect_for(kind, tool),
         "execution": "worker" if kind in {"readOnly", "mutating"} else "unknown",
-        "retry": "safe" if kind == "readOnly" else ("operation_key" if kind == "mutating" else "never"),
+        "retry": retry,
         "cache": "semantic" if kind == "readOnly" else "never",
         "invalidation": [] if kind != "mutating" else ["kb", "dependents", "collections"],
         "previewSupported": preview_supported,

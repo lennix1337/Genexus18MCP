@@ -264,7 +264,7 @@ namespace GxMcp.Worker.Services
             _learningReportService = new LearningReportService(_kbService);
             _gxServerSyncService = new GxServerSyncService(_kbService);
             _compareService = new CompareService(_kbService, _objectService);
-            _moduleService = new ModuleService(_kbService, _objectService);
+            _moduleService = new ModuleService(_kbService, _objectService, _indexCacheService);
             _gamService = new GamService(_kbService);
             _mergeToolService = new MergeToolService(_kbService, _objectService);
             _kbVersionService = new KbVersionService(_kbService);

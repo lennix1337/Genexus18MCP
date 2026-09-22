@@ -6,6 +6,9 @@ using Xunit;
 namespace GxMcp.Gateway.Tests
 {
     [Trait("Category", "LiveDesignSystemRead")]
+    // LiveGatewayHarness spawns real processes, so this class belongs to the
+    // process-smoke lane like every other fixture-backed live class.
+    [Trait("Category", "ProcessSmoke")]
     public sealed class DesignSystemFreshReadLiveTests : IClassFixture<LiveGatewayHarness>, IAsyncLifetime
     {
         private readonly LiveGatewayHarness harness;

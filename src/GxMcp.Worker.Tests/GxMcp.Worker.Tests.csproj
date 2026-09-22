@@ -33,6 +33,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="WindowsBase" />
     <Reference Include="Artech.Architecture.Common">
       <HintPath>$(GX_PATH)\Artech.Architecture.Common.dll</HintPath>
       <Private>False</Private>
