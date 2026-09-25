@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Artech.Architecture.Common.Objects;
 using GxMcp.Worker.Helpers;
@@ -28,6 +30,7 @@ namespace GxMcp.Worker.Services
             if (matchingColumns.Count == 0) return Error("GridColumnNotFound", "Grid column '" + requested + "' was not found.");
             if (matchingColumns.Count != 1) return Error("AmbiguousGridColumn", "Grid column '" + requested + "' matched more than one element.");
             var column = matchingColumns[0];
+            string pendingCaption = null;
             string requestedAttribute = args?["attribute"]?.ToString();
             string requestedVariable = args?["variable"]?.ToString();
             if (!string.IsNullOrWhiteSpace(requestedAttribute)
@@ -37,7 +40,7 @@ namespace GxMcp.Worker.Services
                 && !Attr(column, "variable").Equals(requestedVariable, StringComparison.OrdinalIgnoreCase)
                 && !Attr(column, "name").Equals(requestedVariable, StringComparison.OrdinalIgnoreCase))
                 return Error("GridColumnIdentityMismatch", "variable does not identify the selected grid column.");
-            if (args?["caption"] != null) column.SetAttributeValue("description", args["caption"].ToString());
+            if (args?["caption"] != null) pendingCaption = args["caption"].ToString();
 
             string before = args?["before"]?.ToString();
             if (!string.IsNullOrWhiteSpace(before))
@@ -58,6 +61,10 @@ namespace GxMcp.Worker.Services
                 if (position >= peers.Count) grid.Add(column);
                 else peers[position].AddBeforeSelf(column);
             }
+
+            // Written only after every selector and anchor resolved, so a
+            // rejected request can never leave a half-applied caption behind.
+            if (pendingCaption != null) column.SetAttributeValue("description", pendingCaption);
 
             return new JObject
             {
@@ -83,6 +90,10 @@ namespace GxMcp.Worker.Services
             if (gridError != null) return gridError;
             if (FindGridColumn(grid, name) != null)
                 return Error("GridVariableAlreadyExists", "Grid variable '" + name + "' already exists.");
+            // The name check alone would let a second column claim the same SDK
+            // variable identity, so the reference must be free as well.
+            if (FindGridColumn(grid, reference) != null)
+                return Error("GridVariableReferenceInUse", "Grid variable reference '" + reference + "' is already bound to a column.");
 
             string caption = args?["caption"]?.ToString();
             string basicType = args?["basicType"]?.ToString() ?? args?["type"]?.ToString() ?? "VarChar";
@@ -270,43 +281,42 @@ namespace GxMcp.Worker.Services
             if (grids.Count == 0) return Error("GridNotFound", "The PatternInstance has no grid.");
             if (!string.IsNullOrWhiteSpace(gridPath))
             {
-                var matches = grids.Where(g => GridMatchesPath(g, gridPath)).ToList();
-                if (matches.Count == 1)
+                // An absolute type path walked from the document root, with an
+                // optional zero-based index per segment resolved among the
+                // siblings of that same type. An unindexed segment that matches
+                // more than one element is refused rather than guessed.
+                if (!Regex.IsMatch(gridPath, @"\A/[A-Za-z_][A-Za-z0-9_]*(\[[0-9]+\])?(/[A-Za-z_][A-Za-z0-9_]*(\[[0-9]+\])?)*\z"))
+                    return Error("InvalidGridPath", "gridPath must be an absolute type path with optional zero-based indices.");
+                var cursor = document.Root;
+                var segments = gridPath.Substring(1).Split('/');
+                for (var i = 0; i < segments.Length; i++)
                 {
-                    grid = matches[0];
-                    return null;
+                    var match = Regex.Match(segments[i], @"\A(?<type>[A-Za-z_][A-Za-z0-9_]*)(?:\[(?<index>[0-9]+)\])?\z");
+                    var type = match.Groups["type"].Value;
+                    var candidates = i == 0
+                        ? (Is(document.Root, type) ? new List<XElement> { document.Root } : new List<XElement>())
+                        : cursor.Elements().Where(e => Is(e, type)).ToList();
+                    if (match.Groups["index"].Success)
+                    {
+                        if (!int.TryParse(match.Groups["index"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int index)
+                            || index >= candidates.Count)
+                            return Error("GridNotFound", "gridPath index is outside its matching children.");
+                        cursor = candidates[index];
+                    }
+                    else
+                    {
+                        if (candidates.Count != 1)
+                            return Error(candidates.Count == 0 ? "GridNotFound" : "AmbiguousGrid", "Each unindexed gridPath segment must match exactly one element.");
+                        cursor = candidates[0];
+                    }
                 }
-                if (matches.Count > 1) return Error("AmbiguousGrid", "gridPath matched more than one grid.");
-                return Error("GridNotFound", "gridPath did not match a grid.");
+                if (!Is(cursor, "grid")) return Error("InvalidGridPath", "gridPath must resolve to a grid.");
+                grid = cursor;
+                return null;
             }
             if (grids.Count != 1) return Error("AmbiguousGrid", "The PatternInstance has more than one grid; provide gridPath.");
             grid = grids[0];
             return null;
-        }
-
-        private static bool GridMatchesPath(XElement grid, string path)
-        {
-            string[] segments = path.Split(new[] { '/', '>' }, StringSplitOptions.RemoveEmptyEntries);
-            XElement current = grid;
-            foreach (string segment in segments)
-            {
-                string rawName = segment;
-                int bracket = rawName.IndexOf('[');
-                string name = bracket > 0 ? rawName.Substring(0, bracket) : rawName;
-                if (!Is(current, name) && !Attr(current, "name").Equals(name, StringComparison.OrdinalIgnoreCase)
-                    && !Attr(current, "controlName").Equals(name, StringComparison.OrdinalIgnoreCase)) return false;
-                if (bracket > 0)
-                {
-                    int index = 1;
-                    int.TryParse(rawName.Substring(bracket).Trim('[', ']'), out index);
-                    var parent = current.Parent;
-                    if (parent == null) return false;
-                    current = parent.Elements().ElementAtOrDefault(Math.Max(0, index - 1));
-                    if (current == null) return false;
-                }
-                else current = current.Elements().FirstOrDefault(e => Is(e, name)) ?? current;
-            }
-            return true;
         }
 
         private static List<XElement> FindGridColumns(XElement grid, string identity)
