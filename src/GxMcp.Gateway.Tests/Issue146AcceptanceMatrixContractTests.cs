@@ -227,7 +227,7 @@ namespace GxMcp.Gateway.Tests
             DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             while (DateTime.UtcNow < deadline)
             {
-                string? line = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromMilliseconds(1000));
+                string? line = await process.StandardOutput.ReadLineAsync().WaitAsync(deadline - DateTime.UtcNow);
                 if (line == null) break;
                 if (!line.StartsWith("{")) continue;
                 var message = JObject.Parse(line);

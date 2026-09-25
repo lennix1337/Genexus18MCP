@@ -2,7 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- Add an IDE-attached MCP path for inspecting and editing already-active K2B WebPanel Designers through the native GeneXus document save, with preview and version checks. Activation and legacy HW conversion remain outside this first increment. [#313](https://github.com/lennix1337/Genexus18MCP/issues/313)
+- Raise the tool schema budget from 32,000 to 32,600 approximate tokens to publish the K2B Designer tree, preview, and versioned edit contract without removing existing tool guidance.
+
 ### Fixed
+
+- Build the Worker against GeneXus 17's four-argument module packaging SDK while preserving the GeneXus 18 output-path overload.
+- Honor the full timeout in the isolated stdio smoke test while waiting for a response line, avoiding a premature one-second failure during Gateway startup.
+- Use `Get-Process.Path` as a fallback in the scoped CLI test cleanup when CIM hides `ExecutablePath`; process termination still requires an exact match to the test directory.
 
 - Release resume now requires a complete, passed preflight certificate with matching source, SDK, live-gate inputs, artifact fingerprints, exact process-lane evidence, and bounded command identity; timed-out or incomplete phases fail closed.
 - Release publication now verifies the local artifact bytes against GitHub asset digests, binds workflow evidence to the exact tag/event and current assets, rejects draft manual repairs, verifies archive bytes against the manifest, and fails safely on invalid status or issue evidence.

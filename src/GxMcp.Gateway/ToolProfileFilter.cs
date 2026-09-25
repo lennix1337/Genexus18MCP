@@ -39,6 +39,7 @@ namespace GxMcp.Gateway
             "genexus_generator_reference",
             "genexus_layout",
             "genexus_edit_form",
+            "genexus_k2b_designer",
             "genexus_wwp",
             "genexus_apply_pattern",
             "genexus_edit_and_build"
@@ -83,6 +84,7 @@ namespace GxMcp.Gateway
         {
             "genexus_layout",
             "genexus_edit_form",
+            "genexus_k2b_designer",
             "genexus_browser",
             "genexus_wwp",
             "genexus_apply_pattern",

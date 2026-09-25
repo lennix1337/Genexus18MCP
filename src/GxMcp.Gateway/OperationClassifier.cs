@@ -139,6 +139,9 @@ namespace GxMcp.Gateway
                 ["genexus_edit_form"] = Contract(
                     readOnly: Array.Empty<string>(),
                     mutating: new[] { "add_textblock", "add_button", "set_visibility", "remove_control", "wrap_in_fieldset" }),
+                ["genexus_k2b_designer"] = Contract(
+                    readOnly: new[] { "inspect", "tree", "preview" },
+                    mutating: new[] { "set_property", "add_node", "move_node", "remove_node" }),
                 ["genexus_module"] = Contract(
                     readOnly: new[] { "list", "list_modules_servers", "search_modules_in_servers" },
                     mutating: new[] { "install", "install_builtin", "update", "package", "publish", "restore", "add_modules_server" }),

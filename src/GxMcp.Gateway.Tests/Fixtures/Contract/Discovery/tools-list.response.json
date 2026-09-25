@@ -2296,6 +2296,90 @@
     },
     {
       "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Full guidance: genexus://kb/tool-help/genexus_k2b_designer",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "inspect",
+            "description": "Inspect the active Designer, read its…",
+            "enum": [
+              "inspect",
+              "tree",
+              "preview",
+              "set_property",
+              "add_node",
+              "move_node",
+              "remove_node"
+            ],
+            "type": "string"
+          },
+          "confirm": {
+            "description": "Required for remove_node.",
+            "type": "boolean"
+          },
+          "destination": {
+            "description": "Parent node path for move_node.",
+            "type": "string"
+          },
+          "expectedVersion": {
+            "description": "Version from inspect, tree, or preview;…",
+            "type": "string"
+          },
+          "index": {
+            "description": "Optional destination child index for…",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kb": {
+            "description": "Explicit KB alias.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name of an open WebPanel with an active…",
+            "type": "string"
+          },
+          "nodeType": {
+            "description": "SDK node type offered by the Designer…",
+            "type": "string"
+          },
+          "operation": {
+            "description": "Mutation to validate when…",
+            "enum": [
+              "set_property",
+              "add_node",
+              "move_node",
+              "remove_node"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "Designer node path returned by tree;…",
+            "type": "string"
+          },
+          "property": {
+            "description": "Exact SDK property name for…",
+            "type": "string"
+          },
+          "value": {
+            "description": "Property value in the K2B SDK string…",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "genexus_k2b_designer"
+    },
+    {
+      "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,

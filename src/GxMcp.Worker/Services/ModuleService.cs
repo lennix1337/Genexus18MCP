@@ -626,8 +626,23 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Err(code: "ModuleNotFound", message: "Module '" + name + "' not found in this KB.");
 
             bool rebuild = args?["rebuild"]?.ToObject<bool?>() ?? false;
-            string opcFile;
-            bool ok = svc.Package(module, new List<KBModel> { model }, rebuild, outputDirectory, out opcFile);
+            string opcFile = null;
+            var models = new List<KBModel> { model };
+            // GeneXus 17 provides the four-argument overload; GeneXus 18 also
+            // provides an output parameter with the generated OPC file path.
+            System.Reflection.MethodInfo withOutput = typeof(IModuleManagerService).GetMethod("Package", new[]
+            {
+                typeof(Module), typeof(List<KBModel>), typeof(bool), typeof(string), typeof(string).MakeByRefType()
+            });
+            bool ok;
+            if (withOutput != null)
+            {
+                object[] values = { module, models, rebuild, outputDirectory, null };
+                ok = (bool)withOutput.Invoke(svc, values);
+                opcFile = values[4] as string;
+            }
+            else
+                ok = svc.Package(module, models, rebuild, outputDirectory);
             return OperationResult(ok ? "ModulePackaged" : "ModulePackageDeclined", ok, new JObject
             {
                 ["name"] = name,

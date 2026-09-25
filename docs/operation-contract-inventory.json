@@ -4,9 +4,103 @@
     "src/GxMcp.Gateway/tool_definitions.json",
     "src/GxMcp.Gateway/OperationClassifier.cs"
   ],
-  "toolCount": 54,
-  "actionCount": 270,
+  "toolCount": 55,
+  "actionCount": 277,
   "tools": [
+    {
+      "tool": "genexus_k2b_designer",
+      "router": "OperationsRouter",
+      "actions": [
+        {
+          "action": "inspect",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "tree",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "preview",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "set_property",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": false
+        },
+        {
+          "action": "add_node",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": false
+        },
+        {
+          "action": "move_node",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": false
+        },
+        {
+          "action": "remove_node",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": false
+        }
+      ],
+      "inputExamples": 0,
+      "outputSchema": false
+    },
     {
       "tool": "genexus_data_view",
       "router": "OperationsRouter",

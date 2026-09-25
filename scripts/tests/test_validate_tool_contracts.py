@@ -23,10 +23,10 @@ class ValidateToolContractsTests(unittest.TestCase):
             )
         )
         counts = MODULE.validate_document(document)
-        self.assertEqual(54, counts["tools"])
+        self.assertEqual(55, counts["tools"])
         # The published action count is a deliberate contract gate. Update it
         # together with the schema when a new public action is added.
-        self.assertEqual(250, counts["actions"])
+        self.assertEqual(257, counts["actions"])
         capabilities = MODULE.validate_capabilities_inventory(document)
         self.assertEqual(counts["actions"], capabilities["actions"])
 

@@ -568,6 +568,16 @@ namespace GxMcp.Gateway
                 "- `wrap_in_fieldset` — wrap selected controls in a fieldset container.\n\n" +
                 "Every action mutates the layout. Prefer a read of the authoritative WebForm/PatternInstance first and verify the persisted tree after the write.\n",
 
+            ["genexus_k2b_designer"] =
+                "# genexus_k2b_designer\n\n" +
+                "Read and edit an already-active K2B WebPanel Designer in the open GeneXus IDE. " +
+                "The IDE extension and MCP Worker must share GXMCP_K2B_IDE_PIPE, and the IDE must be started with GXMCP_K2B_IDE_KB set to the same KB.\n\n" +
+                "Use inspect or tree to obtain node paths and a version. Use preview with operation, path, and the fields required by that operation to validate a change. " +
+                "Then pass expectedVersion for set_property, add_node, move_node, or remove_node. Removal also requires confirm=true.\n\n" +
+                "The target WebPanel must be open with Designer active and free of unsaved changes. " +
+                "This tool cannot activate an inactive Designer or convert a legacy HW. " +
+                "After a native IDE save, reread the Designer to confirm persistence.\n",
+
             ["genexus_module"] =
                 "# genexus_module\n\n" +
                 "Inspect and manage modules through the GeneXus Module Manager.\n\n" +

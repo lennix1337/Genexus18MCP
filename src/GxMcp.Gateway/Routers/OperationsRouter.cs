@@ -194,6 +194,15 @@ namespace GxMcp.Gateway.Routers
                     };
                 }
 
+                case "genexus_k2b_designer":
+                    return new
+                    {
+                        module = "K2bDesigner",
+                        action = args?["action"]?.ToString() ?? "inspect",
+                        target = args?["name"]?.ToString(),
+                        @params = args
+                    };
+
                 // Item 11 — resolve runtime URL + optional GAM cookies. No browser launch.
                 case "genexus_run_object":
                     return new

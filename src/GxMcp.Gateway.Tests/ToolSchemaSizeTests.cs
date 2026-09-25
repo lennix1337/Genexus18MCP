@@ -215,7 +215,10 @@ namespace GxMcp.Gateway.Tests
             //   items), Attribute:<name> typeName/basedOn forms, the matching
             //   object_atomic variables[] field, and read/write discoverability
             //   copy. Measured ~31874 tokens.
-            Assert.True(approxTokens < 32000, $"tool_definitions.json is ~{approxTokens} tokens; budget 32000.");
+            // 2026-09-25 (K2B IDE Designer): 32000 -> 32600 for the active-Designer
+            // tree, preview, versioned edit, and explicit IDE bridge contract.
+            // Measured ~32537 tokens.
+            Assert.True(approxTokens < 32600, $"tool_definitions.json is ~{approxTokens} tokens; budget 32600.");
         }
 
         [Theory]
