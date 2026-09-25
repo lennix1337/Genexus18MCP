@@ -134,13 +134,26 @@ dotnet build src\GxMcp.Gateway\GxMcp.Gateway.csproj
 dotnet test Genexus18MCP.sln
 dotnet test src\GxMcp.Worker.Tests --filter "FullyQualifiedName~PropertyService"
 dotnet test src\GxMcp.Gateway.Tests --filter "FullyQualifiedName~McpRouter"
+pwsh -NoProfile -File scripts\tests\run-release-script-tests.ps1
+python -m unittest discover -s scripts\tests
 npm test
 npm run lint
 npm run test:one -- "test name pattern"
 ```
 
+A change is validated when **every** lane above is green, not the lanes you
+remember. The PowerShell and Python suites catch contract drift the .NET, CLI and
+Nexus suites are blind to — a live-test class missing its `ProcessSmoke` trait
+passes every .NET lane and is rejected by the release preflight guard.
+
+Run `.\build.ps1` **last**. A solution-level `dotnet test -c Release` rebuilds
+the Worker outside the `x86` platform the solution maps it to, breaking the
+publish↔source byte identity so the release fingerprint comes back empty and
+`test-release-preflight.ps1` fails for a reason unrelated to your change.
+
 Use the narrowest decisive test first, then the repository-wide checks. Known
 flaky tests are documented in the test section of `docs/agent_playbook.md`.
+Review-time rules live in [`CODING_STANDARDS.md`](CODING_STANDARDS.md).
 
 ## Debugging and validation gates
 
@@ -197,13 +210,33 @@ legacy `supportedMajor` field remains the catalog-primary compatibility alias.
 
 ## Required workflow
 
-- **Mandatory architectural discovery (`ripwire`):** Before reading code manually or running blind text greps, always orient on the task with `ripwire`:
-  - Search & orientation: `ripwire <dir> --for="<task in words>"` — ranked signatures by PageRank, AST and caller context.
-  - Blast radius & callers: `ripwire <dir> --callers=SYM` and `--impact=SYM` (transitive callers before modifying contracts).
-  - Contract check: `ripwire <dir> --edit-check=SYM`.
-  - Diff & PR review: `ripwire . --pr-context` (automatically enforced in `pr-preflight.ps1`).
+- **Architectural discovery (`ripwire`).** Reach for it when a text search would
+  otherwise be the first move — a signature you must locate, a contract you are
+  about to change, or a diff you did not write:
+  - Locating a signature or orienting on unfamiliar code:
+    `ripwire <dir> --for="<task in words>"`.
+  - Before changing a contract: `ripwire <dir> --callers=SYM` and
+    `--impact=SYM` for the transitive caller set.
+  - Reviewing an incoming diff: `ripwire . --pr-context`. This is the path
+    `scripts/pr-preflight.ps1 -PullRequest <N>` gates, and it only **fails** the
+    run when called with `-RequireRipwire`, so pass that flag when the review must
+    not proceed without it.
+
+  On a branch you own and are pushing directly, no gate invokes this for you;
+  the trigger above is the whole obligation.
 - Inspect the actual input/request/route/function/query/response path before
   fixing behavior. Add a regression test when technically viable.
+- Edit tracked text with the file-editing tool, not by piping it through a shell:
+  fixed line indices truncate long files, shell round-trips re-encode UTF-8, and
+  index arithmetic with shifting bounds deletes code. Use the shell to read and
+  to run commands. See [`CODING_STANDARDS.md`](CODING_STANDARDS.md) § Text edits.
+- Inspect a diff with `git show <ref>:<path>` and `--stat`, never by dumping a
+  whole file; cap output with `Select-Object -First N`. A single unfiltered diff
+  of a large file can cost thousands of tokens.
+- After a build failure, the next test run may report the previous binary. Force
+  `-t:Rebuild` before believing a result that contradicts your change.
+- Every new regression guard gets a mutation check: revert the fix and confirm
+  the test goes red. A guard that cannot fail is not coverage.
 - Make the smallest scoped change; preserve unrelated working-tree changes.
 - Every verified bugfix, feature, performance improvement, or architectural
   change gets an immediate entry under `CHANGELOG.md` → `## Unreleased`, using

@@ -164,6 +164,30 @@ isolation before being treated as regressions:
 - `EdgeCaseRegressionTests.Dispatcher_PatchApply_ValidateOnly_MapsToDryRun_ViaConvention`
 - `PatternApplyServiceTests.*`
 
+### A test failure that contradicts your change
+
+A build that fails leaves stale outputs behind, and the next test run then reports
+results from the **previous** binary. The symptom is a failure that should be
+impossible given the code you just wrote, or a fix that "does not work" with an
+unchanged error.
+
+Force the rebuild before investigating:
+
+```powershell
+dotnet build src\GxMcp.Worker\GxMcp.Worker.csproj -c Release -t:Rebuild
+```
+
+Confirm the binaries agree before trusting a result:
+
+```powershell
+Get-FileHash publish\worker\GxMcp.Worker.exe -Algorithm SHA256
+Get-FileHash src\GxMcp.Worker\bin\Release\GxMcp.Worker.exe -Algorithm SHA256
+```
+
+Identical hashes mean the published Worker is the tested Worker, which is also
+what the release certificate requires. A divergence here is a build-ordering
+problem, not a product one.
+
 ### `Nexus IDE checks` blocked by a VS Code update
 
 If the `Nexus IDE checks` preflight phase fails with `Code is currently being
