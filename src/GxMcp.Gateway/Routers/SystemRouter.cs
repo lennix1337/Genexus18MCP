@@ -9,6 +9,15 @@ namespace GxMcp.Gateway.Routers
         {
             string? action = args?["action"]?.ToString();
             string? target = args?["target"]?.ToString();
+            if (string.IsNullOrWhiteSpace(target))
+                target = args?["job_id"]?.ToString() ?? args?["jobId"]?.ToString();
+            // Gateway intercepts resolve known op:<id> values before routing.  If a
+            // legacy Worker task id was supplied with the optional op: prefix, strip
+            // it here so the Worker never searches for the literal string "op:<id>".
+            if (string.Equals(toolName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(target)
+                && target.StartsWith("op:", StringComparison.OrdinalIgnoreCase))
+                target = target.Substring(3);
 
             switch (toolName)
             {
@@ -30,7 +39,8 @@ namespace GxMcp.Gateway.Routers
                                     callers = args?["callers"]?.ToObject<bool?>() ?? true,
                                     callerCap = args?["callerCap"]?.ToObject<int?>() ?? 0,
                                     dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
-                                    deploy = args?["deploy"]?.ToObject<bool?>() ?? false
+                                    deploy = args?["deploy"]?.ToObject<bool?>() ?? false,
+                                    queueLifecycle = true
                                 };
                             }
                             return new {
@@ -46,11 +56,12 @@ namespace GxMcp.Gateway.Routers
                                 // Item 28 (Tier-S, EXPERIMENTAL) — fastIncremental opt-in.
                                 fastIncremental = args?["fastIncremental"]?.ToObject<bool?>() ?? false,
                                 dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
-                                deploy = args?["deploy"]?.ToObject<bool?>() ?? false
+                                deploy = args?["deploy"]?.ToObject<bool?>() ?? false, queueLifecycle = true
                             };
                         case "cancel": return new { module = "Build", action = "Cancel", target = target };
                         // issue #28 item 12: spec-check only — Spec+Gen, no Compile/deploy.
                         case "specify": return new {
+                            queueLifecycle = true,
                             module = "Build",
                             action = "Specify",
                             target = target,
@@ -66,7 +77,7 @@ namespace GxMcp.Gateway.Routers
                             includeCallees = args?["includeCallees"]?.ToString(),
                             buildPlanCap = args?["buildPlanCap"]?.ToObject<int?>(),
                             dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
-                            deploy = args?["deploy"]?.ToObject<bool?>() ?? false
+                            deploy = args?["deploy"]?.ToObject<bool?>() ?? false, queueLifecycle = true
                         };
                         case "build_all": return new {
                             module = "Build",
@@ -77,16 +88,16 @@ namespace GxMcp.Gateway.Routers
                             target = target,
                             environment = args?["environment"]?.ToString(),
                             dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
-                            deploy = args?["deploy"]?.ToObject<bool?>() ?? false
+                            deploy = args?["deploy"]?.ToObject<bool?>() ?? false, queueLifecycle = true
                         };
-                        case "reorg": return new { module = "Build", action = "Reorg", target = target };
+                        case "reorg": return new { module = "Build", action = "Reorg", target = target, queueLifecycle = true };
                         // Item 43 (friction 2026-05-22) — DDL diff/preview pre-reorg.
                         case "reorg_preview": return new { module = "Build", action = "ReorgPreview", target = target };
                         case "validate": return new { module = "Validation", action = "Check", target = target, payload = args?["code"]?.ToString(), part = args?["part"]?.ToString() };
                         case "validate-kb": return new { module = "KB", action = "ValidateConditions", limit = args?["limit"]?.ToObject<int?>() };
                         case "snapshots-list": return new { module = "KB", action = "ListPatternSnapshots", target = target };
                         case "snapshots-restore": return new { module = "KB", action = "RestorePatternSnapshot", target = target, snapshotPath = args?["snapshotPath"]?.ToString() };
-                        case "sync": return new { module = "Build", action = "Sync", target = target };
+                        case "sync": return new { module = "Build", action = "Sync", target = target, queueLifecycle = true };
                         case "index": return new {
                             module = "KB",
                             action = "BulkIndex",
@@ -103,10 +114,15 @@ namespace GxMcp.Gateway.Routers
                                 // counts / TargetsDone / terminal Status) or the timeout fires.
                                 // `since` is the snapshot string returned under _meta.snapshot
                                 // by the previous status response — pass it back for chaining.
+                                bool waitUntilDone = args?["wait_until_done"]?.ToObject<bool?>() == true;
                                 int wait = args?["wait"]?.ToObject<int?>()
-                                    ?? args?["wait_seconds"]?.ToObject<int?>() ?? 0;
+                                    ?? args?["wait_seconds"]?.ToObject<int?>()
+                                    ?? (waitUntilDone ? McpRouter.MaxLongPollSeconds : 0);
                                 if (wait < 0) wait = 0;
                                 if (wait > McpRouter.MaxLongPollSeconds) wait = McpRouter.MaxLongPollSeconds;
+                                string until = args?["until"]?.ToString();
+                                if (string.IsNullOrWhiteSpace(until) && waitUntilDone)
+                                    until = "terminal";
                                 return new {
                                     module = "Build",
                                     action = "Status",
@@ -114,7 +130,8 @@ namespace GxMcp.Gateway.Routers
                                     page = page ?? 1,
                                     pageSize = pageSize ?? 50,
                                     wait = wait,
-                                    since = args?["since"]?.ToString()
+                                    since = args?["since"]?.ToString(),
+                                    until = until
                                 };
                             }
                             // issue #25 #1: no-target status polls the INDEX build. Forward
@@ -266,7 +283,7 @@ namespace GxMcp.Gateway.Routers
                 case "genexus_validate":
                     return new { module = "Validation", action = "Check", target = target, payload = args?["code"]?.ToString(), part = args?["part"]?.ToString() };
                 case "genexus_build":
-                    return new { module = "Build", action = args?["action"]?.ToString(), target = target };
+                    return new { module = "Build", action = args?["action"]?.ToString(), target = target, queueLifecycle = true };
                 // genexus_history routing intentionally NOT handled here — the
                 // canonical handler lives in OperationsRouter.cs:177 which forwards
                 // the v2.6.6 Stream H fields (discard / part / snapshot). The old

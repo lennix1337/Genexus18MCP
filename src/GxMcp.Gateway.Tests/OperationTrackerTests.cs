@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -167,6 +168,48 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public async Task WaitForOperationAsync_WaitsForAProgressChange()
+        {
+            var tracker = new OperationTracker(TimeSpan.FromMinutes(5));
+            string requestId = "wait-progress-request";
+            string operationId = tracker.StartOperation(requestId, "genexus_edit", null, "cid");
+
+            Task<JObject> waiting = tracker.WaitForOperationAsync(operationId, 2, "change");
+            await Task.Delay(100);
+            tracker.TouchProgress(operationId, "Saving", "worker progress");
+
+            JObject payload = await waiting;
+            Assert.Equal("Saving", payload["phase"]?.ToString());
+            Assert.True(payload["waitSatisfied"]?.ToObject<bool>());
+            Assert.Equal("change", payload["waitUntil"]?.ToString());
+        }
+
+        [Fact]
+        public async Task WaitForOperationAsync_TerminalModeDoesNotReturnOnProgressOnly()
+        {
+            var tracker = new OperationTracker(TimeSpan.FromMinutes(5));
+            string requestId = "wait-terminal-request";
+            string operationId = tracker.StartOperation(requestId, "genexus_edit", null, "cid");
+
+            Task<JObject> waiting = tracker.WaitForOperationAsync(operationId, 1, "terminal");
+            await Task.Delay(100);
+            tracker.TouchProgress(operationId, "Saving", "still running");
+
+            Task completedProbe = await Task.WhenAny(waiting, Task.Delay(250));
+            Assert.NotSame(waiting, completedProbe);
+            Assert.False(waiting.IsCompleted);
+
+            tracker.CompleteFromWorker(requestId, new JObject
+            {
+                ["id"] = requestId,
+                ["result"] = new JObject { ["status"] = "ok" }
+            });
+            JObject payload = await waiting;
+            Assert.Equal("Completed", payload["status"]?.ToString());
+            Assert.Equal("terminal", payload["waitUntil"]?.ToString());
+        }
+
+        [Fact]
         public void ToolStats_ExposeCacheHitsAndErrorCodes()
         {
             var tracker = new OperationTracker(TimeSpan.FromMinutes(5));
@@ -278,8 +321,8 @@ namespace GxMcp.Gateway.Tests
 
             Assert.NotNull(method);
 
-            // Signature being added: BuildWorkerRpcRequest(JObject workerCommand, string requestId, string operationId = null)
-            var built = (JObject)method!.Invoke(null, new object?[] { workerCommand, "req-1", "op-xyz" })!;
+            // Signature: BuildWorkerRpcRequest(JObject workerCommand, string requestId, string operationId, string sessionId)
+            var built = (JObject)method!.Invoke(null, new object?[] { workerCommand, "req-1", "op-xyz", null })!;
 
             Assert.Equal("op-xyz", built["_meta"]?["progressToken"]?.ToString());
             Assert.Equal("Build", built["method"]?.ToString());

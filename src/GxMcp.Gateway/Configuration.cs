@@ -303,7 +303,7 @@ namespace GxMcp.Gateway
                 "HttpPort", "McpStdio", "BindAddress", "AllowedOrigins", "SessionIdleTimeoutMinutes",
                 "WorkerIdleTimeoutMinutes", "WedgedCommandTimeoutMinutes", "WorkerHeapRecycleMB",
                 "ArtifactOutputDirectory", "IdempotencyTtlMinutes", "IdempotencyCacheSize", "BuildSyncThresholdSeconds", "MaxOpenKbs",
-                "ToolProfile", "EmitStructuredContent", "TerseResponses", "WorkerSharingMode", "SourceStoreMaxMB"
+                "ToolProfile", "EmitStructuredContent", "TerseResponses", "WorkerSharingMode", "SourceStoreMaxMB", "SourceStoreBackfill"
             }, StringComparer.Ordinal), "Server", path);
             if (server["HttpPort"]?.Type != JTokenType.Integer || server["McpStdio"]?.Type != JTokenType.Boolean)
                 throw new InvalidDataException("Strict config requires typed Server.HttpPort and Server.McpStdio.");
@@ -319,6 +319,9 @@ namespace GxMcp.Gateway
                 throw new InvalidDataException("Strict config Server.WorkerSharingMode must be 'isolated' or 'shared-host'.");
             if (sharingMode == "shared-host" && mode != "stdio-isolated")
                 throw new InvalidDataException("Strict config Server.WorkerSharingMode='shared-host' requires GatewayMode='stdio-isolated'.");
+            string sourceStoreBackfill = server.Value<string>("SourceStoreBackfill")?.Trim().ToLowerInvariant() ?? "auto";
+            if (sourceStoreBackfill != "auto" && sourceStoreBackfill != "off")
+                throw new InvalidDataException("Strict config Server.SourceStoreBackfill must be 'auto' or 'off'.");
 
             if (document["Logging"] is JObject logging)
                 RejectUnknown(logging, new HashSet<string>(new[] { "Level", "Path" }, StringComparer.Ordinal), "Logging", path);
@@ -627,6 +630,8 @@ namespace GxMcp.Gateway
         /// Default: 512 MB.
         /// </summary>
         public int SourceStoreMaxMB { get; set; } = 512;
+        /// <summary>Source-store background population: auto (default) or off.</summary>
+        public string SourceStoreBackfill { get; set; } = "auto";
     }
 
     public class LoggingConfig

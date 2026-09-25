@@ -6,8 +6,8 @@ namespace GxMcp.Worker.Tests
 {
     /// <summary>
     /// Item 3 regression tests: verification-failure envelopes must include a
-    /// genexus_history restore nextStep so callers can roll back without digging
-    /// through documentation.
+    /// valid genexus_versioning history_restore nextStep so callers can recover
+    /// without digging through documentation.
     /// </summary>
     public class WriteVerificationRestoreHintTests
     {
@@ -36,8 +36,8 @@ namespace GxMcp.Worker.Tests
             var nsArr = baseError["nextSteps"] as JArray ?? new JArray();
             nsArr.Add(new JObject
             {
-                ["tool"] = "genexus_history",
-                ["args"] = new JObject { ["action"] = "restore", ["discard"] = true, ["target"] = "MyPanel" },
+                ["tool"] = "genexus_versioning",
+                ["args"] = new JObject { ["action"] = "history_restore", ["discard"] = true, ["name"] = "MyPanel" },
                 ["why"] = "Restore to the pre-write snapshot to undo the failed visual write."
             });
             baseError["nextSteps"] = nsArr;
@@ -49,14 +49,14 @@ namespace GxMcp.Worker.Tests
             bool hasRestoreStep = false;
             foreach (var step in nextSteps)
             {
-                if (string.Equals(step["tool"]?.ToString(), "genexus_history", StringComparison.Ordinal))
+                if (string.Equals(step["tool"]?.ToString(), "genexus_versioning", StringComparison.Ordinal))
                 {
                     hasRestoreStep = true;
-                    Assert.Equal("restore", step["args"]?["action"]?.ToString());
-                    Assert.Equal("MyPanel", step["args"]?["target"]?.ToString());
+                    Assert.Equal("history_restore", step["args"]?["action"]?.ToString());
+                    Assert.Equal("MyPanel", step["args"]?["name"]?.ToString());
                 }
             }
-            Assert.True(hasRestoreStep, "nextSteps must include a genexus_history restore entry on visual verification failure.");
+            Assert.True(hasRestoreStep, "nextSteps must include a genexus_versioning restore entry on visual verification failure.");
         }
 
         [Fact]
@@ -81,8 +81,8 @@ namespace GxMcp.Worker.Tests
                 var nsArr = baseError["nextSteps"] as JArray ?? new JArray();
                 nsArr.Add(new JObject
                 {
-                    ["tool"] = "genexus_history",
-                    ["args"] = new JObject { ["action"] = "restore", ["discard"] = true, ["target"] = "MyWorkWith" },
+                    ["tool"] = "genexus_versioning",
+                    ["args"] = new JObject { ["action"] = "history_restore", ["discard"] = true, ["name"] = "MyWorkWith" },
                     ["why"] = "Restore to the pre-write snapshot to undo the failed pattern write."
                 });
                 baseError["nextSteps"] = nsArr;
@@ -95,14 +95,14 @@ namespace GxMcp.Worker.Tests
             bool hasRestoreStep = false;
             foreach (var step in nextSteps)
             {
-                if (string.Equals(step["tool"]?.ToString(), "genexus_history", StringComparison.Ordinal))
+                if (string.Equals(step["tool"]?.ToString(), "genexus_versioning", StringComparison.Ordinal))
                 {
                     hasRestoreStep = true;
-                    Assert.Equal("restore", step["args"]?["action"]?.ToString());
-                    Assert.Equal("MyWorkWith", step["args"]?["target"]?.ToString());
+                    Assert.Equal("history_restore", step["args"]?["action"]?.ToString());
+                    Assert.Equal("MyWorkWith", step["args"]?["name"]?.ToString());
                 }
             }
-            Assert.True(hasRestoreStep, "nextSteps must include a genexus_history restore entry on pattern verification failure.");
+            Assert.True(hasRestoreStep, "nextSteps must include a genexus_versioning restore entry on pattern verification failure.");
         }
 
         [Fact]

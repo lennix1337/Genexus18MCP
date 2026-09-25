@@ -191,7 +191,12 @@ namespace GxMcp.Gateway
                     isMetaTool = !string.IsNullOrEmpty(toolNameForResolver) && IsMetaTool(toolNameForResolver);
                 }
 
-                bool statefulMetaTool = string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase)
+                bool gatewayMetricsStatusCall = string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(toolNameForResolver, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(((request["params"] as JObject)?["arguments"] as JObject)?["action"]?.ToString(), "status", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(((request["params"] as JObject)?["arguments"] as JObject)?["target"]?.ToString(), "gateway:metrics", StringComparison.OrdinalIgnoreCase);
+                bool statefulMetaTool = !gatewayMetricsStatusCall
+                    && string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase)
                     && OperationClassifier.RequiresSessionLease(
                         toolNameForResolver,
                         (request["params"] as JObject)?["arguments"] as JObject);
@@ -202,12 +207,12 @@ namespace GxMcp.Gateway
                 bool explicitReadOnlyMetaKb = !string.IsNullOrWhiteSpace(resolverArgs?["kb"]?.ToString() ?? resolverArgs?["kbAlias"]?.ToString())
                     && OperationClassifier.IsKbScopedReadMetaTool(toolNameForResolver);
                 statefulMetaTool |= kbEnvironmentMutation;
-                bool needsKbResolution =
-                    (string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase) && (!isMetaTool || statefulMetaTool))
+                bool needsKbResolution = !gatewayMetricsStatusCall
+                    && ((string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase) && (!isMetaTool || statefulMetaTool))
                     || kbEnvironmentTool
                     || explicitReadOnlyMetaKb
                     || (string.Equals(method, "resources/read", StringComparison.OrdinalIgnoreCase)
-                        && McpRouter.ConvertResourceCall(request) != null);
+                        && McpRouter.ConvertResourceCall(request) != null));
 
                 if (needsKbResolution)
                 {
@@ -553,9 +558,15 @@ namespace GxMcp.Gateway
 
                 // Reject stateful calls before any gateway handler can select a
                 // process-wide worker. Stateless recipe/catalog reads remain global.
-                if ((OperationClassifier.RequiresSessionLease(toolName, args)
+                bool gatewayMetricsStatusCallAtDispatch =
+                    string.Equals(toolName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(args?["action"]?.ToString(), "status", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(args?["target"]?.ToString(), "gateway:metrics", StringComparison.OrdinalIgnoreCase);
+                if ((!gatewayMetricsStatusCallAtDispatch
+                        && OperationClassifier.RequiresSessionLease(toolName, args)
                         && !_currentExplicitKb.Value
-                        || OperationClassifier.IsKbEnvironmentMutation(toolName, args?["action"]?.ToString()))
+                        || (!gatewayMetricsStatusCallAtDispatch
+                            && OperationClassifier.IsKbEnvironmentMutation(toolName, args?["action"]?.ToString())))
                     && !(string.Equals(toolName, "genexus_worker_reload", StringComparison.OrdinalIgnoreCase)
                         && CanReloadWithoutLease(args))
                     && !string.Equals(_activeConfig?.Environment?.ResolutionPolicy, "legacy", StringComparison.OrdinalIgnoreCase))

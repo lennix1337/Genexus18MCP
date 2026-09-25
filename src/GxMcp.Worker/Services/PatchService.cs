@@ -586,6 +586,16 @@ namespace GxMcp.Worker.Services
                 // unchanged. Preserve its exact bytes instead of normalizing again.
                 if (noContentChange) updatedSource = workSource;
 
+                // Reject K2BTools designer-owned/protected changes at the patch
+                // boundary, before dry-run reporting or either Events/visual save
+                // path can be reached. This complements the canonical writer
+                // guard and keeps requireObjectSave from bypassing it.
+                KBObject patchObject = _objectService.FindObject(target, typeFilter);
+                if (patchObject != null
+                    && K2bWebPanelDesignerService.TryBuildEditRejection(
+                        patchObject, partName, updatedSource, out string k2bDesignerRejection))
+                    return AttachTimings(k2bDesignerRejection, readMs, patchMs, 0, sourceFromCache);
+
                 bool commentOnlyChange = CommentOnlyPatch.TryClassify(
                     partName, normalizedOperation, workContext, workContent, out string commentStyle);
                 if (commentOnlyChange && !dryRun && string.IsNullOrWhiteSpace(baseVersion))
@@ -847,7 +857,16 @@ namespace GxMcp.Worker.Services
                 // obj.Save() can advance the object's version and leave the changed ISource
                 // only in the live SDK instance. The full path saves the part explicitly and
                 // commits the object transaction, matching mode=full persistence semantics.
-                string writeResult = _writeService.WriteObject(target, partName, finalCode, typeFilter, autoValidate: false, preferFastSourceSave: false, autoInjectVariables: autoInjectVariables, baseVersion: baseVersion);
+                string writeResult = _writeService.WriteObject(
+                    target,
+                    partName,
+                    finalCode,
+                    typeFilter,
+                    autoValidate: false,
+                    preferFastSourceSave: false,
+                    autoInjectVariables: autoInjectVariables,
+                    baseVersion: baseVersion,
+                    rollbackOnFailure: rollbackOnFailure);
                 writeStopwatch.Stop();
                 long writeMs = writeStopwatch.ElapsedMilliseconds;
                 JObject writePayload = ParseWriteResult(writeResult);
@@ -871,9 +890,18 @@ namespace GxMcp.Worker.Services
                     || string.Equals(writePayload["code"]?.ToString(), "VersionConflict", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(writePayload["code"]?.ToString(), "VersionCheckUnavailable", StringComparison.OrdinalIgnoreCase);
                 bool persistedMatches = false;
+                bool writeServiceRolledBack =
+                    string.Equals(writePayload["commitState"]?.ToString(), "RolledBack", StringComparison.OrdinalIgnoreCase)
+                    || writePayload["rollback"]?["rolledBack"]?.Value<bool?>() == true;
+                bool writeServiceRollbackHandled = writeServiceRolledBack
+                    || (WebFormXmlHelper.IsVisualPart(partName) && writePayload["rollback"] != null);
+                bool writeReportedVisualCommit =
+                    WebFormXmlHelper.IsVisualPart(partName)
+                    && string.Equals(writePayload["commitState"]?.ToString(), "Committed", StringComparison.OrdinalIgnoreCase);
                 bool saveReported = (primaryWriteSuccess && !writeReportedNoChange)
                     || writeReportedVerificationMismatch
-                    || writeReportedVerificationUnavailable;
+                    || writeReportedVerificationUnavailable
+                    || writeReportedVisualCommit;
                 string confirmedPersistedSource = null;
                 bool isPatternPart = Services.PatternAnalysisService.IsPatternPart(partName);
 
@@ -892,6 +920,7 @@ namespace GxMcp.Worker.Services
                             ?? writePayload["persistedVerifyError"]?.ToString()
                             ?? writePayload["error"]?["message"]?.ToString()
                             ?? "WriteService could not complete a post-save read.");
+                    PreserveCommittedVisualEvidence(writePayload);
                     if (writeAttempted) WriteService.NotePerTargetWrite(target);
                     if (rollbackOnFailure)
                         PatchPersistenceReceipt.MarkRollbackNotAttempted(
@@ -948,7 +977,7 @@ namespace GxMcp.Worker.Services
                         }
                     }
                 }
-                else if (!writeReportedVersionConflict && (primaryWriteSuccess || writeReportedVerificationMismatch || requireObjectSave))
+                else if (!writeReportedVersionConflict && (primaryWriteSuccess || writeReportedVerificationMismatch || writeReportedVisualCommit || requireObjectSave))
                 {
                     string persistedSource;
                     string verifyError;
@@ -1000,6 +1029,7 @@ namespace GxMcp.Worker.Services
                             // cannot prove either outcome. Never label this as a mismatch and
                             // never run an automatic rollback against an unknown state.
                             PatchPersistenceReceipt.MarkVerificationUnavailable(writePayload, saveReported, verifyError);
+                            PreserveCommittedVisualEvidence(writePayload);
                             if (saveReported) WriteService.NotePerTargetWrite(target);
                             if (rollbackOnFailure)
                                 PatchPersistenceReceipt.MarkRollbackNotAttempted(
@@ -1009,6 +1039,7 @@ namespace GxMcp.Worker.Services
                         else
                         {
                             PatchPersistenceReceipt.MarkNotPersisted(writePayload, saveReported, verifyError, commentOnlyChange);
+                            PreserveCommittedVisualEvidence(writePayload);
                             if (confirmedPersistedSource != null
                                 && originalSource != null
                                 && !string.Equals(
@@ -1025,7 +1056,8 @@ namespace GxMcp.Worker.Services
                             string rollbackBaseVersion = writePayload["postSaveVerification"]?["versionToken"]?.ToString();
                             if (string.IsNullOrWhiteSpace(rollbackBaseVersion))
                                 rollbackBaseVersion = writePayload["verification"]?["versionToken"]?.ToString();
-                            if (PatchPersistenceReceipt.CanAttemptRollback(
+                            if (!writeServiceRollbackHandled
+                                && PatchPersistenceReceipt.CanAttemptRollback(
                                     persistedMatches,
                                     rollbackOnFailure,
                                     rollbackBaseVersion)
@@ -1064,9 +1096,20 @@ namespace GxMcp.Worker.Services
                                     || (rollbackSaved && rollbackVerification == null);
                                 ((JObject)writePayload["rollback"])["baseVersion"] = rollbackBaseVersion;
                                 writePayload["rolledBack"] = rollbackVerified;
-                                if (rollbackVerified) UpdateCachedSource(cacheKey, originalSource, snapshotVersion);
+                                if (rollbackVerified)
+                                {
+                                    writePayload["stateRestored"] = true;
+                                    writePayload["physicalCommit"] = false;
+                                    writePayload["commitState"] = "RolledBack";
+                                    writePayload["persistenceState"] = "Restored";
+                                    writePayload["persisted"] = false;
+                                    writePayload["persistedVerified"] = false;
+                                    writePayload["verified"] = false;
+                                    UpdateCachedSource(cacheKey, originalSource, snapshotVersion);
+                                }
                             }
-                            else if (PatchPersistenceReceipt.ShouldRollback(persistedMatches, rollbackOnFailure)
+                            else if (!writeServiceRollbackHandled
+                                && PatchPersistenceReceipt.ShouldRollback(persistedMatches, rollbackOnFailure)
                                 && originalSource != null)
                             {
                                 // A rollback without the version observed after the failed
@@ -1207,6 +1250,26 @@ namespace GxMcp.Worker.Services
                 Logger.Error($"[PATCH] Error applying patch: {ex.Message}");
                 return BuildPatchResult("Error", partName, NormalizeOperation(operation), expectedCount, 0, ex.Message);
             }
+        }
+
+        private static void PreserveCommittedVisualEvidence(JObject payload)
+        {
+            if (payload == null
+                || !string.Equals(payload["commitState"]?.ToString(), "Committed", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            // PatchPersistenceReceipt classifies content verification separately from
+            // the physical SDK commit. Re-apply the latter for visual mismatch/error
+            // receipts so a forced read cannot turn a committed write into saved=false.
+            payload["sdkSaveCompleted"] = true;
+            payload["saved"] = true;
+            payload["physicalCommit"] = true;
+            payload["persisted"] = true;
+            payload["persistedVerified"] = false;
+            payload["verified"] = false;
+            payload["commitState"] = "Committed";
+            payload["commitConfirmed"] = true;
+            payload["persistenceState"] = "CommittedUnverified";
         }
 
         private ObjectMetadataSnapshot ReadFreshObjectMetadata(string target, string typeFilter)

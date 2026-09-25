@@ -1795,7 +1795,10 @@ namespace GxMcp.Gateway
                 ["status"] = j.Status,
                 ["summary"] = j.Summary,
                 ["completed_at"] = j.CompletedAt?.ToString("o"),
-                ["estimated_seconds"] = j.EstimatedSeconds
+                ["estimated_seconds"] = j.EstimatedSeconds,
+                ["queuePosition"] = j.QueuePosition > 0 ? (JToken)j.QueuePosition : JValue.CreateNull(),
+                ["queuedMs"] = j.QueuedMs,
+                ["operationId"] = j.Id
             }));
 
             // The LLM reads content[0].text (a serialized JSON string), not the wrapper JObject.
@@ -2222,7 +2225,8 @@ namespace GxMcp.Gateway
             int waitSeconds,
             JToken? progressToken = null,
             Func<JObject, Task>? heartbeat = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            string until = "terminal")
         {
             // Clamp wait_seconds to [0, MaxLongPollSeconds]
             int requestedWaitSeconds = Math.Min(Math.Max(waitSeconds, 0), MaxLongPollSeconds);
@@ -2236,11 +2240,16 @@ namespace GxMcp.Gateway
                 ? requestedWaitSeconds
                 : Math.Min(requestedWaitSeconds, SafeLongPollSecondsWithoutProgress);
             bool capApplied = effectiveWaitSeconds < requestedWaitSeconds;
+            string waitUntil = string.Equals(until, "terminal", StringComparison.OrdinalIgnoreCase)
+                ? "terminal" : "change";
+            bool waitForTerminal = waitUntil == "terminal";
 
             var startedAt = DateTime.UtcNow;
             var deadline = startedAt.AddSeconds(effectiveWaitSeconds);
             var nextHeartbeatAt = startedAt.AddSeconds(HeartbeatIntervalSeconds);
             JobEntry? job;
+            string baselineStatus = string.Empty;
+            string baselineUpdated = string.Empty;
 
             do
             {
@@ -2250,7 +2259,21 @@ namespace GxMcp.Gateway
                 }
 
                 job = registry.Get(jobId);
-                if (job == null || job.Status != "running" || effectiveWaitSeconds == 0)
+                if (job == null || effectiveWaitSeconds == 0)
+                    break;
+
+                string currentStatus = job.Status ?? string.Empty;
+                string currentUpdated = job.LastUpdatedAt?.ToUniversalTime().ToString("o") ?? string.Empty;
+                if (baselineStatus.Length == 0)
+                {
+                    baselineStatus = currentStatus;
+                    baselineUpdated = currentUpdated;
+                }
+                bool nowTerminal = !string.Equals(currentStatus, "running", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(currentStatus, "queued", StringComparison.OrdinalIgnoreCase);
+                bool changed = !string.Equals(currentStatus, baselineStatus, StringComparison.Ordinal)
+                    || !string.Equals(currentUpdated, baselineUpdated, StringComparison.Ordinal);
+                if (nowTerminal || (changed && !waitForTerminal))
                     break;
 
                 if (canHeartbeat && DateTime.UtcNow >= nextHeartbeatAt)
@@ -2296,17 +2319,28 @@ namespace GxMcp.Gateway
             var envelope = new JObject
             {
                 ["job_id"] = job.Id,
+                ["operationId"] = job.Id,
                 ["status"] = job.Status,
                 ["summary"] = job.Summary,
                 ["completed_at"] = job.CompletedAt?.ToString("o"),
                 ["estimated_seconds"] = job.EstimatedSeconds,
-                ["result"] = job.Result
+                ["result"] = job.Result,
+                ["waitUntil"] = waitUntil,
+                ["waitSatisfied"] = !string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(job.Status, "queued", StringComparison.OrdinalIgnoreCase)
             };
+            var queueMetadata = registry.GetLifecycleQueueMetadata(job.Id);
+            foreach (var property in queueMetadata.Properties())
+            {
+                if (property.Name == "status" || property.Name == "operationId") continue;
+                envelope[property.Name] = property.Value?.DeepClone();
+            }
 
             // Surface the safe-wait cap so callers know to re-poll: we returned early
             // (relative to their requested wait_seconds) because no progressToken was
             // available to keep their connection alive past SafeLongPollSecondsWithoutProgress.
-            if (capApplied && string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase))
+            if (capApplied && (string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(job.Status, "queued", StringComparison.OrdinalIgnoreCase)))
             {
                 envelope["capped"] = true;
                 envelope["cappedAtSeconds"] = SafeLongPollSecondsWithoutProgress;
@@ -2339,15 +2373,24 @@ namespace GxMcp.Gateway
             if (job == null)
                 throw new ArgumentNullException(nameof(job));
 
-            if (string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(job.Status, "queued", StringComparison.OrdinalIgnoreCase))
             {
+                bool queued = string.Equals(job.Status, "queued", StringComparison.OrdinalIgnoreCase);
+                long queuedMs = job.QueuedMs;
+                if (queued && job.QueuedAtUtc.HasValue)
+                    queuedMs = Math.Max(0L, (long)(DateTime.UtcNow - job.QueuedAtUtc.Value).TotalMilliseconds);
                 var pending = new JObject
                 {
-                    ["status"] = "Pending",
+                    ["status"] = queued ? "Queued" : "Pending",
                     ["operationId"] = job.Id,
-                    ["message"] = "Operation still running. Poll genexus_lifecycle action=status target=op:" + job.Id + " (with wait_seconds>0 to long-poll), then call result once it terminates.",
+                    ["message"] = queued
+                        ? "Operation is queued on the Worker FIFO. Poll genexus_lifecycle action=status target=op:" + job.Id + " or wait_until_done=true."
+                        : "Operation still running. Poll genexus_lifecycle action=status target=op:" + job.Id + " (with wait_seconds>0 to long-poll), then call result once it terminates.",
                     ["startedAt"] = job.StartedAt.ToString("o"),
-                    ["estimated_seconds"] = job.EstimatedSeconds
+                    ["estimated_seconds"] = job.EstimatedSeconds,
+                    ["queuePosition"] = queued && job.QueuePosition > 0 ? (JToken)job.QueuePosition : JValue.CreateNull(),
+                    ["queuedMs"] = queuedMs
                 };
                 return (pending, isError: false);
             }

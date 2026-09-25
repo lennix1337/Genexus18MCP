@@ -210,16 +210,14 @@ namespace GxMcp.Gateway.Tests
             //   2026-09-22 (issue #274 module install preview): 31700 → 31800 for
             //   the genexus_module dryRun preview param on install/install_builtin/update
             //   plus discoverability copy in the tool description. Measured ~31735 tokens.
-            //   2026-09-22 (issue #281 attribute-based variables): 31800 → 32000 for
-            //   the genexus_variable basedOnAttribute param (top-level + variables[]
-            //   items), Attribute:<name> typeName/basedOn forms, the matching
-            //   object_atomic variables[] field, and read/write discoverability
-            //   copy. Measured ~31874 tokens.
-            Assert.True(approxTokens < 32000, $"tool_definitions.json is ~{approxTokens} tokens; budget 32000.");
+            //   2026-09-24 (issues #268, #306, #308, #309, #310, #313, #314, #315, #316): 32000 → 33500 for typed WWP grid, lifecycle continuation, semantic
+            //   WebForm safety, report-control, K2B/structural variable, and pagination
+            //   contracts. Measured ~33055 tokens.
+            Assert.True(approxTokens < 33500, $"tool_definitions.json is ~{approxTokens} tokens; budget 33500.");
         }
 
         [Theory]
-        [InlineData("all", 80000)]
+        [InlineData("all", 82000)]
         [InlineData("core", 25000)]
         [InlineData("standard", 60000)]
         [InlineData("authoring", 60000)]

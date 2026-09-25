@@ -74,6 +74,15 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ResolveClientId_UsesAttachmentAndGatewaySessionMetadata()
+        {
+            Assert.Equal("attachment-7", StaScheduler.ResolveClientId(JObject.Parse(
+                "{\"method\":\"object\",\"_meta\":{\"attachmentId\":\"attachment-7\"}}")));
+            Assert.Equal("session-9", StaScheduler.ResolveClientId(JObject.Parse(
+                "{\"method\":\"object\",\"_meta\":{\"sessionId\":\"session-9\"}}")));
+        }
+
+        [Fact]
         public void FairnessRoundRobin_InterleavesClientsWithinSamePriority()
         {
             var scheduler = new StaScheduler();

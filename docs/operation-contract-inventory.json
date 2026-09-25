@@ -5,7 +5,7 @@
     "src/GxMcp.Gateway/OperationClassifier.cs"
   ],
   "toolCount": 54,
-  "actionCount": 270,
+  "actionCount": 275,
   "tools": [
     {
       "tool": "genexus_data_view",
@@ -1218,6 +1218,48 @@
             "collections"
           ],
           "previewSupported": false
+        },
+        {
+          "action": "add_report_control",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": true
+        },
+        {
+          "action": "move_report_control",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": true
+        },
+        {
+          "action": "remove_report_control",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": true
         },
         {
           "action": "list_controls",
@@ -3607,6 +3649,34 @@
         },
         {
           "action": "add_grid_attribute",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": true
+        },
+        {
+          "action": "move_grid_column",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": true
+        },
+        {
+          "action": "add_grid_variable",
           "kind": "mutating",
           "effects": "kb.write",
           "execution": "worker",

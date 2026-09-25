@@ -603,28 +603,35 @@ namespace GxMcp.Worker.Services
                 var obj = _objectService.FindObject(name, typeFilter);
                 if (obj == null) return HealingService.FormatNotFoundError(name, _indexCacheService.GetIndex());
 
-                dynamic vPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.Equals("VariablesPart"));
+                var vPart = GxMcp.Worker.Structure.PartAccessor.GetVariablesLikePart(obj);
+                var variableList = GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(obj).ToList();
                 if (vPart == null) return Models.McpResponse.Err(code: "VariablesPartNotFound", message: "Variables part not found.", hint: "The object does not expose a Variables part. Check availableParts for what this object supports.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = name }, "Returns availableParts so you can see which parts this object exposes.")), target: name, extra: new JObject { ["objectName"] = obj.Name, ["objectType"] = obj.TypeDescriptor?.Name, ["availableParts"] = new JArray(GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj)) });
 
                 var variables = new JArray();
                 int idx = 0;
-                foreach (Variable var in vPart.Variables)
+                foreach (object var in variableList)
                 {
                     idx++;
+                    dynamic variable = var;
+                    string variableName = GxMcp.Worker.Structure.PartAccessor.GetVariableName(var);
                     var item = new JObject();
-                    item["name"] = var.Name;
-                    item["type"] = var.Type.ToString();
+                    item["name"] = variableName;
+                    try { item["type"] = variable.Type?.ToString() ?? "Unknown"; } catch { item["type"] = "Unknown"; }
+                    try { item["isCollection"] = (bool)variable.IsCollection; } catch { }
+                    VariableDimensionSupport.AddMetadata(item, var);
                     // Layout XML uses AttID="var:N" — surface the internal id so agents don't grep the generated .cs.
                     int? internalId = VariableInjector.GetVariableInternalId(var, idx);
                     if (internalId.HasValue) item["internalId"] = internalId.Value;
-                    var managedBy = GxMcp.Worker.Helpers.FrameworkManagedVariables.GetManagedBy(var.Name);
+                    var managedBy = GxMcp.Worker.Helpers.FrameworkManagedVariables.GetManagedBy(variableName);
                     if (managedBy != null) item["managedBy"] = managedBy;
                     variables.Add(item);
                 }
 
                 var result = new JObject();
                 result["variables"] = variables;
-                result["source"] = VariableInjector.GetVariablesAsText((dynamic)vPart);
+                result["source"] = vPart is global::Artech.Genexus.Common.Parts.VariablesPart typedPart
+                    ? VariableInjector.GetVariablesAsText(typedPart)
+                    : string.Join("\r\n", variableList.Select(v => v.ToString()));
                 return Models.McpResponse.Ok(target: name, code: "VariablesRead", result: result);
             }
             catch (Exception ex)
@@ -1117,18 +1124,23 @@ namespace GxMcp.Worker.Services
                 {
                     tasks.Add(Task.Run(() => {
                         try {
-                            dynamic vPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.Equals("VariablesPart"));
-                            if (vPart != null) {
+                            var variablesOnObject = GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(obj).ToList();
+                            if (variablesOnObject.Count > 0) {
                                 // Lean default: name+type only, capped at 40 rows — enough to orient.
                                 // verbose=true adds length/decimals/internalId and the full list.
                                 const int leanVarCap = 40;
                                 var variables = new JArray();
                                 int idxLocal = 0;
                                 int emitted = 0;
-                                foreach (Variable v in vPart.Variables) {
+                                foreach (object v in variablesOnObject) {
                                     idxLocal++;
                                     if (!verbose && emitted >= leanVarCap) continue;
-                                    var entry = new JObject { ["name"] = v.Name, ["type"] = v.Type.ToString() };
+                                    dynamic variable = v;
+                                    string variableName = GxMcp.Worker.Structure.PartAccessor.GetVariableName(v);
+                                    var entry = new JObject { ["name"] = variableName };
+                                    try { entry["type"] = variable.Type?.ToString() ?? "Unknown"; } catch { entry["type"] = "Unknown"; }
+                                    try { entry["isCollection"] = (bool)variable.IsCollection; } catch { }
+                                    VariableDimensionSupport.AddMetadata(entry, v);
                                     // issue #281: surface Attribute/Domain bindings so an
                                     // attribute-based variable (Attribute:CttCar) is
                                     // distinguishable from a flattened primitive with the
@@ -1138,7 +1150,7 @@ namespace GxMcp.Worker.Services
                                     {
                                         string attrBasedOn = GxMcp.Worker.Helpers.DomainPropertyApplier.GetAttributeBasedOnName((object)v);
                                         string domBasedOn = null;
-                                        try { domBasedOn = v.DomainBasedOn?.Name; } catch { }
+                                        try { domBasedOn = variable.DomainBasedOn?.Name; } catch { }
                                         if (string.IsNullOrEmpty(domBasedOn))
                                         {
                                             try { domBasedOn = GxMcp.Worker.Helpers.DomainPropertyApplier.GetDomainBasedOnName((object)v); } catch { }
@@ -1156,8 +1168,8 @@ namespace GxMcp.Worker.Services
                                     }
                                     catch { }
                                     if (verbose) {
-                                        entry["length"] = (int)v.Length;
-                                        entry["decimals"] = (int)v.Decimals;
+                                        try { entry["length"] = (int)variable.Length; } catch { }
+                                        try { entry["decimals"] = (int)variable.Decimals; } catch { }
                                         // FR#1 + FR#13: also surface internalId here.
                                         int? id = VariableInjector.GetVariableInternalId(v, idxLocal);
                                         if (id.HasValue) entry["internalId"] = id.Value;
@@ -1171,6 +1183,22 @@ namespace GxMcp.Worker.Services
                                         result["variablesTruncated"] = true;
                                         result["variablesTotal"] = idxLocal;
                                     }
+                                }
+                            }
+                            else if (GxMcp.Worker.Structure.PartAccessor.HasReadableVariablesCollection(obj))
+                            {
+                                lock (result) { result["variables"] = new JArray(); }
+                            }
+                            else if (requested.Contains("variables"))
+                            {
+                                lock (result)
+                                {
+                                    result["variables"] = new JArray();
+                                    result["unsupportedIncludes"] = new JArray(new JObject
+                                    {
+                                        ["include"] = "variables",
+                                        ["reason"] = "The SDK exposes no readable variables-bearing part for this object kind."
+                                    });
                                 }
                             }
 
@@ -1274,19 +1302,16 @@ namespace GxMcp.Worker.Services
                         try {
                             var domains = new JArray();
                             var processedDomains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                            dynamic vPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.Equals("VariablesPart"));
-                            if (vPart != null) {
-                                foreach (var v in vPart.Variables) {
-                                    dynamic dv = v;
-                                    var domain = dv.Domain ?? (dv.Attribute != null ? dv.Attribute.Domain : null);
-                                    if (domain != null && !processedDomains.Contains(domain.Name)) {
-                                        processedDomains.Add(domain.Name);
-                                        var dObj = new JObject { ["name"] = domain.Name };
-                                        var values = new JArray();
-                                        foreach (var ev in ((dynamic)domain).EnumValues) values.Add(new JObject { ["name"] = ev.Name, ["value"] = ev.Value });
-                                        dObj["values"] = values;
-                                        domains.Add(dObj);
-                                    }
+                            foreach (var v in GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(obj)) {
+                                dynamic dv = v;
+                                var domain = dv.Domain ?? (dv.Attribute != null ? dv.Attribute.Domain : null);
+                                if (domain != null && !processedDomains.Contains(domain.Name)) {
+                                    processedDomains.Add(domain.Name);
+                                    var dObj = new JObject { ["name"] = domain.Name };
+                                    var values = new JArray();
+                                    foreach (var ev in ((dynamic)domain).EnumValues) values.Add(new JObject { ["name"] = ev.Name, ["value"] = ev.Value });
+                                    dObj["values"] = values;
+                                    domains.Add(dObj);
                                 }
                             }
                             if (domains.Count > 0) lock (result) result["domains"] = domains;

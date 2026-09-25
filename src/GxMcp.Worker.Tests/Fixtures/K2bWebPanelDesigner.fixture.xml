@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<K2bWebPanelDesignerFixture>
+  <WebForm><![CDATA[
+<GxMultiForm>
+  <form type="layout">
+    <simplegrid id="grid-1" controlName="Grid" class="Grid"
+      PATTERN_ELEMENT_CUSTOM_PROPERTIES="&lt;Properties&gt;&lt;Property&gt;&lt;Name&gt;BaseTable&lt;/Name&gt;&lt;Value&gt;Customer&lt;/Value&gt;&lt;/Property&gt;&lt;Property&gt;&lt;Name&gt;KeyAttributes&lt;/Name&gt;&lt;Value&gt;att:5477&lt;/Value&gt;&lt;/Property&gt;&lt;Property&gt;&lt;Name&gt;SelectionMode&lt;/Name&gt;&lt;Value&gt;Multi&lt;/Value&gt;&lt;/Property&gt;&lt;Property&gt;&lt;Name&gt;ControlWhere&lt;/Name&gt;&lt;Value&gt;&amp;lt;TokenDataList&amp;gt;&amp;lt;Token Name=&amp;quot;Active&amp;quot; Value=&amp;quot;1&amp;quot;/&amp;gt;&amp;lt;/TokenDataList&amp;gt;&lt;/Value&gt;&lt;/Property&gt;&lt;Property&gt;&lt;Name&gt;ControlOrder&lt;/Name&gt;&lt;Value&gt;&amp;lt;TokenDataList&amp;gt;&amp;lt;Token Name=&amp;quot;Id&amp;quot; Value=&amp;quot;asc&amp;quot;/&amp;gt;&amp;lt;/TokenDataList&amp;gt;&lt;/Value&gt;&lt;/Property&gt;&lt;/Properties&gt;">
+      <item attribute="var:82" selection="true" />
+      <item attribute="att:5477" titleExp="=Customer.CustomerId" key="true" />
+      <item attribute="att:5478" titleExp="=Customer.Name" />
+    </simplegrid>
+    <userAction name="Refresh" caption="Refresh" />
+  </form>
+</GxMultiForm>
+]]></WebForm>
+  <Events><![CDATA[Event Grid.Load
+  // ---- K2BTools - Do Not Change, Editor Method ----
+  Grid.Load()
+  UpdateSelection(Grid)
+  // ---- K2BTools - To Be Completed By User ----
+  U_UserCompleted()
+end
+]]></Events>
+</K2bWebPanelDesignerFixture>

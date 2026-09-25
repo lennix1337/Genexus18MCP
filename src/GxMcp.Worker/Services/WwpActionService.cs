@@ -158,16 +158,33 @@ namespace GxMcp.Worker.Services
                 }
                 if (requestedObject == null)
                 {
-                    // The typed lookup only sees WorkWithPlus instances. An existing object of
-                    // another type (a parent, or an instance of another pattern) is looked up
-                    // untyped ONLY to explain why it cannot be edited here (issue #260); it never
-                    // reaches the mutation path, so an untyped homonym is still never edited.
+                    // A typed WorkWithPlus lookup is preferred, but GX16/17/18
+                    // builds differ in whether the instance is exposed by name.
+                    // Resolve an explicitly identified Transaction/WebPanel parent
+                    // through the same PatternInstance resolver before declaring
+                    // the target unsupported. Bare homonyms still fail closed.
                     var existing = _objects.FindObject(
                         target,
                         guid: (string)args?["guid"],
                         entityKey: (string)args?["entityKey"]);
                     if (existing != null)
-                        return BuildWwpInstanceNotFound(target, existing);
+                    {
+                        if (K2bWebPanelDesignerService.TryRead(existing, out var k2bDesigner))
+                            return K2bWebPanelDesignerService.BuildEditRejectionResponse(
+                                k2bDesigner, existing.Name, "PatternInstance", "patternInstanceUnsupported");
+
+                        string parentXml = _patterns.ReadPatternPartXml(
+                            existing, "PatternInstance", PatternRegistry.WorkWithPlusPatternId,
+                            out KBObject parentInstance, out _);
+                        if (parentInstance != null && !string.IsNullOrWhiteSpace(parentXml))
+                        {
+                            requestedObject = existing;
+                        }
+                        else
+                        {
+                            return BuildWwpInstanceNotFound(target, existing);
+                        }
+                    }
                 }
                 if (requestedObject == null)
                     return McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", target: target,
@@ -182,7 +199,26 @@ namespace GxMcp.Worker.Services
                 string expectedVersion = args?["baseVersion"]?.ToString()
                     ?? args?["expectedVersion"]?.ToString()
                     ?? args?["versionToken"]?.ToString();
-                if (!IsExpectedVersion(expectedVersion, versionToken))
+                string operation = NormalizeOperation(args?["action"]?.ToString());
+                 if (IsGridColumnOperation(operation) && string.IsNullOrWhiteSpace(expectedVersion))
+                     return McpResponse.Err(code: "ExpectedVersionRequired",
+                         message: "baseVersion is required for move_grid_column/add_grid_variable, including dryRun previews.",
+                         target: target, extra: new JObject { ["currentVersion"] = versionToken });
+                 if (operation == "add_grid_variable")
+                 {
+                     JObject identityError = ResolveGridVariableReference(args, out string verifiedReference);
+                     if (identityError != null)
+                         return McpResponse.Err(code: identityError["code"]?.ToString() ?? "GridVariableIdentityRequired",
+                             message: identityError["error"]?.ToString() ?? identityError["message"]?.ToString()
+                                 ?? "The presentation variable identity could not be verified.",
+                             target: target, extra: new JObject
+                             {
+                                 ["variable"] = args?["variable"]?.ToString() ?? args?["variableName"]?.ToString(),
+                                 ["variableReference"] = args?["variableReference"]?.ToString()
+                             });
+                     args["_variableReference"] = verifiedReference;
+                 }
+                 if (!IsExpectedVersion(expectedVersion, versionToken))
                     return McpResponse.Err(code: "StaleObject",
                         message: "The WorkWithPlus PatternInstance changed after the caller's read; no action mutation was applied.",
                         target: target, extra: new JObject
@@ -193,7 +229,6 @@ namespace GxMcp.Worker.Services
                 _patterns.BuildPatternPartEnvelope(requestedObject, "PatternInstance", xml, PatternRegistry.WorkWithPlusPatternId,
                     out _, out KBObjectPart instancePart);
 
-                string operation = NormalizeOperation(args?["action"]?.ToString());
                 if (IsFormUserActionOperation(operation))
                     return RunFormUserActionOperation(target, requestedObject, instance, instancePart, xml, args);
                 if (IsWebComponentReplacementOperation(operation))
@@ -242,7 +277,9 @@ namespace GxMcp.Worker.Services
                     ["part"] = "PatternInstance",
                     ["mode"] = "full",
                     ["content"] = afterDocument.ToString(SaveOptions.DisableFormatting),
-                    ["validate"] = true
+                    ["validate"] = true,
+                    ["patternEditMode"] = "grid-column",
+                    ["baseVersion"] = expectedVersion
                 });
                 JObject write;
                 try
@@ -251,12 +288,14 @@ namespace GxMcp.Worker.Services
                 }
                 catch (Exception parseEx)
                 {
-                    JObject rollback = TryRollback(target, requestedObject, xml, before, rollbackOnFailure, "write_response_not_json");
+                    JObject rollback = TryRollback(target, requestedObject, xml, before, rollbackOnFailure,
+                        "write_response_not_json", after, null);
                     return BuildWriteFailure(target, operation, writeRaw, parseEx.Message, rollbackOnFailure, rollback);
                 }
                 if (!IsSuccess(write))
                 {
-                    JObject rollback = TryRollback(target, requestedObject, xml, before, rollbackOnFailure, "write_failed");
+                    JObject rollback = TryRollback(target, requestedObject, xml, before, rollbackOnFailure,
+                        "write_failed", after, ExtractWriteVersionToken(write));
                     return BuildWriteFailure(target, operation, write, "The WorkWithPlus PatternInstance write was not accepted.", rollbackOnFailure, rollback);
                 }
 
@@ -267,7 +306,8 @@ namespace GxMcp.Worker.Services
                     : Project(XDocument.Parse(persistedXml, LoadOptions.PreserveWhitespace));
                 if (!JToken.DeepEquals(after, persisted))
                 {
-                    JObject rollback = TryRollback(target, refreshedTarget, xml, before, rollbackOnFailure, "post_write_verification_failed");
+                    JObject rollback = TryRollback(target, refreshedTarget, xml, before, rollbackOnFailure,
+                        "post_write_verification_failed", after, ExtractWriteVersionToken(write));
                     return McpResponse.Err(code: "WwpActionNotPersisted",
                         message: "The PatternInstance save completed, but the requested structural action state was not persisted.",
                         target: target, extra: new JObject
@@ -280,6 +320,39 @@ namespace GxMcp.Worker.Services
                             ["rollbackOnFailure"] = rollbackOnFailure,
                             ["rollback"] = rollback
                         });
+                }
+
+                if (IsGridColumnOperation(operation))
+                {
+                    string projectionError = VerifyGridProjection(refreshedTarget, after, args);
+                    if (!string.IsNullOrWhiteSpace(projectionError) && !ReferenceEquals(refreshedTarget, requestedObject))
+                        projectionError = VerifyGridProjection(requestedObject, after, args);
+                    if (operation == "add_grid_variable")
+                    {
+                        string variableError = VerifyGridVariableDeclaration(
+                            new[] { refreshedTarget, requestedObject, persistedInstance },
+                            args?["variable"]?.ToString() ?? args?["variableName"]?.ToString(),
+                            args?["_variableReference"]?.ToString());
+                        if (string.IsNullOrWhiteSpace(projectionError)) projectionError = variableError;
+                    }
+                    if (!string.IsNullOrWhiteSpace(projectionError))
+                    {
+                        JObject rollback = TryRollback(target, refreshedTarget, xml, before, rollbackOnFailure,
+                            "projection_verification_failed", after, ExtractWriteVersionToken(write));
+                        return McpResponse.Err(
+                            code: "WwpProjectionNotVerified",
+                            message: projectionError,
+                            target: target,
+                            extra: new JObject
+                            {
+                                ["persisted"] = true,
+                                ["verified"] = false,
+                                ["rollback"] = rollback,
+                                ["rollbackRequested"] = rollbackOnFailure,
+                                ["requested"] = after,
+                                ["persistedPattern"] = persisted
+                            });
+                    }
                 }
 
                 return McpResponse.Ok(target: target, code: "WwpActionUpdated", result: new JObject
@@ -311,8 +384,19 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private static string ExtractWriteVersionToken(JObject write)
+        {
+            if (write == null) return null;
+            string token = write["versionToken"]?.ToString();
+            if (!string.IsNullOrWhiteSpace(token)) return token;
+            token = write["result"]?["versionToken"]?.ToString();
+            if (!string.IsNullOrWhiteSpace(token)) return token;
+            return write["result"]?["postSaveVerification"]?["versionToken"]?.ToString();
+        }
+
         private JObject TryRollback(string target, KBObject fallbackTarget, string originalXml,
-            JObject expectedProjection, bool rollbackOnFailure, string reason)
+            JObject expectedProjection, bool rollbackOnFailure, string reason,
+            JObject requestedProjection = null, string expectedPersistedVersion = null)
         {
             var result = new JObject
             {
@@ -324,19 +408,57 @@ namespace GxMcp.Worker.Services
 
             try
             {
-                string raw = _write.WriteObject(target, new JObject
+                KBObject currentTarget = _objects.FindObject(target) ?? fallbackTarget;
+                string currentXml = _patterns.ReadPatternPartXml(
+                    currentTarget, "PatternInstance", PatternRegistry.WorkWithPlusPatternId,
+                    out KBObject currentInstance, out _);
+                if (string.IsNullOrWhiteSpace(currentXml))
+                {
+                    result["error"] = "The current PatternInstance could not be reread; rollback was refused.";
+                    result["refused"] = true;
+                    return result;
+                }
+
+                JObject currentProjection = Project(XDocument.Parse(currentXml, LoadOptions.PreserveWhitespace));
+                string currentVersion = WriteService.ComputeContentVersionToken(currentInstance, currentXml);
+                if (JToken.DeepEquals(currentProjection, expectedProjection))
+                {
+                    result["rolledBack"] = true;
+                    result["noOp"] = true;
+                    result["currentVersion"] = currentVersion;
+                    return result;
+                }
+
+                bool matchesRequested = requestedProjection != null
+                    && JToken.DeepEquals(currentProjection, requestedProjection);
+                bool matchesVersionFence = !string.IsNullOrWhiteSpace(expectedPersistedVersion)
+                    && string.Equals(currentVersion, expectedPersistedVersion, StringComparison.Ordinal);
+                if (!matchesRequested && !matchesVersionFence)
+                {
+                    result["refused"] = true;
+                    result["error"] = "The current PatternInstance is newer than this write; refusing a compensating write.";
+                    result["currentVersion"] = currentVersion;
+                    result["expectedVersion"] = expectedPersistedVersion;
+                    return result;
+                }
+
+                var restoreArgs = new JObject
                 {
                     ["part"] = "PatternInstance",
                     ["mode"] = "full",
                     ["content"] = originalXml,
                     ["validate"] = true
-                });
+                };
+                if (!string.IsNullOrWhiteSpace(currentVersion))
+                    restoreArgs["baseVersion"] = currentVersion;
+                string raw = _write.WriteObject(target, restoreArgs);
                 JObject write = JObject.Parse(raw);
                 result["write"] = write;
                 if (!IsSuccess(write)) return result;
 
                 KBObject refreshedTarget = _objects.FindObject(target) ?? fallbackTarget;
-                string persistedXml = _patterns.ReadPatternPartXml(refreshedTarget, "PatternInstance", PatternRegistry.WorkWithPlusPatternId, out _, out _);
+                string persistedXml = _patterns.ReadPatternPartXml(
+                    refreshedTarget, "PatternInstance", PatternRegistry.WorkWithPlusPatternId, out _, out _);
                 JObject persisted = string.IsNullOrWhiteSpace(persistedXml)
                     ? new JObject()
                     : Project(XDocument.Parse(persistedXml, LoadOptions.PreserveWhitespace));
@@ -389,6 +511,10 @@ namespace GxMcp.Worker.Services
         {
             if (operation == "add_user_action")
                 return AddFormUserAction(document, args, procedureResolver);
+            if (operation == "move_grid_column")
+                return ApplyMoveGridColumnXml(document, args);
+            if (operation == "add_grid_variable")
+                return ApplyAddGridVariableXml(document, args);
 
             string groupName = args?["group"]?.ToString() ?? args?["fromGroup"]?.ToString();
             string actionName = args?["actionName"]?.ToString();
@@ -580,7 +706,43 @@ namespace GxMcp.Worker.Services
                     ["actions"] = actions
                 });
             }
-            return new JObject { ["groups"] = groups, ["formContainers"] = formContainers };
+            var grids = new JArray();
+            foreach (XElement grid in document.Descendants().Where(e =>
+                Is(e, "grid") || Is(e, "simplegrid")))
+                grids.Add(ProjectGridElement(grid));
+
+            return new JObject
+            {
+                ["groups"] = groups,
+                ["formContainers"] = formContainers,
+                ["grids"] = grids
+            };
+        }
+
+        private static JObject ProjectGridElement(XElement grid)
+        {
+            var columns = new JArray();
+            foreach (XElement column in grid.Elements().Where(e =>
+                Is(e, "gridAttribute") || Is(e, "gridVariable")))
+            {
+                var attrs = new JObject();
+                foreach (var attribute in column.Attributes()
+                    .OrderBy(a => a.Name.LocalName, StringComparer.OrdinalIgnoreCase))
+                    attrs[attribute.Name.LocalName] = attribute.Value;
+                columns.Add(new JObject
+                {
+                    ["kind"] = column.Name.LocalName,
+                    ["attributes"] = attrs
+                });
+            }
+            return new JObject
+            {
+                ["name"] = Attr(grid, "name"),
+                ["controlName"] = Attr(grid, "controlName"),
+                ["id"] = Attr(grid, "id"),
+                ["columns"] = columns,
+                ["customProperties"] = Attr(grid, K2bWebPanelDesignerService.CustomPropertiesMarker)
+            };
         }
 
         private static JObject ProjectAction(XElement action, bool deriveEvent)

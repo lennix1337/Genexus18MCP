@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
@@ -332,7 +333,7 @@ namespace GxMcp.Worker.Services
 
         // issue #32 item 1 — shared SDK construction used by AddVariable (single) and
         // AddVariables (batch). Result of building one typed variable into a part.
-        private enum VarBuildResult { Added, DomainNotFound, DomainNotPersistable, PrimitiveNotApplied, AttributeNotFound, AttributeNotPersistable, ObjectNotPersistable }
+        private enum VarBuildResult { Added, DomainNotFound, DomainNotPersistable, PrimitiveNotApplied, AttributeNotFound, AttributeNotPersistable, ObjectNotPersistable, DimensionsNotPersistable }
 
         internal sealed class ExpectedDomainBinding
         {
@@ -366,11 +367,11 @@ namespace GxMcp.Worker.Services
             global::Artech.Genexus.Common.Parts.VariablesPart varPart, string varName,
             GxMcp.Worker.Helpers.TypeResolution resolution, string resolvedTypeForSdk,
             int? resolvedLength, int? resolvedDecimals,
-            int? length, int? decimals, bool? collection, string originalTypeName,
+            int? length, int? decimals, bool? collection, int? dimensions, JArray dimensionSizes, string originalTypeName,
             out ExpectedDomainBinding domainBinding, out string bindFailure)
         {
             return BuildResolvedVariableInto(varPart, varName, resolution, resolvedTypeForSdk,
-                resolvedLength, resolvedDecimals, length, decimals, collection, originalTypeName,
+                resolvedLength, resolvedDecimals, length, decimals, collection, dimensions, dimensionSizes, originalTypeName,
                 out domainBinding, out _, out _, out bindFailure);
         }
 
@@ -378,7 +379,7 @@ namespace GxMcp.Worker.Services
             global::Artech.Genexus.Common.Parts.VariablesPart varPart, string varName,
             GxMcp.Worker.Helpers.TypeResolution resolution, string resolvedTypeForSdk,
             int? resolvedLength, int? resolvedDecimals,
-            int? length, int? decimals, bool? collection, string originalTypeName,
+            int? length, int? decimals, bool? collection, int? dimensions, JArray dimensionSizes, string originalTypeName,
             out ExpectedDomainBinding domainBinding, out ExpectedAttributeBinding attributeBinding, out ExpectedObjectBinding objectBinding, out string bindFailure)
         {
             domainBinding = null;
@@ -409,6 +410,8 @@ namespace GxMcp.Worker.Services
                     return VarBuildResult.AttributeNotPersistable;
                 attributeBinding = new ExpectedAttributeBinding { VarName = varName, AttributeName = attrObj.Name };
                 if (collection == true) { try { newVar.IsCollection = true; } catch { } }
+                if (dimensions.HasValue && !VariableDimensionSupport.TryApply(newVar, dimensions, dimensionSizes, out bindFailure))
+                    return VarBuildResult.DimensionsNotPersistable;
                 varPart.Variables.Add(newVar);
                 return VarBuildResult.Added;
             }
@@ -519,6 +522,8 @@ namespace GxMcp.Worker.Services
                 }
             }
             if (collection == true) { try { newVar.IsCollection = true; } catch { /* not all types collectible */ } }
+            if (dimensions.HasValue && !VariableDimensionSupport.TryApply(newVar, dimensions, dimensionSizes, out bindFailure))
+                return VarBuildResult.DimensionsNotPersistable;
             varPart.Variables.Add(newVar);
             return VarBuildResult.Added;
         }
@@ -527,7 +532,7 @@ namespace GxMcp.Worker.Services
         // item 11) or applies the naming heuristic. Explicit length/decimals/collection
         // args still override the result. Adds to varPart in memory (no save).
         private void AddInferredVariableInto(global::Artech.Genexus.Common.Parts.VariablesPart varPart,
-            string varName, int? length, int? decimals, bool? collection)
+            string varName, int? length, int? decimals, bool? collection, int? dimensions, JArray dimensionSizes)
         {
             var newVar = VariableInjector.CreateVariable(varPart, varName);
             try
@@ -537,6 +542,8 @@ namespace GxMcp.Worker.Services
             }
             catch { /* best-effort */ }
             if (collection == true) { try { newVar.IsCollection = true; } catch { } }
+            if (dimensions.HasValue && !VariableDimensionSupport.TryApply(newVar, dimensions, dimensionSizes, out var dimensionFailure))
+                throw new InvalidOperationException("Variable dimensions could not be applied: " + dimensionFailure);
             varPart.Variables.Add(newVar);
         }
 
@@ -546,6 +553,10 @@ namespace GxMcp.Worker.Services
         // the agent see which vars were Added / already Exist / Failed without N round-trips.
         public string AddVariables(string target, JArray variables, bool dryRun = false)
         {
+            string dimensionValidationError;
+            if (!ValidateVariableDimensionBatch(variables, out dimensionValidationError))
+                return dimensionValidationError;
+
             if (dryRun)
             {
                 string targetError = ValidateVariableDryRunTarget(target);
@@ -569,6 +580,84 @@ namespace GxMcp.Worker.Services
             var raw = AddVariablesInternal(target, variables);
             MarkDirtyIfSuccess(raw, target);
             return WrapWithPersistedState(raw, target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
+        }
+
+        private static bool ValidateVariableDimensionBatch(JArray variables, out string errorResponse)
+        {
+            errorResponse = null;
+            if (variables == null) return true;
+
+            for (int index = 0; index < variables.Count; index++)
+            {
+                var item = variables[index] as JObject;
+                if (item == null)
+                {
+                    errorResponse = McpResponse.Err(
+                        code: "InvalidVariableDimensions",
+                        message: "Variable batch item " + index + " must be an object.",
+                        hint: "Send each variables[] item as an object with varName and optional dimension fields.");
+                    return false;
+                }
+
+                int? dimensions = null;
+                JToken dimensionsToken = item["dimensions"];
+                if (dimensionsToken != null && dimensionsToken.Type != JTokenType.Null)
+                {
+                    int parsedDimensions;
+                    if (dimensionsToken.Type != JTokenType.Integer
+                        || !int.TryParse(dimensionsToken.ToString(), out parsedDimensions))
+                    {
+                        errorResponse = McpResponse.Err(
+                            code: "InvalidVariableDimensions",
+                            message: "variables[" + index + "].dimensions must be an integer 1 or 2.",
+                            hint: "Use dimensions=1 with one positive size or dimensions=2 with two positive sizes.");
+                        return false;
+                    }
+                    dimensions = parsedDimensions;
+                }
+
+                JToken sizesToken = item["dimensionSizes"];
+                if (sizesToken != null && sizesToken.Type != JTokenType.Null
+                    && sizesToken.Type != JTokenType.Array)
+                {
+                    errorResponse = McpResponse.Err(
+                        code: "InvalidVariableDimensions",
+                        message: "variables[" + index + "].dimensionSizes must be an array.",
+                        hint: "Use dimensionSizes=[size] for a vector or [rows,columns] for a matrix.");
+                    return false;
+                }
+                JArray sizes = sizesToken as JArray;
+
+                JToken collectionToken = item["collection"];
+                bool? collection = null;
+                if (collectionToken != null && collectionToken.Type != JTokenType.Null)
+                {
+                    if (collectionToken.Type != JTokenType.Boolean)
+                    {
+                        errorResponse = McpResponse.Err(
+                            code: "InvalidVariableDimensions",
+                            message: "variables[" + index + "].collection must be a boolean.",
+                            hint: "Use collection=true only when dimensions/dimensionSizes are omitted.");
+                        return false;
+                    }
+                    collection = collectionToken.Value<bool>();
+                }
+
+                string code, message, hint;
+                JObject extra;
+                if (!VariableDimensionSupport.TryValidate(dimensions, sizes, collection, out code,
+                    out message, out hint, out extra))
+                {
+                    errorResponse = McpResponse.Err(
+                        code: code,
+                        message: "variables[" + index + "]: " + message,
+                        hint: hint,
+                        extra: extra);
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private string AddVariablesInternal(string target, JArray variables)
@@ -653,11 +742,25 @@ namespace GxMcp.Worker.Services
                         }
                         else outcome["persisted"] = true;
                     }
+                    var dimensionErr = VerifyBatchVariableDimensionsPersisted(target, variables, addedNames);
+                    if (dimensionErr != null)
+                    {
+                        foreach (var addedName in addedNames)
+                        {
+                            var addedVariable = varPart.Variables.FirstOrDefault(v =>
+                                string.Equals(v.Name, addedName, StringComparison.OrdinalIgnoreCase));
+                            if (addedVariable != null) varPart.Variables.Remove(addedVariable);
+                        }
+                        try { obj.EnsureSave(); ScheduleFlush(); } catch { }
+                        return dimensionErr;
+                    }
+
                     // issue #59: verify EVERY added variable (not just Domain-bound ones)
                     // actually landed in the persisted Variables part. A silent drop is
                     // reported as VariableAddNotPersisted instead of a false VariableAdded.
                     var perItemErr = VerifyVariablesPersisted(target, addedNames);
                     if (perItemErr != null) return perItemErr;
+
                 }
 
                 if (outcomes.OfType<JObject>().Any(o => string.Equals(o["status"]?.ToString(), "NotPersisted", StringComparison.OrdinalIgnoreCase)))
@@ -690,6 +793,23 @@ namespace GxMcp.Worker.Services
                         why: "Lists current variables to verify existence before retrying.")),
                     target: target);
             }
+        }
+
+        private string VerifyBatchVariableDimensionsPersisted(
+            string target, JArray variables, IEnumerable<string> addedNames)
+        {
+            if (variables == null || addedNames == null) return null;
+            var added = new HashSet<string>(addedNames, StringComparer.OrdinalIgnoreCase);
+            foreach (JObject item in variables.OfType<JObject>())
+            {
+                string name = (item["varName"] ?? item["name"])?.ToString()?.TrimStart('&');
+                if (string.IsNullOrWhiteSpace(name) || !added.Contains(name)) continue;
+                int? dimensions = item["dimensions"]?.ToObject<int?>();
+                var sizes = item["dimensionSizes"] as JArray;
+                string error = VerifyVariableDimensionsPersisted(target, name, dimensions, sizes);
+                if (error != null) return error;
+            }
+            return null;
         }
 
         internal void PopulateVariablesInto(
@@ -767,6 +887,8 @@ namespace GxMcp.Worker.Services
                 int? vLen = jo["length"]?.ToObject<int?>();
                 int? vDec = jo["decimals"]?.ToObject<int?>();
                 bool? vColl = jo["collection"]?.ToObject<bool?>();
+                int? vDimensions = jo["dimensions"]?.ToObject<int?>();
+                JArray vDimensionSizes = jo["dimensionSizes"] as JArray;
 
                 if (varPart.Variables.Any(v => string.Equals(v.Name, vName, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -851,7 +973,7 @@ namespace GxMcp.Worker.Services
                 {
                     if (!string.IsNullOrEmpty(vType) || !string.IsNullOrWhiteSpace(vBasedOn) || !string.IsNullOrWhiteSpace(vBasedOnAttribute))
                     {
-                        var batchBuild = BuildResolvedVariableInto(varPart, vName, res, rSdk, rLen, rDec, vLen, vDec, vColl, vBasedOnAttribute ?? vBasedOn ?? vType,
+                        var batchBuild = BuildResolvedVariableInto(varPart, vName, res, rSdk, rLen, rDec, vLen, vDec, vColl, vDimensions, vDimensionSizes, vBasedOnAttribute ?? vBasedOn ?? vType,
                             out var domainBinding, out var attributeBinding, out var objectBinding, out var bindFailure);
                         if (batchBuild == VarBuildResult.DomainNotFound || batchBuild == VarBuildResult.AttributeNotFound)
                         {
@@ -891,17 +1013,35 @@ namespace GxMcp.Worker.Services
                             });
                             continue;
                         }
+                        if (batchBuild == VarBuildResult.DimensionsNotPersistable)
+                        {
+                            failed++;
+                            outcomes.Add(new JObject
+                            {
+                                ["name"] = vName,
+                                ["status"] = "Failed",
+                                ["reason"] = "VariableDimensionsNotPersisted",
+                                ["details"] = bindFailure ?? "The requested dimensions could not be represented as native SDK variable properties."
+                            });
+                            continue;
+                        }
                         if (domainBinding != null) domainBound.Add(domainBinding);
                         if (attributeBinding != null) attributeBound.Add(attributeBinding);
                         if (objectBinding != null) objectBound.Add(objectBinding);
                     }
                     else
                     {
-                        AddInferredVariableInto(varPart, vName, vLen, vDec, vColl);
+                        AddInferredVariableInto(varPart, vName, vLen, vDec, vColl, vDimensions, vDimensionSizes);
                     }
                     added++;
                     addedNames.Add(vName);
-                    outcomes.Add(new JObject { ["name"] = vName, ["status"] = "Added" });
+                    var addedOutcome = new JObject { ["name"] = vName, ["status"] = "Added" };
+                    if (vDimensions.HasValue)
+                    {
+                        addedOutcome["dimensions"] = vDimensions.Value;
+                        addedOutcome["dimensionSizes"] = vDimensionSizes?.DeepClone();
+                    }
+                    outcomes.Add(addedOutcome);
                 }
                 catch (Exception exItem)
                 {
@@ -912,8 +1052,22 @@ namespace GxMcp.Worker.Services
         }
 
         public string AddVariable(string target, string varName, string typeName = null, bool dryRun = false,
-            int? length = null, int? decimals = null, bool? collection = null, string basedOn = null, string basedOnAttribute = null)
+            int? length = null, int? decimals = null, bool? collection = null, string basedOn = null, string basedOnAttribute = null,
+            int? dimensions = null, JArray dimensionSizes = null)
         {
+            string dimensionCode, dimensionMessage, dimensionHint;
+            JObject dimensionExtra;
+            if (!VariableDimensionSupport.TryValidate(dimensions, dimensionSizes, collection,
+                out dimensionCode, out dimensionMessage, out dimensionHint, out dimensionExtra))
+            {
+                return McpResponse.Err(
+                    code: dimensionCode,
+                    message: dimensionMessage,
+                    hint: dimensionHint,
+                    target: target,
+                    extra: dimensionExtra);
+            }
+
             if (dryRun)
             {
                 string targetError = ValidateVariableDryRunTarget(target);
@@ -933,11 +1087,13 @@ namespace GxMcp.Worker.Services
                             ["basedOnAttribute"] = basedOnAttribute,
                             ["length"] = length,
                             ["decimals"] = decimals,
-                            ["collection"] = collection
+                            ["collection"] = collection,
+                            ["dimensions"] = dimensions,
+                            ["dimensionSizes"] = dimensionSizes?.DeepClone()
                         }
                     });
             }
-            var raw = AddVariableInternal(target, varName, typeName, length, decimals, collection, basedOn, basedOnAttribute);
+            var raw = AddVariableInternal(target, varName, typeName, length, decimals, collection, basedOn, basedOnAttribute, dimensions, dimensionSizes);
             MarkDirtyIfSuccess(raw, target);
             return WrapWithPersistedState(raw, target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
         }
@@ -952,7 +1108,8 @@ namespace GxMcp.Worker.Services
         //   (item 11) when typeName is omitted, CreateVariable already inherits the type of
         //   a same-named attribute via FindAttribute — length/decimals below still override.
         private string AddVariableInternal(string target, string varName, string typeName = null,
-            int? length = null, int? decimals = null, bool? collection = null, string basedOn = null, string basedOnAttribute = null)
+            int? length = null, int? decimals = null, bool? collection = null, string basedOn = null, string basedOnAttribute = null,
+            int? dimensions = null, JArray dimensionSizes = null)
         {
             try
             {
@@ -1059,7 +1216,7 @@ namespace GxMcp.Worker.Services
                     // issue #32 item 1: construction extracted into BuildResolvedVariableInto so
                     // the batch AddVariables path reuses the exact same SDK binding logic.
                     var buildResult = BuildResolvedVariableInto(varPart, varName, resolution, resolvedTypeForSdk,
-                            resolvedLength, resolvedDecimals, length, decimals, collection, basedOnAttribute ?? basedOn ?? typeName,
+                            resolvedLength, resolvedDecimals, length, decimals, collection, dimensions, dimensionSizes, basedOnAttribute ?? basedOn ?? typeName,
                             out var domainBinding, out var attributeBinding, out var objectBinding, out var bindFailure);
                     if (buildResult == VarBuildResult.DomainNotFound || buildResult == VarBuildResult.AttributeNotFound)
                     {
@@ -1111,13 +1268,22 @@ namespace GxMcp.Worker.Services
                             target: target,
                             extra: new JObject { ["typeName"] = typeName, ["details"] = bindFailure });
                     }
+                    if (buildResult == VarBuildResult.DimensionsNotPersistable)
+                    {
+                        return McpResponse.Err(
+                            code: "VariableDimensionsNotPersisted",
+                            message: "The requested fixed-size dimensions could not be represented as native GeneXus variable properties. The variable was not created.",
+                            hint: "Verify that this GeneXus SDK exposes the variable Dimensions/AttRows/AttCols properties, then retry with positive sizes.",
+                            target: target,
+                            extra: new JObject { ["dimensions"] = dimensions, ["dimensionSizes"] = dimensionSizes?.DeepClone(), ["details"] = bindFailure });
+                    }
                     if (domainBinding != null) domainBound.Add(domainBinding);
                     if (attributeBinding != null) attributeBound.Add(attributeBinding);
                     if (objectBinding != null) objectBound.Add(objectBinding);
                 }
                 else
                 {
-                    AddInferredVariableInto(varPart, varName, length, decimals, collection);
+                    AddInferredVariableInto(varPart, varName, length, decimals, collection, dimensions, dimensionSizes);
                 }
 
                 ForceSaveVariableOwner(obj);
@@ -1172,8 +1338,30 @@ namespace GxMcp.Worker.Services
                 var singleVerify = VerifyVariablesPersisted(target, new System.Collections.Generic.List<string> { varName });
                 if (singleVerify != null) return singleVerify;
 
-                return McpResponse.Ok(target: target, code: "VariableAdded", result: new JObject
-                { ["variable"] = varName, ["requestedType"] = typeName, ["persisted"] = true, ["saved"] = true });
+                var dimensionVerifyError = VerifyVariableDimensionsPersisted(target, varName, dimensions, dimensionSizes);
+                if (dimensionVerifyError != null)
+                {
+                    var addedVariable = varPart.Variables.FirstOrDefault(v =>
+                        string.Equals(v.Name, varName, StringComparison.OrdinalIgnoreCase));
+                    if (addedVariable != null) varPart.Variables.Remove(addedVariable);
+                    try { obj.EnsureSave(); ScheduleFlush(); } catch { }
+                    return dimensionVerifyError;
+                }
+
+                var addedResult = new JObject
+                {
+                    ["variable"] = varName,
+                    ["requestedType"] = typeName,
+                    ["persisted"] = true,
+                    ["saved"] = true,
+                    ["reReadConfirmed"] = true
+                };
+                if (dimensions.HasValue)
+                {
+                    addedResult["dimensions"] = dimensions;
+                    addedResult["dimensionSizes"] = dimensionSizes?.DeepClone();
+                }
+                return McpResponse.Ok(target: target, code: "VariableAdded", result: addedResult);
             }
             catch (Exception ex)
             {
@@ -1190,17 +1378,45 @@ namespace GxMcp.Worker.Services
                     if (!string.IsNullOrWhiteSpace(verifyText)
                         && MissingVariableNames(verifyText, new[] { varName }).Count == 0)
                     {
+                        if (dimensions.HasValue)
+                        {
+                            var dimensionReconcileError = VerifyVariableDimensionsPersisted(
+                                target, varName, dimensions, dimensionSizes);
+                            if (dimensionReconcileError != null)
+                            {
+                                try
+                                {
+                                    var rollbackObject = _objectService.FindObject(target);
+                                    var rollbackPart = GxMcp.Worker.Structure.PartAccessor.GetVariablesPart(rollbackObject);
+                                    var addedVariable = rollbackPart?.Variables.FirstOrDefault(v =>
+                                        string.Equals(v.Name, varName, StringComparison.OrdinalIgnoreCase));
+                                    if (addedVariable != null) rollbackPart.Variables.Remove(addedVariable);
+                                    if (rollbackObject != null) ForceSaveVariableOwner(rollbackObject);
+                                    ScheduleFlush();
+                                }
+                                catch { }
+                                return dimensionReconcileError;
+                            }
+                        }
+
                         Logger.Warn("[VARIABLES-POST-CHECK] AddVariable threw after persistence for " + target
                             + "/" + varName + "; returning reconciled success. Cause: " + ex.Message);
-                        return McpResponse.Ok(target: target, code: "VariableAdded", result: new JObject
+                        var reconciledResult = new JObject
                         {
                             ["variable"] = varName,
                             ["requestedType"] = typeName,
                             ["persisted"] = true,
                             ["saved"] = true,
+                            ["reReadConfirmed"] = dimensions.HasValue,
                             ["verification"] = "reconciledAfterFailure",
                             ["warning"] = "The SDK reported an error after save, but a fresh full read confirmed the variable is persisted."
-                        });
+                        };
+                        if (dimensions.HasValue)
+                        {
+                            reconciledResult["dimensions"] = dimensions;
+                            reconciledResult["dimensionSizes"] = dimensionSizes?.DeepClone();
+                        }
+                        return McpResponse.Ok(target: target, code: "VariableAdded", result: reconciledResult);
                     }
                 }
                 catch (Exception verifyEx)
@@ -1217,6 +1433,272 @@ namespace GxMcp.Worker.Services
                         why: "Lists current variables to confirm state.")),
                     target: target);
             }
+        }
+
+        /// <summary>
+        /// Independently verifies fixed-size dimension metadata after a save. The
+        /// in-memory VariablesPart is not sufficient evidence: some SDK versions
+        /// accept AttNumDim/AttRows/AttCols in memory and silently drop one of the
+        /// properties during EnsureSave.
+        /// </summary>
+        private string VerifyVariableDimensionsPersisted(
+            string target, string varName, int? dimensions, JArray dimensionSizes)
+        {
+            if (!dimensions.HasValue) return null;
+
+            List<int> expectedSizes = new List<int>();
+            if (!VariableDimensionSupport.TryParseSizes(dimensionSizes, out expectedSizes, out string sizeError))
+            {
+                return McpResponse.Err(
+                    code: "VariableDimensionsNotPersisted",
+                    message: "The requested dimension sizes are not valid for verification: " + sizeError,
+                    hint: "Use positive integer dimensionSizes matching dimensions=1 or dimensions=2.",
+                    target: target,
+                    extra: new JObject
+                    {
+                        ["variable"] = varName,
+                        ["dimensions"] = dimensions.GetValueOrDefault(),
+                        ["dimensionSizes"] = dimensionSizes?.DeepClone(),
+                        ["saved"] = false
+                    });
+            }
+            int expectedDimensions = dimensions.GetValueOrDefault();
+
+            try
+            {
+                // Use the same complete, cache-bypassing public read path that the
+                // writer uses for other post-save checks. The structured Variables
+                // projection is the independent evidence; the direct SDK fallback
+                // below is retained for older/kind-specific parts that do not expose
+                // that projection yet.
+                string freshReadJson = _objectService.ReadObjectSourceForVerification(target, "Variables");
+                if (string.IsNullOrWhiteSpace(freshReadJson))
+                {
+                    return McpResponse.Err(
+                        code: "VariableDimensionsNotPersisted",
+                        message: "The variable dimensions could not be independently verified because the fresh Variables read was empty.",
+                        hint: "Re-read the Variables part and verify the array metadata before retrying.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["variable"] = varName,
+                            ["expectedDimensions"] = expectedDimensions,
+                            ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                            ["saved"] = false
+                        });
+                }
+
+                JObject freshRead;
+                try { freshRead = JObject.Parse(freshReadJson); }
+                catch (Exception parseException)
+                {
+                    return McpResponse.Err(
+                        code: "VariableDimensionsNotPersisted",
+                        message: "The fresh Variables read could not be parsed for dimension verification: " + parseException.Message,
+                        hint: "Inspect the saved Variables part and the Worker log before retrying.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["variable"] = varName,
+                            ["expectedDimensions"] = expectedDimensions,
+                            ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                            ["saved"] = false
+                        });
+                }
+                if (freshRead["error"] != null)
+                {
+                    JObject readErrorObject = freshRead["error"] as JObject;
+                    string readError = readErrorObject?["message"]?.ToString()
+                        ?? freshRead["error"]?.ToString()
+                        ?? "The fresh Variables read returned an error.";
+                    return McpResponse.Err(
+                        code: "VariableDimensionsNotPersisted",
+                        message: "The variable dimensions could not be independently verified: " + readError,
+                        hint: "Re-read the Variables part and verify the array metadata before retrying.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["variable"] = varName,
+                            ["expectedDimensions"] = expectedDimensions,
+                            ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                            ["saved"] = false
+                        });
+                }
+                if (freshRead["variables"] is JArray freshRows)
+                {
+                    JObject freshRow = freshRows.OfType<JObject>().FirstOrDefault(row =>
+                        string.Equals((row["name"]?.ToString() ?? string.Empty).TrimStart('&'),
+                            (varName ?? string.Empty).TrimStart('&'), StringComparison.OrdinalIgnoreCase));
+                    if (freshRow == null)
+                    {
+                        return McpResponse.Err(
+                            code: "VariableDimensionsNotPersisted",
+                            message: "The SDK did not retain the variable after save; dimension metadata cannot be confirmed.",
+                            hint: "Re-read Variables and retry the add or modify operation.",
+                            target: target,
+                            extra: new JObject
+                            {
+                                ["variable"] = varName,
+                                ["expectedDimensions"] = expectedDimensions,
+                                ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                                ["saved"] = false
+                            });
+                    }
+                    if (freshRow["dimensionsMalformed"]?.ToObject<bool>() == true)
+                    {
+                        return McpResponse.Err(
+                            code: "VariableDimensionsNotPersisted",
+                            message: freshRow["dimensionsError"]?.ToString()
+                                ?? "The SDK returned malformed variable dimension metadata after save.",
+                            hint: "Repair the array metadata in GeneXus before retrying.",
+                            target: target,
+                            extra: new JObject
+                            {
+                                ["variable"] = varName,
+                                ["expectedDimensions"] = expectedDimensions,
+                                ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                                ["saved"] = false
+                            });
+                    }
+                    int actualDimensions;
+                    List<int> actualSizes = new List<int>();
+                    bool validProjection = int.TryParse(freshRow["dimensions"]?.ToString(), out actualDimensions)
+                        && VariableDimensionSupport.TryParseSizes(freshRow["dimensionSizes"] as JArray,
+                            out actualSizes, out _);
+                    bool sameProjection = validProjection && actualDimensions == expectedDimensions
+                        && actualSizes.Count == expectedSizes.Count;
+                    if (sameProjection)
+                    {
+                        for (int i = 0; i < expectedSizes.Count; i++)
+                        {
+                            if (actualSizes[i] != expectedSizes[i])
+                            {
+                                sameProjection = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (sameProjection) return null;
+
+                    return McpResponse.Err(
+                        code: "VariableDimensionsNotPersisted",
+                        message: "The SDK accepted the variable write but did not retain the requested fixed-size dimensions.",
+                        hint: "The variable was not reported as persisted. Re-read Variables and retry only after checking the GeneXus SDK compatibility.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["variable"] = varName,
+                            ["expectedDimensions"] = expectedDimensions,
+                            ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                            ["actualDimensions"] = freshRow["dimensions"],
+                            ["actualDimensionSizes"] = freshRow["dimensionSizes"]?.DeepClone(),
+                            ["saved"] = false
+                        });
+                }
+
+                var freshObject = _objectService.FindObjectFresh(target);
+                if (freshObject == null)
+                {
+                    return McpResponse.Err(
+                        code: "VariableDimensionsNotPersisted",
+                        message: "The variable dimensions could not be independently verified because the saved object was not readable.",
+                        hint: "Re-read the Variables part and verify the array metadata before retrying.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["variable"] = varName,
+                            ["dimensions"] = dimensions.GetValueOrDefault(),
+                            ["dimensionSizes"] = dimensionSizes?.DeepClone(),
+                            ["saved"] = false
+                        });
+                }
+
+                var freshVariable = GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(freshObject)
+                    .FirstOrDefault(v => string.Equals(
+                        GxMcp.Worker.Structure.PartAccessor.GetVariableName(v),
+                        (varName ?? string.Empty).TrimStart('&'), StringComparison.OrdinalIgnoreCase));
+                if (freshVariable == null)
+                {
+                    return McpResponse.Err(
+                        code: "VariableDimensionsNotPersisted",
+                        message: "The SDK did not retain the variable after save; dimension metadata cannot be confirmed.",
+                        hint: "Re-read Variables and retry the add or modify operation.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["variable"] = varName,
+                            ["dimensions"] = dimensions.GetValueOrDefault(),
+                            ["dimensionSizes"] = dimensionSizes?.DeepClone(),
+                            ["saved"] = false
+                        });
+                }
+
+                VariableDimensionInfo actual;
+                if (!VariableDimensionSupport.TryRead(freshVariable, out actual) || !actual.IsValid)
+                {
+                    return McpResponse.Err(
+                        code: "VariableDimensionsNotPersisted",
+                        message: actual.Error ?? "The SDK returned malformed variable dimension metadata after save.",
+                        hint: "Repair the array metadata in GeneXus before retrying; the writer will not report an unverified dimension as persisted.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["variable"] = varName,
+                            ["expectedDimensions"] = expectedDimensions,
+                            ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                            ["saved"] = false
+                        });
+                }
+
+                bool same = actual.Dimensions == expectedDimensions
+                    && actual.DimensionSizes != null
+                    && actual.DimensionSizes.Count == expectedSizes.Count;
+                if (same)
+                {
+                    for (int i = 0; i < expectedSizes.Count; i++)
+                    {
+                        if (actual.DimensionSizes[i] != expectedSizes[i])
+                        {
+                            same = false;
+                            break;
+                        }
+                    }
+                }
+                if (!same)
+                {
+                    return McpResponse.Err(
+                        code: "VariableDimensionsNotPersisted",
+                        message: "The SDK accepted the variable write but did not retain the requested fixed-size dimensions.",
+                        hint: "The variable was not reported as persisted. Re-read Variables and retry only after checking the GeneXus SDK compatibility.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["variable"] = varName,
+                            ["expectedDimensions"] = expectedDimensions,
+                            ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                            ["actualDimensions"] = actual.Dimensions,
+                            ["actualDimensionSizes"] = actual.SizesToJson(),
+                            ["saved"] = false
+                        });
+                }
+            }
+            catch (Exception ex)
+            {
+                return McpResponse.Err(
+                    code: "VariableDimensionsNotPersisted",
+                    message: "Independent variable-dimension verification failed: " + ex.Message,
+                    hint: "Do not retry blindly; inspect the saved Variables part and the Worker log.",
+                    target: target,
+                    extra: new JObject
+                    {
+                        ["variable"] = varName,
+                        ["expectedDimensions"] = expectedDimensions,
+                        ["expectedDimensionSizes"] = new JArray(expectedSizes.Cast<object>().ToArray()),
+                        ["saved"] = false
+                    });
+            }
+
+            return null;
         }
 
         // Post-save read-back for Domain-based variable types. The formatted Variables
@@ -1277,7 +1759,7 @@ namespace GxMcp.Worker.Services
             foreach (var name in expectedNames)
             {
                 if (string.IsNullOrWhiteSpace(name)) continue;
-                string pattern = @"^&\b" + Regex.Escape(name.TrimStart('&')) + @"\b\s*:";
+                string pattern = @"^&\b" + Regex.Escape(name.TrimStart('&')) + @"\b(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?\s*:";
                 if (!Regex.IsMatch(variablesText, pattern, RegexOptions.IgnoreCase | RegexOptions.Multiline))
                     missing.Add(name.TrimStart('&'));
             }
@@ -1582,6 +2064,16 @@ namespace GxMcp.Worker.Services
                 catch { bindingNotRestored = true; }
             }
 
+            // Apply dimensions after all type/binding restore operations: several
+            // SDK binding setters rebuild the ATT property bag and would otherwise
+            // erase a vector/matrix copied earlier in the rollback.
+            try
+            {
+                if (!VariableDimensionSupport.TryCopy(originalSnapshot, restored, out string dimensionRestoreError))
+                    bindingNotRestored = true;
+            }
+            catch { bindingNotRestored = true; }
+
             varPart.Variables.Add(restored);
             return bindingNotRestored;
         }
@@ -1592,8 +2084,22 @@ namespace GxMcp.Worker.Services
         // VariablesPart, with a snapshot of the pre-change variable set so we
         // can roll back if obj.Save() throws.
         public string ModifyVariable(string target, string varName, string newTypeName, string basedOn = null, bool dryRun = false,
-            int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null)
+            int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null,
+            int? dimensions = null, JArray dimensionSizes = null)
         {
+            string dimensionCode, dimensionMessage, dimensionHint;
+            JObject dimensionExtra;
+            if (!VariableDimensionSupport.TryValidate(dimensions, dimensionSizes, collection,
+                out dimensionCode, out dimensionMessage, out dimensionHint, out dimensionExtra))
+            {
+                return McpResponse.Err(
+                    code: dimensionCode,
+                    message: dimensionMessage,
+                    hint: dimensionHint,
+                    target: target,
+                    extra: dimensionExtra);
+            }
+
             if (dryRun)
             {
                 string targetError = ValidateVariableDryRunTarget(target);
@@ -1613,17 +2119,20 @@ namespace GxMcp.Worker.Services
                             ["basedOnAttribute"] = basedOnAttribute,
                             ["length"] = length,
                             ["decimals"] = decimals,
-                            ["collection"] = collection
+                            ["collection"] = collection,
+                            ["dimensions"] = dimensions,
+                            ["dimensionSizes"] = dimensionSizes?.DeepClone()
                         }
                     });
             }
-            var raw = ModifyVariableInternal(target, varName, newTypeName, basedOn, length, decimals, collection, basedOnAttribute);
+            var raw = ModifyVariableInternal(target, varName, newTypeName, basedOn, length, decimals, collection, basedOnAttribute, dimensions, dimensionSizes);
             MarkDirtyIfSuccess(raw, target);
             return WrapWithPersistedState(raw, target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
         }
 
         private string ModifyVariableInternal(string target, string varName, string newTypeName, string basedOn,
-            int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null)
+            int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null,
+            int? dimensions = null, JArray dimensionSizes = null)
         {
             // Gate 1 — resolve newTypeName up front, before any SDK / KB call.
             // Mirrors AddVariable's Task 4.2 envelope shape exactly.
@@ -1748,6 +2257,56 @@ namespace GxMcp.Worker.Services
                             why: "Lists all declared variables on the object.")),
                         target: target);
                 }
+
+                VariableDimensionInfo existingDimensions;
+                bool existingDimensionsRead = VariableDimensionSupport.TryRead(existing, out existingDimensions);
+                if (!existingDimensionsRead || !existingDimensions.IsValid)
+                {
+                    return McpResponse.Err(
+                        code: "VariableDimensionsMalformed",
+                        message: "The existing variable has malformed dimension metadata; it was not modified.",
+                        hint: "Re-read the Variables part and repair the array metadata in the GeneXus IDE before retrying.",
+                        target: target,
+                        extra: new JObject { ["variable"] = varName, ["details"] = existingDimensions.Error });
+                }
+
+                bool existingIsCollection = false;
+                try { existingIsCollection = existing.IsCollection; } catch { }
+                if (dimensions.HasValue && existingIsCollection && collection != false)
+                {
+                    return McpResponse.Err(
+                        code: "CollectionDimensionConflict",
+                        message: "The existing variable is a collection; dimensions require collection=false.",
+                        hint: "Pass collection=false explicitly to convert it to a fixed-size vector/matrix.",
+                        target: target,
+                        extra: new JObject { ["variable"] = varName, ["dimensions"] = dimensions.Value });
+                }
+
+                // The delete+add implementation starts with a scalar. Preserve the
+                // existing collection/array shape when the request is silent, and
+                // make explicit conversion semantics unambiguous:
+                //   collection=true  -> collection, no fixed dimensions
+                //   collection=false -> scalar, no fixed dimensions
+                //   omitted          -> retain the existing shape
+                bool effectiveIsCollection = collection ?? existingIsCollection;
+                int? effectiveDimensions = dimensions;
+                JArray effectiveDimensionSizes = dimensionSizes;
+                if (effectiveIsCollection)
+                {
+                    effectiveDimensions = null;
+                    effectiveDimensionSizes = null;
+                }
+                else if (collection == false)
+                {
+                    effectiveDimensions = null;
+                    effectiveDimensionSizes = null;
+                }
+                else if (!effectiveDimensions.HasValue && existingDimensions.Dimensions > 0)
+                {
+                    effectiveDimensions = existingDimensions.Dimensions;
+                    effectiveDimensionSizes = existingDimensions.SizesToJson();
+                }
+                bool? effectiveCollection = effectiveIsCollection;
 
                 global::Artech.Genexus.Common.Objects.Domain requestedDomain = null;
                 global::Artech.Genexus.Common.Objects.Attribute requestedAttribute = null;
@@ -2007,8 +2566,12 @@ namespace GxMcp.Worker.Services
                         }
                     }
 
-                    // issue #28 item 9: collection flag (null = leave as-is on retype).
-                    if (collection.HasValue) { try { newVar.IsCollection = collection.Value; } catch { } }
+                    // Preserve an existing collection when the caller does not
+                    // explicitly change it. A retype must not silently turn a
+                    // collection into a scalar (or vice versa).
+                    if (effectiveCollection.HasValue) { try { newVar.IsCollection = effectiveCollection.Value; } catch { } }
+                    if (effectiveDimensions.HasValue && !VariableDimensionSupport.TryApply(newVar, effectiveDimensions, effectiveDimensionSizes, out var dimensionFailure))
+                        throw new InvalidOperationException("VariableDimensionsNotPersisted: " + dimensionFailure);
                     varPart.Variables.Add(newVar);
 
                     ForceSaveVariableOwner(obj);
@@ -2057,6 +2620,16 @@ namespace GxMcp.Worker.Services
                         return objectVerifyError;
                     }
 
+                    var dimensionVerifyError = VerifyVariableDimensionsPersisted(
+                        target, varName, effectiveDimensions, effectiveDimensionSizes);
+                    if (dimensionVerifyError != null)
+                    {
+                        bindingNotRestored = RestoreVariableSnapshot(
+                            varPart, varName, originalSnapshot, preservedDescription, originalTypeName);
+                        try { obj.EnsureSave(); ScheduleFlush(); } catch { }
+                        return dimensionVerifyError;
+                    }
+
                     // issue #36.2 — report the ACTUAL persisted type. For a primitive, read the
                     // eDBType the SDK stored (Blob/Binary persist as BINARY) plus the effective
                     // length/decimals; if it differs from what was requested, say so explicitly so
@@ -2069,6 +2642,11 @@ namespace GxMcp.Worker.Services
                         ? resolution.CanonicalType
                         : boundTypeName;
                     var resultPayload = new JObject { ["requestedType"] = requestedDisplay };
+                    if (effectiveDimensions.HasValue)
+                    {
+                        resultPayload["dimensions"] = effectiveDimensions.Value;
+                        resultPayload["dimensionSizes"] = effectiveDimensionSizes?.DeepClone();
+                    }
                     string persistedDesc = requestedDisplay;
                     if (appliedPrimitive)
                     {
@@ -2156,8 +2734,22 @@ namespace GxMcp.Worker.Services
         /// </summary>
         public string ChangeBusinessComponentVariable(string action, string target, string varName,
             string objectName, string moduleName, bool dryRun, string expectedVersion,
-            bool rollbackOnFailure = true, bool? collection = null)
+            bool rollbackOnFailure = true, bool? collection = null,
+            int? dimensions = null, JArray dimensionSizes = null)
         {
+            string dimensionCode, dimensionMessage, dimensionHint;
+            JObject dimensionExtra;
+            if (!VariableDimensionSupport.TryValidate(dimensions, dimensionSizes, collection,
+                out dimensionCode, out dimensionMessage, out dimensionHint, out dimensionExtra))
+            {
+                return McpResponse.Err(
+                    code: dimensionCode,
+                    message: dimensionMessage,
+                    hint: dimensionHint,
+                    target: target,
+                    extra: dimensionExtra);
+            }
+
             action = (action ?? "add").Trim().ToLowerInvariant();
             if (action != "add" && action != "modify")
                 return McpResponse.Err(code: "InvalidAction",
@@ -2167,6 +2759,43 @@ namespace GxMcp.Worker.Services
             var targetError = ResolveVariableTarget(target, ref normalizedName,
                 out var owner, out var variables, out var existing);
             if (targetError != null) return targetError;
+
+            bool existingIsCollection = false;
+            try { existingIsCollection = existing?.IsCollection == true; } catch { }
+            VariableDimensionInfo existingDimensions;
+            bool existingDimensionsRead = VariableDimensionSupport.TryRead(existing, out existingDimensions);
+            if (existing != null && (!existingDimensionsRead || !existingDimensions.IsValid))
+            {
+                return McpResponse.Err(
+                    code: "VariableDimensionsMalformed",
+                    message: "The existing variable has malformed dimension metadata; it was not modified.",
+                    hint: "Repair the array metadata in GeneXus before retrying.",
+                    target: target,
+                    extra: new JObject { ["variable"] = normalizedName, ["details"] = existingDimensions.Error });
+            }
+            if (dimensions.HasValue && existingIsCollection && collection != false)
+            {
+                return McpResponse.Err(
+                    code: "CollectionDimensionConflict",
+                    message: "The existing variable is a collection; dimensions require collection=false.",
+                    hint: "Pass collection=false explicitly to convert it to a fixed-size vector/matrix.",
+                    target: target,
+                    extra: new JObject { ["variable"] = normalizedName, ["dimensions"] = dimensions.Value });
+            }
+
+            bool effectiveIsCollection = collection ?? existingIsCollection;
+            int? effectiveDimensions = dimensions;
+            JArray effectiveDimensionSizes = dimensionSizes;
+            if (effectiveIsCollection || collection == false)
+            {
+                effectiveDimensions = null;
+                effectiveDimensionSizes = null;
+            }
+            else if (!effectiveDimensions.HasValue && existingDimensions.Dimensions > 0)
+            {
+                effectiveDimensions = existingDimensions.Dimensions;
+                effectiveDimensionSizes = existingDimensions.SizesToJson();
+            }
 
             var bc = VariableInjector.ResolveBusinessComponent(variables.Model, objectName, moduleName,
                 out string resolutionError);
@@ -2238,7 +2867,8 @@ namespace GxMcp.Worker.Services
                     message: "Variable '&" + normalizedName + "' was not found.",
                     hint: "Use action=add to create it.", target: target,
                     extra: new JObject { ["persisted"] = false, ["beforeVersion"] = versionBefore });
-            if (action == "modify" && alreadyBound && !dryRun)
+            if (action == "modify" && alreadyBound && !dryRun
+                && !dimensions.HasValue && collection == null)
                 return McpResponse.Ok(target: target, code: "WriteNoChange", result: new JObject
                 {
                     ["persisted"] = true,
@@ -2258,6 +2888,11 @@ namespace GxMcp.Worker.Services
                 ["before"] = beforeIdentity,
                 ["requested"] = requestedIdentity.DeepClone()
             };
+            if (effectiveDimensions.HasValue)
+            {
+                diff["dimensions"] = effectiveDimensions.Value;
+                diff["dimensionSizes"] = effectiveDimensionSizes?.DeepClone();
+            }
             if (dryRun)
                 return McpResponse.Ok(target: target, code: "DryRun", result: new JObject
                 {
@@ -2307,14 +2942,9 @@ namespace GxMcp.Worker.Services
                         var currentVariable = currentPart.Variables.FirstOrDefault(v =>
                             string.Equals(v.Name, normalizedName, StringComparison.OrdinalIgnoreCase));
                         string description = null;
-                        bool isCollection = collection ?? false;
                         if (currentVariable != null)
                         {
                             try { description = currentVariable.Description; } catch { }
-                            if (!collection.HasValue)
-                            {
-                                try { isCollection = currentVariable.IsCollection; } catch { }
-                            }
                             currentPart.Variables.Remove(currentVariable);
                         }
 
@@ -2324,7 +2954,11 @@ namespace GxMcp.Worker.Services
                         };
                         try { replacement.Description = description; } catch { }
                         VariableInjector.BindVariableToBC(replacement, bc);
-                        try { replacement.IsCollection = isCollection; } catch { }
+                        try { replacement.IsCollection = effectiveIsCollection; } catch { }
+                        if (effectiveDimensions.HasValue
+                            && !VariableDimensionSupport.TryApply(replacement, effectiveDimensions,
+                                effectiveDimensionSizes, out var dimensionFailure))
+                            throw new InvalidOperationException("VariableDimensionsNotPersisted: " + dimensionFailure);
                         currentPart.Variables.Add(replacement);
                         ForceSaveVariableOwner(currentOwner);
                         tx.Commit();
@@ -2351,25 +2985,38 @@ namespace GxMcp.Worker.Services
                         ? bindingError
                         : "A non-Variables authored part changed unexpectedly: " + authoredComparison.ChangedParts);
 
+                var dimensionVerifyError = VerifyVariableDimensionsPersisted(
+                    target, normalizedName, effectiveDimensions, effectiveDimensionSizes);
+                if (dimensionVerifyError != null)
+                    throw new InvalidOperationException("VariableDimensionsNotPersisted: "
+                        + (dimensionVerifyError ?? string.Empty));
+
                 string versionAfter = versionAfterCommit;
                 JObject persistedIdentity = DescribeVariableBinding(persistedVariable, persistedPart.Model);
                 diff["persisted"] = persistedIdentity.DeepClone();
                 MarkDirtyIfSuccess("{\"status\":\"ok\"}", target);
-                return McpResponse.Ok(target: target, code: action == "add" ? "VariableAdded" : "VariableRetyped",
-                    result: new JObject
-                    {
-                        ["persisted"] = true,
-                        ["mutationDetected"] = true,
-                        ["beforeVersion"] = versionBefore,
-                        ["afterVersion"] = versionAfter,
-                        ["versionToken"] = versionAfter,
-                        ["diff"] = diff,
-                        ["typedIdentity"] = persistedIdentity,
-                        ["collection"] = persistedVariable?.IsCollection,
-                        ["reReadConfirmed"] = true,
-                        ["rollbackOnFailure"] = rollbackOnFailure,
-                        ["implicitLifecycleActions"] = new JArray()
-                    });
+                var result = new JObject
+                {
+                    ["persisted"] = true,
+                    ["mutationDetected"] = true,
+                    ["beforeVersion"] = versionBefore,
+                    ["afterVersion"] = versionAfter,
+                    ["versionToken"] = versionAfter,
+                    ["diff"] = diff,
+                    ["typedIdentity"] = persistedIdentity,
+                    ["collection"] = persistedVariable?.IsCollection,
+                    ["reReadConfirmed"] = true,
+                    ["rollbackOnFailure"] = rollbackOnFailure,
+                    ["implicitLifecycleActions"] = new JArray()
+                };
+                if (effectiveDimensions.HasValue)
+                {
+                    result["dimensions"] = effectiveDimensions.Value;
+                    result["dimensionSizes"] = effectiveDimensionSizes?.DeepClone();
+                }
+                return McpResponse.Ok(target: target,
+                    code: action == "add" ? "VariableAdded" : "VariableRetyped",
+                    result: result);
             }
             catch (Exception ex)
             {
@@ -2397,7 +3044,10 @@ namespace GxMcp.Worker.Services
                     }
                     : RestoreObjectSnapshot(kb, owner.Guid, snapshot, normalizedName, originalVariableData);
                 bool restored = rollback["verified"]?.ToObject<bool?>() == true;
-                string code = versionConflict ? "VersionConflict" : "VariableTypeNotPersisted";
+                bool dimensionFailure = ex.Message.StartsWith("VariableDimensionsNotPersisted:", StringComparison.Ordinal);
+                string code = versionConflict
+                    ? "VersionConflict"
+                    : dimensionFailure ? "VariableDimensionsNotPersisted" : "VariableTypeNotPersisted";
                 return McpResponse.Err(code: code,
                     message: restored
                         ? "The Business Component variable change failed and the complete object snapshot was restored. " + ex.Message

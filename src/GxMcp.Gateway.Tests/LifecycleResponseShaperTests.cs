@@ -1,3 +1,4 @@
+using System.Linq;
 using Xunit;
 using Newtonsoft.Json.Linq;
 using GxMcp.Gateway;
@@ -81,6 +82,58 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(new[] { "CallerA", "CallerB" }, evidence["callersAdded"]!.ToObject<string[]>());
             Assert.True(evidence["truncated"]!.Value<bool>());
             Assert.True(evidence["callerGraphAvailable"]!.Value<bool>());
+        }
+
+        [Fact]
+        public void Compact_True_PreservesWarningDeltaAndCursor()
+        {
+            var raw = new JObject
+            {
+                ["Status"] = "Running",
+                ["Warnings"] = new JArray("old-warning", "new-warning"),
+                ["newWarnings"] = new JArray("new-warning"),
+                ["warningCount"] = 2,
+                ["warningTotal"] = 2,
+                ["warningCursor"] = 2,
+                ["_meta"] = new JObject { ["warningCursor"] = 2 }
+            };
+
+            var compact = LifecycleResponseShaper.CompactObject(raw);
+            Assert.Empty((JArray)compact["warnings"]!);
+            Assert.Equal(new[] { "new-warning" }, compact["newWarnings"]!.Values<string>().ToArray());
+            Assert.Equal(2, compact["warningCursor"]!.ToObject<int>());
+            Assert.Equal(2, compact["_meta"]!["warningCursor"]!.ToObject<int>());
+        }
+
+        [Fact]
+        public void StatusWarningDelta_RemovesPascalCaseListAndUsesCursor()
+        {
+            var source = new JObject
+            {
+                ["Status"] = "Succeeded",
+                ["WarningCount"] = 3,
+                ["Warnings"] = new JArray("warning-1", "warning-2", "warning-3")
+            };
+
+            var first = LifecycleResponseShaper.BuildStatusWarningDelta(source, null);
+            Assert.Equal(new[] { "warning-1", "warning-2", "warning-3" },
+                first["newWarnings"]!.Values<string>().ToArray());
+            Assert.Empty((JArray)first["warnings"]!);
+            Assert.Null(first["Warnings"]);
+            Assert.Equal(3, first["warningCursor"]!.ToObject<int>());
+
+            var next = LifecycleResponseShaper.BuildStatusWarningDelta(source, "warnings:2");
+            Assert.Equal(new[] { "warning-3" }, next["newWarnings"]!.Values<string>().ToArray());
+            Assert.Empty((JArray)next["warnings"]!);
+            Assert.Null(next["Warnings"]);
+
+            var alreadyShaped = LifecycleResponseShaper.BuildStatusWarningDelta(new JObject
+            {
+                ["warnings"] = new JArray(),
+                ["newWarnings"] = new JArray("warning-2"),
+                ["warningCount"] = 2
+            }, null);
+            Assert.Equal(new[] { "warning-2" }, alreadyShaped["newWarnings"]!.Values<string>().ToArray());
         }
 
         [Fact]

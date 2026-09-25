@@ -150,6 +150,17 @@ namespace GxMcp.Worker.Services
                         why: "Search for objects matching the name to find the correct identifier.")),
                     target: target);
 
+                // K2BTools WebPanel Designer objects keep their layout model in the
+                // WebForm/Events parts and do not expose a WorkWithPlus (or other)
+                // PatternInstance. Recognize them before the WWP resolver so a
+                // valid designer object never receives WWPInstanceNotFound.
+                string designerCandidateType = obj.TypeDescriptor?.Name ?? string.Empty;
+                bool designerCandidate = designerCandidateType.Equals("WebPanel", StringComparison.OrdinalIgnoreCase)
+                                      || designerCandidateType.Equals("WebComponent", StringComparison.OrdinalIgnoreCase)
+                                      || designerCandidateType.Equals("SDPanel", StringComparison.OrdinalIgnoreCase);
+                if (designerCandidate && K2bWebPanelDesignerService.TryRead(obj, out var k2bDesigner))
+                    return K2bWebPanelDesignerService.BuildMetadataResponse(obj, k2bDesigner);
+
                 // Fast type guard — WWP only applies to WorkWithPlus instances or to
                 // Transaction/WebPanel parents that may own one. For Procedure/SDT/
                 // Domain/etc., ResolveWWPInstance would still walk model.Objects.GetAll()

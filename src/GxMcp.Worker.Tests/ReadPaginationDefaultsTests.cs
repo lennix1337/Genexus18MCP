@@ -78,6 +78,19 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ExplicitWindowOffsetAndLimit_ReturnsExactLinesWithoutDefaultRecap()
+        {
+            var content = MakeContent(500, approxBytesPerLine: 40);
+            var page = ReadPagination.ApplyDefault(content, offset: 318, limit: 20, client: "mcp");
+
+            Assert.Equal(20, page.LinesReturned);
+            Assert.Equal(318, page.Offset);
+            Assert.StartsWith("line318:", page.Content.TrimStart());
+            Assert.DoesNotContain("line317:", page.Content);
+            Assert.DoesNotContain("line338:", page.Content);
+        }
+
+        [Fact]
         public void LastPage_NoSuggestedNext()
         {
             var content = MakeContent(500, approxBytesPerLine: 40);

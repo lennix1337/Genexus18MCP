@@ -24,6 +24,13 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Err(code: "MissingAttribute", message: "attribute is required.", target: target);
             if (string.IsNullOrWhiteSpace(caption))
                 return McpResponse.Err(code: "MissingCaption", message: "caption is required.", target: target);
+            string expectedVersion = args?["baseVersion"]?.ToString()
+                ?? args?["expectedVersion"]?.ToString()
+                ?? args?["versionToken"]?.ToString();
+            if (string.IsNullOrWhiteSpace(expectedVersion))
+                return McpResponse.Err(code: "ExpectedVersionRequired",
+                    message: "baseVersion is required for add_grid_attribute, including dryRun previews.",
+                    target: target, extra: new JObject { ["currentVersion"] = WriteService.ComputeContentVersionToken(instance, xml) });
 
             KBObject attribute = _objects.FindObject(attributeName, "Attribute");
             if (attribute == null || !string.Equals(attribute.TypeDescriptor?.Name, "Attribute", StringComparison.OrdinalIgnoreCase))
@@ -79,12 +86,8 @@ namespace GxMcp.Worker.Services
                     return McpResponse.Err(code: "WWPInstanceNotFound",
                         message: "The WorkWithPlus PatternInstance could not be re-resolved before save.", target: target);
 
-                string expectedVersion = args?["baseVersion"]?.ToString()
-                    ?? args?["expectedVersion"]?.ToString()
-                    ?? args?["versionToken"]?.ToString();
                 string currentVersion = WriteService.ComputeContentVersionToken(currentInstance, currentXml);
-                if (!string.IsNullOrWhiteSpace(expectedVersion)
-                    && !string.Equals(expectedVersion, currentVersion, StringComparison.Ordinal))
+                if (!string.Equals(expectedVersion, currentVersion, StringComparison.Ordinal))
                     return McpResponse.Err(code: "StaleObject",
                         message: "The PatternInstance changed after the caller's read/dry-run; no grid attribute was changed.",
                         target: target, extra: new JObject

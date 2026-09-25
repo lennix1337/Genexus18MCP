@@ -179,6 +179,9 @@ namespace GxMcp.Worker.Tests
             Assert.NotNull(obj["result"]?["partialHits"]);
             Assert.NotNull(obj["result"]?["totalScanned"]);
             Assert.NotNull(obj["result"]?["totalObjects"]);
+            Assert.NotNull(obj["result"]?["coverage"]?["requestedParts"]);
+            Assert.NotNull(obj["result"]?["partExecution"]?["requestedParts"]);
+            Assert.True(obj["result"]?["sliceContinuation"]?.ToObject<bool>() ?? false);
         }
     }
 }

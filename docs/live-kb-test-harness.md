@@ -17,7 +17,10 @@ disposable.
 
 Live probes must use bounded asynchronous stdio reads and must not treat a
 response carrying `operationId` or `job_id` as final evidence. Disposable probes
-must also clean up Gateway/Worker processes on terminating errors.
+must also clean up Gateway/Worker processes on terminating errors. The structured
+summary records diagnostic error lines; an actual Worker/Gateway error, missing
+diagnostic evidence, explicit-KB open failure, missing process-exit confirmation,
+or failed cleanup is `unavailable`, never a pass.
 When an indexed read returns `IndexNotReady`, use
 `genexus_lifecycle action=status wait=10` before retrying the read; repeated
 `genexus_whoami` calls are health checks, not an index-readiness barrier.

@@ -598,8 +598,8 @@ namespace GxMcp.Worker.Services
 
             var nextSteps = new JArray(
                 McpResponse.NextStep(
-                    tool: "genexus_history",
-                    args: new JObject { ["action"] = "restore", ["discard"] = true, ["target"] = target },
+                    tool: "genexus_versioning",
+                    args: new JObject { ["action"] = "history_restore", ["discard"] = true, ["name"] = target, ["part"] = normPart },
                     why: "Restores the part bytes captured immediately before this write from the latest snapshot."),
                 McpResponse.NextStep(
                     tool: "genexus_read",
@@ -609,7 +609,7 @@ namespace GxMcp.Worker.Services
             return McpResponse.Err(
                 code: "WriteNotPersisted",
                 message: "Write was reported as applied but the persisted source is empty — the content was not saved.",
-                hint: "The SDK save reported success but the part re-read as empty (a save that lands during a background index or an SDK normalization edge can drop content). Restore via genexus_history, or re-run the edit once the KB is idle; if it recurs, edit that object in the GeneXus IDE.",
+                hint: "The SDK save reported success but the part re-read as empty (a save that lands during a background index or an SDK normalization edge can drop content). Restore via genexus_versioning action=history_restore, or re-run the edit once the KB is idle; if it recurs, edit that object in the GeneXus IDE.",
                 nextSteps: nextSteps,
                 target: target,
                 extra: new JObject
@@ -727,7 +727,8 @@ namespace GxMcp.Worker.Services
                     facadeArgs.ForceWrite,
                     facadeArgs.BaseVersion,
                     facadeArgs.VerifyMode,
-                    facadeArgs.RequireObjectSave);
+                    facadeArgs.RequireObjectSave,
+                    facadeArgs.AllowGridStructure);
             }
 
             // Friction 2026-05-22: KBs default to WIN1252 (codepage 1252) on
@@ -998,6 +999,7 @@ namespace GxMcp.Worker.Services
                 ExplicitBase64 = string.Equals(encoding, "base64", StringComparison.OrdinalIgnoreCase),
                 VerifyMode = args["verifyMode"]?.ToString(),
                 RollbackOnFailure = args["rollbackOnFailure"]?.ToObject<bool?>() ?? false,
+                AllowGridStructure = string.Equals(args["patternEditMode"]?.ToString(), "grid-column", StringComparison.OrdinalIgnoreCase),
                 // Optimistic concurrency: the versionToken the caller got from the
                 // genexus_read this edit is based on. When present, the write is
                 // refused if the object changed since (StaleObject) — see the guard
@@ -1032,6 +1034,7 @@ namespace GxMcp.Worker.Services
             public bool ExplicitBase64 { get; set; }
             public string VerifyMode { get; set; }
             public bool RollbackOnFailure { get; set; }
+            public bool AllowGridStructure { get; set; }
             public string BaseVersion { get; set; }
             public bool AutoInjectVariables { get; set; }
             public bool ForceWrite { get; set; }
@@ -1111,7 +1114,7 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        public string WriteObject(string target, string partName, string code, string typeFilter = null, bool autoValidate = true, bool preferFastSourceSave = false, bool autoInjectVariables = true, bool dryRun = false, bool explicitBase64 = false, bool strictVerify = true, bool rollbackOnFailure = false, bool forceWrite = false, string baseVersion = null, string verifyMode = null, bool requireObjectSave = false)
+        public string WriteObject(string target, string partName, string code, string typeFilter = null, bool autoValidate = true, bool preferFastSourceSave = false, bool autoInjectVariables = true, bool dryRun = false, bool explicitBase64 = false, bool strictVerify = true, bool rollbackOnFailure = false, bool forceWrite = false, string baseVersion = null, string verifyMode = null, bool requireObjectSave = false, bool allowGridStructure = false)
         {
             partName = string.IsNullOrWhiteSpace(partName) ? "Source" : partName;
             if (requireObjectSave) preferFastSourceSave = false;
@@ -1199,7 +1202,12 @@ namespace GxMcp.Worker.Services
             string raw;
             try
             {
-                raw = WriteObjectInternal(target, partName, code, typeFilter, autoValidate, preferFastSourceSave, autoInjectVariables, dryRun, explicitBase64, strictVerify, forceWrite, exactSource: string.Equals(verifyMode, "exact", StringComparison.OrdinalIgnoreCase));
+                raw = WriteObjectInternal(
+                    target, partName, code, typeFilter, autoValidate, preferFastSourceSave,
+                    autoInjectVariables, dryRun, explicitBase64, strictVerify, forceWrite,
+                    exactSource: string.Equals(verifyMode, "exact", StringComparison.OrdinalIgnoreCase),
+                    rollbackOnFailure: rollbackOnFailure,
+                    allowGridStructure: allowGridStructure);
             }
             finally
             {
@@ -1227,6 +1235,19 @@ namespace GxMcp.Worker.Services
 
             if (!dryRun && rollbackOnFailure && snapshot?.PriorContent != null)
                 wrapped = RollbackFullWriteFailure(wrapped, target, partName, typeFilter, snapshot.PriorContent);
+            else if (!dryRun && rollbackOnFailure && WebFormXmlHelper.IsVisualPart(partName))
+            {
+                try
+                {
+                    var noSnapshot = JObject.Parse(wrapped);
+                    if (string.Equals(noSnapshot["commitState"]?.ToString(), "Committed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        MarkVisualRollbackUnavailable(noSnapshot, "Rollback was not attempted because no complete pre-write snapshot was available.");
+                        wrapped = noSnapshot.ToString(Newtonsoft.Json.Formatting.None);
+                    }
+                }
+                catch { }
+            }
 
             // Attach snapshot envelope to the response so callers can restore.
             if (snapshot != null)
@@ -1419,7 +1440,21 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private string WriteObjectInternal(string target, string partName, string code, string typeFilter = null, bool autoValidate = true, bool preferFastSourceSave = false, bool autoInjectVariables = true, bool dryRun = false, bool explicitBase64 = false, bool strictVerify = true, bool forceWrite = false, bool exactSource = false)
+        private string WriteObjectInternal(
+            string target,
+            string partName,
+            string code,
+            string typeFilter = null,
+            bool autoValidate = true,
+            bool preferFastSourceSave = false,
+            bool autoInjectVariables = true,
+            bool dryRun = false,
+            bool explicitBase64 = false,
+            bool strictVerify = true,
+            bool forceWrite = false,
+            bool exactSource = false,
+            bool rollbackOnFailure = false,
+            bool allowGridStructure = false)
         {
             try
             {
@@ -1517,6 +1552,14 @@ namespace GxMcp.Worker.Services
 
                 Logger.Debug(string.Format("[DEBUG-SAVE] Object Found: {0} ({1})", obj.Name, obj.TypeDescriptor.Name));
 
+                // K2BTools WebPanel Designer metadata is embedded in WebForm/Events
+                // and has no PatternInstance or verified editor-regeneration
+                // contract. Refuse designer-owned/protected edits before any SDK
+                // part save, while leaving unrelated edits on the normal path.
+                if (K2bWebPanelDesignerService.TryBuildEditRejection(
+                        obj, partName, decodedCode, out string k2bDesignerRejection))
+                    return k2bDesignerRejection;
+
                 if (obj is Artech.Packages.Patterns.Objects.PatternSettings)
                     return Models.McpResponse.Err(code: "SettingsIsolationUnverified",
                         message: "Generic Settings writes are disabled. Use genexus_wwp settings_edit with dryRun=true; isolated SDK save events have not been certified.");
@@ -1528,12 +1571,14 @@ namespace GxMcp.Worker.Services
 
                 if (PatternAnalysisService.IsPatternPart(partName))
                 {
-                    return WritePatternPart(obj, target, partName, decodedCode, dryRun, strictVerify);
+                    return WritePatternPart(obj, target, partName, decodedCode, dryRun, strictVerify, allowGridStructure);
                 }
 
                 if (WebFormXmlHelper.IsVisualPart(partName))
                 {
-                    return WriteVisualPart(obj, target, partName, decodedCode, dryRun, strictVerify, forceWrite);
+                    return WriteVisualPart(
+                        obj, target, partName, decodedCode, dryRun, strictVerify, forceWrite,
+                        rollbackOnFailure: rollbackOnFailure);
                 }
 
                 if (dryRun)

@@ -372,13 +372,37 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                KBModel versionModel = version?.Model;
-                if (versionModel?.Objects != null)
+                object versionModel = version == null
+                    ? null
+                    : version.GetType().GetProperty("Model", BindingFlags.Public | BindingFlags.Instance)?.GetValue(version, null);
+                if (versionModel is KBModel typedVersionModel && typedVersionModel.Objects != null)
                     return new FrozenObjectSnapshot
                     {
-                        Objects = versionModel.Objects.GetAll(),
+                        Objects = typedVersionModel.Objects.GetAll(),
                         Source = "sdk:KBVersion.Model"
                     };
+                // GeneXus 16 exposes KBVersion.Model through a different
+                // framework base type. Keep the same SDK authority without a
+                // compile-time cast that only exists in newer majors.
+                object versionObjects = versionModel?.GetType().GetProperty("Objects", BindingFlags.Public | BindingFlags.Instance)?.GetValue(versionModel, null);
+                MethodInfo versionGetAll = versionObjects?.GetType().GetMethod("GetAll", BindingFlags.Public | BindingFlags.Instance);
+                object all = versionGetAll?.Invoke(versionObjects, null);
+                if (all is IEnumerable<KBObject> typedObjects)
+                    return new FrozenObjectSnapshot
+                    {
+                        Objects = typedObjects,
+                        Source = "sdk:KBVersion.Model(reflection)"
+                    };
+                if (all is IEnumerable enumerableObjects)
+                {
+                    var fallbackObjects = enumerableObjects.Cast<object>().OfType<KBObject>().ToList();
+                    if (fallbackObjects.Count > 0)
+                        return new FrozenObjectSnapshot
+                        {
+                            Objects = fallbackObjects,
+                            Source = "sdk:KBVersion.Model(reflection-enumerable)"
+                        };
+                }
             }
             catch (Exception ex)
             {

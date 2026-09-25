@@ -30,15 +30,76 @@ namespace GxMcp.Gateway
             return CompactObject(obj).ToString(Newtonsoft.Json.Formatting.None);
         }
 
+        /// <summary>
+        /// Convert a stored terminal Worker result into the status delta surface.
+        /// JobRegistry keeps the final payload for action=result, but action=status
+        /// must not resend its complete warning list on every poll.  The optional
+        /// cursor accepts the same `warnings:N`/`warningCursor=N` forms as Worker
+        /// status polling; without one, the first status call reports all retained
+        /// warnings once.
+        /// </summary>
+        internal static JObject BuildStatusWarningDelta(JObject source, string? since)
+        {
+            var result = (JObject)(source ?? new JObject()).DeepClone();
+            var fullWarnings = result["Warnings"] as JArray ?? result["warnings"] as JArray;
+            var existingDelta = result["newWarnings"] as JArray;
+            var warnings = fullWarnings != null && fullWarnings.Count > 0
+                ? fullWarnings
+                : existingDelta ?? fullWarnings ?? new JArray();
+            int cursor = ParseStatusWarningCursor(since);
+            int available = warnings.Count;
+            int start = Math.Min(Math.Max(cursor, 0), available);
+            int total = result["WarningCount"]?.ToObject<int?>()
+                ?? result["warningCount"]?.ToObject<int?>()
+                ?? result["warningTotal"]?.ToObject<int?>()
+                ?? available;
+
+            var delta = new JArray(warnings.Skip(start).Cast<object>().ToArray());
+            result["newWarnings"] = delta;
+            result["warningCount"] = total;
+            result["warningTotal"] = total;
+            result["warningCursor"] = available;
+            result["warnings"] = new JArray();
+            result.Remove("Warnings");
+            result.Remove("warningsAggregated");
+
+            var meta = result["_meta"] as JObject ?? new JObject();
+            meta["warningCursor"] = available;
+            meta["warningCount"] = total;
+            result["_meta"] = meta;
+            return result;
+        }
+
+        private static int ParseStatusWarningCursor(string? since)
+        {
+            if (string.IsNullOrWhiteSpace(since)) return 0;
+            string value = since.Trim();
+            if (value.StartsWith("warnings:", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring("warnings:".Length);
+            else if (value.StartsWith("warningCursor=", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring("warningCursor=".Length);
+            if (int.TryParse(value, out int parsed) && parsed >= 0) return parsed;
+            try
+            {
+                if (JObject.Parse(since)["warningCursor"]?.ToObject<int?>() is int cursor && cursor >= 0)
+                    return cursor;
+            }
+            catch { }
+            return 0;
+        }
+
         // PERFORMANCE (perf-review round 3): tree-based core shared with the gateway
         // dispatch paths — callers holding an in-memory JObject skip the
         // serialize→parse round-trip the string overload used to force.
         public static JObject CompactObject(JObject obj)
         {
-            var errors = obj["Errors"] as JArray ?? new JArray();
-            var warnings = obj["Warnings"] as JArray ?? new JArray();
-            int errCount = obj["ErrorCount"]?.Value<int?>() ?? errors.Count;
-            int warnCount = obj["WarningCount"]?.Value<int?>() ?? warnings.Count;
+            var errors = obj["Errors"] as JArray ?? obj["errors"] as JArray ?? new JArray();
+            bool hasWarningDelta = obj["newWarnings"] != null;
+            var warnings = hasWarningDelta
+                ? obj["newWarnings"] as JArray ?? new JArray()
+                : obj["Warnings"] as JArray ?? obj["warnings"] as JArray ?? new JArray();
+            int errCount = obj["ErrorCount"]?.Value<int?>() ?? obj["errorCount"]?.Value<int?>() ?? errors.Count;
+            int warnCount = obj["WarningCount"]?.Value<int?>() ?? obj["warningCount"]?.Value<int?>() ?? warnings.Count;
 
             var dedupedWarnings = new JArray();
             var groups = warnings
@@ -71,10 +132,15 @@ namespace GxMcp.Gateway
                 ["msBuildExitCode"] = obj["msBuildExitCode"] ?? obj["MsBuildExitCode"],
                 ["fullLogPath"] = obj["fullLogPath"] ?? obj["FullLogPath"],
                 ["hint"] = obj["hint"] ?? obj["Hint"],
+                ["operationId"] = obj["operationId"] ?? obj["OperationId"],
+                ["queuePosition"] = obj["queuePosition"] ?? obj["QueuePosition"],
+                ["queuedMs"] = obj["queuedMs"] ?? obj["QueuedMs"],
                 ["errorCount"] = errCount,
                 ["warningCount"] = warnCount,
+                ["warningTotal"] = obj["warningTotal"]?.ToObject<int?>() ?? obj["WarningCount"]?.ToObject<int?>() ?? warnCount,
                 ["errors"] = new JArray(errors.Take(ErrorCap)),
-                ["warnings"] = dedupedWarnings,
+                ["warnings"] = hasWarningDelta ? new JArray() : dedupedWarnings,
+                ["newWarnings"] = hasWarningDelta ? (warnings.DeepClone()) : new JArray(),
                 ["summary"] = $"{errCount} errors / {warnCount} warnings",
                 ["truncated"] = errCount > ErrorCap,
                 ["compact"] = true
@@ -197,6 +263,9 @@ namespace GxMcp.Gateway
             if (obj["jobId"] != null) compactObj["jobId"] = obj["jobId"];
             if (obj["ElapsedSeconds"] != null) compactObj["ElapsedSeconds"] = obj["ElapsedSeconds"];
             if (obj["_meta"] != null) compactObj["_meta"] = obj["_meta"];
+            if (obj["warningCursor"] != null) compactObj["warningCursor"] = obj["warningCursor"];
+            if (obj["_meta"]?["warningCursor"] != null && compactObj["warningCursor"] == null)
+                compactObj["warningCursor"] = obj["_meta"]!["warningCursor"]!.DeepClone();
 
             return compactObj;
         }

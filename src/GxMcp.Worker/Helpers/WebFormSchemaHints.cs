@@ -7,12 +7,15 @@ using Artech.Architecture.Common.Objects;
 
 namespace GxMcp.Worker.Helpers
 {
-    // Best-effort element→accepted-attribute hints derived from observed SDK sanitisation
-    // and publish/worker/Definitions. The SDK is the ground truth — extend when new
-    // element/attribute combinations surface in friction reports.
+    // Best-effort element→accepted-attribute hints derived from observed SDK
+    // persistence and publish/worker/Definitions. A missing hint is explicitly
+    // unverified, never a guarantee that the SDK will sanitize the attribute.
     public static class WebFormSchemaHints
     {
-        private static readonly string[] _commonCtrlAttrs = { "id", "AttID", "Class", "classref", "Width", "Height", "Visible", "Tooltip" };
+        private static readonly string[] _commonCtrlAttrs =
+        {
+            "id", "name", "ControlName", "controlName", "AttID", "Class", "classref", "Width", "Height", "Visible", "Tooltip"
+        };
 
         private static string[] WithCommon(params string[] extras)
         {
@@ -25,19 +28,24 @@ namespace GxMcp.Worker.Helpers
         // Lookup is case-insensitive so mixed-case markup ("WIDTH" vs "Width") still resolves.
         private static readonly Dictionary<string, string[]> _accepted = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
-            ["table"]          = new[] { "id", "classref", "Class", "AttID", "cellPadding", "cellSpacing", "Width", "Height", "BackColor", "ForeColor", "Border", "AutoGrow", "Background", "BackgroundType" },
-            ["gxAttribute"]    = WithCommon("CaptionExpression", "DataField", "ReadOnly", "ControlType", "Format"),
-            ["gxTextBlock"]    = WithCommon("CaptionExpression", "Format"),
-            ["gxButton"]       = WithCommon("CaptionExpression", "OnClickEvent", "Enabled"),
-            ["gxBitmap"]       = WithCommon("ImageData"),
-            ["gxImage"]        = WithCommon("ImageData"),
-            ["gxGrid"]         = WithCommon("DataField", "Rows", "Columns", "AllowSelection", "AllowOrdering"),
-            ["gxTab"]          = WithCommon("CaptionExpression"),
-            ["gxCard"]         = WithCommon("CaptionExpression"),
-            ["gxGroup"]        = WithCommon("CaptionExpression"),
-            ["gxEmbeddedPage"] = WithCommon("ObjectCall"),
-            ["row"]            = new[] { "Height" },
-            ["cell"]           = new[] { "id", "ColSpan", "RowSpan", "Width", "Height", "HAlign", "VAlign", "ClassRef", "Class" },
+            // Legacy HTML WebForms use a deliberately permissive shape. These are
+            // observed SDK-persisted attributes, not a claim that the modern
+            // GxMultiForm schema accepts every HTML presentation attribute.
+            ["table"]          = new[] { "id", "name", "ControlName", "controlName", "classref", "Class", "AttID", "cellPadding", "cellSpacing", "Width", "Height", "BackColor", "ForeColor", "Border", "AutoGrow", "Background", "BackgroundType", "align", "vAlign", "borderColor", "borderStyle", "title", "style" },
+            ["gxAttribute"]    = WithCommon("CaptionExpression", "DataField", "ReadOnly", "ControlType", "Format", "Event", "ReturnOnClick", "GxFormat", "OnClickEvent", "OnEnterEvent", "Caption"),
+            ["gxTextBlock"]    = WithCommon("CaptionExpression", "Format", "Event", "ReturnOnClick", "GxFormat", "OnClickEvent", "OnEnterEvent", "Caption", "InnerText", "align", "vAlign"),
+            ["gxButton"]       = WithCommon("CaptionExpression", "OnClickEvent", "Event", "Enabled", "ReturnOnClick", "GxFormat", "Caption", "OnEnterEvent", "action", "type"),
+            ["gxBitmap"]       = WithCommon("ImageData", "Event", "OnClickEvent", "OnEnterEvent", "ReturnOnClick", "GxFormat"),
+            ["gxImage"]        = WithCommon("ImageData", "Event", "OnClickEvent", "OnEnterEvent", "ReturnOnClick", "GxFormat"),
+            ["gxGrid"]         = WithCommon("DataField", "Rows", "Columns", "AllowSelection", "AllowOrdering", "CaptionExpression", "Caption", "Event", "OnClickEvent"),
+            ["gxTab"]          = WithCommon("CaptionExpression", "Caption", "Event", "OnClickEvent", "Selected", "ReturnOnClick"),
+            ["gxCard"]         = WithCommon("CaptionExpression", "Caption", "Event", "OnClickEvent", "ReturnOnClick"),
+            ["gxGroup"]        = WithCommon("CaptionExpression", "Caption", "Event", "OnClickEvent", "ReturnOnClick"),
+            ["gxEmbeddedPage"] = WithCommon("ObjectCall", "Event", "OnClickEvent", "ReturnOnClick"),
+            ["tr"]             = new[] { "Height", "align", "vAlign" },
+            ["td"]             = new[] { "id", "ColSpan", "RowSpan", "Width", "Height", "HAlign", "VAlign", "ClassRef", "Class", "align", "vAlign", "nowrap", "title" },
+            ["row"]            = new[] { "Height", "HAlign", "VAlign" },
+            ["cell"]           = new[] { "id", "ColSpan", "RowSpan", "Width", "Height", "HAlign", "VAlign", "ClassRef", "Class", "align", "vAlign", "nowrap" },
         };
 
         // null = no hint registered for this element; caller treats as "SDK is authoritative".
@@ -69,7 +77,7 @@ namespace GxMcp.Worker.Helpers
                     {
                         Element = el.Name.LocalName,
                         Attribute = a.Name.LocalName,
-                        Reason = "Attribute not in SDK schema for this element; will be sanitised on save.",
+                        Reason = "Attribute is not in the hint table (unverified); SDK persistence is not guaranteed.",
                     });
                 }
             }

@@ -1689,12 +1689,16 @@
             ],
             "type": "string"
           },
+          "baseVersion": {
+            "description": "Version token from the preceding…",
+            "type": "string"
+          },
           "caption": {
             "description": "add_textblock/add_button: caption text.",
             "type": "string"
           },
           "controlId": {
-            "description": "set_visibility/remove_control: control…",
+            "description": "add_textblock/add_button: explicit…",
             "type": "string"
           },
           "controlIds": {
@@ -1709,7 +1713,7 @@
             "type": "boolean"
           },
           "event": {
-            "description": "add_button: event name to trigger on…",
+            "description": "add_button: event name; accepts EventA…",
             "type": "string"
           },
           "format": {
@@ -1739,6 +1743,11 @@
           "position": {
             "description": "first|last|after:<id>",
             "type": "string"
+          },
+          "rollbackOnFailure": {
+            "default": true,
+            "description": "Request a guarded pre-write snapshot…",
+            "type": "boolean"
           },
           "visible": {
             "description": "set_visibility: visibility state (true…",
@@ -2561,9 +2570,36 @@
               "rename_printblock",
               "add_printblock",
               "delete_printblock",
+              "add_report_control",
+              "move_report_control",
+              "remove_report_control",
               "list_controls",
               "design_system"
             ],
+            "type": "string"
+          },
+          "after": {
+            "description": "Place/move after this report control.",
+            "type": "string"
+          },
+          "alignment": {
+            "description": "Optional report text alignment.",
+            "type": "string"
+          },
+          "baseVersion": {
+            "description": "Version token from get_tree; required…",
+            "type": "string"
+          },
+          "below": {
+            "description": "Place/move below this report control.",
+            "type": "string"
+          },
+          "binding": {
+            "description": "add_report_control: variable (&Name) or…",
+            "type": "string"
+          },
+          "caption": {
+            "description": "add_report_control: label text for…",
             "type": "string"
           },
           "changes": {
@@ -2596,8 +2632,32 @@
             "description": "Control name within the layout or…",
             "type": "string"
           },
+          "controlName": {
+            "description": "add/move/remove_report_control: stable…",
+            "type": "string"
+          },
+          "controlType": {
+            "description": "Optional native report control type…",
+            "type": "string"
+          },
           "currentName": {
             "description": "rename_printblock: existing printblock…",
+            "type": "string"
+          },
+          "dryRun": {
+            "description": "Preview report-control mutation without…",
+            "type": "boolean"
+          },
+          "font": {
+            "description": "Optional report font token.",
+            "type": "string"
+          },
+          "fontName": {
+            "description": "Optional report font family.",
+            "type": "string"
+          },
+          "fontSize": {
+            "description": "Optional report font size.",
             "type": "string"
           },
           "height": {
@@ -2607,6 +2667,22 @@
           "kb": {
             "description": "KB alias.",
             "type": "string"
+          },
+          "kind": {
+            "description": "add_report_control: report control kind.",
+            "enum": [
+              "variable",
+              "attribute",
+              "label",
+              "line",
+              "box",
+              "image"
+            ],
+            "type": "string"
+          },
+          "left": {
+            "description": "Report control X/left coordinate.",
+            "type": "number"
           },
           "limit": {
             "description": "find_controls/list_controls: maximum…",
@@ -2618,6 +2694,10 @@
           },
           "newName": {
             "description": "rename_printblock: new printblock name.",
+            "type": "string"
+          },
+          "picture": {
+            "description": "Optional image/report picture token.",
             "type": "string"
           },
           "printBlockName": {
@@ -2632,9 +2712,30 @@
             "description": "find_controls: search query matching…",
             "type": "string"
           },
+          "rollbackOnFailure": {
+            "default": true,
+            "description": "Restore the pre-write report layout…",
+            "type": "boolean"
+          },
+          "top": {
+            "description": "Report control Y/top coordinate.",
+            "type": "number"
+          },
           "value": {
             "description": "Value to assign to the specified…",
             "type": "string"
+          },
+          "width": {
+            "description": "Report control width.",
+            "type": "number"
+          },
+          "x": {
+            "description": "Alias for left.",
+            "type": "number"
+          },
+          "y": {
+            "description": "Alias for top.",
+            "type": "number"
           }
         },
         "required": [
@@ -2744,6 +2845,14 @@
             ],
             "type": "string"
           },
+          "jobId": {
+            "description": "Legacy alias for job_id.",
+            "type": "string"
+          },
+          "job_id": {
+            "description": "Gateway operation id or Worker task id…",
+            "type": "string"
+          },
           "kb": {
             "description": "KB alias.",
             "type": "string"
@@ -2812,6 +2921,14 @@
           },
           "target": {
             "description": "Object/task ID/op:<id>. compile_check…",
+            "type": "string"
+          },
+          "until": {
+            "description": "Status wait stop condition: change…",
+            "enum": [
+              "change",
+              "terminal"
+            ],
             "type": "string"
           },
           "verification": {
@@ -4182,6 +4299,22 @@
             "description": "add/modify optional: overrides decimals…",
             "type": "integer"
           },
+          "dimensionSizes": {
+            "description": "add/modify optional: positive sizes in…",
+            "items": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array"
+          },
+          "dimensions": {
+            "description": "add/modify optional: fixed-size…",
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
           "dryRun": {
             "default": false,
             "description": "Validate and return the typed diff…",
@@ -4265,6 +4398,22 @@
                   "type": "boolean"
                 },
                 "decimals": {
+                  "type": "integer"
+                },
+                "dimensionSizes": {
+                  "description": "Positive sizes in row/column order;…",
+                  "items": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxItems": 2,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "dimensions": {
+                  "description": "Fixed-size vector/matrix rank; requires…",
+                  "maximum": 2,
+                  "minimum": 1,
                   "type": "integer"
                 },
                 "length": {
@@ -4516,6 +4665,8 @@
               "remove_tab",
               "set_table_type",
               "add_grid_attribute",
+              "move_grid_column",
+              "add_grid_variable",
               "replace_web_component_with_user_action",
               "settings_templates",
               "settings_read",
@@ -4528,11 +4679,19 @@
             "type": "string"
           },
           "attribute": {
-            "description": "add_grid_attribute: GeneXus Attribute…",
+            "description": "add_grid_attribute/move_grid_column:…",
             "type": "string"
           },
           "baseVersion": {
             "description": "Optimistic-concurrency token returned…",
+            "type": "string"
+          },
+          "basicType": {
+            "description": "add_grid_variable: Character or VarChar…",
+            "type": "string"
+          },
+          "before": {
+            "description": "move_grid_column/add_grid_variable:…",
             "type": "string"
           },
           "buttonClass": {
@@ -4540,7 +4699,7 @@
             "type": "string"
           },
           "caption": {
-            "description": "Action caption. For a DropDownComponent…",
+            "description": "Action caption or add_grid_variable…",
             "type": "string"
           },
           "children": {
@@ -4651,6 +4810,10 @@
             "description": "move_action: source group (optional;…",
             "type": "string"
           },
+          "gridPath": {
+            "description": "move_grid_column/add_grid_variable:…",
+            "type": "string"
+          },
           "group": {
             "description": "Action group name. add_action creates…",
             "type": "string"
@@ -4670,6 +4833,11 @@
           "kb": {
             "description": "KB alias.",
             "type": "string"
+          },
+          "length": {
+            "description": "add_grid_variable: Character/VarChar…",
+            "minimum": 1,
+            "type": "integer"
           },
           "limit": {
             "description": "Settings nodes per page; offset=0,…",
@@ -4755,6 +4923,14 @@
             "type": "string"
           },
           "value": {
+            "type": "string"
+          },
+          "variable": {
+            "description": "add_grid_variable: presentation…",
+            "type": "string"
+          },
+          "variableReference": {
+            "description": "Verified SDK variable identity in…",
             "type": "string"
           },
           "versionToken": {

@@ -171,7 +171,7 @@ namespace GxMcp.Worker.Tests
             var coverage = SourceStoreService.Instance.GetCoverage(entries, null);
             Assert.Equal(3, coverage.TotalObjects);
             Assert.Equal(1, coverage.StoredObjects); // guid1
-            Assert.Equal(1, coverage.StaleObjects);  // guid2
+            Assert.Equal(2, coverage.StaleObjects);  // guid2 plus the missing guid3 record
 
             Assert.True(SourceStoreService.Instance.IsStoredAndFresh(entries[0], null));
             Assert.False(SourceStoreService.Instance.IsStoredAndFresh(entries[1], null));
@@ -224,6 +224,187 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ScopeEligibilityRequiresEveryRequestedPart()
+        {
+            string guid = "12121212-2222-3333-4444-555555555555";
+            var entry = new SearchIndex.IndexEntry
+            {
+                Guid = guid,
+                Name = "SelectionPopup",
+                Type = "WebPanel",
+                LastUpdate = DateTime.UtcNow
+            };
+
+            SourceStoreService.Instance.Put(guid, "Events", "EventOnlyNeedle()", entry.LastUpdate, "v1");
+            Assert.True(SourceStoreService.Instance.IsStoredAndFresh(entry, new List<string> { "events" }));
+            Assert.True(SourceStoreService.Instance.IsStoredAndFresh(entry, new List<string> { "source" }));
+            Assert.False(SourceStoreService.Instance.IsStoredAndFresh(entry, new List<string> { "webForm" }));
+            Assert.False(SourceStoreService.Instance.IsStoredAndFresh(entry, new List<string> { "events", "rules" }));
+
+            SourceStoreService.Instance.Put(guid, "WebForm", "FormNeedle()", entry.LastUpdate, "v1");
+            Assert.True(SourceStoreService.Instance.IsStoredAndFresh(entry, new List<string> { "webForm" }));
+            Assert.False(SourceStoreService.Instance.IsStoredAndFresh(entry, new List<string> { "events", "rules" }));
+        }
+
+        [Fact]
+        public void SearchStoreHonorsRequestedPartAndDoesNotRelabelStoredHits()
+        {
+            string guid = "13131313-2222-3333-4444-555555555555";
+            var entry = new SearchIndex.IndexEntry
+            {
+                Guid = guid,
+                Name = "SelectionPopup",
+                Type = "WebPanel",
+                LastUpdate = DateTime.UtcNow
+            };
+            SourceStoreService.Instance.Put(guid, "Events", "EventOnlyNeedle()", entry.LastUpdate, "v1");
+            SourceStoreService.Instance.Put(guid, "WebForm", "FormOnlyNeedle()", entry.LastUpdate, "v1");
+
+            var criteria = new SourceSearchCriteria
+            {
+                Pattern = "OnlyNeedle",
+                Scope = new List<string> { "webForm" },
+                MaxResults = 10
+            };
+            var webFormHits = SourceStoreService.Instance.SearchStore(
+                new[] { entry }, criteria, new Regex("OnlyNeedle", RegexOptions.IgnoreCase));
+            Assert.Single(webFormHits);
+            Assert.Equal("WebForm", webFormHits[0]["part"]?.ToString());
+
+            criteria.Scope = new List<string> { "events" };
+            var eventHits = SourceStoreService.Instance.SearchStore(
+                new[] { entry }, criteria, new Regex("OnlyNeedle", RegexOptions.IgnoreCase));
+            Assert.Single(eventHits);
+            Assert.Equal("Events", eventHits[0]["part"]?.ToString());
+        }
+
+        [Fact]
+        public void CoverageReportsEachRequestedPartIndependently()
+        {
+            string guid = "abababab-2222-3333-4444-555555555555";
+            var entry = new SearchIndex.IndexEntry
+            {
+                Guid = guid,
+                Name = "SelectionPopup",
+                Type = "WebPanel",
+                LastUpdate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)
+            };
+            SourceStoreService.Instance.Put(guid, "Events", "event", entry.LastUpdate, "v1");
+            SourceStoreService.Instance.Put(guid, "WebForm", "form", entry.LastUpdate.AddMinutes(1), "v2");
+
+            var coverage = SourceStoreService.Instance.GetCoverage(
+                new[] { entry }, new List<string> { "source", "webForm", "rules" });
+
+            Assert.Equal(1, coverage.PartsByPart["events"].StoredObjects);
+            Assert.Equal(1, coverage.PartsByPart["webform"].StoredObjects);
+            Assert.Equal(0, coverage.PartsByPart["rules"].StoredObjects);
+            Assert.Equal(1, coverage.PartsByPart["rules"].TotalObjects);
+            Assert.Equal(0, coverage.StoredObjects); // one requested part is missing
+        }
+
+        [Fact]
+        public void FreshnessRejectsMissingPerPartRecordFile()
+        {
+            string guid = "abababab-3333-4444-5555-666666666666";
+            var entry = new SearchIndex.IndexEntry
+            {
+                Guid = guid,
+                Name = "MissingFile",
+                Type = "Procedure",
+                LastUpdate = DateTime.UtcNow
+            };
+            Assert.True(SourceStoreService.Instance.Put(guid, "Source", "code", entry.LastUpdate, "v1"));
+
+            string path = RecordPath(_tempDir, guid, "Source");
+            Assert.True(File.Exists(path));
+            File.Delete(path);
+
+            Assert.False(SourceStoreService.Instance.IsStoredAndFresh(entry, null));
+            Assert.False(SourceStoreService.Instance.TryGet(guid, "Source", out _));
+            var coverage = SourceStoreService.Instance.GetCoverage(new[] { entry }, null);
+            Assert.Equal(0, coverage.StoredObjects);
+            Assert.Equal(1, coverage.StaleObjects);
+        }
+
+        [Fact]
+        public void ReloadedCatalogDoesNotCertifyAMissingPerPartFile()
+        {
+            string guid = "abababab-3333-4444-5555-666666666667";
+            var entry = new SearchIndex.IndexEntry
+            {
+                Guid = guid,
+                Name = "ReloadedMissingFile",
+                Type = "Procedure",
+                LastUpdate = DateTime.UtcNow
+            };
+            Assert.True(SourceStoreService.Instance.Put(guid, "Source", "code", entry.LastUpdate, "v1"));
+            SourceStoreService.Instance.FlushCatalog();
+            File.Delete(RecordPath(_tempDir, guid, "Source"));
+
+            SourceStoreService.Instance.SetStoreDirectoryForTest(_tempDir);
+
+            Assert.False(SourceStoreService.Instance.IsStoredAndFresh(entry, null));
+            Assert.False(SourceStoreService.Instance.TryGet(guid, "Source", out _));
+        }
+
+        [Fact]
+        public void FreshnessRejectsCorruptPerPartRecordFile()
+        {
+            string guid = "abababab-3333-4444-5555-777777777777";
+            var entry = new SearchIndex.IndexEntry
+            {
+                Guid = guid,
+                Name = "CorruptFile",
+                Type = "Procedure",
+                LastUpdate = DateTime.UtcNow
+            };
+            Assert.True(SourceStoreService.Instance.Put(guid, "Source", "code", entry.LastUpdate, "v1"));
+            File.WriteAllBytes(RecordPath(_tempDir, guid, "Source"), new byte[] { 0x01, 0x02, 0x03 });
+
+            Assert.False(SourceStoreService.Instance.IsStoredAndFresh(entry, null));
+            var coverage = SourceStoreService.Instance.GetCoverage(new[] { entry }, null);
+            Assert.Equal(0, coverage.StoredObjects);
+            Assert.Equal(1, coverage.StaleObjects);
+        }
+
+        [Fact]
+        public void PutRepairsAMissingRecordWhenTheContentHashIsUnchanged()
+        {
+            string guid = "abababab-3333-4444-5555-888888888888";
+            var entry = new SearchIndex.IndexEntry
+            {
+                Guid = guid,
+                Name = "Repairable",
+                Type = "Procedure",
+                LastUpdate = DateTime.UtcNow
+            };
+            Assert.True(SourceStoreService.Instance.Put(guid, "Source", "same code", entry.LastUpdate, "v1"));
+            File.Delete(RecordPath(_tempDir, guid, "Source"));
+
+            Assert.True(SourceStoreService.Instance.Put(guid, "Source", "same code", entry.LastUpdate, "v1"));
+            Assert.True(SourceStoreService.Instance.IsStoredAndFresh(entry, null));
+            Assert.True(SourceStoreService.Instance.TryGet(guid, "Source", out string source));
+            Assert.Equal("same code", source);
+        }
+
+        [Fact]
+        public void EmptySourceIsAValidPerPartRecord()
+        {
+            string guid = "abababab-3333-4444-5555-999999999999";
+            var entry = new SearchIndex.IndexEntry
+            {
+                Guid = guid,
+                Name = "EmptyPart",
+                Type = "Procedure",
+                LastUpdate = DateTime.UtcNow
+            };
+            Assert.True(SourceStoreService.Instance.Put(guid, "Source", string.Empty, entry.LastUpdate, "v1"));
+            Assert.True(SourceStoreService.Instance.IsStoredAndFresh(entry, null));
+            Assert.True(SourceStoreService.Instance.TryGet(guid, "Source", out string source));
+            Assert.Equal(string.Empty, source);
+        }
+
+        [Fact]
         public void SourceStoreService_FlushAndReloadCatalog_PreservesStoredState()
         {
             string guid = "eeee1111-2222-3333-4444-555555555555";
@@ -240,6 +421,15 @@ namespace GxMcp.Worker.Tests
             bool ok = SourceStoreService.Instance.TryGet(guid, part, out string reloaded);
             Assert.True(ok);
             Assert.Equal(code, reloaded);
+        }
+
+        private static string RecordPath(string root, string guid, string part)
+        {
+            string normalizedGuid = guid.ToLowerInvariant();
+            return Path.Combine(
+                root,
+                normalizedGuid.Substring(0, 2),
+                normalizedGuid + "_" + part.ToLowerInvariant() + ".bin.gz");
         }
     }
 }

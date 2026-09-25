@@ -49,6 +49,7 @@ namespace GxMcp.Worker.Tests
 
         private static void ResetBuildState()
         {
+            BuildService.ResetBuildAdmissionForTest();
             Tasks().Clear();
             InFlight().Clear();
         }

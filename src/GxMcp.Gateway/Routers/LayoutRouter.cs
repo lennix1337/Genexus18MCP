@@ -48,6 +48,9 @@ namespace GxMcp.Gateway.Routers
                 "rename_printblock" => "RenamePrintBlock",
                 "add_printblock" => "AddPrintBlock",
                 "delete_printblock" => "DeletePrintBlock",
+                "add_report_control" => "AddReportControl",
+                "move_report_control" => "MoveReportControl",
+                "remove_report_control" => "RemoveReportControl",
                 _ => null
             };
 
@@ -67,7 +70,28 @@ namespace GxMcp.Gateway.Routers
                 currentName = args?["currentName"]?.ToString(),
                 newName = args?["newName"]?.ToString(),
                 printBlockName = args?["printBlockName"]?.ToString(),
-                height = args?["height"]?.ToObject<int?>()
+                height = args?["height"]?.ToObject<int?>(),
+                kind = args?["kind"]?.ToString(),
+                controlName = args?["controlName"]?.ToString(),
+                controlType = args?["controlType"]?.ToString(),
+                binding = args?["binding"]?.ToString(),
+                caption = args?["caption"]?.ToString(),
+                left = args?["left"]?.ToObject<double?>(),
+                top = args?["top"]?.ToObject<double?>(),
+                x = args?["x"]?.ToObject<double?>(),
+                y = args?["y"]?.ToObject<double?>(),
+                width = args?["width"]?.ToObject<double?>(),
+                heightControl = args?["height"]?.ToObject<double?>(),
+                after = args?["after"]?.ToString(),
+                below = args?["below"]?.ToString(),
+                font = args?["font"]?.ToString(),
+                fontName = args?["fontName"]?.ToString(),
+                fontSize = args?["fontSize"]?.ToString(),
+                alignment = args?["alignment"]?.ToString(),
+                picture = args?["picture"]?.ToString(),
+                baseVersion = args?["baseVersion"]?.ToString() ?? args?["expectedVersion"]?.ToString(),
+                dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
+                rollbackOnFailure = args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true
             };
         }
     }

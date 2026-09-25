@@ -2557,11 +2557,13 @@ namespace GxMcp.Worker.Services
         // SourceSearchService already paid the SDK read for this complete primary source.
         // Promote it into the existing index snapshot so a later worker process can
         // answer the same literal search without reopening every candidate source.
-        // Keep persisted source memory bounded: each source is capped at 2 MiB and the
-        // aggregate FullSource budget is capped at 8 MiB. An empty string is a valid
-        // complete-source marker when the SDK confirmed that this object has no source part.
+        // The old fixed 8 MiB aggregate cap made the index snapshot the bottleneck even
+        // after the persistent source store had become complete. Keep a conservative cap
+        // while backfill is incomplete, then lift it to a bounded large-KB budget once
+        // the resumable store certifies full coverage.
         private const int PersistedFullSourceMaxChars = 2 * 1024 * 1024;
         private const long PersistedFullSourceBudgetChars = 8L * 1024 * 1024;
+        private const long CertifiedFullSourceBudgetChars = 256L * 1024 * 1024;
         internal bool PromoteSourceForSearch(SearchIndex.IndexEntry entry, string source)
         {
             if (entry == null || source == null || source.Length > PersistedFullSourceMaxChars) return false;
@@ -2588,7 +2590,14 @@ namespace GxMcp.Worker.Services
             {
                 if (candidate?.FullSource != null) storedChars += candidate.FullSource.Length;
             }
-            if (storedChars + source.Length > PersistedFullSourceBudgetChars) return false;
+            long sourceBudget = PersistedFullSourceBudgetChars;
+            try
+            {
+                var backfill = SourceStoreBackfillService.Instance.GetState();
+                if (backfill.State == "complete") sourceBudget = CertifiedFullSourceBudgetChars;
+            }
+            catch { }
+            if (storedChars + source.Length > sourceBudget) return false;
             lock (current)
             {
                 if (current.FullSource != null) return false;

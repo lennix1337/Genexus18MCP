@@ -101,6 +101,10 @@ namespace GxMcp.Worker.Services
             using (SdkGate.Enter())
             {
                 KBObject seed = _objectService.FindObject(target, typeFilter);
+                if (seed != null
+                    && K2bWebPanelDesignerService.TryBuildEditRejection(
+                        seed, "Events", source, out string k2bDesignerRejection))
+                    return k2bDesignerRejection;
                 JObject isolation;
                 try { isolation = EventsSaveIsolation.Preflight(seed); }
                 catch (Exception ex)

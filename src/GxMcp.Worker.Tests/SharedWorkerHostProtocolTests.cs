@@ -96,6 +96,7 @@ namespace GxMcp.Worker.Tests
             Assert.NotEqual("41", childRequest["id"]?.ToString());
             Assert.NotEqual("same-token", childRequest["_meta"]?["progressToken"]?.ToString());
             Assert.Equal("attach-a", route.AttachmentId);
+            Assert.Equal("attach-a", childRequest["_meta"]?["attachmentId"]?.ToString());
             Assert.Equal(41, route.ClientRequestId.Value<int>());
             Assert.Equal("same-token", route.ClientProgressToken.Value<string>());
 

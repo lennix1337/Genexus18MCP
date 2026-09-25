@@ -60,6 +60,63 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void IdentityBoundFenceDoesNotClearOnHomonymousRead()
+        {
+            var registry = new MutationRecoveryRegistry();
+            registry.RequireRead("kb", "Object", "Variables", "op-identity",
+                "11111111-1111-1111-1111-111111111111", "EntityKey:1", "WebPanel", "Root/Object", "v1");
+
+            var wrong = registry.FindForRead("kb", new JObject
+            {
+                ["name"] = "Object",
+                ["guid"] = "22222222-2222-2222-2222-222222222222"
+            }, "Variables");
+            Assert.Empty(wrong);
+
+            var exact = registry.FindForRead("kb", new JObject
+            {
+                ["name"] = "Object",
+                ["guid"] = "11111111-1111-1111-1111-111111111111",
+                ["type"] = "WebPanel"
+            }, "Variables");
+            Assert.Single(exact);
+            Assert.Equal("v1", exact[0].ExpectedVersion);
+        }
+
+        [Fact]
+        public void HomonymousObjectsWithDifferentStableIdentitiesKeepIndependentFences()
+        {
+            var registry = new MutationRecoveryRegistry();
+            registry.RequireRead("kb", "SharedName", "Source", "op-a",
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", null, "WebPanel", "Root/A", "v-a");
+            registry.RequireRead("kb", "SharedName", "Source", "op-b",
+                "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", null, "WebPanel", "Root/B", "v-b");
+
+            Assert.Equal(2, registry.Count);
+            var matchesA = registry.FindForRead("kb", new JObject
+            {
+                ["name"] = "SharedName",
+                ["guid"] = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            }, "Source");
+            var matchesB = registry.FindForRead("kb", new JObject
+            {
+                ["name"] = "SharedName",
+                ["guid"] = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            }, "Source");
+            Assert.Single(matchesA);
+            Assert.Single(matchesB);
+
+            Assert.True(registry.ConfirmRead("kb", "SharedName", "Source", matchesA[0]));
+            Assert.Single(registry.FindForRead("kb", new JObject
+            {
+                ["name"] = "SharedName",
+                ["guid"] = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            }, "Source"));
+            Assert.True(registry.ConfirmRead("kb", "SharedName", "Source", matchesB[0]));
+            Assert.Equal(0, registry.Count);
+        }
+
+        [Fact]
         public void CorruptJournalFailsClosedInsteadOfDroppingTheFence()
         {
             string path = Path.Combine(Path.GetTempPath(), "gx-recovery-corrupt-" + Guid.NewGuid().ToString("N") + ".json");

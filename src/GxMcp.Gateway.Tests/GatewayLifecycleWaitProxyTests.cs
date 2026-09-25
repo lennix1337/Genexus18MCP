@@ -85,5 +85,35 @@ namespace GxMcp.Gateway.Tests
             var command = JObject.FromObject(router.ConvertToolCall("genexus_lifecycle", args)!);
             Assert.Equal(0, command["wait"]?.ToObject<int>());
         }
+
+        [Fact]
+        public void Status_DefaultsUntilToTerminalForWaitUntilDone()
+        {
+            var router = new SystemRouter();
+            var command = JObject.FromObject(router.ConvertToolCall("genexus_lifecycle", new JObject
+            {
+                ["action"] = "status",
+                ["target"] = "abcd1234",
+                ["wait_until_done"] = true
+            })!);
+
+            Assert.Equal("terminal", command["until"]?.ToString());
+            Assert.Equal(600, command["wait"]?.ToObject<int>());
+        }
+
+        [Fact]
+        public void Status_UsesJobIdAndStripsOperationPrefixForLegacyWorkerFallback()
+        {
+            var router = new SystemRouter();
+            var command = JObject.FromObject(router.ConvertToolCall("genexus_lifecycle", new JObject
+            {
+                ["action"] = "status",
+                ["job_id"] = "op:abcd1234"
+            })!);
+
+            Assert.Equal("Build", command["module"]?.ToString());
+            Assert.Equal("Status", command["action"]?.ToString());
+            Assert.Equal("abcd1234", command["target"]?.ToString());
+        }
     }
 }

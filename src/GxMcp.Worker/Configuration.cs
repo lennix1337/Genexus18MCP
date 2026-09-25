@@ -57,6 +57,33 @@ namespace GxMcp.Worker
         // Set Indexing.LazyEnrichment=false to restore the eager full-KB enrichment drain.
         public static bool LazyEnrichment => BoolSetting("Indexing.LazyEnrichment");
 
+        /// <summary>
+        /// Source-store background population mode.  auto enables bounded P2 slices;
+        /// off leaves the store entirely lazy.  The environment variable is used by
+        /// the Gateway-launched Worker, while App.config supports direct launches.
+        /// </summary>
+        public static bool SourceStoreBackfillEnabled
+        {
+            get
+            {
+                var env = Environment.GetEnvironmentVariable("GXMCP_SOURCE_STORE_BACKFILL");
+                if (!string.IsNullOrWhiteSpace(env))
+                    return !string.Equals(env.Trim(), "off", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(env.Trim(), "false", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(env.Trim(), "0", StringComparison.OrdinalIgnoreCase);
+                try
+                {
+                    var raw = ConfigurationManager.AppSettings["Server.SourceStoreBackfill"];
+                    if (!string.IsNullOrWhiteSpace(raw))
+                        return !string.Equals(raw.Trim(), "off", StringComparison.OrdinalIgnoreCase)
+                            && !string.Equals(raw.Trim(), "false", StringComparison.OrdinalIgnoreCase)
+                            && !string.Equals(raw.Trim(), "0", StringComparison.OrdinalIgnoreCase);
+                }
+                catch { }
+                return true;
+            }
+        }
+
         public static int SourceStoreMaxMB
         {
             get

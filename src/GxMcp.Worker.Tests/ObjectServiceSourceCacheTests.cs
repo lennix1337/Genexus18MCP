@@ -11,6 +11,16 @@ namespace GxMcp.Worker.Tests
     public class ObjectServiceSourceCacheTests
     {
         [Fact]
+        public void TryReadPartSourceRaw_ReportsSdkReadFailureEvidence()
+        {
+            var service = new ObjectService(null, null);
+
+            Assert.False(service.TryReadPartSourceRaw(null, "Source", out string source, out string error));
+            Assert.Null(source);
+            Assert.Contains("null", error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void EmptyRawSourceCache_HitSkipsSourceResolution_AndCanBeInvalidated()
         {
             var guid = Guid.NewGuid();
@@ -182,6 +192,19 @@ namespace GxMcp.Worker.Tests
             var service = new GxMcp.Worker.Services.ObjectService(null, null);
             Assert.True(service.TryGetPartSourceRaw(guid.ToString(), "Source", out string source));
             Assert.Equal("parm(&CustomerId);", source);
+        }
+
+        [Fact]
+        public void ReadCacheKey_BindsPartAndExactPaginationWindow()
+        {
+            var guid = Guid.NewGuid();
+            string source = ObjectService.BuildReadCacheKey(guid, "Source", null, null, "mcp", false);
+            string events = ObjectService.BuildReadCacheKey(guid, "Events", null, null, "mcp", false);
+            string window = ObjectService.BuildReadCacheKey(guid, "Events", 318, 20, "mcp", false);
+            string otherWindow = ObjectService.BuildReadCacheKey(guid, "Events", 318, 21, "mcp", false);
+
+            Assert.NotEqual(source, events);
+            Assert.NotEqual(window, otherWindow);
         }
 
         [Fact]

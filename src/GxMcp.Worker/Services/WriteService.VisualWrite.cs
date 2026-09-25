@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
@@ -173,7 +174,15 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private string WriteVisualPart(global::Artech.Architecture.Common.Objects.KBObject obj, string target, string partName, string xml, bool dryRun = false, bool strictVerify = true, bool forceWrite = false)
+        private string WriteVisualPart(
+            global::Artech.Architecture.Common.Objects.KBObject obj,
+            string target,
+            string partName,
+            string xml,
+            bool dryRun = false,
+            bool strictVerify = true,
+            bool forceWrite = false,
+            bool rollbackOnFailure = false)
         {
             var webFormPart = WebFormXmlHelper.GetWebFormPart(obj);
             if (webFormPart == null)
@@ -269,7 +278,10 @@ namespace GxMcp.Worker.Services
                     WebFormPreSaveValidator.ValidationReport noChangeValidation = null;
                     if (dryRun)
                     {
-                        noChangeValidation = ValidateProspectiveWebForm(webFormPart, currentXml, currentXml);
+                        var noChangeValidationProjection = WebFormTypedPropertyWriter.ProjectDescriptorFixupOntoDetachedXml(
+                            currentXml, currentXml);
+                        noChangeValidation = ValidateProspectiveWebForm(
+                            webFormPart, noChangeValidationProjection.Xml ?? currentXml, currentXml);
                         if (WebFormPreSaveValidator.HasErrors(noChangeValidation.Messages) && !forceWrite)
                         {
                             var validationError = new JObject
@@ -277,7 +289,8 @@ namespace GxMcp.Worker.Services
                                 ["part"] = partName,
                                 ["validationAvailable"] = noChangeValidation.ValidatorAvailable,
                                 ["validationDiagnostics"] = ToValidationDiagnostics(noChangeValidation.Messages),
-                                ["persisted"] = false
+                                ["persisted"] = false,
+                                ["dryRun"] = true
                             };
                             if (!string.IsNullOrWhiteSpace(noChangeValidation.Error)) validationError["validationError"] = noChangeValidation.Error;
                             return Models.McpResponse.Err(
@@ -291,7 +304,8 @@ namespace GxMcp.Worker.Services
                     var noChangeResp = new JObject
                     {
                         ["part"] = partName,
-                        ["details"] = dryRun ? "Dry-run: no change would be applied." : "No change"
+                        ["details"] = dryRun ? "Dry-run: no change would be applied." : "No change",
+                        ["dryRun"] = dryRun
                     };
                     if (noChangeValidation != null)
                     {
@@ -299,6 +313,11 @@ namespace GxMcp.Worker.Services
                         if (forceWrite && WebFormPreSaveValidator.HasErrors(noChangeValidation.Messages))
                             noChangeResp["validationOverridden"] = true;
                     }
+                    var noChangeProjection = WebFormTypedPropertyWriter.ProjectDescriptorFixupOntoDetachedXml(
+                        currentXml, currentXml);
+                    noChangeResp["transformationsSimulated"] = true;
+                    noChangeResp["validationInput"] = "detached-projection";
+                    noChangeResp["detachedTransformation"] = BuildDetachedTransformationEvidence(noChangeProjection);
                     var noChangeHtmlWarnings = BuildHtmlFormatWarnings(prospectiveGotchas);
                     AttachWarnings(noChangeResp, MergeWarnings(patternShadowWarnings, noChangeHtmlWarnings));
                     if (prospectiveGotchas != null) noChangeResp["layoutGotchas"] = prospectiveGotchas;
@@ -306,7 +325,13 @@ namespace GxMcp.Worker.Services
                 }
                 if (dryRun)
                 {
-                    var dryValidation = ValidateProspectiveWebForm(webFormPart, normalizedInput, currentXml);
+                    // Run the same conservative descriptor projection on a detached
+                    // XML copy before asking the SDK validator to inspect it. The
+                    // live part is still inside a rollback-only transaction.
+                    var dryProjection = WebFormTypedPropertyWriter.ProjectDescriptorFixupOntoDetachedXml(
+                        currentXml, normalizedInput);
+                    var dryValidation = ValidateProspectiveWebForm(
+                        webFormPart, dryProjection.Xml ?? normalizedInput, currentXml);
                     if (WebFormPreSaveValidator.HasErrors(dryValidation.Messages) && !forceWrite)
                     {
                         var validationError = new JObject
@@ -314,7 +339,8 @@ namespace GxMcp.Worker.Services
                             ["part"] = partName,
                             ["validationAvailable"] = dryValidation.ValidatorAvailable,
                             ["validationDiagnostics"] = ToValidationDiagnostics(dryValidation.Messages),
-                            ["persisted"] = false
+                            ["persisted"] = false,
+                            ["dryRun"] = true
                         };
                         if (!string.IsNullOrWhiteSpace(dryValidation.Error)) validationError["validationError"] = dryValidation.Error;
                         return Models.McpResponse.Err(
@@ -329,9 +355,13 @@ namespace GxMcp.Worker.Services
                         ["part"] = partName,
                         ["details"] = "Dry-run: input parsed and would update visual XML. Save skipped.",
                         ["verified"] = new JArray("xmlParse", "layoutGotchas", "diffVsCurrent"),
-                        ["savePathExercised"] = false
+                        ["savePathExercised"] = false,
+                        ["dryRun"] = true
                     };
                     AttachWebFormValidation(dryResp, dryValidation);
+                    dryResp["transformationsSimulated"] = true;
+                    dryResp["validationInput"] = "detached-projection";
+                    dryResp["detachedTransformation"] = BuildDetachedTransformationEvidence(dryProjection);
                     var dryHtmlWarnings = BuildHtmlFormatWarnings(prospectiveGotchas);
                     AttachWarnings(dryResp, MergeWarnings(patternShadowWarnings, dryHtmlWarnings));
                     var suspects = GxMcp.Worker.Helpers.WebFormSchemaHints.ScanForRejectedAttributes(normalizedInput);
@@ -341,7 +371,7 @@ namespace GxMcp.Worker.Services
                         foreach (var s in suspects)
                             arr.Add(new JObject { ["element"] = s.Element, ["attribute"] = s.Attribute, ["reason"] = s.Reason });
                         dryResp["preflightWarnings"] = arr;
-                        dryResp["warning"] = "Dry-run detected " + suspects.Count + " attribute(s) likely to be sanitised by the SDK on save. See preflightWarnings.";
+                        dryResp["warning"] = "Dry-run found " + suspects.Count + " attribute(s) outside the observed hint table; persistence is unverified. See preflightWarnings.";
                     }
                     if (prospectiveGotchas != null) dryResp["layoutGotchas"] = prospectiveGotchas;
                     return Models.McpResponse.Ok(target: target, code: "WriteDryRun", result: dryResp);
@@ -368,6 +398,7 @@ namespace GxMcp.Worker.Services
                 return CreateWriteError("KB not opened", target, partName, "Open a Knowledge Base before writing visual metadata.", obj);
             }
 
+            bool sdkCommitCompleted = false;
             using (var transaction = kb.BeginTransaction())
             {
                 try
@@ -466,6 +497,7 @@ namespace GxMcp.Worker.Services
                     }
 
                     transaction.Commit();
+                    sdkCommitCompleted = true;
                     // Force synchronous flush so the data actually lands on disk before we re-read
                     // for verification. ScheduleFlush() default is timer-based and async — if the
                     // worker is killed before the timer fires (or before ProcessExit), unflushed
@@ -493,21 +525,21 @@ namespace GxMcp.Worker.Services
                                 "The SDK save path completed, but the persisted WebForm XML does not match the requested content. Diff: " + (visualDiff ?? "n/a"),
                                 obj,
                                 visualStructured);
-                            // Attach snapshot descriptor + restore hint so the caller can roll back.
+                            // The transaction is already committed at this point. Keep
+                            // physical persistence separate from content verification;
+                            // callers must not read this mismatch as "nothing was saved".
                             try
                             {
                                 var verifyJobj = JObject.Parse(visualVerifyErr);
                                 var errObj = verifyJobj["error"] as JObject ?? verifyJobj;
                                 if (webFormPartSaveError != null) errObj["sdkSaveError"] = webFormPartSaveError;
-                                // Inject restore nextStep into nextSteps array.
-                                var nsArr = verifyJobj["nextSteps"] as JArray ?? new JArray();
-                                nsArr.Add(new JObject
+                                if (sdkCommitCompleted)
                                 {
-                                    ["tool"] = "genexus_history",
-                                    ["args"] = new JObject { ["action"] = "restore", ["discard"] = true, ["target"] = target },
-                                    ["why"] = "Restore to the pre-write snapshot to undo the failed visual write."
-                                });
-                                verifyJobj["nextSteps"] = nsArr;
+                                    AttachVisualCommitEvidence(verifyJobj, committed: true, verified: false);
+                                    AttachVisualCommitEvidence(errObj, committed: true, verified: false);
+                                }
+                                verifyJobj["rollbackRequested"] = rollbackOnFailure;
+                                AddVersioningRestoreStep(verifyJobj, target, partName);
                                 return verifyJobj.ToString();
                             }
                             catch
@@ -531,14 +563,13 @@ namespace GxMcp.Worker.Services
                             var sdkErrJobj = JObject.Parse(sdkErr);
                             var errObj = sdkErrJobj["error"] as JObject ?? sdkErrJobj;
                             errObj["sdkSaveError"] = webFormPartSaveError;
-                            var nsArr = sdkErrJobj["nextSteps"] as JArray ?? new JArray();
-                            nsArr.Add(new JObject
+                            if (sdkCommitCompleted)
                             {
-                                ["tool"] = "genexus_history",
-                                ["args"] = new JObject { ["action"] = "restore", ["discard"] = true, ["target"] = target },
-                                ["why"] = "Restore to the pre-write snapshot to undo the failed visual write."
-                            });
-                            sdkErrJobj["nextSteps"] = nsArr;
+                                AttachVisualCommitEvidence(sdkErrJobj, committed: true, verified: false);
+                                AttachVisualCommitEvidence(errObj, committed: true, verified: false);
+                            }
+                            sdkErrJobj["rollbackRequested"] = rollbackOnFailure;
+                            AddVersioningRestoreStep(sdkErrJobj, target, partName);
                             return sdkErrJobj.ToString();
                         }
                         catch { return sdkErr; }
@@ -549,7 +580,14 @@ namespace GxMcp.Worker.Services
                         ["part"] = partName,
                         ["details"] = strictVerify
                             ? "Visual XML updated and verified."
-                            : "Visual XML updated (post-write verify skipped: validate=best-effort). Build to confirm generation."
+                            : "Visual XML updated (post-write verify skipped: validate=best-effort). Build to confirm generation.",
+                        ["sdkSaveCompleted"] = sdkCommitCompleted,
+                        ["saved"] = sdkCommitCompleted,
+                        ["physicalCommit"] = sdkCommitCompleted,
+                        ["commitState"] = sdkCommitCompleted ? "Committed" : "NotCommitted",
+                        ["commitConfirmed"] = sdkCommitCompleted,
+                        ["persistenceState"] = sdkCommitCompleted ? "Committed" : "NotPersisted",
+                        ["persistedVerified"] = strictVerify && sdkCommitCompleted
                     };
                     AttachWebFormValidation(okResp, validationReport);
                     if (forceWrite && WebFormPreSaveValidator.HasErrors(validationReport.Messages))
@@ -664,6 +702,109 @@ namespace GxMcp.Worker.Services
                         extra: visualExtra);
                 }
             }
+        }
+
+        private static JObject BuildDetachedTransformationEvidence(
+            WebFormTypedPropertyWriter.DescriptorProjectionResult projection)
+        {
+            var transformations = new JArray();
+            if (projection?.Notices != null)
+            {
+                foreach (var notice in projection.Notices)
+                {
+                    transformations.Add(new JObject
+                    {
+                        ["element"] = notice.Element,
+                        ["controlId"] = notice.ControlId,
+                        ["source"] = notice.Source,
+                        ["canonical"] = notice.Canonical,
+                        ["action"] = notice.Action,
+                        ["reason"] = notice.Reason
+                    });
+                }
+            }
+
+            var attributeChanges = new JArray();
+            if (projection?.AttributeChanges != null)
+            {
+                foreach (var change in projection.AttributeChanges)
+                {
+                    attributeChanges.Add(new JObject
+                    {
+                        ["element"] = change.Element,
+                        ["controlId"] = change.ControlId,
+                        ["attribute"] = change.Attribute,
+                        ["kind"] = change.Kind,
+                        ["before"] = BoundedTransformationValue(change.Before),
+                        ["after"] = BoundedTransformationValue(change.After),
+                        ["canonical"] = change.Canonical
+                    });
+                }
+            }
+
+            string detachedHash = projection == null || projection.Xml == null
+                ? null
+                : ComputeContentFingerprint(projection.Xml);
+            return new JObject
+            {
+                ["simulated"] = true,
+                ["detached"] = true,
+                ["legacyHtml"] = projection?.IsLegacyHtml ?? false,
+                ["transformations"] = transformations,
+                ["attributeChanges"] = attributeChanges,
+                ["detachedXmlHash"] = detachedHash
+            };
+        }
+
+        private static string BoundedTransformationValue(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value;
+            return value.Length <= 240 ? value : value.Substring(0, 240) + "…[truncated]";
+        }
+
+        internal static void AttachVisualCommitEvidence(JObject response, bool committed, bool verified)
+        {
+            if (response == null) return;
+            response["sdkSaveCompleted"] = committed;
+            response["saved"] = committed;
+            response["physicalCommit"] = committed;
+            response["commitConfirmed"] = committed;
+            response["commitState"] = committed ? "Committed" : "NotCommitted";
+            response["persistenceState"] = verified ? "Verified" : committed ? "CommittedUnverified" : "NotPersisted";
+            response["verified"] = verified;
+            // For a committed visual write, persisted describes the physical
+            // commit; persistedVerified/verified describe content equivalence.
+            response["persisted"] = committed;
+            response["persistedVerified"] = verified;
+        }
+
+        internal static void AddVersioningRestoreStep(JObject response, string target, string partName)
+        {
+            if (response == null) return;
+            var error = response["error"] as JObject ?? response;
+            var steps = error["nextSteps"] as JArray ?? new JArray();
+            bool alreadyPresent = steps.OfType<JObject>().Any(step =>
+                string.Equals(step["tool"]?.ToString(), "genexus_versioning", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(step["args"]?["action"]?.ToString(), "history_restore", StringComparison.OrdinalIgnoreCase));
+            if (!alreadyPresent)
+            {
+                steps.Add(new JObject
+                {
+                    ["tool"] = "genexus_versioning",
+                    ["args"] = new JObject
+                    {
+                        ["action"] = "history_restore",
+                        ["name"] = target,
+                        ["part"] = string.IsNullOrWhiteSpace(partName) ? "WebForm" : partName,
+                        ["discard"] = true
+                    },
+                    ["why"] = "Restore the pre-write KB snapshot after a committed visual verification mismatch."
+                });
+            }
+            error["nextSteps"] = steps;
+            // Keep a top-level alias for legacy clients that looked for nextSteps
+            // outside the canonical error object.
+            if (response["nextSteps"] == null) response["nextSteps"] = steps;
         }
 
         // Walks ex.InnerException so the deepest message — usually the real SDK

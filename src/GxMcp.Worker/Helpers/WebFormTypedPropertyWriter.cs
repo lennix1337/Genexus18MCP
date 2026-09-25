@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Xml;
+using System.Xml.Linq;
 
 namespace GxMcp.Worker.Helpers
 {
@@ -152,6 +153,15 @@ namespace GxMcp.Worker.Helpers
                 // (e.g. gxButton: descriptor "OnClickEvent" → XML attr "Event"), so writing the
                 // descriptor name as an XML attribute leaves it unread → silent fallback to Enter.
                 //
+                // Legacy HTML WebForms are different: CaptionExpression Tokens is the
+                // persisted canonical representation, not a misspelled descriptor name.
+                // Keep that value on the raw-XML path and never send it through the modern
+                // Caption converter.
+                bool legacyHtml = WebFormXmlHelper.IsLegacyHtmlWebForm(partDocForEnum?.OuterXml);
+                var effectiveDeltas = kv.Value
+                    .Where(d => !(legacyHtml && IsCaptionExpression(d.PropertyName)))
+                    .ToList();
+
                 // Strategy: extract these properties into a "descriptor delta" set; remaining
                 // properties still go through raw XML mutation (which works for Caption, Class,
                 // Visible, etc. where XML attr name == descriptor name).
@@ -159,7 +169,7 @@ namespace GxMcp.Worker.Helpers
                 var rawXmlDeltas = new List<WebFormPropertyDelta>();
                 foreach (var d in kv.Value)
                 {
-                    if (NeedsDescriptorPath(d.PropertyName)) descriptorDeltas.Add(d);
+                    if (NeedsDescriptorPath(d.PropertyName, legacyHtml)) descriptorDeltas.Add(d);
                     else rawXmlDeltas.Add(d);
                 }
 
@@ -169,16 +179,17 @@ namespace GxMcp.Worker.Helpers
                     ApplyDescriptorDeltas(tag, controlName, descriptorDeltas);
                 }
 
-                // 2. Raw XML path — direct attribute mutation
+                // 2. Raw XML path — direct attribute mutation. This includes
+                // CaptionExpression on legacy HTML forms, where it is authoritative.
                 foreach (var d in rawXmlDeltas)
                 {
                     if (d.Value == null)
                     {
-                        node.Attributes.RemoveNamedItem(d.PropertyName);
+                        RemoveAttribute(node, d.PropertyName);
                         Logger.Info("[TypedWriter] removed attr " + controlName + "." + d.PropertyName);
                         continue;
                     }
-                    var attr = node.Attributes[d.PropertyName];
+                    var attr = FindAttribute(node, d.PropertyName);
                     if (attr == null)
                     {
                         attr = node.OwnerDocument.CreateAttribute(d.PropertyName);
@@ -199,16 +210,17 @@ namespace GxMcp.Worker.Helpers
                 // EntityVersionComposition pointer at the parent WebPanel lands on the
                 // regenerated sibling, so reads return the original. By updating the typed
                 // model here, both serializations match and composition resolves correctly.
-                if (setPropertiesDict != null)
+                if (setPropertiesDict != null && effectiveDeltas.Count > 0)
                 {
                     try
                     {
                         var dict = new System.Collections.Hashtable();
-                        foreach (var d in kv.Value)
+                        foreach (var d in effectiveDeltas)
                         {
                             // Key is the XML attribute name; SetProperties handles the
-                            // attribute↔typed-property mapping internally (e.g.,
-                            // CaptionExpression → Caption with Tokens conversion).
+                            // attribute↔typed-property mapping internally. Legacy
+                            // CaptionExpression is intentionally excluded above because
+                            // its Tokens XML is already the canonical persisted value.
                             dict[d.PropertyName] = d.Value;
                         }
                         setPropertiesDict.Invoke(tag, new object[] { dict });
@@ -223,7 +235,7 @@ namespace GxMcp.Worker.Helpers
                         try
                         {
                             var propsBag = GetReadProperty(tag, "Properties");
-                            foreach (var d in kv.Value)
+                            foreach (var d in effectiveDeltas)
                             {
                                 if (propsBag == null) break;
                                 bool changed = false;
@@ -242,7 +254,7 @@ namespace GxMcp.Worker.Helpers
 
                 // Verify the mutation actually landed in part.Document by re-querying.
                 var verify = FindElementInPartDoc(partDoc, controlName);
-                foreach (var d in kv.Value)
+                foreach (var d in effectiveDeltas)
                 {
                     string after = verify?.Attributes?[d.PropertyName]?.Value;
                     Logger.Info("[TypedWriter] verify part.Document <" + node.Name + " id=" + controlName + ">." + d.PropertyName + " = '" + Truncate(after, 80) + "' (wanted '" + Truncate(d.Value, 80) + "', match=" + (after == d.Value) + ")");
@@ -389,17 +401,25 @@ namespace GxMcp.Worker.Helpers
         }
 
         // Post-write hook called from WebFormXmlHelper.ApplyEditableXml after the raw XML is
-        // persisted and the part has reparsed via DeserializeDataFromDocument. Walks every
-        // IWebTag in the part; for any tag whose XmlNode has a descriptor-name attribute
-        // (e.g. OnClickEvent), invokes PropertiesObject.SetPropertyValueString so the SDK
-        // converter writes the canonical XML attr (e.g. Event=) the HTML generator reads.
-        // Idempotent: SDK no-ops when value already correct.
+        // persisted and the part has reparsed via DeserializeDataFromDocument. Only controls
+        // changed by this request are considered. This is important for legacy HTML forms:
+        // their CaptionExpression Tokens attributes are canonical persisted data, and walking
+        // the whole part can silently strip every untouched caption.
+        // Compatibility overload for callers compiled against the original
+        // one-argument hook. New write paths pass the baseline/updated scope.
         public static void ApplyDescriptorPathFixup(object webFormPart)
+            => ApplyDescriptorPathFixup(webFormPart, null, null, null);
+
+        public static void ApplyDescriptorPathFixup(
+            object webFormPart,
+            string baselineXml = null,
+            string updatedXml = null,
+            IEnumerable<string> changedControlNames = null)
         {
             if (webFormPart == null) return;
             try
             {
-                Type helperType = FindType("Artech.Genexus.Common.Parts.WebForm.WebFormHelper");
+                Type helperType = FindType(HelperTypeName);
                 if (helperType == null) return;
 
                 XmlDocument partDoc = null;
@@ -412,6 +432,15 @@ namespace GxMcp.Worker.Helpers
                 catch { }
                 if (partDoc == null) partDoc = GetReadProperty(webFormPart, "Document") as XmlDocument;
                 if (partDoc == null) return;
+
+                var scope = ResolveChangedControlNames(baselineXml, updatedXml);
+                if (changedControlNames != null)
+                {
+                    scope = scope ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var name in changedControlNames)
+                        if (!string.IsNullOrWhiteSpace(name)) scope.Add(name);
+                }
+                bool legacyHtml = WebFormXmlHelper.IsLegacyHtmlWebForm(partDoc.OuterXml);
 
                 var partKbObj = GetReadProperty(webFormPart, "KBObject") ?? GetReadProperty(webFormPart, "ContainerObject") ?? GetReadProperty(webFormPart, "Parent") ?? GetReadProperty(webFormPart, "Container");
                 MethodInfo enumerate = null;
@@ -441,6 +470,7 @@ namespace GxMcp.Worker.Helpers
                 if (enumerate == null) return;
 
                 int fixupCount = 0;
+                int preservedCount = 0;
                 IEnumerable tags;
                 try { tags = (IEnumerable)enumerate.Invoke(null, enumArgs); }
                 catch (Exception ex) { Logger.Info("[DescFixup] EnumerateWebTag threw: " + (ex.InnerException ?? ex).Message); return; }
@@ -450,12 +480,16 @@ namespace GxMcp.Worker.Helpers
                     var node = GetReadProperty(tag, "Node") as XmlNode;
                     if (node?.Attributes == null) continue;
 
+                    string ctrlId = GetControlId(node);
+                    if (scope != null && !scope.Contains(ctrlId)) continue;
+
                     // Collect descriptor-name attributes present on this tag's XML node.
                     var deltas = new List<WebFormPropertyDelta>();
-                    string ctrlId = node.Attributes["id"]?.Value ?? node.Attributes["ControlName"]?.Value ?? node.LocalName;
+                    string elementName = node.LocalName;
                     foreach (var descName in _descriptorPathProps)
                     {
-                        var attr = node.Attributes[descName];
+                        if (!NeedsDescriptorPath(descName, legacyHtml, elementName)) continue;
+                        var attr = FindAttribute(node, descName);
                         if (attr == null) continue;
                         deltas.Add(new WebFormPropertyDelta {
                             ControlName = ctrlId,
@@ -465,26 +499,44 @@ namespace GxMcp.Worker.Helpers
                     }
                     if (deltas.Count == 0) continue;
 
-                    ApplyDescriptorDeltas(tag, ctrlId, deltas);
-                    fixupCount += deltas.Count;
-
-                    // Remove the wrong-named XML attribute now that SDK has written the right one.
-                    // Otherwise generator may see both and the HTML output is unpredictable.
-                    string elementName = node.LocalName;
+                    var applied = ApplyDescriptorDeltas(tag, ctrlId, deltas);
                     foreach (var d in deltas)
                     {
-                        try { node.Attributes.RemoveNamedItem(d.PropertyName); } catch { }
-                        // Item 77 — record the rename so the caller can surface a
-                        // GotchaWebFormTypedPropertyAutoRouted warning to the agent.
-                        RecordAutoRoute(elementName, ctrlId, d.PropertyName, ResolveCanonicalAttr(d.PropertyName, elementName));
+                        string canonical = ResolveCanonicalAttr(d.PropertyName, elementName);
+                        bool canonicalObserved = HasCanonicalAttribute(partDoc, ctrlId, canonical);
+                        bool sdkAccepted = applied != null && applied.TryGetValue(d.PropertyName, out bool accepted) && accepted;
+
+                        // Never delete the source descriptor on a failed conversion. A
+                        // missing canonical attribute is the exact legacy failure mode
+                        // this guard is intended to prevent.
+                        if (!sdkAccepted || !canonicalObserved)
+                        {
+                            preservedCount++;
+                            Logger.Info("[DescFixup] preserved " + ctrlId + "." + d.PropertyName +
+                                " because canonical '" + canonical + "' was not observed.");
+                            continue;
+                        }
+
+                        RemoveAttribute(node, d.PropertyName);
+                        var liveNode = FindElementInPartDoc(partDoc, ctrlId);
+                        if (liveNode != null && !object.ReferenceEquals(liveNode, node))
+                            RemoveAttribute(liveNode, d.PropertyName);
+                        fixupCount++;
+                        // Item 77 — record only a verified rename so the caller can surface
+                        // GotchaWebFormTypedPropertyAutoRouted without claiming a lossless
+                        // conversion that the SDK did not actually perform.
+                        RecordAutoRoute(elementName, ctrlId, d.PropertyName, canonical);
                     }
                 }
 
-                if (fixupCount > 0)
-                    Logger.Info("[DescFixup] routed " + fixupCount + " descriptor-property write(s) through SDK.");
+                if (fixupCount > 0 || preservedCount > 0)
+                    Logger.Info("[DescFixup] routed " + fixupCount + " descriptor-property write(s); preserved " +
+                        preservedCount + " unverified/legacy source attribute(s).");
             }
             catch (Exception ex)
             {
+                // Descriptor repair is advisory. A reflection failure must never become
+                // permission to remove source XML.
                 Logger.Info("[DescFixup] outer fault: " + (ex.InnerException ?? ex).Message);
             }
         }
@@ -502,12 +554,20 @@ namespace GxMcp.Worker.Helpers
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
                 "OnClickEvent",      // gxButton → Event; gxAttribute/gxImage → eventGX
                 "OnEnterEvent",      // gxAttribute/gxButton → eventGX (Enter override)
-                "CaptionExpression", // gxButton/gxTextBlock → Caption (with Tokens XML)
+                "CaptionExpression", // modern gxButton/gxTextBlock → Caption; legacy keeps Tokens XML
             };
 
-        private static bool NeedsDescriptorPath(string propertyName)
+        private static bool IsCaptionExpression(string propertyName)
+            => string.Equals(propertyName, "CaptionExpression", StringComparison.OrdinalIgnoreCase);
+
+        private static bool NeedsDescriptorPath(string propertyName, bool legacyHtml, string elementName = null)
         {
-            return !string.IsNullOrEmpty(propertyName) && _descriptorPathProps.Contains(propertyName);
+            if (string.IsNullOrEmpty(propertyName) || !_descriptorPathProps.Contains(propertyName)) return false;
+            // CaptionExpression is a descriptor only for the modern GxMultiForm
+            // dialect. In a legacy BODY/HTML form it is the canonical Tokens
+            // representation and must remain an ordinary XML attribute.
+            if (IsCaptionExpression(propertyName) && legacyHtml) return false;
+            return true;
         }
 
         // Friction-report 2026-05-22 item 77 — surface auto-routes to the caller.
@@ -585,21 +645,23 @@ namespace GxMcp.Worker.Helpers
         // value). The SDK runs the registered PropertyValueConverter (e.g. GxEventReferenceConverter
         // for OnClickEvent) which produces the correct XML attribute name and quoted format.
         // SaveProperties() then mirrors the typed model into the tag's XmlNode in m_Document.
-        private static void ApplyDescriptorDeltas(object tag, string controlName, List<WebFormPropertyDelta> deltas)
+        private static Dictionary<string, bool> ApplyDescriptorDeltas(object tag, string controlName, List<WebFormPropertyDelta> deltas)
         {
-            if (tag == null || deltas == null || deltas.Count == 0) return;
+            var results = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            if (tag == null || deltas == null || deltas.Count == 0) return results;
+            foreach (var d in deltas) results[d.PropertyName] = false;
 
             object propsObj;
             try { propsObj = GetReadProperty(tag, "Properties"); }
             catch (Exception ex)
             {
                 Logger.Info("[TypedWriter] descriptor path: GetProperties on " + controlName + " threw: " + (ex.InnerException ?? ex).Message);
-                return;
+                return results;
             }
             if (propsObj == null)
             {
                 Logger.Info("[TypedWriter] descriptor path: tag " + controlName + " has no Properties — skipping " + deltas.Count + " delta(s).");
-                return;
+                return results;
             }
 
             // Probe candidate methods: SetPropertyValueString(name,value), SetPropertyValue(name,object).
@@ -624,7 +686,7 @@ namespace GxMcp.Worker.Helpers
                     string.Join(",", poType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                         .Where(mi => mi.Name.StartsWith("Set", StringComparison.OrdinalIgnoreCase))
                         .Select(mi => mi.Name + "(" + string.Join(",", mi.GetParameters().Select(p => p.ParameterType.Name)) + ")")));
-                return;
+                return results;
             }
 
             foreach (var d in deltas)
@@ -651,6 +713,7 @@ namespace GxMcp.Worker.Helpers
                         Logger.Info("[TypedWriter] descriptor " + setMethod.Name + " threw: " + inner.GetType().Name + ": " + inner.Message);
                     }
                 }
+                results[d.PropertyName] = applied;
                 if (!applied)
                     Logger.Info("[TypedWriter] descriptor path: no candidate accepted " + controlName + "." + d.PropertyName);
             }
@@ -665,21 +728,339 @@ namespace GxMcp.Worker.Helpers
             {
                 Logger.Info("[TypedWriter] descriptor path: SaveProperties on " + controlName + " threw: " + (ex.InnerException ?? ex).Message);
             }
+            return results;
+        }
+
+        public sealed class DescriptorProjectionNotice
+        {
+            public string Element;
+            public string ControlId;
+            public string Source;
+            public string Canonical;
+            public string Action;
+            public string Reason;
+        }
+
+        public sealed class DescriptorAttributeDelta
+        {
+            public string Element;
+            public string ControlId;
+            public string Attribute;
+            public string Kind;
+            public string Before;
+            public string After;
+            public string Canonical;
+        }
+
+        public sealed class DescriptorProjectionResult
+        {
+            public string Xml;
+            public bool IsLegacyHtml;
+            public List<DescriptorProjectionNotice> Notices = new List<DescriptorProjectionNotice>();
+            public List<DescriptorAttributeDelta> AttributeChanges = new List<DescriptorAttributeDelta>();
+        }
+
+        /// <summary>
+        /// Projects the safe descriptor decisions onto a detached XML copy. It is
+        /// intentionally conservative: a source attribute is removed only when the
+        /// canonical attribute is already present in the detached document. A route
+        /// that still needs the SDK is reported as a notice and is not presented as
+        /// a proven transformation.
+        /// </summary>
+        public static DescriptorProjectionResult ProjectDescriptorFixupOntoDetachedXml(
+            string baselineXml, string updatedXml)
+        {
+            var result = new DescriptorProjectionResult { Xml = updatedXml };
+            if (string.IsNullOrWhiteSpace(updatedXml)) return result;
+
+            XDocument updated;
+            try { updated = XDocument.Parse(updatedXml, LoadOptions.PreserveWhitespace); }
+            catch { return result; }
+            if (updated.Root == null) return result;
+
+            result.IsLegacyHtml = WebFormXmlHelper.IsLegacyHtmlWebForm(updated.ToString());
+            var scope = ResolveChangedControlNames(baselineXml, updatedXml);
+            CollectAttributeDeltas(baselineXml, updated, scope, result);
+            foreach (var element in updated.Descendants())
+            {
+                string controlId = GetElementIdentity(element);
+                if (scope != null && !scope.Contains(controlId)) continue;
+
+                foreach (var descriptor in _descriptorPathProps)
+                {
+                    if (!NeedsDescriptorPath(descriptor, result.IsLegacyHtml, element.Name.LocalName)) continue;
+                    var source = FindAttribute(element, descriptor);
+                    if (source == null) continue;
+                    string canonical = ResolveCanonicalAttr(descriptor, element.Name.LocalName);
+                    var notice = new DescriptorProjectionNotice
+                    {
+                        Element = element.Name.LocalName,
+                        ControlId = controlId,
+                        Source = descriptor,
+                        Canonical = canonical
+                    };
+
+                    if (result.IsLegacyHtml && IsCaptionExpression(descriptor))
+                    {
+                        notice.Action = "preserved";
+                        notice.Reason = "legacy-canonical-caption-expression";
+                    }
+                    else if (FindAttribute(element, canonical) != null)
+                    {
+                        element.Attribute(descriptor)?.Remove();
+                        var delta = result.AttributeChanges.FirstOrDefault(d =>
+                            string.Equals(d.ControlId, controlId, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(d.Attribute, descriptor, StringComparison.OrdinalIgnoreCase));
+                        if (delta != null)
+                        {
+                            delta.Kind = "renamed";
+                            delta.Canonical = canonical;
+                        }
+                        notice.Action = "removed-source";
+                        notice.Reason = "canonical-observed";
+                    }
+                    else
+                    {
+                        notice.Action = "would-route";
+                        notice.Reason = "canonical-not-observed-in-detached-input";
+                    }
+                    result.Notices.Add(notice);
+                }
+            }
+
+            result.Xml = updated.Declaration != null
+                ? updated.Declaration + Environment.NewLine + updated.Root.ToString(SaveOptions.None)
+                : updated.Root.ToString(SaveOptions.None);
+            return result;
+        }
+
+        private static void CollectAttributeDeltas(
+            string baselineXml,
+            XDocument updated,
+            HashSet<string> scope,
+            DescriptorProjectionResult result)
+        {
+            if (updated == null || result == null || string.IsNullOrWhiteSpace(baselineXml)) return;
+            XDocument baseline;
+            try { baseline = XDocument.Parse(baselineXml, LoadOptions.PreserveWhitespace); }
+            catch { return; }
+
+            var before = BuildControlRecords(baseline);
+            var after = BuildControlRecords(updated);
+            var keys = new HashSet<string>(before.Keys, StringComparer.OrdinalIgnoreCase);
+            keys.UnionWith(after.Keys);
+            foreach (var key in keys)
+            {
+                if (scope != null && !scope.Contains(key)) continue;
+                before.TryGetValue(key, out var oldRecord);
+                after.TryGetValue(key, out var newRecord);
+                AddAttributeDeltas(result, key, oldRecord?.Element, newRecord?.Element);
+            }
+        }
+
+        private static void AddAttributeDeltas(
+            DescriptorProjectionResult result,
+            string controlId,
+            XElement before,
+            XElement after)
+        {
+            var oldAttrs = before?.Attributes()
+                .Where(a => !a.IsNamespaceDeclaration)
+                .ToDictionary(a => a.Name.LocalName, a => a.Value, StringComparer.OrdinalIgnoreCase)
+                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var newAttrs = after?.Attributes()
+                .Where(a => !a.IsNamespaceDeclaration)
+                .ToDictionary(a => a.Name.LocalName, a => a.Value, StringComparer.OrdinalIgnoreCase)
+                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var names = new HashSet<string>(oldAttrs.Keys, StringComparer.OrdinalIgnoreCase);
+            names.UnionWith(newAttrs.Keys);
+            foreach (var name in names)
+            {
+                oldAttrs.TryGetValue(name, out var oldValue);
+                newAttrs.TryGetValue(name, out var newValue);
+                bool hadOld = oldAttrs.ContainsKey(name);
+                bool hasNew = newAttrs.ContainsKey(name);
+                if (hadOld && hasNew && string.Equals(oldValue, newValue, StringComparison.Ordinal)) continue;
+                result.AttributeChanges.Add(new DescriptorAttributeDelta
+                {
+                    Element = (after ?? before)?.Name.LocalName,
+                    ControlId = controlId,
+                    Attribute = name,
+                    Kind = hadOld ? (hasNew ? "changed" : "removed") : "added",
+                    Before = hadOld ? oldValue : null,
+                    After = hasNew ? newValue : null
+                });
+            }
+        }
+
+        internal static HashSet<string> ResolveChangedControlNames(string baselineXml, string updatedXml)
+        {
+            var changed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(updatedXml))
+                return string.IsNullOrWhiteSpace(baselineXml) ? null : changed;
+
+            XDocument updated;
+            try { updated = XDocument.Parse(updatedXml, LoadOptions.PreserveWhitespace); }
+            catch { return changed; }
+
+            if (string.IsNullOrWhiteSpace(baselineXml))
+            {
+                foreach (var element in updated.Descendants())
+                {
+                    string id = GetElementIdentity(element);
+                    if (!string.IsNullOrWhiteSpace(id)) changed.Add(id);
+                }
+                return changed;
+            }
+
+            XDocument baseline;
+            try { baseline = XDocument.Parse(baselineXml, LoadOptions.PreserveWhitespace); }
+            catch { return changed; }
+
+            var before = BuildControlRecords(baseline);
+            var after = BuildControlRecords(updated);
+            var keys = new HashSet<string>(before.Keys, StringComparer.OrdinalIgnoreCase);
+            keys.UnionWith(after.Keys);
+            foreach (var key in keys)
+            {
+                before.TryGetValue(key, out var oldRecord);
+                after.TryGetValue(key, out var newRecord);
+                var oldElement = oldRecord?.Element;
+                var newElement = newRecord?.Element;
+                if (oldElement == null || newElement == null || !EquivalentElement(oldElement, newElement))
+                    changed.Add(key);
+            }
+            return changed;
+        }
+
+        public static IReadOnlyCollection<string> GetChangedControlNames(string baselineXml, string updatedXml)
+            => ResolveChangedControlNames(baselineXml, updatedXml);
+
+        private sealed class ControlRecord
+        {
+            public XElement Element;
+        }
+
+        private static Dictionary<string, ControlRecord> BuildControlRecords(XDocument document)
+        {
+            var records = new Dictionary<string, ControlRecord>(StringComparer.OrdinalIgnoreCase);
+            var occurrences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var element in document?.Descendants() ?? Enumerable.Empty<XElement>())
+            {
+                string identity = GetElementIdentity(element);
+                if (string.IsNullOrWhiteSpace(identity)) continue;
+                int occurrence;
+                occurrences.TryGetValue(identity, out occurrence);
+                occurrences[identity] = occurrence + 1;
+                string key = occurrence == 0 ? identity : identity + "#" + occurrence;
+                records[key] = new ControlRecord { Element = element };
+            }
+            return records;
+        }
+
+        private static bool EquivalentElement(XElement left, XElement right)
+        {
+            if (left == null || right == null) return left == right;
+            if (!string.Equals(left.Name.LocalName, right.Name.LocalName, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var leftAttrs = left.Attributes().ToDictionary(a => a.Name.LocalName, a => a.Value, StringComparer.OrdinalIgnoreCase);
+            var rightAttrs = right.Attributes().ToDictionary(a => a.Name.LocalName, a => a.Value, StringComparer.OrdinalIgnoreCase);
+            if (leftAttrs.Count != rightAttrs.Count) return false;
+            foreach (var item in leftAttrs)
+                if (!rightAttrs.TryGetValue(item.Key, out var value) || !string.Equals(item.Value, value, StringComparison.Ordinal))
+                    return false;
+
+            string leftText = string.Concat(left.Nodes().OfType<XText>().Where(t => !string.IsNullOrWhiteSpace(t.Value)).Select(t => t.Value));
+            string rightText = string.Concat(right.Nodes().OfType<XText>().Where(t => !string.IsNullOrWhiteSpace(t.Value)).Select(t => t.Value));
+            if (!string.Equals(leftText, rightText, StringComparison.Ordinal)) return false;
+
+            var leftChildren = left.Elements().ToList();
+            var rightChildren = right.Elements().ToList();
+            if (leftChildren.Count != rightChildren.Count) return false;
+            for (int i = 0; i < leftChildren.Count; i++)
+                if (!EquivalentElement(leftChildren[i], rightChildren[i])) return false;
+            return true;
+        }
+
+        private static string GetElementIdentity(XElement element)
+        {
+            if (element == null) return null;
+            string id = FindAttribute(element, "id")?.Value;
+            string controlName = FindAttribute(element, "ControlName")?.Value;
+            if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(controlName)
+                && !string.Equals(id, controlName, StringComparison.OrdinalIgnoreCase))
+                return id + "|" + controlName;
+            if (!string.IsNullOrWhiteSpace(id)) return id;
+            if (!string.IsNullOrWhiteSpace(controlName)) return controlName;
+            return FindAttribute(element, "controlName")?.Value
+                ?? FindAttribute(element, "InternalName")?.Value ?? FindAttribute(element, "name")?.Value;
+        }
+
+        private static string GetControlId(XmlNode node)
+        {
+            string id = FindAttribute(node, "id")?.Value;
+            string controlName = FindAttribute(node, "ControlName")?.Value
+                ?? FindAttribute(node, "controlName")?.Value;
+            if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(controlName)
+                && !string.Equals(id, controlName, StringComparison.OrdinalIgnoreCase))
+                return id + "|" + controlName;
+            if (!string.IsNullOrWhiteSpace(id)) return id;
+            if (!string.IsNullOrWhiteSpace(controlName)) return controlName;
+            string internalName = FindAttribute(node, "InternalName")?.Value;
+            if (!string.IsNullOrWhiteSpace(internalName)) return internalName;
+            string name = FindAttribute(node, "name")?.Value;
+            return !string.IsNullOrWhiteSpace(name) ? name : node?.LocalName;
+        }
+
+        private static XmlAttribute FindAttribute(XmlNode node, string name)
+        {
+            if (node?.Attributes == null || string.IsNullOrEmpty(name)) return null;
+            foreach (XmlAttribute attr in node.Attributes)
+                if (string.Equals(attr.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return attr;
+            return null;
+        }
+
+        private static XAttribute FindAttribute(XElement element, string name)
+        {
+            if (element == null || string.IsNullOrEmpty(name)) return null;
+            return element.Attributes().FirstOrDefault(attr =>
+                string.Equals(attr.Name.LocalName, name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static void RemoveAttribute(XmlNode node, string name)
+        {
+            var attr = FindAttribute(node, name);
+            if (attr != null) node.Attributes.Remove(attr);
+        }
+
+        private static bool HasCanonicalAttribute(XmlDocument partDoc, string controlName, string canonical)
+        {
+            // Only the live m_Document node is persistence evidence. A canonical
+            // attribute that exists solely on an internal SDK tag is not enough
+            // to authorize deleting the source from the part that will be saved.
+            var liveNode = FindElementInPartDoc(partDoc, controlName);
+            return liveNode != null && FindAttribute(liveNode, canonical) != null;
         }
 
         private static XmlElement FindElementInPartDoc(XmlDocument doc, string controlName)
         {
             if (doc?.DocumentElement == null || string.IsNullOrEmpty(controlName)) return null;
-            // Prefer id, fall back to ControlName / controlName.
-            foreach (var attr in new[] { "id", "ControlName", "controlName", "InternalName" })
+            var names = controlName.Split('|');
+            foreach (XmlNode candidate in doc.SelectNodes("//*"))
             {
-                var xp = string.Format("//*[@{0}='{1}']", attr, controlName.Replace("'", "&apos;"));
-                var node = doc.SelectSingleNode(xp) as XmlElement;
-                if (node != null) return node;
+                var element = candidate as XmlElement;
+                if (element == null) continue;
+                foreach (var name in new[] { "id", "ControlName", "controlName", "InternalName", "name" })
+                {
+                    string value = FindAttribute(element, name)?.Value;
+                    if (names.Any(candidateName => string.Equals(value, candidateName, StringComparison.OrdinalIgnoreCase)))
+                        return element;
+                }
             }
             return null;
         }
-
         private static void InvalidateTagPropertyCache(object tag, string controlName)
         {
             var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;

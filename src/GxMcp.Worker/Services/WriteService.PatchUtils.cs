@@ -200,6 +200,10 @@ namespace GxMcp.Worker.Services
                 return parsed.ToString();
 
             bool isDryRun = string.Equals(parsed["code"]?.ToString(), "WriteDryRun", StringComparison.OrdinalIgnoreCase);
+            bool responseMarkedDryRun = parsed["dryRun"]?.Value<bool?>() == true
+                || parsed["result"]?["dryRun"]?.Value<bool?>() == true;
+            isDryRun = isDryRun || responseMarkedDryRun;
+            bool suppressVisualSourceEcho = isDryRun && WebFormXmlHelper.IsVisualPart(partName);
 
             string finalSource = "";
             string finalVersionToken = null;
@@ -256,7 +260,18 @@ namespace GxMcp.Worker.Services
             if (verificationReadReliable)
             {
                 AppendPersistedState(parsed, finalSource, editLine);
-                parsed["source"] = finalSource;
+                if (suppressVisualSourceEcho)
+                {
+                    parsed["sourceEchoOmitted"] = true;
+                    parsed["sourcePreview"] = Truncate(finalSource, 2000);
+                    string snippet = parsed["persistedSnippet"]?.ToString();
+                    if (!string.IsNullOrEmpty(snippet) && snippet.Length > 2000)
+                        parsed["persistedSnippet"] = snippet.Substring(0, 2000) + "…[truncated]";
+                }
+                else
+                {
+                    parsed["source"] = finalSource;
+                }
                 parsed[isDryRun ? "currentState" : "postSaveVerification"] = new JObject
                 {
                     ["reReadConfirmed"] = true,
@@ -348,6 +363,12 @@ namespace GxMcp.Worker.Services
             bool? saved = dryRun ? false : response["sdkSaveCompleted"]?.Value<bool?>()
                 ?? response["result"]?["sdkSaveCompleted"]?.Value<bool?>()
                 ?? response["saved"]?.Value<bool?>() ?? (successful && writeApplied ? (bool?)true : successful && noChange ? (bool?)false : null);
+            string commitState = response["commitState"]?.ToString()
+                ?? response["result"]?["commitState"]?.ToString();
+            bool physicalCommit = !dryRun && saved == true
+                && string.Equals(commitState, "Committed", StringComparison.OrdinalIgnoreCase);
+            if (response["commitState"] == null && !string.IsNullOrWhiteSpace(commitState))
+                response["commitState"] = commitState;
             bool? objectSaved = response["objectSaved"]?.Value<bool?>()
                 ?? response["result"]?["objectSaved"]?.Value<bool?>()
                 ?? (successful && noChange ? (bool?)false : null);
@@ -373,7 +394,11 @@ namespace GxMcp.Worker.Services
             }
             response["persistedStateKnown"] = known;
             response["verified"] = !dryRun && known && verification.Matches;
-            response["persisted"] = !dryRun && known && verification.Matches;
+            response["persistedVerified"] = response["verified"];
+            // A visual write can be physically committed even when the requested
+            // XML did not round-trip. Preserve that fact instead of reporting
+            // persisted=false and steering callers into a blind retry.
+            response["persisted"] = !dryRun && ((known && verification.Matches) || physicalCommit);
             response["versionToken"] = known ? versionToken : null;
             response["implicitLifecycleActions"] = new JArray();
             response[dryRun ? "currentState" : "postSaveVerification"] = new JObject
@@ -491,24 +516,54 @@ namespace GxMcp.Worker.Services
                 && !string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
                 return responseJson;
 
+            bool visualPart = WebFormXmlHelper.IsVisualPart(partName);
             if (IsPostSaveVerificationIndeterminate(response.ToString(Newtonsoft.Json.Formatting.None)))
             {
                 if (string.Equals(partName, "Source", StringComparison.OrdinalIgnoreCase))
                     MarkSourceRollbackUnavailable(response);
+                else if (visualPart)
+                    MarkVisualRollbackUnavailable(response, "Rollback was not attempted because the post-save state is unknown.");
                 return response.ToString(Newtonsoft.Json.Formatting.None);
             }
 
             string current = response["source"]?.ToString();
-            if (current != null && string.Equals(current, priorSource, StringComparison.Ordinal))
+            bool physicalEvidence = string.Equals(response["commitState"]?.ToString(), "Committed", StringComparison.OrdinalIgnoreCase)
+                || response["sdkSaveCompleted"]?.Value<bool?>() == true
+                || response["physicalCommit"]?.Value<bool?>() == true;
+            if (current != null && ContentEqualsForRollback(current, priorSource, partName))
             {
+                if (visualPart && !physicalEvidence)
+                {
+                    response["rollback"] = new JObject
+                    {
+                        ["requested"] = true,
+                        ["attempted"] = false,
+                        ["rolledBack"] = false,
+                        ["verified"] = false,
+                        ["atomic"] = false,
+                        ["error"] = "No visual write commit was evidenced; rollback was not attempted."
+                    };
+                    return response.ToString(Newtonsoft.Json.Formatting.None);
+                }
                 response["rollback"] = new JObject
                 {
                     ["requested"] = true,
+                    ["attempted"] = false,
                     ["rolledBack"] = true,
+                    ["verified"] = true,
+                    ["atomic"] = true,
                     ["saveRequired"] = false,
                     ["reReadConfirmed"] = true
                 };
+                response["rolledBack"] = true;
+                response["stateRestored"] = true;
                 response["persisted"] = false;
+                if (visualPart)
+                {
+                    response["physicalCommit"] = false;
+                    response["commitState"] = "RolledBack";
+                    response["persistenceState"] = "Restored";
+                }
                 return response.ToString(Newtonsoft.Json.Formatting.None);
             }
 
@@ -521,10 +576,34 @@ namespace GxMcp.Worker.Services
                 return response.ToString(Newtonsoft.Json.Formatting.None);
             }
 
+            // A restore is only safe when the failed write's post-save version
+            // token is available. The public WriteObject path performs the stale
+            // check again under its normal concurrency guard before touching the KB.
+            string rollbackBaseVersion = response["postSaveVerification"]?["versionToken"]?.ToString();
+            if (string.IsNullOrWhiteSpace(rollbackBaseVersion))
+                rollbackBaseVersion = response["versionToken"]?.ToString();
+            if (string.IsNullOrWhiteSpace(rollbackBaseVersion))
+            {
+                if (visualPart)
+                    MarkVisualRollbackUnavailable(response, "Rollback was not attempted because the post-save version token was unavailable.");
+                else
+                    response["rollback"] = new JObject
+                    {
+                        ["requested"] = true,
+                        ["attempted"] = false,
+                        ["rolledBack"] = false,
+                        ["verified"] = false,
+                        ["atomic"] = false,
+                        ["error"] = "Rollback was not attempted because the post-save version token was unavailable."
+                    };
+                return response.ToString(Newtonsoft.Json.Formatting.None);
+            }
+
             string restoreError = null;
+            JObject restoreEnvelope = null;
             try
             {
-                string restore = WriteObjectInternal(
+                string restore = WriteObject(
                     target,
                     partName,
                     priorSource,
@@ -534,11 +613,26 @@ namespace GxMcp.Worker.Services
                     autoInjectVariables: false,
                     dryRun: false,
                     explicitBase64: false,
-                    strictVerify: true);
-                JObject restoreEnvelope = JObject.Parse(restore);
-                if (!string.Equals(restoreEnvelope["status"]?.ToString(), "ok", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(restoreEnvelope["status"]?.ToString(), "success", StringComparison.OrdinalIgnoreCase))
-                    restoreError = restoreEnvelope["error"]?["message"]?.ToString() ?? restoreEnvelope.ToString(Newtonsoft.Json.Formatting.None);
+                    strictVerify: true,
+                    rollbackOnFailure: false,
+                    baseVersion: rollbackBaseVersion);
+                try { restoreEnvelope = JObject.Parse(restore ?? "{}"); }
+                catch { restoreError = "Rollback writer returned invalid JSON."; }
+
+                // A WriteNotPersisted/verification-unavailable response can still
+                // have performed the physical restore. Do not trust that envelope
+                // alone; the forced read below is the deciding evidence.
+                if (restoreEnvelope != null)
+                {
+                    string restoreStatus = restoreEnvelope["status"]?.ToString();
+                    string restoreCode = restoreEnvelope["code"]?.ToString();
+                    bool knownRestoreFailure = !string.Equals(restoreStatus, "ok", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(restoreStatus, "success", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(restoreCode, "WriteNotPersisted", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(restoreCode, "WriteVerificationUnavailable", StringComparison.OrdinalIgnoreCase);
+                    if (knownRestoreFailure && restoreError == null)
+                        restoreError = restoreEnvelope["error"]?["message"]?.ToString() ?? restoreEnvelope["message"]?.ToString() ?? "Rollback write failed.";
+                }
             }
             catch (Exception ex)
             {
@@ -558,7 +652,8 @@ namespace GxMcp.Worker.Services
                     out string readFailure,
                     allowSerializedPart: true))
                 {
-                    if (restoreError == null) restoreError = readFailure ?? (truncated ? "Rollback re-read was truncated." : "Rollback re-read was incomplete.");
+                    if (restoreError == null)
+                        restoreError = readFailure ?? (truncated ? "Rollback re-read was truncated." : "Rollback re-read was incomplete.");
                 }
             }
             catch (Exception ex)
@@ -566,25 +661,82 @@ namespace GxMcp.Worker.Services
                 if (restoreError == null) restoreError = "Rollback re-read failed: " + ex.Message;
             }
 
-            bool restored = restoreError == null && string.Equals(after, priorSource, StringComparison.Ordinal);
+            bool restored = restoreError == null && ContentEqualsForRollback(after, priorSource, partName);
+            bool atomicRestore = restoreError == null;
             response["rollback"] = new JObject
             {
                 ["requested"] = true,
+                ["attempted"] = true,
                 ["rolledBack"] = restored,
+                ["verified"] = restored,
+                ["atomic"] = atomicRestore,
+                ["baseVersion"] = rollbackBaseVersion,
                 ["saveRequired"] = true,
                 ["reReadConfirmed"] = after != null,
                 ["error"] = restoreError
             };
+            response["rolledBack"] = restored;
+            response["stateRestored"] = restored;
             response["postSaveVerification"] = new JObject
             {
                 ["reReadConfirmed"] = after != null,
-                ["versionToken"] = afterVersion
+                ["matches"] = restored,
+                ["versionToken"] = afterVersion,
+                ["reason"] = restored ? "rollbackVerified" : "rollbackUnverified"
             };
             response["source"] = after;
             response["persisted"] = false;
+            if (visualPart)
+            {
+                response["physicalCommit"] = !restored;
+                response["commitState"] = restored ? "RolledBack" : "Committed";
+                response["persistenceState"] = restored ? "Restored" : "CommittedUnverified";
+                response["saved"] = true;
+                response["sdkSaveCompleted"] = true;
+                response["persisted"] = !restored;
+                response["persistedVerified"] = false;
+                response["verified"] = false;
+            }
             if (!restored)
                 response["rollbackFailed"] = true;
             return response.ToString(Newtonsoft.Json.Formatting.None);
+        }
+
+        private static bool ContentEqualsForRollback(string actual, string expected, string partName)
+        {
+            if (actual == null || expected == null) return false;
+            if (WebFormXmlHelper.IsVisualPart(partName))
+            {
+                try { return XmlEquivalence.AreEquivalent(actual, expected, out _); }
+                catch { return false; }
+            }
+            return string.Equals(actual, expected, StringComparison.Ordinal);
+        }
+
+        internal static void MarkVisualRollbackUnavailable(JObject response, string reason)
+        {
+            if (response == null) return;
+            response["rollback"] = new JObject
+            {
+                ["requested"] = true,
+                ["attempted"] = false,
+                ["rolledBack"] = false,
+                ["verified"] = false,
+                ["atomic"] = false,
+                ["reason"] = "AtomicRollbackUnavailable",
+                ["message"] = reason ?? "The visual restore was not attempted because an atomic version-fenced restore could not be established."
+            };
+            response["rolledBack"] = false;
+            response["stateRestored"] = false;
+            // Preserve the distinction between a known committed write and an
+            // indeterminate post-save read. Never manufacture a physical commit
+            // claim merely because a rollback could not be attempted.
+            bool committed = string.Equals(response["commitState"]?.ToString(), "Committed", StringComparison.OrdinalIgnoreCase)
+                || response["sdkSaveCompleted"]?.Value<bool?>() == true;
+            response["physicalCommit"] = committed ? (JToken)true : JValue.CreateNull();
+            response["commitState"] = committed ? "Committed" : "Indeterminate";
+            response["persistenceState"] = committed ? "CommittedUnverified" : "Indeterminate";
+            response["persisted"] = committed ? (JToken)true : JValue.CreateNull();
         }
 
         internal static void MarkSourceRollbackUnavailable(JObject response)

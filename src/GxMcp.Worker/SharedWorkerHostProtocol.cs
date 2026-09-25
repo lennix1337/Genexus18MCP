@@ -196,13 +196,18 @@ namespace GxMcp.Worker
 
             JToken clientProgress = JValue.CreateNull();
             string childProgress = string.Empty;
-            var meta = rewritten["_meta"] as JObject;
-            if (meta != null && meta["progressToken"] != null && meta["progressToken"].Type != JTokenType.Null)
+            var meta = rewritten["_meta"] as JObject ?? new JObject();
+            // The broker is the authoritative owner of the child request.  The
+            // scheduler uses this field to create distinct client buckets; without
+            // it every shared-host command falls into the default bucket.
+            meta["attachmentId"] = attachmentId;
+            if (meta["progressToken"] != null && meta["progressToken"].Type != JTokenType.Null)
             {
                 clientProgress = clientRequest["_meta"]?["progressToken"]?.DeepClone() ?? JValue.CreateNull();
                 childProgress = "gxmcp-progress-" + attachmentId + "-" + sequence.ToString(System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N");
                 meta["progressToken"] = childProgress;
             }
+            rewritten["_meta"] = meta;
 
             route = new SharedWorkerRequestRoute
             {

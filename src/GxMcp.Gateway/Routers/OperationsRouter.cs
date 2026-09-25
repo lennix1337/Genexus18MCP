@@ -100,7 +100,12 @@ namespace GxMcp.Gateway.Routers
                         length = args?["length"]?.ToObject<int?>(),
                         decimals = args?["decimals"]?.ToObject<int?>(),
                         collection = args?["collection"]?.ToObject<bool?>(),
-                        // issue #32 item 1: batch add — array of {varName,typeName,length,decimals,collection}.
+                        // issue #315: fixed-size vector/matrix metadata. The Worker
+                        // validates the pair and applies it through the SDK ATT
+                        // property bag after type/binding resolution.
+                        dimensions = args?["dimensions"]?.ToObject<int?>(),
+                        dimensionSizes = args?["dimensionSizes"] as JArray,
+                        // issue #32 item 1: batch add — array of {varName,typeName,length,decimals,collection,dimensions,dimensionSizes}.
                         variables = args?["variables"],
                         dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
                         // issue #60 — validationMode="specify" runs the inline Specify pass after

@@ -160,6 +160,327 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ResumeCursor_IsRejectedForDifferentQueryScopeOrIndexGeneration()
+        {
+            var index = Build10kIndex();
+            var service = new SourceSearchService(index, objectService: null);
+            var first = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "Foo",
+                MaxResults = 10,
+                TimeoutMs = 0
+            }));
+            Assert.Equal("Timeout", first["code"]?.ToString());
+            string cursor = first["result"]?["nextCursor"]?.ToString();
+            Assert.False(string.IsNullOrWhiteSpace(cursor));
+
+            var differentQuery = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "Different",
+                Cursor = cursor,
+                MaxResults = 10,
+                TimeoutMs = 30000
+            }));
+            Assert.Equal("InvalidCursor", differentQuery["error"]?["code"]?.ToString());
+
+            var differentScope = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "Foo",
+                Scope = new List<string> { "rules" },
+                ScopeExplicit = true,
+                Cursor = cursor,
+                MaxResults = 10,
+                TimeoutMs = 30000
+            }));
+            Assert.Equal("InvalidCursor", differentScope["error"]?["code"]?.ToString());
+
+            // Replacing the in-memory index is a new generation even when the
+            // object set is equivalent; the old continuation must not be accepted.
+            index.LoadFromEntries(Build10kIndex().GetIndex().Objects.Values);
+            var differentGeneration = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "Foo",
+                Cursor = cursor,
+                MaxResults = 10,
+                TimeoutMs = 30000
+            }));
+            Assert.Equal("InvalidCursor", differentGeneration["error"]?["code"]?.ToString());
+        }
+
+        [Fact]
+        public void MetadataTimeout_PublishesParseableMetadataCursorAndResumes()
+        {
+            var index = new IndexCacheService();
+            index.LoadFromEntries(new[]
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Name = "First", Type = "Procedure", Description = "NEEDLE first"
+                },
+                new SearchIndex.IndexEntry
+                {
+                    Name = "Second", Type = "Procedure", Description = "NEEDLE second"
+                }
+            });
+
+            var service = new SourceSearchService(index, objectService: null);
+            var timedOut = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "NEEDLE",
+                Fields = new List<string> { "description" },
+                MaxResults = 10,
+                TimeoutMs = 0
+            }));
+            Assert.Equal("Timeout", timedOut["code"]?.ToString());
+            string cursor = timedOut["result"]?["nextCursor"]?.ToString();
+            Assert.True(SourceSearchService.TryParseResumeCursor(
+                cursor, out int entry, out int skipped, out bool metadata));
+            Assert.Equal(0, entry);
+            Assert.Equal(0, skipped);
+            Assert.True(metadata);
+
+            var resumed = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "NEEDLE",
+                Fields = new List<string> { "description" },
+                Cursor = cursor,
+                MaxResults = 10,
+                TimeoutMs = 30000
+            }));
+            Assert.Equal("SourceSearchCompleted", resumed["code"]?.ToString());
+            Assert.Equal(2, resumed["result"]?["count"]?.ToObject<int>());
+        }
+
+        [Fact]
+        public void MetadataCancellation_PublishesParseableMetadataCursor()
+        {
+            var index = new IndexCacheService();
+            index.LoadFromEntries(new[]
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Name = "First", Type = "Procedure", Description = "NEEDLE first"
+                },
+                new SearchIndex.IndexEntry
+                {
+                    Name = "Second", Type = "Procedure", Description = "NEEDLE second"
+                }
+            });
+            var service = new SourceSearchService(index, objectService: null);
+            using (var cts = new CancellationTokenSource())
+            {
+                cts.Cancel();
+                var cancelled = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+                {
+                    Pattern = "NEEDLE",
+                    Fields = new List<string> { "description" },
+                    MaxResults = 10,
+                    TimeoutMs = 30000
+                }, cts.Token));
+                Assert.Equal("Cancelled", cancelled["code"]?.ToString());
+                string cursor = cancelled["result"]?["nextCursor"]?.ToString();
+                Assert.True(SourceSearchService.TryParseResumeCursor(
+                    cursor, out int entry, out int skipped, out bool metadata));
+                Assert.Equal(0, entry);
+                Assert.Equal(0, skipped);
+                Assert.True(metadata);
+            }
+        }
+
+        [Fact]
+        public void MetadataOnlySearch_HonorsGuidEntityAndPathFilters()
+        {
+            var index = new IndexCacheService();
+            index.LoadFromEntries(new[]
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Guid = "guid-target", EntityKey = "entity-target",
+                    Name = "Target", Type = "Procedure", Path = "Root Module/Target",
+                    Description = "NEEDLE target"
+                },
+                new SearchIndex.IndexEntry
+                {
+                    Guid = "guid-other", EntityKey = "entity-other",
+                    Name = "Other", Type = "Procedure", Path = "Root Module/Other",
+                    Description = "NEEDLE other"
+                }
+            });
+            var service = new SourceSearchService(index, objectService: null);
+
+            var filters = new[]
+            {
+                new SourceSearchCriteria { ObjectGuid = "guid-target" },
+                new SourceSearchCriteria { ObjectEntityKey = "entity-target" },
+                new SourceSearchCriteria { ObjectPath = "Target" }
+            };
+            foreach (var filter in filters)
+            {
+                filter.Pattern = "NEEDLE";
+                filter.Fields = new List<string> { "description" };
+                filter.MaxResults = 10;
+                filter.TimeoutMs = 30000;
+                var result = JObject.Parse(service.SearchAsJson(filter));
+                var hits = (JArray)result["result"]?["hits"];
+                Assert.Single(hits);
+                Assert.Equal("Target", hits[0]?["objectName"]?.ToString());
+            }
+        }
+
+        [Fact]
+        public void ConflictingObjectNameAndGuidSelectorsAreRejected()
+        {
+            var index = new IndexCacheService();
+            index.LoadFromEntries(new[]
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Guid = "guid-target", EntityKey = "entity-target",
+                    Name = "Target", Type = "Procedure", Path = "Root Module/Target",
+                    FullSource = "NEEDLE target"
+                },
+                new SearchIndex.IndexEntry
+                {
+                    Guid = "guid-other", EntityKey = "entity-other",
+                    Name = "Other", Type = "Procedure", Path = "Root Module/Other",
+                    FullSource = "NEEDLE other"
+                }
+            });
+            index.MarkIndexComplete(2);
+            var service = new SourceSearchService(index, objectService: null);
+
+            var response = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "NEEDLE",
+                ObjectName = "Other",
+                ObjectGuid = "guid-target",
+                MaxResults = 10,
+                TimeoutMs = 30000
+            }));
+
+            Assert.Equal("error", response["status"]?.ToString());
+            Assert.Equal("ConflictingObjectSelectors", response["error"]?["code"]?.ToString());
+        }
+
+        [Fact]
+        public void ConflictingObjectNameAndEntityOrPathSelectorsAreRejected()
+        {
+            var index = new IndexCacheService();
+            index.LoadFromEntries(new[]
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Guid = "guid-target", EntityKey = "entity-target",
+                    Name = "Target", Type = "Procedure", Path = "Root Module/Target",
+                    FullSource = "NEEDLE"
+                },
+                new SearchIndex.IndexEntry
+                {
+                    Guid = "guid-other", EntityKey = "entity-other",
+                    Name = "Other", Type = "Procedure", Path = "Root Module/Other",
+                    FullSource = "NEEDLE"
+                }
+            });
+            index.MarkIndexComplete(2);
+            var service = new SourceSearchService(index, objectService: null);
+
+            foreach (var selector in new Action<SourceSearchCriteria>[]
+            {
+                criteria => criteria.ObjectEntityKey = "entity-target",
+                criteria => criteria.ObjectPath = "Root Module/Target"
+            })
+            {
+                var criteria = new SourceSearchCriteria
+                {
+                    Pattern = "NEEDLE",
+                    ObjectName = "Other",
+                    MaxResults = 10,
+                    TimeoutMs = 30000
+                };
+                selector(criteria);
+                var response = JObject.Parse(service.SearchAsJson(criteria));
+                Assert.Equal("ConflictingObjectSelectors", response["error"]?["code"]?.ToString());
+            }
+        }
+
+        [Fact]
+        public void MatchingObjectNameAndIdentitySelectorsRemainConjunctive()
+        {
+            var index = new IndexCacheService();
+            index.LoadFromEntries(new[]
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Guid = "guid-target", EntityKey = "entity-target",
+                    Name = "Target", Type = "Procedure", FullSource = "NEEDLE"
+                },
+                new SearchIndex.IndexEntry
+                {
+                    Guid = "guid-other", EntityKey = "entity-other",
+                    Name = "Other", Type = "Procedure", FullSource = "NEEDLE"
+                }
+            });
+            index.MarkIndexComplete(2);
+            var service = new SourceSearchService(index, objectService: null);
+
+            var response = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "NEEDLE",
+                ObjectName = "Target",
+                ObjectGuid = "guid-target",
+                MaxResults = 10,
+                TimeoutMs = 30000
+            }));
+
+            Assert.Equal("SourceSearchCompleted", response["code"]?.ToString());
+            Assert.Equal(1, response["result"]?["totalObjects"]?.ToObject<int>());
+            Assert.Equal("Target", response["result"]?["hits"]?[0]?["objectName"]?.ToString());
+        }
+
+        [Fact]
+        public void TruncatedSearch_NextCursorIsOpaqueToken()
+        {
+            var index = new IndexCacheService();
+            index.LoadFromEntries(new[]
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Name = "One", Type = "Procedure", FullSource = "NEEDLE"
+                }
+            });
+            var result = JObject.Parse(new SourceSearchService(index, objectService: null).SearchAsJson(
+                new SourceSearchCriteria
+                {
+                    Pattern = "NEEDLE",
+                    MaxResults = 0,
+                    TimeoutMs = 30000
+                }));
+            Assert.Equal(JTokenType.String, result["result"]?["nextCursor"]?.Type);
+            Assert.True(SourceSearchService.TryParseResumeCursor(
+                result["result"]?["nextCursor"]?.ToString(),
+                out int entry, out int skipped, out bool metadata));
+            Assert.Equal(0, entry);
+            Assert.Equal(0, skipped);
+            Assert.False(metadata);
+
+            var metadataResult = JObject.Parse(new SourceSearchService(index, objectService: null).SearchAsJson(
+                new SourceSearchCriteria
+                {
+                    Pattern = "NEEDLE",
+                    Fields = new List<string> { "description" },
+                    MaxResults = 0,
+                    TimeoutMs = 30000
+                }));
+            Assert.Equal(JTokenType.String, metadataResult["result"]?["nextCursor"]?.Type);
+            Assert.True(SourceSearchService.TryParseResumeCursor(
+                metadataResult["result"]?["nextCursor"]?.ToString(),
+                out int metadataEntry, out int metadataSkipped, out bool metadataPhase));
+            Assert.Equal(0, metadataEntry);
+            Assert.Equal(0, metadataSkipped);
+            Assert.True(metadataPhase);
+        }
+
+        [Fact]
         public void WordBoundaryPattern_DoesNotDropIndexedSourceHits()
         {
             var index = new IndexCacheService();

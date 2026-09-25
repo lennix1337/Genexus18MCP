@@ -52,10 +52,74 @@ function Show-LiveSummary {
     Get-Content -LiteralPath $summaryPath | ForEach-Object { Write-Host "  $_" }
 }
 
-function Fail-Live([string]$Message, [int]$ExitCode = 1) {
+function Fail-Live([string]$Message, [int]$ExitCode = 1, [string]$Status = 'unavailable') {
     Show-LiveSummary
-    Write-Error "live=unavailable; Live gate failed: $Message"
+    [Console]::Error.WriteLine("live=$Status; Live gate failed: $Message")
     exit $ExitCode
+}
+
+function Get-LiveKbOpenFailure {
+    param([string]$GatewayLogPath)
+    # A KB that cannot be opened by the selected SDK/fixture is an environment
+    # limitation, not a product-code failure. Detect it from the harness summary
+    # and the gateway log so such runs are reported as `unavailable` (exit 2)
+    # instead of being misclassified as a failing gate (exit 1).
+    $summaryPath = $env:GXMCP_LIVE_SUMMARY_PATH
+    if (-not [string]::IsNullOrWhiteSpace($summaryPath) -and (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
+        try {
+            $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
+            if (-not [string]::IsNullOrWhiteSpace([string]$summary.kbAlias) -and
+                [string]$summary.selectionState -ne 'valid') {
+                return $true
+            }
+        } catch {
+            # fall through to the log-based check
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($GatewayLogPath) -and (Test-Path -LiteralPath $GatewayLogPath -PathType Leaf)) {
+        if (Select-String -LiteralPath $GatewayLogPath -Pattern 'NoKb|KB-OPEN-FAIL|AUTO-OPEN-GIVEUP|ERROR opening KB' -Quiet) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Assert-LiveSummaryHealthy {
+    $summaryPath = $env:GXMCP_LIVE_SUMMARY_PATH
+    if ([string]::IsNullOrWhiteSpace($summaryPath) -or -not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
+        Fail-Live 'Live harness did not produce its required structured summary.' 2
+    }
+
+    try {
+        $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
+    } catch {
+        Fail-Live "Live harness summary is not valid JSON: $($_.Exception.Message)" 2
+    }
+
+    if ($null -eq $summary.errorCount) {
+        Fail-Live 'Live harness did not report a diagnostic error count; the gate is unavailable.' 2
+    }
+    $errorCount = 0
+    try { $errorCount = [int]$summary.errorCount } catch {
+        Fail-Live 'Live harness diagnostic error count is invalid; the gate is unavailable.' 2
+    }
+    if ($errorCount -ne 0) {
+        Fail-Live "Live diagnostics recorded $errorCount actual Worker/Gateway error line(s); the gate is unavailable rather than passed." 2
+    }
+    $logPath = [string]($summary.gatewayLogPath)
+    if ([string]::IsNullOrWhiteSpace($logPath) -or -not (Test-Path -LiteralPath $logPath -PathType Leaf)) {
+        Fail-Live 'Live harness did not retain its required diagnostic log; the gate is unavailable.' 2
+    }
+    $openFailure = Get-LiveKbOpenFailure -GatewayLogPath $logPath
+    if ($openFailure) {
+        Fail-Live 'Live harness could not open the explicit KB; the gate is unavailable rather than passed.' 2
+    }
+    if ($summary.processExited -ne $true) {
+        Fail-Live 'Live harness did not confirm Gateway/Worker process exit.' 2
+    }
+    if ($summary.cleanup -ne 'passed') {
+        Fail-Live "Live harness cleanup was '$($summary.cleanup)', not 'passed'." 2
+    }
 }
 
 function Write-LiveProgress {
@@ -115,14 +179,14 @@ if (-not (Test-Path -LiteralPath $KbPath -PathType Container)) {
 }
 $KbPath = (Resolve-Path -LiteralPath $KbPath).Path
 if ([string]::IsNullOrWhiteSpace($FixtureManifest)) { $FixtureManifest = $env:GXMCP_TEST_FIXTURE }
-if ($RunBenchmark -and -not [string]::IsNullOrWhiteSpace($FixtureManifest)) {
+if (-not [string]::IsNullOrWhiteSpace($FixtureManifest)) {
     if (-not (Test-Path -LiteralPath $FixtureManifest -PathType Leaf)) {
         Fail-Live "Fixture manifest not found: $FixtureManifest"
     }
     try {
         $fixture = Get-Content -LiteralPath $FixtureManifest -Raw | ConvertFrom-Json
         Assert-LiveFixture $fixture $KbPath
-    } catch { Fail-Live $_.Exception.Message }
+    } catch { Fail-Live $_.Exception.Message 1 'failed' }
 } else {
     # An explicit KB path is sufficient for live operation. A manifest is
     # optional benchmark metadata only.
@@ -179,7 +243,7 @@ if (-not $SkipBuild) {
     Write-Host "`n>>> Building current Gateway/Worker artifact" -ForegroundColor Cyan
     & pwsh -NoProfile -File (Join-Path $root 'build.ps1')
     if ($LASTEXITCODE -ne 0) {
-        Fail-Live "Current artifact build failed with exit code $LASTEXITCODE."
+        Fail-Live "Current artifact build failed with exit code $LASTEXITCODE." 1 'failed'
     }
 }
 
@@ -187,21 +251,21 @@ $gatewayExe = Join-Path $root 'publish\GxMcp.Gateway.exe'
 $sourceSchema = Join-Path $root 'src\GxMcp.Gateway\tool_definitions.json'
 $publishedSchema = Join-Path $root 'publish\tool_definitions.json'
 if (-not (Test-Path -LiteralPath $gatewayExe -PathType Leaf)) {
-    Fail-Live "Published Gateway not found at '$gatewayExe'."
+    Fail-Live "Published Gateway not found at '$gatewayExe'." 1 'failed'
 }
 if (-not (Test-Path -LiteralPath $publishedSchema -PathType Leaf)) {
-    Fail-Live "Published tool schema not found at '$publishedSchema'."
+    Fail-Live "Published tool schema not found at '$publishedSchema'." 1 'failed'
 }
 if ((Get-FileHash -LiteralPath $sourceSchema -Algorithm SHA256).Hash -ne
     (Get-FileHash -LiteralPath $publishedSchema -Algorithm SHA256).Hash) {
-    Fail-Live "Published tool schema is stale. Run without -SkipBuild to rebuild the current artifact."
+    Fail-Live "Published tool schema is stale. Run without -SkipBuild to rebuild the current artifact." 1 'failed'
 }
 
 $versionMatch = Select-String -LiteralPath (Join-Path $root 'src\GxMcp.Gateway\GxMcp.Gateway.csproj') -Pattern '<Version>([^<]+)</Version>'
 $sourceVersion = if ($versionMatch) { $versionMatch.Matches[0].Groups[1].Value } else { $null }
 $publishedVersion = [System.Reflection.AssemblyName]::GetAssemblyName($gatewayExe.Replace('.exe', '.dll')).Version.ToString(3)
 if (-not [string]::IsNullOrWhiteSpace($sourceVersion) -and $sourceVersion -ne $publishedVersion) {
-    Fail-Live "Published Gateway version $publishedVersion does not match source version $sourceVersion. Run without -SkipBuild."
+    Fail-Live "Published Gateway version $publishedVersion does not match source version $sourceVersion. Run without -SkipBuild." 1 'failed'
 }
 
 $gatewayProject = Join-Path $root 'src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj'
@@ -232,12 +296,15 @@ Write-LiveProgress "Gateway live smoke starting; filter=$TestFilter; RPC timeout
 Write-Host "`n>>> Gateway live smoke" -ForegroundColor Cyan
 & dotnet test $gatewayProject --no-restore --nologo -v:minimal --filter $TestFilter
 if ($LASTEXITCODE -ne 0) {
-    Fail-Live "Gateway live smoke failed with exit code $LASTEXITCODE. Gateway log: $gatewayLogPath"
+    if (Get-LiveKbOpenFailure -GatewayLogPath $gatewayLogPath) {
+        Fail-Live "Gateway live smoke could not use the explicit KB under this SDK; the gate is unavailable rather than a product failure. Gateway log: $gatewayLogPath" 2
+    }
+    Fail-Live "Gateway live smoke failed with exit code $LASTEXITCODE. Gateway log: $gatewayLogPath" 1 'failed'
 }
 try {
     Assert-LiveGatewayMaster -LogPath $gatewayLogPath -RequireStdio
 } catch {
-    Fail-Live $_.Exception.Message
+    Fail-Live $_.Exception.Message 1 'failed'
 }
 Write-Host "Gateway master verified; log=$gatewayLogPath" -ForegroundColor Green
 
@@ -255,7 +322,7 @@ if ($RequireBuildAll) {
         Fail-Live 'Native Build All is unavailable in this fixture/environment (see the structured result above).' 2
     }
     if ($buildAllExit -ne 0) {
-        Fail-Live "Native Build All evidence gate failed with exit code $buildAllExit."
+        Fail-Live "Native Build All evidence gate failed with exit code $buildAllExit." 1 'failed'
     }
     Write-Host 'Native Build All evidence gate passed.' -ForegroundColor Green
 }
@@ -266,7 +333,7 @@ if (-not $GatewayOnly) {
     Write-Host "`n>>> Worker SDK live check" -ForegroundColor Cyan
     & dotnet test $workerProject --no-restore --nologo -v:minimal --filter 'FullyQualifiedName~InProcessBuildRunnerTests.TryResolveTypes_finds_GeneXus_tasks_when_SDK_installed'
     if ($LASTEXITCODE -ne 0) {
-        Fail-Live "Worker SDK live check failed with exit code $LASTEXITCODE."
+        Fail-Live "Worker SDK live check failed with exit code $LASTEXITCODE." 1 'failed'
     }
 }
 
@@ -349,6 +416,7 @@ if ($RunBenchmark) {
     Write-Host "Benchmark output: $BenchmarkOut" -ForegroundColor Green
 }
 
+Assert-LiveSummaryHealthy
 Show-LiveSummary
 Write-Host "`nLive gate completed." -ForegroundColor Green
 } finally {

@@ -79,6 +79,55 @@ namespace GxMcp.Gateway
         }
 
         /// <summary>
+        /// Persist the post-timeout recovery evidence for a mutating tool and
+        /// annotate the timeout envelope. Manifest imports deliberately use the
+        /// reserved KB-level target: a successful read of one arbitrary object
+        /// or Source part is not evidence for the whole manifest.
+        /// </summary>
+        internal static bool RegisterTimeoutRecoveryFence(
+            MutationRecoveryRegistry recovery,
+            string? kbAlias,
+            string? toolName,
+            JObject? toolArgs,
+            string? operationId,
+            JObject timeoutPayload)
+        {
+            if (recovery == null || string.IsNullOrWhiteSpace(kbAlias)
+                || !IsMutatingTool(toolName ?? string.Empty, toolArgs))
+                return false;
+
+            var targets = EnumerateMutationRecoveryTargets(toolName ?? string.Empty, toolArgs).ToList();
+            if (targets.Count == 0) return false;
+
+            string recoveryOperationId = string.IsNullOrWhiteSpace(operationId)
+                ? "timeout-" + Guid.NewGuid().ToString("N")
+                : operationId;
+            foreach (var recoveryTarget in targets)
+            {
+                if (MutationRecoveryRegistry.IsKbLevelRecoveryTarget(
+                    recoveryTarget.Target, recoveryTarget.Part))
+                {
+                    recovery.RequireRead(
+                        kbAlias, recoveryTarget.Target, recoveryTarget.Part, recoveryOperationId);
+                }
+                else
+                {
+                    recovery.RequireRead(
+                        kbAlias, recoveryTarget.Target, recoveryTarget.Part, recoveryOperationId,
+                        toolArgs?["guid"]?.ToString(), toolArgs?["entityKey"]?.ToString(),
+                        toolArgs?["type"]?.ToString(), toolArgs?["path"]?.ToString(),
+                        toolArgs?["baseVersion"]?.ToString() ?? toolArgs?["expectedVersion"]?.ToString());
+                }
+            }
+
+            timeoutPayload["reReadRequired"] = true;
+            if (targets.Any(target => MutationRecoveryRegistry.IsKbLevelRecoveryTarget(
+                target.Target, target.Part)))
+                timeoutPayload["recoveryScope"] = "kb";
+            return true;
+        }
+
+        /// <summary>
         /// Inner dispatch: returns { isError, content } (tool result payload, no
         /// JSON-RPC envelope). Extracted from the former DispatchCore local function;
         /// the caller binds request/session context explicitly.
@@ -170,10 +219,20 @@ namespace GxMcp.Gateway
             if (string.Equals(tName, "genexus_read", StringComparison.OrdinalIgnoreCase))
             {
                 _mutationRecovery.Refresh();
-                foreach (var target in EnumerateMutationRecoveryTargets(tName, tArgs))
+                bool ReadCoversPart(string part)
                 {
-                    _mutationRecovery.TryGet(kbScope, target.Target, target.Part, out var observed);
-                    recoveryReads.Add((target.Target, target.Part, observed));
+                    if (tArgs?["part"] != null && tArgs["part"].Type != JTokenType.Null)
+                        return string.Equals(tArgs["part"]?.ToString(), part, StringComparison.OrdinalIgnoreCase);
+                    if (tArgs?["parts"] is JArray requestedParts)
+                        return requestedParts.OfType<JToken>().Any(item =>
+                            string.Equals(item.ToString(), part, StringComparison.OrdinalIgnoreCase));
+                    // No part selector is a complete-object read.
+                    return true;
+                }
+                foreach (var observed in _mutationRecovery.FindForRead(kbScope, tArgs))
+                {
+                    if (ReadCoversPart(observed.Part))
+                        recoveryReads.Add((observed.Target, observed.Part, observed));
                 }
                 // A cached response cannot reconcile an uncertain persisted write.
                 isLiveTool |= !_mutationRecovery.IsHealthy || _mutationRecovery.Count > 0;
@@ -512,8 +571,35 @@ namespace GxMcp.Gateway
                     if (!isErr && string.Equals(tName, "genexus_read", StringComparison.OrdinalIgnoreCase)
                         && IsCompleteMutationRecoveryRead(finalResult))
                     {
-                        foreach (var recoveryTarget in recoveryReads)
-                            _mutationRecovery.ConfirmRead(kbScope, recoveryTarget.Target, recoveryTarget.Part, recoveryTarget.Observed);
+                        if (IsFullObjectMutationRecoveryRead(finalResult))
+                        {
+                            // A versioned FullObjectRead is complete evidence for
+                            // every part of the object, not just the default Source
+                            // key used to find the request.
+                            var fullParts = (finalResult as JObject)?["result"]?["parts"] as JObject;
+                            var availableParts = (finalResult as JObject)?["result"]?["availableParts"] as JArray;
+                            foreach (var recoveryTarget in recoveryReads)
+                            {
+                                var pending = recoveryTarget.Observed;
+                                if (pending == null) continue;
+                                bool partWasRead = fullParts != null
+                                    && fullParts.Properties().Any(property =>
+                                        string.Equals(property.Name, pending.Part, StringComparison.OrdinalIgnoreCase));
+                                bool emptyPartWasEnumerated = availableParts != null
+                                    && availableParts.Any(part => string.Equals(part?.ToString(), pending.Part, StringComparison.OrdinalIgnoreCase));
+                                if (!partWasRead && !emptyPartWasEnumerated) continue;
+                                _mutationRecovery.ConfirmRead(
+                                    kbScope,
+                                    pending.Target,
+                                    pending.Part,
+                                    pending);
+                            }
+                        }
+                        else
+                        {
+                            foreach (var recoveryTarget in recoveryReads)
+                                _mutationRecovery.ConfirmRead(kbScope, recoveryTarget.Target, recoveryTarget.Part, recoveryTarget.Observed);
+                        }
                     }
 
                     // StripNulls: remove null-valued properties from the result to reduce wire size.
@@ -609,9 +695,13 @@ namespace GxMcp.Gateway
                         timeoutError["retryable"] = false;
                         timeoutError["reconciliationRequired"] = true;
                     }
+                    bool hasTimeoutRecoveryTargets = RegisterTimeoutRecoveryFence(
+                        _mutationRecovery, kbScope, tName, tArgs, operationId, timeoutPayload);
                     var help = new JArray();
                     if (recordWrite)
                         help.Add("Do not repeat the write. Poll the original operation result, then query the record keys against the datastore.");
+                    if (string.Equals(timeoutPayload["recoveryScope"]?.ToString(), "kb", StringComparison.OrdinalIgnoreCase))
+                        help.Add("The manifest may have changed multiple KB objects and parts; reconcile the KB state before retrying.");
                     if (!string.IsNullOrWhiteSpace(operationId))
                     {
                         timeoutPayload["operationId"] = operationId;
@@ -619,16 +709,14 @@ namespace GxMcp.Gateway
                         if (tName != null && (tName.IndexOf("edit", StringComparison.OrdinalIgnoreCase) >= 0
                                              || tName.IndexOf("write", StringComparison.OrdinalIgnoreCase) >= 0
                                              || tName.IndexOf("variable", StringComparison.OrdinalIgnoreCase) >= 0
-                                             || isAsyncGxServer))
+                                             || isAsyncGxServer
+                                             || hasTimeoutRecoveryTargets))
                         {
                             // Writes have usually persisted by the time the gateway times out; poll result, then read — don't retry the edit.
                             help.Add("For long writes the change is usually already persisted; check action='result' once, then read back instead of retrying.");
-                            foreach (var recoveryTarget in EnumerateMutationRecoveryTargets(tName!, tArgs))
-                                _mutationRecovery.RequireRead(kbScope, recoveryTarget.Target, recoveryTarget.Part, operationId);
-                            timeoutPayload["reReadRequired"] = true;
                         }
                     }
-                    else if (!recordWrite)
+                    else if (!recordWrite && !hasTimeoutRecoveryTargets)
                     {
                         help.Add("Retry with narrower scope or lower limit.");
                     }
@@ -944,8 +1032,16 @@ namespace GxMcp.Gateway
                                    ?? JobRegistry.EstimateBuildSeconds($"lifecycle/{lcAction}")
                                    ?? (string.Equals(lcAction, "rebuild", StringComparison.OrdinalIgnoreCase) ? 120 : 60);
             int threshold = _activeConfig?.Server?.BuildSyncThresholdSeconds ?? 20;
+            bool waitUntilDone = tArgs?["wait_until_done"]?.ToObject<bool?>() ?? false;
+            bool registryOnlyAction = string.Equals(lcAction, "validate-kb", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(lcAction, "reorg", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(lcAction, "index", StringComparison.OrdinalIgnoreCase);
 
-            bool useSync = callerEstimate.HasValue && BuildPathSelector.UseSync(callerEstimate.Value, threshold);
+            // A caller asking for wait_until_done must stay on the registry path even
+            // when it supplies a small estimate. The same is true for the other long
+            // actions: their worker operation has no task id to poll synchronously.
+            bool useSync = !waitUntilDone && !registryOnlyAction
+                && callerEstimate.HasValue && BuildPathSelector.UseSync(callerEstimate.Value, threshold);
             if (useSync)
             {
                 // UseSync == true → fall through to the normal synchronous dispatch below
@@ -954,26 +1050,61 @@ namespace GxMcp.Gateway
             }
 
             // --- ASYNC PATH (Task 4.3) ---
-            // Register the job first, then fire-and-forget the actual build.
-            // The worker call is synchronous over the JSON-RPC pipe, so we wrap
-            // it in Task.Run so the gateway thread returns to the caller immediately.
-            var job = JobRegistry.Start(sessionId, $"lifecycle/{lcAction}", estimatedSeconds, GetCurrentOwnership(sessionId));
-            Log($"[AsyncBuild] Dispatching job={job.Id} action={lcAction} target={tArgs?["target"]?.ToString() ?? "(all)"} estimated={estimatedSeconds}s");
+            // Admission happens before Task.Run/SendWorkerCommandAsync. A queued
+            // caller therefore receives an operation handle immediately instead of
+            // waiting behind the Worker STA and only then seeing a late rejection.
+            var ownership = GetCurrentOwnership(sessionId);
+            // KbId is the stable physical-worker identity; aliases can differ
+            // between independent Gateway attachments to the same shared Worker.
+            string workerScope = _currentKb.Value?.KbId ?? ownership.KbId;
+            bool serialize = !string.Equals(
+                Environment.GetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS"),
+                "1", StringComparison.OrdinalIgnoreCase);
+            var admission = JobRegistry.AdmitLifecycle(
+                sessionId,
+                $"lifecycle/{lcAction}",
+                estimatedSeconds,
+                ownership,
+                workerScope,
+                BuildLifecycleRequestKey(lcAction, tArgs),
+                serialize);
+            var job = admission.Job;
+            if (admission.IsNew)
+            {
+                job.WorkerAlias = _currentKb.Value?.NormalizedAlias;
+                job.QueueAction = lcAction;
+                job.QueueTarget = tArgs?["target"]?.ToString();
+            }
+            Log($"[AsyncBuild] Dispatching job={job.Id} action={lcAction} target={tArgs?["target"]?.ToString() ?? "(all)"} estimated={estimatedSeconds}s status={job.Status} coalesced={admission.Coalesced}");
 
-            _ = Task.Run(async () =>
+            // Only the canonical operation owns a worker command.  A coalesced caller
+            // joins the existing poller and therefore cannot start a second build.
+            if (admission.IsNew)
+            {
+                _ = Task.Run(async () =>
             {
                 try
                 {
+                    if (!await JobRegistry.WaitForLifecycleAdmissionAsync(job.Id, CancellationToken.None))
+                    {
+                        JobRegistry.Complete(job.Id, false, "Lifecycle admission cancelled before worker dispatch.");
+                        return;
+                    }
+
                     // Step 1: Kick off the build on the worker — returns {status:"Accepted", taskId:...}
                     // v2.3.8 (Task 5.2) — forward callee-expansion knobs through the async path.
                     // Keep dryRun out of this branch entirely; the condition above routes
                     // previews through the normal worker command, where BuildDryRun runs.
                     var buildCmd = BuildAsyncLifecycleCommand(lcAction, tArgs, job.Id);
 
+                    int admissionTimeoutMs = string.Equals(lcAction, "validate-kb", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(lcAction, "index", StringComparison.OrdinalIgnoreCase)
+                        ? 600000
+                        : 60000;
                     JObject? ackEnvelope = await SendWorkerCommandAsync(
                         buildCmd,
-                        60000,
-                        $"Timeout starting async build (job={job.Id})",
+                        admissionTimeoutMs,
+                        $"Timeout starting async lifecycle action (job={job.Id})",
                         env => env,
                         (_, correlationId) => new JObject { ["error"] = "Gateway timeout starting build.", ["correlationId"] = correlationId },
                         toolName: tName, toolArgs: tArgs, trackOperation: false);
@@ -990,16 +1121,18 @@ namespace GxMcp.Gateway
                     // Issue #27 item 1: record the worker task id on the job so a
                     // later status/result poll can reconcile against the worker's
                     // live build-task state if this background poller wedges.
-                    if (!string.IsNullOrEmpty(taskId)) job.WorkerTaskId = taskId;
+                    if (!string.IsNullOrEmpty(taskId)) JobRegistry.SetWorkerTaskId(job.Id, taskId);
                     if (string.IsNullOrEmpty(taskId))
                     {
-                        // No taskId means the worker returned a synchronous result already
-                        // (or an error response). Complete with what we have.
-                        bool syncSuccess = !string.Equals(ack["status"]?.ToString(), "Error",
-                            StringComparison.OrdinalIgnoreCase) && ack["error"] == null;
+                        // No taskId means a synchronous long action (validate-kb or a
+                        // forced index refresh) completed inside the worker command.
+                        // Store that terminal payload in the same operation registry.
+                        bool syncSuccess = IsSuccessfulBackgroundToolCompletion(ack)
+                            && !string.Equals(ack["status"]?.ToString(), "Error", StringComparison.OrdinalIgnoreCase)
+                            && ack["error"] == null;
                         JobRegistry.Complete(job.Id, syncSuccess,
-                                    syncSuccess ? "Build completed (sync)" : $"Build error: {ack["error"]?.ToString() ?? "unknown"}",
-                            ack);
+                                    syncSuccess ? "Lifecycle action completed" : $"Lifecycle action error: {ack["error"]?.ToString() ?? "unknown"}",
+                                    ack);
                         return;
                     }
 
@@ -1094,6 +1227,27 @@ namespace GxMcp.Gateway
 
                     // Step 3: Complete the JobRegistry entry with the real final status.
                     string? finalState = finalStatus?["status"]?.ToString() ?? finalStatus?["Status"]?.ToString() ?? "Timeout";
+                    bool terminalWorkerState =
+                        string.Equals(finalState, "Succeeded", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(finalState, "Failed", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(finalState, "Error", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(finalState, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(finalState, "ReorgRequired", StringComparison.OrdinalIgnoreCase);
+                    if (terminalWorkerState)
+                    {
+                        // Worker Status is a delta surface. Hydrate the canonical
+                        // Gateway operation with Worker Result before storing it so
+                        // action=result retains the complete warning list.
+                        JObject? fullResult = await ReadWorkerLifecycleResultAsync(
+                            taskId, tArgs, CancellationToken.None);
+                        if (fullResult != null)
+                        {
+                            finalStatus = fullResult;
+                            finalState = fullResult["status"]?.ToString()
+                                ?? fullResult["Status"]?.ToString()
+                                ?? finalState;
+                        }
+                    }
                     var finalOutcome = finalStatus != null
                         ? LifecycleResponseShaper.ClassifyBuildOutcome(finalStatus)
                         : LifecycleResponseShaper.BuildOutcome.Error;
@@ -1113,12 +1267,12 @@ namespace GxMcp.Gateway
                     JobRegistry.Complete(job.Id, false, $"Build exception: {ex.Message}");
                     Log($"[AsyncBuild] Exception in job={job.Id}: {ex.Message}");
                 }
-            });
+                });
+            }
 
             // Friction 2026-05-22: wait_until_done=true blocks in a single turn
             // up to MaxLongPollSeconds instead of forcing the caller to poll. Falls
             // back to job_id+running if the build outruns the cap.
-            bool waitUntilDone = tArgs?["wait_until_done"]?.ToObject<bool?>() ?? false;
             if (waitUntilDone)
             {
                 int blockingCap = tArgs?["wait_seconds"]?.ToObject<int?>() ?? McpRouter.MaxLongPollSeconds;
@@ -1136,7 +1290,8 @@ namespace GxMcp.Gateway
                         JobRegistry, job.Id, blockingCap,
                         progressToken: clientProgressToken,
                         heartbeat: hasProgressToken ? TryWriteStdout : null,
-                        cancellationToken: longPollCancellationToken);
+                        cancellationToken: longPollCancellationToken,
+                        until: "terminal");
                 }
                 finally
                 {
@@ -1155,7 +1310,8 @@ namespace GxMcp.Gateway
                 // through ClassifyBuildOutcome so 0/0/exit=0 = success and
                 // partial_success surfaces as a warning marker, not an error.
                 string terminalStatus = pollResult["status"]?.ToString();
-                bool stillRunning = string.Equals(terminalStatus, "running", StringComparison.OrdinalIgnoreCase);
+                bool stillRunning = string.Equals(terminalStatus, "running", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(terminalStatus, "queued", StringComparison.OrdinalIgnoreCase);
                 bool isErr;
                 if (stillRunning) isErr = false;
                 else if (pollResult["result"] is JObject buildPayloadFinal)
@@ -1184,8 +1340,17 @@ namespace GxMcp.Gateway
                 return BuildToolResultContent(pollResult, isErr, tName, tArgs);
             }
 
-            // Return immediately with job_id
+            // Return immediately with the canonical operation identity and queue
+            // metadata.  A coalesced caller gets the same operationId and observes the
+            // existing queue position instead of creating a second execution.
             var asyncResponse = BuildAsyncLifecycleAcceptedPayload(job, lcAction);
+            asyncResponse["coalesced"] = admission.Coalesced;
+            var queueMetadata = JobRegistry.GetLifecycleQueueMetadata(job.Id);
+            foreach (var property in queueMetadata.Properties())
+            {
+                if (property.Name == "status" && admission.IsNew) continue;
+                asyncResponse[property.Name] = property.Value?.DeepClone();
+            }
             if (McpTasksProtocol.SupportsTasks(request))
             {
                 return McpTasksProtocol.BuildCreateTaskResult(
@@ -1220,6 +1385,7 @@ namespace GxMcp.Gateway
             // gxserver update on a stale KB runs many minutes; give it a longer
             // default estimate so the poll cadence is sensible.
             int estEdit = tArgs?["estimated_seconds"]?.ToObject<int?>() ?? (isAsyncGxServer ? 120 : 30);
+            var recoveryTargets = EnumerateMutationRecoveryTargets(tName, tArgs).ToList();
             string jobLabel = isAsyncGxServer ? $"gxserver/{tArgs?["action"]?.ToString()}" : $"edit/{tName}";
             var editJob = JobRegistry.Start(sessionId, jobLabel, estEdit, GetCurrentOwnership(sessionId));
             editJob.WorkerAlias = _currentKb.Value?.NormalizedAlias;
@@ -1228,8 +1394,16 @@ namespace GxMcp.Gateway
             if (string.Equals(tName, "genexus_io", StringComparison.OrdinalIgnoreCase))
                 editJob.Part = ioAction == "export_kb_to_text" ? "ObjectTextExport" : "ObjectText";
             else
-                editJob.Part = tArgs?["part"]?.ToString() ?? "Source";
+                editJob.Part = recoveryTargets.FirstOrDefault(target =>
+                    string.Equals(target.Target, editJob.Target, StringComparison.OrdinalIgnoreCase)).Part
+                    ?? tArgs?["part"]?.ToString()
+                    ?? recoveryTargets.FirstOrDefault().Part
+                    ?? "Source";
             editJob.ObjectType = tArgs?["type"]?.ToString();
+            editJob.TargetGuid = tArgs?["guid"]?.ToString();
+            editJob.TargetEntityKey = tArgs?["entityKey"]?.ToString();
+            editJob.TargetPath = tArgs?["path"]?.ToString();
+            editJob.ExpectedVersion = tArgs?["baseVersion"]?.ToString() ?? tArgs?["expectedVersion"]?.ToString();
             Log($"[AsyncEdit] Dispatching job={editJob.Id} tool={tName} estimated={estEdit}s");
             // v2.6.2 (Item B): inject cancelToken=jobId so the worker's
             // blanket-register at dispatch entry makes lifecycle cancel resolvable.
@@ -1306,21 +1480,36 @@ namespace GxMcp.Gateway
                                     Log($"[AsyncEdit] Stalled-worker recycle failed for KB '{stalledKb.Alias}': {recycleEx.Message}");
                                 }
                             }
+                            var stalledEnvelope = BuildStalledAsyncMutationEnvelope(
+                                editJob.Id, capturedName, estEdit, boundSeconds, workerRecycled);
+                            if (recoveryTargets.Any(target => MutationRecoveryRegistry.IsKbLevelRecoveryTarget(
+                                target.Target, target.Part)))
+                            {
+                                stalledEnvelope["recoveryScope"] = "kb";
+                                stalledEnvelope["hint"] = "Reconcile the manifest/KB state before retrying; no single object/part read can clear this fence.";
+                            }
                             JobRegistry.Stall(
                                 editJob.Id,
                                 capturedName + " did not return within the " + boundText
                                     + " time bound; SDK call likely blocked (IDE modal dialog or retrying validation) — see result for recovery steps.",
-                                BuildStalledAsyncMutationEnvelope(editJob.Id, capturedName, estEdit, boundSeconds, workerRecycled));
-                            if (RequiresAsyncMutationRecovery(editJob))
+                                stalledEnvelope);
+                            foreach (var recoveryTarget in recoveryTargets)
                             {
-                                _mutationRecovery.RequireRead(
-                                    editJob.WorkerAlias,
-                                    editJob.Target,
-                                    editJob.Part,
-                                    editJob.Id);
+                                if (MutationRecoveryRegistry.IsKbLevelRecoveryTarget(
+                                    recoveryTarget.Target, recoveryTarget.Part))
+                                {
+                                    _mutationRecovery.RequireRead(
+                                        editJob.WorkerAlias, recoveryTarget.Target, recoveryTarget.Part, editJob.Id);
+                                }
+                                else
+                                {
+                                    _mutationRecovery.RequireRead(
+                                        editJob.WorkerAlias, recoveryTarget.Target, recoveryTarget.Part, editJob.Id,
+                                        tArgs?["guid"]?.ToString(), tArgs?["entityKey"]?.ToString(),
+                                        tArgs?["type"]?.ToString(), tArgs?["path"]?.ToString(),
+                                        tArgs?["baseVersion"]?.ToString() ?? tArgs?["expectedVersion"]?.ToString());
+                                }
                             }
-                            foreach (var recoveryTarget in EnumerateMutationRecoveryTargets(capturedName, tArgs))
-                                _mutationRecovery.RequireRead(editJob.WorkerAlias, recoveryTarget.Target, recoveryTarget.Part, editJob.Id);
                             Log($"[AsyncEdit] Watchdog fired for job={editJob.Id} tool={capturedName} after {watchdogMs}ms — marked stalled (workerRecycled={workerRecycled}).");
                         }
                         return;

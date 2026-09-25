@@ -21,6 +21,27 @@ namespace GxMcp.Worker.Services
         public int StoredObjects { get; set; }
         public int StaleObjects { get; set; }
         public int TotalObjects { get; set; }
+
+        // Aggregate coverage is intentionally retained for the existing search
+        // contract, while the per-part projection makes mixed scopes diagnosable.
+        // A part is considered stored only when its record is present and fresh.
+        public Dictionary<string, SourceStoreCoverage> PartsByPart { get; }
+            = new Dictionary<string, SourceStoreCoverage>(StringComparer.OrdinalIgnoreCase);
+
+        public JObject ToJson()
+        {
+            var result = new JObject
+            {
+                ["storedObjects"] = StoredObjects,
+                ["staleObjects"] = StaleObjects,
+                ["totalObjects"] = TotalObjects,
+                ["parts"] = new JObject()
+            };
+            var parts = (JObject)result["parts"];
+            foreach (var part in PartsByPart)
+                parts[part.Key] = part.Value.ToJson();
+            return result;
+        }
     }
 
     public class SourceStoreService
@@ -40,6 +61,13 @@ namespace GxMcp.Worker.Services
             public string RelativeFilePath { get; set; }
             public long FileBytes { get; set; }
             public DateTime StoredAtUtc { get; set; }
+        }
+
+        private enum RecordReadState
+        {
+            Valid,
+            Missing,
+            Invalid
         }
 
         private string _storeDirectory;
@@ -109,6 +137,161 @@ namespace GxMcp.Worker.Services
             return $"{guid?.Trim().ToLowerInvariant()}:{partName?.Trim().ToLowerInvariant()}";
         }
 
+        private static DateTime? ParseDateToken(JToken token)
+        {
+            if (token == null || token.Type == JTokenType.Null) return null;
+            if (token.Type == JTokenType.Date) return token.Value<DateTime>();
+            DateTime parsed;
+            return DateTime.TryParse(token.ToString(), out parsed) ? parsed : (DateTime?)null;
+        }
+
+        private bool TryReadStoredRecord(string guid, string partName,
+            out string source, out RecordReadState state, out string detail)
+        {
+            source = null;
+            state = RecordReadState.Invalid;
+            detail = null;
+            if (string.IsNullOrWhiteSpace(guid) || string.IsNullOrWhiteSpace(partName))
+            {
+                detail = "The source-store record key is incomplete.";
+                return false;
+            }
+
+            Initialize();
+            string normalizedGuid = guid.Trim();
+            string normalizedPart = ObjectService.NormalizeRawSourcePart(partName);
+            string key = MakeKey(normalizedGuid, normalizedPart);
+            if (!_records.TryGetValue(key, out var summary) || summary == null)
+            {
+                state = RecordReadState.Missing;
+                detail = "The source-store catalog has no record for this part.";
+                return false;
+            }
+
+            if (!string.Equals(summary.Guid?.Trim(), normalizedGuid, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(ObjectService.NormalizeRawSourcePart(summary.PartName), normalizedPart,
+                    StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(summary.RelativeFilePath)
+                || string.IsNullOrWhiteSpace(summary.ContentHash))
+            {
+                detail = "The source-store catalog summary is incomplete or belongs to another part.";
+                return false;
+            }
+
+            string fullPath;
+            try
+            {
+                string root = Path.GetFullPath(_storeDirectory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                fullPath = Path.GetFullPath(Path.Combine(root, summary.RelativeFilePath));
+                string rootPrefix = root + Path.DirectorySeparatorChar;
+                if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    detail = "The source-store record path escapes the store directory.";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                detail = "The source-store record path is invalid: " + ex.Message;
+                return false;
+            }
+
+            if (!File.Exists(fullPath))
+            {
+                state = RecordReadState.Missing;
+                detail = "The source-store record file is missing.";
+                return false;
+            }
+
+            try
+            {
+                using (var fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var gz = new GZipStream(fs, CompressionMode.Decompress))
+                using (var reader = new StreamReader(gz, Encoding.UTF8))
+                {
+                    var payload = JObject.Parse(reader.ReadToEnd());
+                    var sourceToken = payload["source"];
+                    if (sourceToken == null || sourceToken.Type != JTokenType.String)
+                    {
+                        detail = "The source-store record has no string source payload.";
+                        return false;
+                    }
+                    source = sourceToken.Value<string>();
+                    if (source == null)
+                    {
+                        detail = "The source-store record source is null.";
+                        return false;
+                    }
+
+                    string payloadGuid = payload["guid"]?.ToString();
+                    string payloadPart = payload["part"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(payloadGuid) || string.IsNullOrWhiteSpace(payloadPart)
+                        || !string.Equals(payloadGuid.Trim(), normalizedGuid, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(ObjectService.NormalizeRawSourcePart(payloadPart), normalizedPart,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        detail = "The source-store payload identity does not match its catalog part.";
+                        source = null;
+                        return false;
+                    }
+
+                    string payloadHash = payload["hash"]?.ToString();
+                    if (!string.Equals(payloadHash, summary.ContentHash, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(ComputeHash(source), summary.ContentHash,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        detail = "The source-store payload hash does not match its catalog record.";
+                        source = null;
+                        return false;
+                    }
+
+                    if (summary.FileBytes > 0
+                        && new FileInfo(fullPath).Length != summary.FileBytes)
+                    {
+                        detail = "The source-store record file size does not match its catalog record.";
+                        source = null;
+                        return false;
+                    }
+
+                    var lastUpdateToken = payload["lastUpdate"];
+                    DateTime? payloadLastUpdate = null;
+                    if (lastUpdateToken != null && lastUpdateToken.Type != JTokenType.Null)
+                    {
+                        DateTime parsed;
+                        if (lastUpdateToken.Type == JTokenType.Date)
+                        {
+                            parsed = lastUpdateToken.Value<DateTime>();
+                        }
+                        else if (!DateTime.TryParse(lastUpdateToken.ToString(), out parsed))
+                        {
+                            detail = "The source-store payload has an invalid last-update value.";
+                            source = null;
+                            return false;
+                        }
+                        payloadLastUpdate = parsed;
+                    }
+                    if (summary.LastUpdate.HasValue != payloadLastUpdate.HasValue
+                        || (summary.LastUpdate.HasValue && payloadLastUpdate.HasValue
+                            && summary.LastUpdate.Value != payloadLastUpdate.Value))
+                    {
+                        detail = "The source-store payload timestamp does not match its catalog record.";
+                        source = null;
+                        return false;
+                    }
+                }
+
+                state = RecordReadState.Valid;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                detail = "The source-store record is unreadable or corrupt: " + ex.Message;
+                source = null;
+                return false;
+            }
+        }
+
         public bool Put(string guid, string partName, string source, DateTime? lastUpdate, string versionToken)
         {
             if (string.IsNullOrWhiteSpace(guid) || string.IsNullOrWhiteSpace(partName) || source == null)
@@ -123,19 +306,21 @@ namespace GxMcp.Worker.Services
             string key = MakeKey(guid, partName);
             string hash = ComputeHash(source);
 
-            // Check if record exists with identical hash
-            if (_records.TryGetValue(key, out var existing))
+            // A catalog summary is not proof that the per-part file still exists
+            // or is readable.  Only take the cheap same-content path after the
+            // actual record validates; a missing/corrupt file is rewritten.
+            if (_records.TryGetValue(key, out var existing)
+                && string.Equals(existing.ContentHash, hash, StringComparison.OrdinalIgnoreCase))
             {
-                if (string.Equals(existing.ContentHash, hash, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (lastUpdate.HasValue && existing.LastUpdate != lastUpdate)
-                    {
-                        existing.LastUpdate = lastUpdate;
-                        existing.VersionToken = versionToken ?? existing.VersionToken;
-                        MarkCatalogDirty();
-                    }
+                string ignoredSource;
+                RecordReadState ignoredState;
+                string ignoredDetail;
+                bool validRecord = TryReadStoredRecord(
+                    guid, partName, out ignoredSource, out ignoredState, out ignoredDetail);
+                bool metadataSame = !lastUpdate.HasValue
+                    || (existing.LastUpdate.HasValue && existing.LastUpdate.Value == lastUpdate.Value);
+                if (validRecord && metadataSame)
                     return true;
-                }
             }
 
             try
@@ -215,39 +400,66 @@ namespace GxMcp.Worker.Services
 
         public bool TryGet(string guid, string partName, out string source)
         {
+            RecordReadState state;
+            string detail;
+            bool valid = TryReadStoredRecord(guid, partName, out source, out state, out detail);
+            if (!valid && !string.IsNullOrWhiteSpace(detail))
+            {
+                if (state == RecordReadState.Missing)
+                    Logger.Debug("[SOURCE-STORE] Source record unavailable for " + guid + " (" + partName + "): " + detail);
+                else
+                    Logger.Error("[SOURCE-STORE] Error reading source for " + guid + " (" + partName + "): " + detail);
+            }
+            return valid;
+        }
+
+        public bool TryGetStoredAndFresh(SearchIndex.IndexEntry entry, string part, out string source)
+        {
             source = null;
-            if (string.IsNullOrWhiteSpace(guid) || string.IsNullOrWhiteSpace(partName)) return false;
+            if (entry == null || string.IsNullOrWhiteSpace(entry.Guid)
+                || string.IsNullOrWhiteSpace(part))
+                return false;
 
-            Initialize();
-            guid = guid.Trim().ToLowerInvariant();
-            partName = ObjectService.NormalizeRawSourcePart(partName);
-            string key = MakeKey(guid, partName);
-
-            if (!_records.TryGetValue(key, out var summary) || string.IsNullOrEmpty(summary.RelativeFilePath))
+            RecordReadState state;
+            string detail;
+            string normalizedPart = ObjectService.NormalizeRawSourcePart(
+                ObjectService.ResolveSearchPartName(entry.Type, part));
+            if (!TryReadStoredRecord(entry.Guid, normalizedPart, out source, out state, out detail))
+                return false;
+            if (!_records.TryGetValue(MakeKey(entry.Guid, normalizedPart), out var summary))
             {
+                source = null;
                 return false;
             }
-
-            string fullPath = Path.Combine(_storeDirectory, summary.RelativeFilePath);
-            if (!File.Exists(fullPath)) return false;
-
-            try
+            if (summary.LastUpdate.HasValue
+                && entry.LastUpdate > DateTime.MinValue
+                && entry.LastUpdate > summary.LastUpdate.Value.AddSeconds(2))
             {
-                using (var fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var gz = new GZipStream(fs, CompressionMode.Decompress))
-                using (var reader = new StreamReader(gz, Encoding.UTF8))
-                {
-                    string json = reader.ReadToEnd();
-                    var payload = JObject.Parse(json);
-                    source = payload["source"]?.ToString();
-                    return source != null;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"[SOURCE-STORE] Error reading source for {guid} ({partName}): {ex.Message}");
+                source = null;
                 return false;
             }
+            return true;
+        }
+
+        private static List<string> ResolveRequestedParts(string type, List<string> scope)
+        {
+            var requested = scope == null || scope.Count == 0
+                ? new List<string> { "source" }
+                : scope;
+            return requested
+                .Where(part => !string.IsNullOrWhiteSpace(part))
+                .Select(part => ObjectService.ResolveSearchPartName(type, part).Trim().ToLowerInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private bool IsPartStoredAndFresh(SearchIndex.IndexEntry entry, string part)
+        {
+            string source;
+            // The summary is only an index.  Freshness is certified by reading
+            // and validating the concrete per-part record, including its hash,
+            // identity, timestamp and file bounds.
+            return TryGetStoredAndFresh(entry, part, out source);
         }
 
         public SourceStoreCoverage GetCoverage(IEnumerable<SearchIndex.IndexEntry> entries, List<string> scope)
@@ -255,28 +467,42 @@ namespace GxMcp.Worker.Services
             var coverage = new SourceStoreCoverage();
             if (entries == null) return coverage;
 
-            Initialize();
             var entryList = entries as IList<SearchIndex.IndexEntry> ?? entries.ToList();
             coverage.TotalObjects = entryList.Count;
 
             foreach (var e in entryList)
             {
                 if (string.IsNullOrWhiteSpace(e?.Guid)) continue;
-                string primaryPart = ObjectService.ResolveSearchPartName(e.Type);
-                string key = MakeKey(e.Guid, primaryPart);
-
-                if (_records.TryGetValue(key, out var summary))
+                var requestedParts = ResolveRequestedParts(e.Type, scope);
+                bool allStored = requestedParts.Count > 0;
+                bool anyStale = false;
+                foreach (string part in requestedParts)
                 {
-                    if (summary.LastUpdate.HasValue && e.LastUpdate > DateTime.MinValue
-                        && e.LastUpdate > summary.LastUpdate.Value.AddSeconds(2))
+                    if (!coverage.PartsByPart.TryGetValue(part, out var partCoverage))
                     {
-                        coverage.StaleObjects++;
+                        partCoverage = new SourceStoreCoverage();
+                        coverage.PartsByPart[part] = partCoverage;
+                    }
+                    partCoverage.TotalObjects++;
+
+                    if (IsPartStoredAndFresh(e, part))
+                    {
+                        partCoverage.StoredObjects++;
                     }
                     else
                     {
-                        coverage.StoredObjects++;
+                        // Missing, corrupt, and timestamp-stale records are all
+                        // ineligible for coverage.  Keep them in the stale/error
+                        // bucket instead of silently treating an absent file as
+                        // a healthy catalog entry.
+                        partCoverage.StaleObjects++;
+                        allStored = false;
+                        anyStale = true;
                     }
                 }
+
+                if (allStored && !anyStale) coverage.StoredObjects++;
+                else if (anyStale) coverage.StaleObjects++;
             }
 
             return coverage;
@@ -285,21 +511,13 @@ namespace GxMcp.Worker.Services
         public bool IsStoredAndFresh(SearchIndex.IndexEntry entry, List<string> scope)
         {
             if (entry == null || string.IsNullOrWhiteSpace(entry.Guid)) return false;
-            Initialize();
-
-            string primaryPart = ObjectService.ResolveSearchPartName(entry.Type);
-            string key = MakeKey(entry.Guid, primaryPart);
-
-            if (_records.TryGetValue(key, out var summary))
+            var requestedParts = ResolveRequestedParts(entry.Type, scope);
+            if (requestedParts.Count == 0) return false;
+            foreach (string part in requestedParts)
             {
-                if (summary.LastUpdate.HasValue && entry.LastUpdate > DateTime.MinValue
-                    && entry.LastUpdate > summary.LastUpdate.Value.AddSeconds(2))
-                {
-                    return false; // Stale
-                }
-                return true;
+                if (!IsPartStoredAndFresh(entry, part)) return false;
             }
-            return false;
+            return true;
         }
 
         public List<JObject> SearchStore(
@@ -309,16 +527,18 @@ namespace GxMcp.Worker.Services
             CancellationToken ct = default(CancellationToken))
         {
             var hits = new List<JObject>();
-            if (storedEntries == null) return hits;
+            if (storedEntries == null || criteria == null) return hits;
 
-            Initialize();
             var entriesByGuid = new Dictionary<string, SearchIndex.IndexEntry>(StringComparer.OrdinalIgnoreCase);
+            var allowedPartsByGuid = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var e in storedEntries)
             {
-                if (!string.IsNullOrWhiteSpace(e.Guid))
-                {
-                    entriesByGuid[e.Guid.Trim().ToLowerInvariant()] = e;
-                }
+                if (string.IsNullOrWhiteSpace(e?.Guid)) continue;
+                var requestedParts = ResolveRequestedParts(e.Type, criteria.Scope);
+                if (requestedParts.Count == 0 || !IsStoredAndFresh(e, requestedParts)) continue;
+                string guid = e.Guid.Trim().ToLowerInvariant();
+                entriesByGuid[guid] = e;
+                allowedPartsByGuid[guid] = new HashSet<string>(requestedParts, StringComparer.OrdinalIgnoreCase);
             }
 
             if (entriesByGuid.Count == 0) return hits;
@@ -335,7 +555,10 @@ namespace GxMcp.Worker.Services
                 if (colon > 0)
                 {
                     string guid = k.Substring(0, colon);
-                    if (entriesByGuid.ContainsKey(guid))
+                    string part = k.Substring(colon + 1);
+                    if (entriesByGuid.ContainsKey(guid)
+                        && allowedPartsByGuid.TryGetValue(guid, out var allowedParts)
+                        && allowedParts.Contains(part))
                     {
                         matchedCandidateKeys.Add(k);
                     }
@@ -361,18 +584,11 @@ namespace GxMcp.Worker.Services
                 if (!entriesByGuid.TryGetValue(guid, out var entry)) return;
                 if (!TryGet(guid, part, out string src) || string.IsNullOrEmpty(src)) return;
 
-                string canonicalPart = entry.FullSourcePart;
+                string canonicalPart = null;
+                if (_records.TryGetValue(key, out var rec) && !string.IsNullOrEmpty(rec.PartName))
+                    canonicalPart = rec.PartName;
                 if (string.IsNullOrEmpty(canonicalPart))
-                {
-                    if (_records.TryGetValue(key, out var rec) && !string.IsNullOrEmpty(rec.PartName))
-                    {
-                        canonicalPart = rec.PartName;
-                    }
-                }
-                if (string.IsNullOrEmpty(canonicalPart))
-                {
                     canonicalPart = ObjectService.ResolveSearchPartName(entry.Type, part);
-                }
                 if (string.Equals(canonicalPart, "events", StringComparison.OrdinalIgnoreCase))
                 {
                     canonicalPart = "Events";
@@ -575,6 +791,8 @@ namespace GxMcp.Worker.Services
         private void LoadCatalog()
         {
             string catalogPath = Path.Combine(_storeDirectory, "catalog.json.gz");
+            _records.Clear();
+            _trigramIndex.Clear();
             if (!File.Exists(catalogPath)) return;
 
             try
@@ -590,24 +808,36 @@ namespace GxMcp.Worker.Services
 
                     foreach (var item in array)
                     {
-                        string key = item["k"]?.ToString();
                         string guid = item["g"]?.ToString();
                         string part = item["p"]?.ToString();
-                        string uStr = item["u"]?.ToString();
-                        DateTime? u = !string.IsNullOrEmpty(uStr) && DateTime.TryParse(uStr, out var parsedU) ? parsedU : (DateTime?)null;
+                        var updateToken = item["u"];
+                        DateTime? u = ParseDateToken(updateToken);
                         string v = item["v"]?.ToString();
                         string h = item["h"]?.ToString();
                         string f = item["f"]?.ToString();
                         long b = item["b"]?.Value<long>() ?? 0;
-                        string sStr = item["s"]?.ToString();
-                        DateTime s = !string.IsNullOrEmpty(sStr) && DateTime.TryParse(sStr, out var parsedS) ? parsedS : DateTime.UtcNow;
+                        var storedToken = item["s"];
+                        DateTime? storedAt = ParseDateToken(storedToken);
+                        DateTime s = storedAt ?? DateTime.UtcNow;
 
-                        if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(guid) && !string.IsNullOrEmpty(part))
+                        if (!string.IsNullOrEmpty(guid) && !string.IsNullOrEmpty(part))
                         {
+                            // Keep even an incomplete summary in memory so freshness
+                            // can report it as an invalid/stale part rather than
+                            // silently mistaking it for an unvisited object.  The
+                            // concrete record validator will reject missing paths,
+                            // hashes, or payloads.
+                            string canonicalPart = ObjectService.NormalizeRawSourcePart(part);
+                            string canonicalKey = MakeKey(guid, canonicalPart);
+                            if (string.IsNullOrWhiteSpace(h)
+                                || (updateToken != null && updateToken.Type != JTokenType.Null && !u.HasValue)
+                                || (storedToken != null && storedToken.Type != JTokenType.Null && !storedAt.HasValue)
+                                || b < 0)
+                                h = null;
                             var summary = new RecordSummary
                             {
-                                Guid = guid,
-                                PartName = part,
+                                Guid = guid.Trim(),
+                                PartName = part.Trim(),
                                 LastUpdate = u,
                                 VersionToken = v,
                                 ContentHash = h,
@@ -615,9 +845,7 @@ namespace GxMcp.Worker.Services
                                 FileBytes = b,
                                 StoredAtUtc = s
                             };
-                            _records[key] = summary;
-
-                            // Reconstruct trigram index lazily or from files if needed
+                            _records[canonicalKey] = summary;
                         }
                     }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
 using Newtonsoft.Json.Linq;
@@ -15,7 +16,7 @@ namespace GxMcp.Worker.Helpers
         public JArray Changes { get; } = new JArray();
         public bool IsNoChange => ErrorCode == null && Changes.Count == 0;
 
-        public static PatternXmlEditPlan Create(string currentXml, string requestedXml)
+        public static PatternXmlEditPlan Create(string currentXml, string requestedXml, bool allowGridStructure = false)
         {
             var plan = new PatternXmlEditPlan { Xml = requestedXml };
             XDocument current, requested;
@@ -30,7 +31,7 @@ namespace GxMcp.Worker.Helpers
                 || oldOutside.Length != newOutside.Length
                 || oldOutside.Where((n, i) => !XNode.DeepEquals(n, newOutside[i])).Any())
                 return plan.Reject("PatternStructureChangeUnsupported", "Document declarations or nodes outside the pattern root changed (DTDs are unsupported).");
-            plan.Compare(current.Root, requested.Root, "/");
+            plan.Compare(current.Root, requested.Root, "/", allowGridStructure);
             return plan;
         }
 
@@ -42,7 +43,7 @@ namespace GxMcp.Worker.Helpers
             return this;
         }
 
-        private void Compare(XElement before, XElement after, string path)
+        private void Compare(XElement before, XElement after, string path, bool allowGridStructure)
         {
             if (ErrorCode != null) return;
             path += before.Name + "/";
@@ -56,6 +57,19 @@ namespace GxMcp.Worker.Helpers
                 var left = before.Attribute(name);
                 var right = after.Attribute(name);
                 if ((string)left == (string)right) continue;
+                if (allowGridStructure
+                    && IsGrid(before)
+                    && string.Equals(name.LocalName, "childrenOrderedList", StringComparison.OrdinalIgnoreCase))
+                {
+                    Changes.Add(new JObject
+                    {
+                        ["path"] = path + "@" + name.LocalName,
+                        ["operation"] = "GridOrder",
+                        ["before"] = (string)left,
+                        ["after"] = (string)right
+                    });
+                    continue;
+                }
                 if (IsProtected(name.LocalName) || left?.IsNamespaceDeclaration == true || right?.IsNamespaceDeclaration == true)
                 {
                     Reject("PatternMetadataChangeUnsupported", "SDK-owned metadata or identity changed at " + path + "@" + name);
@@ -67,11 +81,16 @@ namespace GxMcp.Worker.Helpers
             var newNodes = after.Nodes().Where(Significant).ToArray();
             if (oldNodes.Length != newNodes.Length)
             {
+                if (allowGridStructure && TryAllowGridVariableInsertion(before, oldNodes, newNodes, path))
+                    return;
                 if (TryAllowWebComponentInsertion(before, after, oldNodes, newNodes, path))
                     return;
                 Reject("PatternStructureChangeUnsupported", "Child structure changed at " + path);
                 return;
             }
+            if (allowGridStructure && IsGrid(before)
+                && TryCompareGridReorder(oldNodes, newNodes, path, allowGridStructure))
+                return;
             for (int i = 0; i < oldNodes.Length; i++)
             {
                 if (oldNodes[i] is XElement oldElement && newNodes[i] is XElement newElement)
@@ -79,7 +98,7 @@ namespace GxMcp.Worker.Helpers
                     if (IsMetadata(oldElement.Name.LocalName) && !XNode.DeepEquals(oldElement, newElement))
                         Reject("PatternMetadataChangeUnsupported", "SDK-owned metadata changed at " + path + oldElement.Name);
                     else
-                        Compare(oldElement, newElement, path + "[" + i + "]/");
+                        Compare(oldElement, newElement, path + "[" + i + "]/", allowGridStructure);
                 }
                 else if (!XNode.DeepEquals(oldNodes[i], newNodes[i]))
                     Reject("PatternStructureChangeUnsupported", "Text or node structure changed at " + path);
@@ -87,7 +106,138 @@ namespace GxMcp.Worker.Helpers
             }
         }
 
-        // A WebComponent is a named, non-ordered child in WorkWithPlus layout
+        private static bool IsGrid(XElement element)
+            => element != null && string.Equals(element.Name.LocalName, "grid", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsGridColumn(XElement element)
+            => element != null && (string.Equals(element.Name.LocalName, "gridAttribute", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(element.Name.LocalName, "gridVariable", StringComparison.OrdinalIgnoreCase));
+
+        private static string GridColumnIdentity(XElement element)
+        {
+            if (!IsGridColumn(element)) return null;
+            string identity = (string)element.Attribute("variable")
+                ?? (string)element.Attribute("attribute")
+                ?? (string)element.Attribute("name");
+            return string.IsNullOrWhiteSpace(identity) ? null : identity.Trim();
+        }
+
+        private bool TryAllowGridVariableInsertion(XElement parent, XNode[] oldNodes, XNode[] newNodes, string path)
+        {
+            if (!IsGrid(parent) || newNodes.Length != oldNodes.Length + 1) return false;
+            int insertedIndex = -1;
+            for (int i = 0; i < newNodes.Length; i++)
+            {
+                if (newNodes[i] is XElement element
+                    && string.Equals(element.Name.LocalName, "gridVariable", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (insertedIndex >= 0) return false;
+                    insertedIndex = i;
+                }
+            }
+            if (insertedIndex < 0 || !(newNodes[insertedIndex] is XElement inserted)
+                || inserted.HasElements) return false;
+            if (string.IsNullOrWhiteSpace((string)inserted.Attribute("variable"))
+                || string.IsNullOrWhiteSpace((string)inserted.Attribute("name"))) return false;
+            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "variable", "name", "description", "caption", "basicType", "basicCLength", "type", "length"
+            };
+            if (inserted.Attributes().Any(a => !allowed.Contains(a.Name.LocalName))) return false;
+            int oldIndex = 0;
+            for (int newIndex = 0; newIndex < newNodes.Length; newIndex++)
+            {
+                if (newIndex == insertedIndex) continue;
+                if (oldIndex >= oldNodes.Length || !XNode.DeepEquals(oldNodes[oldIndex], newNodes[newIndex])) return false;
+                oldIndex++;
+            }
+            if (oldIndex != oldNodes.Length) return false;
+            Changes.Add(new JObject
+            {
+                ["path"] = path + "gridVariable[@name='" + (string)inserted.Attribute("name") + "']",
+                ["operation"] = "Insert",
+                ["name"] = (string)inserted.Attribute("name")
+            });
+            return true;
+        }
+
+        private bool TryCompareGridReorder(XNode[] oldNodes, XNode[] newNodes, string path, bool allowGridStructure)
+        {
+            if (!allowGridStructure || oldNodes.Length != newNodes.Length) return false;
+
+            // A grid can contain action groups, filters, sort metadata, and other
+            // authored children alongside its columns.  A valid move is one column
+            // moving through that sequence; removing that column must leave every
+            // other direct child in exactly the same order and with the same data.
+            var oldColumns = oldNodes.OfType<XElement>().Where(IsGridColumn).ToList();
+            var newColumns = newNodes.OfType<XElement>().Where(IsGridColumn).ToList();
+            if (oldColumns.Count == 0 || oldColumns.Count != newColumns.Count) return false;
+
+            var oldMap = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
+            var oldIndexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < oldNodes.Length; i++)
+            {
+                if (!(oldNodes[i] is XElement column) || !IsGridColumn(column)) continue;
+                string identity = GridColumnIdentity(column);
+                if (string.IsNullOrWhiteSpace(identity) || oldMap.ContainsKey(identity)) return false;
+                oldMap[identity] = column;
+                oldIndexes[identity] = i;
+            }
+
+            var newMap = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
+            var newIndexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < newNodes.Length; i++)
+            {
+                if (!(newNodes[i] is XElement column) || !IsGridColumn(column)) continue;
+                string identity = GridColumnIdentity(column);
+                if (string.IsNullOrWhiteSpace(identity) || newMap.ContainsKey(identity)
+                    || !oldMap.ContainsKey(identity)) return false;
+                newMap[identity] = column;
+                newIndexes[identity] = i;
+            }
+            if (oldMap.Count != newMap.Count) return false;
+
+            bool columnPositionChanged = oldMap.Keys.Any(identity =>
+                oldIndexes[identity] != newIndexes[identity]);
+            if (!columnPositionChanged) return false;
+
+            int moveCandidates = 0;
+            string movedIdentity = null;
+            foreach (string identity in oldMap.Keys)
+            {
+                int oldIndex = oldIndexes[identity];
+                int newIndex = newIndexes[identity];
+                if (oldIndex == newIndex) continue;
+
+                var oldRemaining = oldNodes.Where((node, index) => index != oldIndex).ToArray();
+                var newRemaining = newNodes.Where((node, index) => index != newIndex).ToArray();
+                if (!SameNodeSequence(oldRemaining, newRemaining)) continue;
+                moveCandidates++;
+                movedIdentity = movedIdentity ?? identity;
+            }
+            if (moveCandidates == 0)
+            {
+                Reject("PatternStructureChangeUnsupported",
+                    "Grid column movement changed another direct child at " + path);
+                return true;
+            }
+
+            Changes.Add(new JObject { ["path"] = path, ["operation"] = "GridOrder" });
+            Compare(oldMap[movedIdentity], newMap[movedIdentity],
+                path + "[@" + movedIdentity + "]/", allowGridStructure);
+            return true;
+        }
+
+        private static bool SameNodeSequence(XNode[] left, XNode[] right)
+        {
+            if (left.Length != right.Length) return false;
+            for (int i = 0; i < left.Length; i++)
+            {
+                if (!XNode.DeepEquals(left[i], right[i])) return false;
+            }
+            return true;
+        }
+
         // containers. Allow only the narrow structural operation needed to add
         // one such component to an existing container: no removals, moves,
         // replacements, metadata changes, or childrenOrderedList edits. The

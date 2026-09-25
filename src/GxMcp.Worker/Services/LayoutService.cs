@@ -70,6 +70,8 @@ namespace GxMcp.Worker.Services
                     ["count"] = emitted,
                     ["stats"] = JObject.FromObject(stats),
                     ["nodes"] = nodes,
+                    ["versionToken"] = WriteService.ComputeContentVersionToken(
+                        obj, contextResult.Document.ToString(SaveOptions.DisableFormatting)),
                     ["empty"] = emitted == 0,
                     ["help"] = new JArray 
                     {
@@ -146,6 +148,8 @@ namespace GxMcp.Worker.Services
                     ["count"] = emitted,
                     ["stats"] = JObject.FromObject(stats),
                     ["nodes"] = nodes,
+                    ["versionToken"] = WriteService.ComputeContentVersionToken(
+                        obj, contextResult.Document.ToString(SaveOptions.DisableFormatting)),
                     ["empty"] = emitted == 0,
                     ["help"] = new JArray 
                     {
@@ -1219,9 +1223,17 @@ namespace GxMcp.Worker.Services
                     ["p"] = path,
                     ["t"] = tag,
                     ["n"] = controlName,
-                    ["c"] = Attr(current, "Caption"),
+                    ["c"] = Attr(current, "Caption") ?? Attr(current, "Text"),
                     ["k"] = Attr(current, "Class"),
-                    ["v"] = Attr(current, "Attribute") ?? Attr(current, "Variable")
+                    ["v"] = Attr(current, "Attribute") ?? Attr(current, "Variable"),
+                    ["left"] = Attr(current, "Left") ?? Attr(current, "X"),
+                    ["top"] = Attr(current, "Top") ?? Attr(current, "Y"),
+                    ["width"] = Attr(current, "Width"),
+                    ["height"] = Attr(current, "Height"),
+                    ["font"] = Attr(current, "Font") ?? Attr(current, "FontName"),
+                    ["fontSize"] = Attr(current, "FontSize"),
+                    ["alignment"] = Attr(current, "Alignment"),
+                    ["picture"] = Attr(current, "Picture")
                 };
                 nodes.Add(node);
                 emitted++;

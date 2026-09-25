@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<BODY>
+  <TABLE id="MainTable" align="center">
+    <TR>
+      <TD vAlign="middle">
+        <gxTextBlock id="txtExisting" Event="'SelectTab0'" CaptionExpression="&lt;Tokens&gt;&lt;Token&gt;&lt;Type&gt;Constant&lt;/Type&gt;&lt;Data&gt;&lt;![CDATA[Existing label]]&gt;&lt;/Data&gt;&lt;/Token&gt;&lt;/Tokens&gt;" />
+      </TD>
+    </TR>
+    <TR>
+      <TD>
+        <gxButton id="btnA" Event="'EventA'" CaptionExpression="&lt;Tokens&gt;&lt;Token&gt;&lt;Type&gt;Constant&lt;/Type&gt;&lt;Data&gt;&lt;![CDATA[Label A]]&gt;&lt;/Data&gt;&lt;/Token&gt;&lt;/Tokens&gt;" />
+      </TD>
+    </TR>
+  </TABLE>
+</BODY>

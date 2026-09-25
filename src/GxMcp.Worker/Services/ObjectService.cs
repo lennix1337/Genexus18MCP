@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Threading;
 using Artech.Architecture.Common.Objects;
 using Artech.Architecture.Common.Descriptors;
 using Artech.Genexus.Common.Wiki;
@@ -132,6 +133,8 @@ namespace GxMcp.Worker.Services
         private UIService _uiService;
         private PatternAnalysisService _patternAnalysisService;
         private WriteService _writeService;
+        private int _sourceStoreBackfillStartAttempted;
+        private readonly object _sourceStoreBackfillStartGate = new object();
 
         public ObjectService(KbService kbService, BuildService buildService)
         {
@@ -145,13 +148,140 @@ namespace GxMcp.Worker.Services
         public void SetWriteService(WriteService writeService) { _writeService = writeService; }
         public KbService GetKbService() { return _kbService; }
 
-        public SearchIndex GetIndex() { return _kbService.GetIndexCache().GetIndex(); }
+        public SearchIndex GetIndex()
+        {
+            var index = _kbService.GetIndexCache().GetIndex();
+            StartSourceStoreBackfillIfReady(index);
+            return index;
+        }
 
         // Non-blocking index accessor: returns the in-memory index if it's already
         // loaded, otherwise null — never triggers a synchronous 30-60s cold load on
         // the STA thread. Prefer this on hot paths (object resolution, not-found
         // suggestions) so one cold KB doesn't stall every queued tool call.
-        public SearchIndex GetLoadedIndexOrNull() { return _kbService.GetIndexCache().TryGetLoadedIndex(); }
+        public SearchIndex GetLoadedIndexOrNull()
+        {
+            var index = _kbService.GetIndexCache().TryGetLoadedIndex();
+            StartSourceStoreBackfillIfReady(index);
+            return index;
+        }
+
+        /// <summary>
+        /// Starts the bounded P2 source-store backfill once an index is available.
+        /// The actual SDK reads run in SourceStoreBackfillService STA slices; this
+        /// method only snapshots the in-memory catalogue and schedules the first one.
+        /// </summary>
+        private static IReadOnlyList<string> GetSourceStoreRequiredParts(string type)
+        {
+            var requested = new List<string> { "Source", "Rules", "Conditions" };
+            if (string.Equals(type, "WebPanel", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(type, "Transaction", StringComparison.OrdinalIgnoreCase))
+                requested.Add("WebForm");
+            if (string.Equals(type, "Procedure", StringComparison.OrdinalIgnoreCase)
+                || (type ?? string.Empty).IndexOf("Report", StringComparison.OrdinalIgnoreCase) >= 0)
+                requested.Add("Layout");
+
+            return requested
+                .Select(part => ResolveSearchPartName(type, part))
+                .Where(part => !string.IsNullOrWhiteSpace(part))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList()
+                .AsReadOnly();
+        }
+
+        private void StartSourceStoreBackfillIfReady(SearchIndex index)
+        {
+            if (!Configuration.SourceStoreBackfillEnabled || index?.Objects == null || index.Objects.Count == 0) return;
+            var indexState = _kbService?.GetIndexCache()?.GetState();
+            var backfillState = SourceStoreBackfillService.Instance.GetState();
+            if (string.Equals(backfillState.State, "error", StringComparison.OrdinalIgnoreCase)
+                && backfillState.RetryCount >= 5)
+            {
+                // An exhausted transient retry window must not leave the one-shot
+                // start guard permanently wedged; a later index check may start a
+                // fresh bounded window after the SDK queue recovers.
+                lock (_sourceStoreBackfillStartGate) _sourceStoreBackfillStartAttempted = 0;
+            }
+            bool canResume = string.Equals(indexState?.Status, "Ready", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(SourceStoreBackfillService.Instance.GetState().State, "running", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(SourceStoreBackfillService.Instance.GetState().State, "queued", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(SourceStoreBackfillService.Instance.GetState().State, "error", StringComparison.OrdinalIgnoreCase);
+            if (!canResume) return;
+            lock (_sourceStoreBackfillStartGate)
+            {
+                if (_sourceStoreBackfillStartAttempted != 0) return;
+                _sourceStoreBackfillStartAttempted = 1;
+            }
+
+            var store = SourceStoreService.Instance;
+            var entryProvider = new Func<IReadOnlyList<SearchIndex.IndexEntry>>(() =>
+            {
+                var loaded = _kbService.GetIndexCache().TryGetLoadedIndex();
+                return loaded?.Objects?.Values
+                    .Where(e => e != null && !string.IsNullOrWhiteSpace(e.Guid))
+                    .OrderByDescending(e => e.LastUpdate)
+                    .ToList()
+                    .AsReadOnly() ?? (IReadOnlyList<SearchIndex.IndexEntry>)Array.Empty<SearchIndex.IndexEntry>();
+            });
+            var partReader = new Func<SearchIndex.IndexEntry, IReadOnlyList<SourceStoreBackfillPart>>(entry =>
+            {
+                var result = new List<SourceStoreBackfillPart>();
+                if (entry == null) return null;
+
+                var actualParts = GetSourceStoreRequiredParts(entry.Type);
+                var staleParts = actualParts
+                    .Where(p => !store.IsStoredAndFresh(entry, new List<string> { p }))
+                    .ToList();
+                // Do not resolve an SDK object for a fully fresh record. Warm-start
+                // refresh must pay SDK cost only for the stale delta.
+                if (staleParts.Count == 0) return result;
+
+                KBObject obj = FindObject(entry);
+                if (obj == null) return null;
+
+                foreach (string partName in staleParts)
+                {
+                    string source;
+                    string readError;
+                    if (!TryReadPartSourceRaw(obj, partName, out source, out readError))
+                    {
+                        // Keep the failed part in the result.  Returning an empty
+                        // list here would make a partially failed SDK read look
+                        // like a successfully certified object.
+                        result.Add(new SourceStoreBackfillPart
+                        {
+                            PartName = partName,
+                            Source = null,
+                            ReadSucceeded = false,
+                            ReadError = readError
+                        });
+                        continue;
+                    }
+                    string version = null;
+                    try { version = WriteService.ComputeContentVersionToken(obj, source); } catch { }
+                    result.Add(new SourceStoreBackfillPart
+                    {
+                        PartName = partName,
+                        Source = source,
+                        ReadSucceeded = true,
+                        LastUpdate = obj.LastUpdate,
+                        VersionToken = version
+                    });
+                }
+                return result;
+            });
+            var requiredPartProvider = new Func<SearchIndex.IndexEntry, IReadOnlyList<string>>(
+                entry => entry == null ? null : GetSourceStoreRequiredParts(entry.Type));
+
+            bool started = SourceStoreBackfillService.Instance.Start(
+                entryProvider,
+                partReader,
+                requiredPartProvider: requiredPartProvider);
+            if (!started)
+            {
+                lock (_sourceStoreBackfillStartGate) _sourceStoreBackfillStartAttempted = 0;
+            }
+        }
 
         /// <summary>
         /// Returns all index entries whose name matches <paramref name="name"/> (case-insensitive).
@@ -3501,12 +3631,16 @@ namespace GxMcp.Worker.Services
                 : obj is Artech.Packages.Patterns.Objects.PatternSettings ? new[] { "PatternSettings" } : DefaultPartsToFetch;
 
             var partsObj = new JObject();
+            JArray variablesProjection = null;
             foreach (var pName in partsToFetch)
             {
                 try
                 {
                     string partJson = ReadObjectSourceInternal(obj, pName, null, null, "mcp", false);
                     var pObj = JObject.Parse(partJson);
+                    if (pName.IndexOf("Variables", StringComparison.OrdinalIgnoreCase) >= 0
+                        && pObj["variables"] is JArray variableRows)
+                        variablesProjection = variableRows;
                     if (obj is Artech.Packages.Patterns.Objects.PatternSettings || pObj["source"] != null)
                         partsObj[pName] = obj is Artech.Packages.Patterns.Objects.PatternSettings ? pObj : pObj["source"];
                     else if (pObj["error"] == null)
@@ -3516,13 +3650,15 @@ namespace GxMcp.Worker.Services
                 catch { /* skip parts that error */ }
             }
 
-            return new JObject
+            var result = new JObject
             {
                 ["name"] = obj.Name,
                 ["type"] = obj.TypeDescriptor?.Name,
                 ["identity"] = BuildObjectIdentity(obj),
                 ["parts"] = partsObj
-            }.ToString();
+            };
+            if (variablesProjection != null) result["variables"] = variablesProjection;
+            return result.ToString();
         }
 
         private string ReadPartTextSafe(KBObject obj, string partName)
@@ -3540,18 +3676,17 @@ namespace GxMcp.Worker.Services
             return null;
         }
 
-        public JArray GetVariablesCompact(KBObject obj, string referencedSource = null)
+        public JArray GetVariablesCompact(KBObject obj, string referencedSource = null, bool includeAllStandard = false)
         {
             var varsArr = new JArray();
             if (obj == null) return varsArr;
 
             try
             {
-                var varPart = GxMcp.Worker.Structure.PartAccessor.GetVariablesPart(obj);
+                var varPart = GxMcp.Worker.Structure.PartAccessor.GetVariablesLikePart(obj);
                 if (varPart != null)
                 {
-                    dynamic p = varPart;
-                    foreach (var v in p.Variables)
+                    foreach (var v in GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(obj))
                     {
                         dynamic dv = v;
                         string vName = null;
@@ -3562,7 +3697,7 @@ namespace GxMcp.Worker.Services
                         try { isStandard = (bool)dv.IsStandard; } catch { }
 
                         // Prune SDK built-in variables that are not referenced in the object's code
-                        if (isStandard)
+                        if (isStandard && !includeAllStandard)
                         {
                             if (string.IsNullOrEmpty(referencedSource) ||
                                 referencedSource.IndexOf("&" + vName, StringComparison.OrdinalIgnoreCase) < 0)
@@ -3605,6 +3740,7 @@ namespace GxMcp.Worker.Services
                         if (length > 0) vObj["length"] = length;
                         if (decimals > 0) vObj["decimals"] = decimals;
                         if (isColl) vObj["isCollection"] = true;
+                        VariableDimensionSupport.AddMetadata(vObj, (object)v);
                         if (!string.IsNullOrEmpty(domainName)) vObj["domain"] = domainName;
                         if (!string.IsNullOrEmpty(sdtName)) vObj["sdt"] = sdtName;
 
@@ -3832,6 +3968,18 @@ namespace GxMcp.Worker.Services
             var avail = GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj);
             if (avail != null && avail.Length > 0) result["availableParts"] = new JArray(avail);
 
+            // A whole-object read is recovery evidence only when it has a stable
+            // aggregate token. Individual part reads already carry their own
+            // content token; this token lets the Gateway fence all parts of a
+            // timed-out mutation without treating an unversioned projection as
+            // complete.
+            try
+            {
+                string fullVersion = WriteService.ComputeContentVersionToken(obj, combinedCode);
+                if (!string.IsNullOrWhiteSpace(fullVersion)) result["versionToken"] = fullVersion;
+            }
+            catch { }
+
             return Models.McpResponse.Ok(target: obj.Name, code: "FullObjectRead", result: result);
         }
 
@@ -3922,15 +4070,38 @@ namespace GxMcp.Worker.Services
 
         public string ReadPartSourceRaw(KBObject obj, string partName)
         {
-            if (obj == null) return null;
+            string readError;
+            return ReadPartSourceRaw(obj, partName, out readError);
+        }
+
+        /// <summary>
+        /// Reads a source part while preserving the distinction between a valid
+        /// empty part and an SDK read failure.  The ordinary string API keeps its
+        /// historical null-on-failure behavior; the evidence overload is used by
+        /// backfill so a failed part cannot disappear from a batch.
+        /// </summary>
+        public string ReadPartSourceRaw(KBObject obj, string partName, out string readError)
+        {
+            readError = null;
+            if (obj == null)
+            {
+                readError = "The SDK object is null.";
+                return null;
+            }
             partName = ResolveSearchPartName(obj.TypeDescriptor?.Name, partName);
             string key = BuildRawSourceCacheKey(obj.Guid, partName);
             if (TryGetReadCache(key, out string cached)) return cached;
             if (TryGetLargeRawSourceCache(key, out cached)) return cached;
+            if (TryGetEmptyRawSourceCache(key)) return string.Empty;
 
             string normalizedPart = NormalizeRawSourcePart(partName);
-            string src = ReadPartSourceUncached(obj, normalizedPart);
-            if (src == null) return null;
+            string src = ReadPartSourceUncached(obj, normalizedPart, out readError);
+            if (src == null)
+            {
+                if (string.IsNullOrWhiteSpace(readError))
+                    readError = "The SDK returned no source for part '" + partName + "'.";
+                return null;
+            }
             if (src.Length == 0)
                 SetEmptyRawSourceCache(key);
             else if (src.Length <= RawSourceCacheMaxBytes)
@@ -3938,6 +4109,13 @@ namespace GxMcp.Worker.Services
             else if (src.Length <= LargeRawSourceCacheMaxBytes)
                 SetLargeRawSourceCache(key, src);
             return src;
+        }
+
+        public bool TryReadPartSourceRaw(KBObject obj, string partName,
+            out string source, out string readError)
+        {
+            source = ReadPartSourceRaw(obj, partName, out readError);
+            return source != null;
         }
 
         // PERFORMANCE (perf round 2): cache-only probe used by SourceSearchService's scan
@@ -4052,6 +4230,20 @@ namespace GxMcp.Worker.Services
         // TryGetPartSource so the cache layer can live here without changing semantics.
         internal static string ReadPartSourceUncached(KBObject obj, string normalizedPart)
         {
+            string readError;
+            return ReadPartSourceUncached(obj, normalizedPart, out readError);
+        }
+
+        internal static string ReadPartSourceUncached(KBObject obj, string normalizedPart,
+            out string readError)
+        {
+            readError = null;
+            if (obj == null)
+            {
+                readError = "The SDK object is null.";
+                return null;
+            }
+            normalizedPart = NormalizeRawSourcePart(normalizedPart);
             try
             {
                 if (normalizedPart == "source")
@@ -4069,11 +4261,13 @@ namespace GxMcp.Worker.Services
                         return transaction.Rules?.Source ?? "";
                     if (obj is WebPanel webPanel)
                         return webPanel.Rules?.Source ?? "";
-                    try { return ((dynamic)obj).Rules?.Source ?? ""; } catch { return null; }
+                    try { return ((dynamic)obj).Rules?.Source ?? ""; }
+                    catch (Exception ex) { readError = ex.Message; return null; }
                 }
                 if (normalizedPart == "conditions")
                 {
-                    try { return ((dynamic)obj).Conditions?.Source ?? ""; } catch { return null; }
+                    try { return ((dynamic)obj).Conditions?.Source ?? ""; }
+                    catch (Exception ex) { readError = ex.Message; return null; }
                 }
                 if (normalizedPart == "events")
                 {
@@ -4081,14 +4275,20 @@ namespace GxMcp.Worker.Services
                         return transaction.Events?.Source ?? "";
                     if (obj is WebPanel webPanel)
                         return webPanel.Events?.Source ?? "";
-                    try { return ((dynamic)obj).Events?.Source ?? ""; } catch { return null; }
+                    try { return ((dynamic)obj).Events?.Source ?? ""; }
+                    catch (Exception ex) { readError = ex.Message; return null; }
                 }
                 if (normalizedPart == "webform" || normalizedPart == "layout")
                 {
-                    try { return GxMcp.Worker.Helpers.WebFormXmlHelper.ReadEditableXml(obj) ?? ""; } catch { return null; }
+                    try { return GxMcp.Worker.Helpers.WebFormXmlHelper.ReadEditableXml(obj) ?? ""; }
+                    catch (Exception ex) { readError = ex.Message; return null; }
                 }
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                readError = ex.Message;
+                return null;
+            }
             return "";
         }
 
@@ -4561,7 +4761,7 @@ namespace GxMcp.Worker.Services
                         ["contentType"] = "application/xml",
                         ["xmlKind"] = "GxMultiForm"
                     };
-                    ProcessTextResponse(xml, visualResult, client);
+                    ProcessSourceContent(obj, xml, offset, limit, visualResult, client);
                     return visualResult.ToString();
                 }
 
@@ -4688,7 +4888,7 @@ namespace GxMcp.Worker.Services
                         patternResult["warning"] = "The pattern instance XML could not be resolved; this is only the part's <Properties> bag, not the instance definition. Do not edit it as the instance.";
                     }
 
-                    ProcessTextResponse(patternXml, patternResult, client);
+                    ProcessSourceContent(resolvedObject ?? obj, patternXml, offset, limit, patternResult, client);
                     try
                     {
                         var versionObject = resolvedObject ?? obj;
@@ -4792,12 +4992,27 @@ namespace GxMcp.Worker.Services
                     return result.ToString();
                 }
 
-                // Handle Variables Part specially
-                var varPart = (part as global::Artech.Genexus.Common.Parts.VariablesPart) ?? GxMcp.Worker.Structure.PartAccessor.GetVariablesPart(obj);
-                if (varPart != null && (part is global::Artech.Genexus.Common.Parts.VariablesPart || part.GetType().Name.IndexOf("Variables", StringComparison.OrdinalIgnoreCase) >= 0 || partName.Equals("Variables", StringComparison.OrdinalIgnoreCase)))
+                // Handle Variables Part specially. Some supported K2B WebPanel
+                // versions expose a kind-specific variables part that is not derived
+                // from VariablesPart; use the structural accessor so inspect/read do
+                // not silently omit those declarations.
+                var varPartObject = GxMcp.Worker.Structure.PartAccessor.GetVariablesLikePart(obj);
+                var varPart = varPartObject as global::Artech.Genexus.Common.Parts.VariablesPart;
+                bool isVariablesPart = varPartObject != null
+                    && (ReferenceEquals(varPartObject, part)
+                        || part.GetType().Name.IndexOf("Variables", StringComparison.OrdinalIgnoreCase) >= 0
+                        || partName.Equals("Variables", StringComparison.OrdinalIgnoreCase));
+                if (isVariablesPart)
                 {
-                    string varText = VariableInjector.GetVariablesAsText(varPart);
-                    ProcessTextResponse(varText, result, client);
+                    string varText = varPart != null
+                        ? VariableInjector.GetVariablesAsText(varPart)
+                        : string.Join("\r\n", GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(obj).Select(v => v.ToString()));
+                    ProcessSourceContent(obj, varText, offset, limit, result, client);
+                    // A targeted Variables read is also the authoritative typed
+                    // projection. Keep the source text for round-tripping and
+                    // expose dimension metadata as structured fields so callers
+                    // do not have to infer `&V(10)` from formatting.
+                    result["variables"] = GetVariablesCompact(obj, null, includeAllStandard: true);
                     Logger.Info("ReadSource (Variables) SUCCESS");
                 }
                 else if (part is ISource sourcePart)
@@ -5225,8 +5440,7 @@ namespace GxMcp.Worker.Services
             try
             {
                 // Nirvana v19.4: Auto-Inject Full Context (Variables + Data Schema + Pattern)
-                var varPart = GxMcp.Worker.Structure.PartAccessor.GetVariablesPart(obj)
-                    ?? obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.IndexOf("Variables", StringComparison.OrdinalIgnoreCase) >= 0);
+                var varPart = GxMcp.Worker.Structure.PartAccessor.GetVariablesLikePart(obj);
                 if (varPart != null)
                 {
                     var referencedVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -5238,27 +5452,19 @@ namespace GxMcp.Worker.Services
                     if (referencedVars.Count > 0)
                     {
                         var variables = new JArray();
-                        var varListProp = varPart.GetType().GetProperty("Variables");
-                        if (varListProp != null)
+                        foreach (object vObj in GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(obj))
                         {
-                            var varList = varListProp.GetValue(varPart) as System.Collections.IEnumerable;
-                            if (varList != null)
+                            dynamic v = vObj;
+                            string vName = GxMcp.Worker.Structure.PartAccessor.GetVariableName(vObj);
+                            if (referencedVars.Contains(vName))
                             {
-                                foreach (object vObj in varList)
-                                {
-                                    dynamic v = vObj;
-                                    string vName = v.Name;
-                                    if (referencedVars.Contains(vName))
-                                    {
-                                        variables.Add(new JObject {
-                                            ["name"] = vName,
-                                            ["type"] = v.Type.ToString(),
-                                            ["length"] = Convert.ToInt32(v.Length),
-                                            ["decimals"] = Convert.ToInt32(v.Decimals),
-                                            ["isCollection"] = (bool)v.IsCollection
-                                        });
-                                    }
-                                }
+                                var entry = new JObject { ["name"] = vName };
+                                try { entry["type"] = v.Type?.ToString() ?? "Unknown"; } catch { entry["type"] = "Unknown"; }
+                                try { entry["length"] = Convert.ToInt32(v.Length); } catch { }
+                                try { entry["decimals"] = Convert.ToInt32(v.Decimals); } catch { }
+                                try { entry["isCollection"] = (bool)v.IsCollection; } catch { }
+                                VariableDimensionSupport.AddMetadata(entry, vObj);
+                                variables.Add(entry);
                             }
                         }
                         if (variables.Count > 0) result["variables"] = variables;

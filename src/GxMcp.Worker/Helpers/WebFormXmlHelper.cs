@@ -120,6 +120,86 @@ namespace GxMcp.Worker.Helpers
             return doc.ToString();
         }
 
+        /// <summary>
+        /// Identifies the two WebForm XML dialects that are observed in supported
+        /// GeneXus majors.  A legacy HTML form is rooted at BODY (or carries an
+        /// explicit Form/@type="html"); modern GxMultiForm layouts use the
+        /// layout form type and must not be rewritten using the legacy caption
+        /// representation.
+        /// </summary>
+        public enum WebFormMarkupFlavor
+        {
+            LegacyHtml,
+            ModernGxMultiForm
+        }
+
+        public static WebFormMarkupFlavor DetectMarkupFlavor(string xml)
+        {
+            if (string.IsNullOrWhiteSpace(xml)) return WebFormMarkupFlavor.ModernGxMultiForm;
+
+            try
+            {
+                var doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+                return DetectMarkupFlavor(doc);
+            }
+            catch
+            {
+                // Keep the write fail-closed at the normal XML validation boundary;
+                // flavor detection must never make a malformed document look safe.
+                return WebFormMarkupFlavor.ModernGxMultiForm;
+            }
+        }
+
+        internal static WebFormMarkupFlavor DetectMarkupFlavor(XDocument doc)
+        {
+            var root = doc?.Root;
+            if (root == null) return WebFormMarkupFlavor.ModernGxMultiForm;
+
+            if (IsElement(root, "BODY")) return WebFormMarkupFlavor.LegacyHtml;
+            if (IsElement(root, "HTML") && root.DescendantsAndSelf().Any(e => IsElement(e, "BODY")))
+                return WebFormMarkupFlavor.LegacyHtml;
+
+            // Some older writers wrap the BODY in GxMultiForm without a type;
+            // an explicit html form is equally authoritative.
+            var form = IsElement(root, "Form")
+                ? root
+                : root.DescendantsAndSelf().FirstOrDefault(e => IsElement(e, "Form"));
+            if (form != null)
+            {
+                string type = GetAttribute(form, "type");
+                if (string.Equals(type, "html", StringComparison.OrdinalIgnoreCase))
+                    return WebFormMarkupFlavor.LegacyHtml;
+                if (string.IsNullOrWhiteSpace(type)
+                    && !IsElement(root, "GxMultiForm")
+                    && form.DescendantsAndSelf().Any(e => IsElement(e, "BODY")))
+                    return WebFormMarkupFlavor.LegacyHtml;
+            }
+
+            string rootType = GetAttribute(root, "type");
+            if (string.Equals(rootType, "html", StringComparison.OrdinalIgnoreCase))
+                return WebFormMarkupFlavor.LegacyHtml;
+
+            return WebFormMarkupFlavor.ModernGxMultiForm;
+        }
+
+        public static bool IsLegacyHtmlWebForm(string xml)
+            => DetectMarkupFlavor(xml) == WebFormMarkupFlavor.LegacyHtml;
+
+        internal static bool IsLegacyHtmlWebForm(XmlDocument document)
+            => document?.DocumentElement != null
+                && IsLegacyHtmlWebForm(document.OuterXml);
+
+        private static bool IsElement(XElement element, string localName)
+            => element != null && string.Equals(element.Name.LocalName, localName, StringComparison.OrdinalIgnoreCase);
+
+        private static string GetAttribute(XElement element, string name)
+        {
+            if (element == null) return null;
+            var attr = element.Attributes().FirstOrDefault(a =>
+                string.Equals(a.Name.LocalName, name, StringComparison.OrdinalIgnoreCase));
+            return attr?.Value;
+        }
+
         public static void ApplyEditableXml(KBObjectPart part, string xml, string baselineXml = null)
         {
             if (part == null)
@@ -166,6 +246,7 @@ namespace GxMcp.Worker.Helpers
             }
 
             var propertyDeltas = WebFormPropertyDeltaDetector.DetectSupportedPropertyDeltas(currentXml, normalized);
+            var changedControlNames = WebFormTypedPropertyWriter.GetChangedControlNames(currentXml, normalized);
             if (propertyDeltas.IsSupported && propertyDeltas.Deltas.Count > 0)
             {
                 Logger.Info("[LayoutFix] Detected " + propertyDeltas.Deltas.Count + " property delta(s) — trying typed-property write via IWebTag.");
@@ -176,7 +257,11 @@ namespace GxMcp.Worker.Helpers
                     // FR#1: still run descriptor-property fixup so any pre-existing wrong-named
                     // XML attrs (e.g. gxButton OnClickEvent= written by an earlier raw-XML pass)
                     // get routed through SDK and the canonical attr gets emitted.
-                    WebFormTypedPropertyWriter.ApplyDescriptorPathFixup(part);
+                    WebFormTypedPropertyWriter.ApplyDescriptorPathFixup(
+                        part,
+                        baselineXml: currentXml,
+                        updatedXml: normalized,
+                        changedControlNames: changedControlNames);
                     return;
                 }
                 Logger.Info("[LayoutFix] Typed-property write rejected: " + failure + " — falling back to raw XML rewrite.");
@@ -216,7 +301,11 @@ namespace GxMcp.Worker.Helpers
             // SetPropertyValueString — which writes the right XML attr internally.
             // Runs always (not just on add/remove), idempotent — SDK no-ops when the
             // value already matches the canonical form.
-            WebFormTypedPropertyWriter.ApplyDescriptorPathFixup(part);
+            WebFormTypedPropertyWriter.ApplyDescriptorPathFixup(
+                part,
+                baselineXml: currentXml,
+                updatedXml: normalized,
+                changedControlNames: changedControlNames);
         }
 
         private static bool TrySetEditableContent(object part, string normalizedXml)

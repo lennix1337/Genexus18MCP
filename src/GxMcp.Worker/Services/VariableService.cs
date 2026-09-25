@@ -11,11 +11,11 @@ namespace GxMcp.Worker.Services
     public interface IVariableService
     {
         TypeResolution ResolveType(string typeSpec);
-        string AddVariable(string target, string varName, string typeName = null, bool dryRun = false, int? length = null, int? decimals = null, bool? collection = null, string basedOn = null, string basedOnAttribute = null);
+        string AddVariable(string target, string varName, string typeName = null, bool dryRun = false, int? length = null, int? decimals = null, bool? collection = null, string basedOn = null, string basedOnAttribute = null, int? dimensions = null, JArray dimensionSizes = null);
         string AddVariables(string target, JArray variables, bool dryRun = false);
         string DeleteVariable(string target, string varName, bool dryRun = false);
         string DeleteVariables(string target, IEnumerable<string> varNames);
-        string ModifyVariable(string target, string varName, string newTypeName, string basedOn = null, bool dryRun = false, int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null);
+        string ModifyVariable(string target, string varName, string newTypeName, string basedOn = null, bool dryRun = false, int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null, int? dimensions = null, JArray dimensionSizes = null);
         void InjectFromSource(KBObject obj, string sourceCode, SearchIndex index = null);
     }
 
@@ -43,10 +43,10 @@ namespace GxMcp.Worker.Services
             return VariableTypeResolver.Resolve(typeSpec);
         }
 
-        public string AddVariable(string target, string varName, string typeName = null, bool dryRun = false, int? length = null, int? decimals = null, bool? collection = null, string basedOn = null, string basedOnAttribute = null)
+        public string AddVariable(string target, string varName, string typeName = null, bool dryRun = false, int? length = null, int? decimals = null, bool? collection = null, string basedOn = null, string basedOnAttribute = null, int? dimensions = null, JArray dimensionSizes = null)
         {
             if (_writeService == null) return McpResponse.Err(code: "ServiceUnavailable", message: "WriteService not configured.");
-            return _writeService.AddVariable(target, varName, typeName, dryRun, length, decimals, collection, basedOn, basedOnAttribute);
+            return _writeService.AddVariable(target, varName, typeName, dryRun, length, decimals, collection, basedOn, basedOnAttribute, dimensions, dimensionSizes);
         }
 
         public string AddVariables(string target, JArray variables, bool dryRun = false)
@@ -67,10 +67,10 @@ namespace GxMcp.Worker.Services
             return _writeService.DeleteVariables(target, varNames);
         }
 
-        public string ModifyVariable(string target, string varName, string newTypeName, string basedOn = null, bool dryRun = false, int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null)
+        public string ModifyVariable(string target, string varName, string newTypeName, string basedOn = null, bool dryRun = false, int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null, int? dimensions = null, JArray dimensionSizes = null)
         {
             if (_writeService == null) return McpResponse.Err(code: "ServiceUnavailable", message: "WriteService not configured.");
-            return _writeService.ModifyVariable(target, varName, newTypeName, basedOn, dryRun, length, decimals, collection, basedOnAttribute);
+            return _writeService.ModifyVariable(target, varName, newTypeName, basedOn, dryRun, length, decimals, collection, basedOnAttribute, dimensions, dimensionSizes);
         }
 
         public void InjectFromSource(KBObject obj, string sourceCode, SearchIndex index = null)

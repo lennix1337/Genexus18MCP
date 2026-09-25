@@ -308,15 +308,44 @@ namespace GxMcp.Gateway
             var found = new Dictionary<string, (string Target, string Part)>(StringComparer.OrdinalIgnoreCase);
             void Add(string? target, string? part)
             {
-                if (string.IsNullOrWhiteSpace(target)) return;
+                if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(part)) return;
                 string normalizedTarget = target.Trim();
-                string normalizedPart = string.IsNullOrWhiteSpace(part) ? "Source" : part.Trim();
+                string normalizedPart = part.Trim();
                 found[normalizedTarget + "|" + normalizedPart] = (normalizedTarget, normalizedPart);
             }
 
-            string? defaultPart = args["part"]?.ToString();
+            // Most umbrella tools carry an explicit part. These tools do not:
+            // their native operation has one well-known part, and using Source
+            // makes a valid recovery read impossible after a timeout.
+            string? toolDefaultPart = toolName?.ToLowerInvariant() switch
+            {
+                "genexus_variable" => "Variables",
+                "genexus_edit_form" => "WebForm",
+                "genexus_properties" => "Properties",
+                "genexus_edit" => "Source",
+                "genexus_write" => "Source",
+                "genexus_layout" => (
+                    args?["printBlockName"] != null
+                    || args?["currentName"] != null
+                    || new[] { "add_printblock", "rename_printblock", "delete_printblock", "add_report_control", "move_report_control", "remove_report_control" }
+                        .Contains(args?["action"]?.ToString(), StringComparer.OrdinalIgnoreCase)
+                ) ? "Layout" : "WebForm",
+                "genexus_wwp" => "PatternInstance",
+                "genexus_io" => new[] { "import_part", "import_text_to_kb", "delete_kb_objects" }
+                    .Contains(args?["action"]?.ToString(), StringComparer.OrdinalIgnoreCase)
+                    ? "Source" : null,
+                _ => null
+            };
+            string? requestedPart = args!["part"]?.ToString();
+            bool hasExplicitParts = args["parts"] is JArray explicitParts && explicitParts.Count > 0;
+            string? defaultPart = !string.IsNullOrWhiteSpace(requestedPart)
+                ? requestedPart
+                : hasExplicitParts ? null : toolDefaultPart;
             Add(args["name"]?.ToString(), defaultPart);
             Add(args["target"]?.ToString(), defaultPart);
+            if (string.IsNullOrWhiteSpace(args["name"]?.ToString())
+                && string.IsNullOrWhiteSpace(args["target"]?.ToString()))
+                Add(args["guid"]?.ToString(), defaultPart);
 
             if (args["targets"] is JArray targets)
             {
@@ -326,6 +355,17 @@ namespace GxMcp.Gateway
                         Add(item["name"]?.ToString() ?? item["target"]?.ToString(), item["part"]?.ToString() ?? defaultPart);
                     else
                         Add(token?.ToString(), defaultPart);
+                }
+            }
+
+            if (args["parts"] is JArray parts)
+            {
+                foreach (var token in parts)
+                {
+                    if (token is JObject item)
+                        Add(item["name"]?.ToString() ?? item["target"]?.ToString(), item["part"]?.ToString());
+                    else
+                        Add(args["name"]?.ToString() ?? args["target"]?.ToString(), token?.ToString());
                 }
             }
 
@@ -342,6 +382,75 @@ namespace GxMcp.Gateway
                             Add(token?.ToString(), defaultPart);
                     }
                 }
+            }
+
+            bool HasConcreteSelector(string? value)
+                => !string.IsNullOrWhiteSpace(value)
+                    && !string.Equals(value.Trim(), "*", StringComparison.OrdinalIgnoreCase);
+
+            bool HasSelectorToken(JToken? token)
+            {
+                if (token is JObject item)
+                    return HasConcreteSelector(item["name"]?.ToString())
+                        || HasConcreteSelector(item["target"]?.ToString());
+                return HasConcreteSelector(token?.ToString());
+            }
+
+            bool HasWildcardSelector(JToken? token)
+            {
+                if (token is JObject item)
+                    return string.Equals(item["name"]?.ToString()?.Trim(), "*", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(item["target"]?.ToString()?.Trim(), "*", StringComparison.OrdinalIgnoreCase);
+                return string.Equals(token?.ToString()?.Trim(), "*", StringComparison.OrdinalIgnoreCase);
+            }
+
+            bool HasObjectSelector()
+            {
+                if (HasConcreteSelector(args["name"]?.ToString())
+                    || HasConcreteSelector(args["target"]?.ToString())
+                    || HasConcreteSelector(args["guid"]?.ToString()))
+                    return true;
+                if (args["targets"] is JArray targetArray && targetArray.Any(HasSelectorToken))
+                    return true;
+                if (args["names"] is JArray names && names.Any(HasSelectorToken))
+                    return true;
+                if (args["objects"] is JArray objects && objects.Any(HasSelectorToken))
+                    return true;
+                if (args["parts"] is JArray parts && parts.OfType<JObject>().Any(HasSelectorToken))
+                    return true;
+                if (args["changeSet"] is JObject changes
+                    && (changes["changes"] as JArray ?? changes["targets"] as JArray) is JArray changeArray
+                    && changeArray.Any(HasSelectorToken))
+                    return true;
+                return false;
+            }
+
+            bool HasWildcardObjectSelector()
+            {
+                if (HasWildcardSelector(args["name"]) || HasWildcardSelector(args["target"]))
+                    return true;
+                return new[] { args["targets"], args["names"], args["objects"] }
+                    .OfType<JArray>()
+                    .SelectMany(array => array)
+                    .Any(HasWildcardSelector)
+                    || (args["parts"] as JArray)?.OfType<JObject>().Any(HasWildcardSelector) == true
+                    || (args["changeSet"]?["changes"] as JArray ?? args["changeSet"]?["targets"] as JArray)?
+                        .Any(HasWildcardSelector) == true;
+            }
+
+            // A manifest import has no single authored object target. Use a
+            // reserved KB-level fence rather than treating the manifest path as
+            // an object named Source; the latter makes a part-specific read
+            // look like evidence for an unknown, multi-object import.
+            if (string.Equals(toolName, "genexus_io", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(args["action"]?.ToString(), "import_text_to_kb", StringComparison.OrdinalIgnoreCase)
+                && (!HasObjectSelector() || HasWildcardObjectSelector()))
+            {
+                foreach (string key in found.Keys
+                    .Where(key => key.StartsWith("*|", StringComparison.OrdinalIgnoreCase))
+                    .ToList())
+                    found.Remove(key);
+                Add(MutationRecoveryRegistry.KbRecoveryTarget, MutationRecoveryRegistry.KbRecoveryPart);
             }
 
             foreach (var item in found.Values

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using GxMcp.Gateway;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -70,6 +71,121 @@ public class BackgroundJobRegistryPersistenceTests
             Assert.False(File.Exists(path));
         }
         finally { try { Directory.Delete(Path.GetDirectoryName(path)!, true); } catch { } }
+    }
+
+    [Fact]
+    public void LoadFrom_DoesNotResurrectJobsCompletedAfterSnapshot()
+    {
+        var registry = new BackgroundJobRegistry(600);
+        var fence = new OwnershipFence("session", "physical-kb", 1);
+        var running = registry.AdmitLifecycle("session", "lifecycle/build", 30,
+            fence, "physical-kb", "build|A");
+        var queued = registry.AdmitLifecycle("session-2", "lifecycle/build", 30,
+            fence, "physical-kb", "build|B");
+        string path = TempPath();
+        try
+        {
+            registry.SaveTo(path);
+            registry.Complete(running.Job.Id, true, "completed after snapshot");
+            registry.Cancel(queued.Job.Id, "cancelled after snapshot");
+
+            registry.LoadFrom(path);
+
+            Assert.Equal("succeeded", registry.Get(running.Job.Id)!.Status);
+            Assert.Equal("cancelled", registry.Get(queued.Job.Id)!.Status);
+        }
+        finally { try { Directory.Delete(Path.GetDirectoryName(path)!, true); } catch { } }
+    }
+
+    [Fact]
+    public void LoadFrom_CancellationDuringMergeCannotResurrectTerminalJob()
+    {
+        var registry = new BackgroundJobRegistry(600);
+        var job = registry.Start("session", "edit", 30);
+        string path = TempPath();
+        try
+        {
+            registry.SaveTo(path);
+            // The hook runs inside the merge critical section. Cancel re-enters
+            // the per-job monitor, making the terminal transition deterministic
+            // rather than scheduler-dependent.
+            registry.LoadMergeTransitionForTest = () =>
+                Assert.True(registry.Cancel(job.Id, "cancelled during reload"));
+
+            registry.LoadFrom(path, deleteAfterRead: false);
+
+            Assert.Same(job, registry.Get(job.Id));
+            Assert.Equal("cancelled", registry.Get(job.Id)!.Status);
+        }
+        finally
+        {
+            registry.LoadMergeTransitionForTest = null;
+            try { Directory.Delete(Path.GetDirectoryName(path)!, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void LoadFrom_RebuildsLifecycleFifoAndAdmissionSignals()
+    {
+        var pre = new BackgroundJobRegistry(600);
+        var fence = new OwnershipFence("session", "physical-kb", 1);
+        var first = pre.AdmitLifecycle("session", "lifecycle/build", 30,
+            fence, "physical-kb", "build|A");
+        var second = pre.AdmitLifecycle("session-2", "lifecycle/build", 30,
+            fence, "physical-kb", "build|B");
+        Assert.Equal("running", first.Job.Status);
+        Assert.Equal("queued", second.Job.Status);
+
+        string path = TempPath();
+        try
+        {
+            pre.SaveTo(path);
+            var post = new BackgroundJobRegistry(600);
+            post.LoadFrom(path);
+
+            var third = post.AdmitLifecycle("session-3", "lifecycle/build", 30,
+                fence, "physical-kb", "build|C");
+            Assert.Equal("queued", third.Job.Status);
+            Assert.Equal(2, third.Job.QueuePosition);
+
+            post.Complete(first.Job.Id, true, "done");
+            Assert.Equal("running", post.Get(second.Job.Id)!.Status);
+        }
+        finally { try { Directory.Delete(Path.GetDirectoryName(path)!, true); } catch { } }
+    }
+
+    [Fact]
+    public async Task LoadFrom_PreservesLiveAdmissionWaiterWhileRebuildingQueue()
+    {
+        var registry = new BackgroundJobRegistry(600);
+        var fence = new OwnershipFence("session", "physical-kb", 1);
+        var running = registry.AdmitLifecycle("session", "lifecycle/build", 30,
+            fence, "physical-kb", "build|A");
+        var queued = registry.AdmitLifecycle("session-2", "lifecycle/build", 30,
+            fence, "physical-kb", "build|B");
+        Task<bool> waiter = registry.WaitForLifecycleAdmissionAsync(queued.Job.Id);
+
+        string path = TempPath();
+        try
+        {
+            registry.SaveTo(path);
+            registry.LoadFrom(path);
+
+            bool remainedPendingAfterReload = !waiter.IsCompleted;
+            registry.Complete(running.Job.Id, true, "done after reload");
+            bool admitted = await waiter.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.True(remainedPendingAfterReload,
+                "Loading a live snapshot must not resolve an admission waiter.");
+            Assert.True(admitted);
+            Assert.Equal("running", registry.Get(queued.Job.Id)!.Status);
+        }
+        finally
+        {
+            registry.Cancel(queued.Job.Id, "test cleanup");
+            registry.Cancel(running.Job.Id, "test cleanup");
+            try { Directory.Delete(Path.GetDirectoryName(path)!, true); } catch { }
+        }
     }
 
     [Fact]

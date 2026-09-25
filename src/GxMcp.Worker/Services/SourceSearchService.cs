@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Artech.Architecture.Common.Objects;
@@ -19,6 +23,7 @@ namespace GxMcp.Worker.Services
         public bool CaseSensitive { get; set; }
         public string TypeFilter { get; set; }
         public List<string> Scope { get; set; } = new List<string> { "source" };
+        public bool ScopeExplicit { get; set; }
         /// <summary>
         /// Item 22: wider field search. Values: source (default), caption,
         /// description, parmNames. When any non-source value is present the
@@ -31,6 +36,11 @@ namespace GxMcp.Worker.Services
         // internal 25s budget — when exceeded we return a structured Timeout
         // envelope with partial hits, never a silently empty result.
         public int TimeoutMs { get; set; } = 30000;
+        // Internal continuation controls; these are never published as MCP args.
+        internal bool SuppressContinuation { get; set; }
+        internal int ContinuationDepth { get; set; }
+        internal System.Threading.CancellationToken ContinuationCancellationToken { get; set; }
+        internal string ContinuationCancelToken { get; set; }
 
         // Issue #27 item 4: scope the scan to specific object(s) by exact name
         // (comma/semicolon-separated, case-insensitive). When set, only those
@@ -120,6 +130,23 @@ namespace GxMcp.Worker.Services
         internal static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromSeconds(2);
         private static readonly List<string> DefaultScope = new List<string> { "source" };
 
+        private static bool IsDefaultSourceScope(List<string> scope)
+        {
+            if (scope == null || scope.Count == 0) return true;
+            if (scope.Count != 1 || string.IsNullOrWhiteSpace(scope[0])) return false;
+            string value = scope[0].Trim();
+            return value.Equals("source", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("code", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool HasOnlySourceFields(List<string> fields)
+        {
+            if (fields == null || fields.Count == 0) return true;
+            return fields.Count == 1
+                && !string.IsNullOrWhiteSpace(fields[0])
+                && fields[0].Trim().Equals("source", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static Regex GetCachedRegex(string pattern, RegexOptions opts)
         {
             string key = pattern + "\u0001" + ((int)opts).ToString();
@@ -142,6 +169,17 @@ namespace GxMcp.Worker.Services
             return true;
         }
 
+        private static string HitObjectIdentity(JObject hit)
+        {
+            if (hit == null) return string.Empty;
+            var guid = hit["guid"];
+            string value = guid == null || guid.Type == JTokenType.Null ? string.Empty : guid.ToString();
+            if (!string.IsNullOrEmpty(value)) return value;
+            var objectName = hit["objectName"];
+            return objectName == null || objectName.Type == JTokenType.Null
+                ? string.Empty : objectName.ToString();
+        }
+
         private static bool AddSourceHit(JArray hits, JObject hit, ref int produced,
             ref int skipped, ref int consumed, int maxResults)
         {
@@ -152,34 +190,209 @@ namespace GxMcp.Worker.Services
                 return false;
             }
 
+            string hitKey = string.Join("|",
+                HitObjectIdentity(hit),
+                hit["part"]?.ToString() ?? string.Empty,
+                hit["field"]?.ToString() ?? string.Empty,
+                hit["line"]?.ToString() ?? string.Empty,
+                hit["lineText"]?.ToString() ?? string.Empty);
+            if (hits.OfType<JObject>().Any(existing => string.Join("|",
+                HitObjectIdentity(existing),
+                existing["part"]?.ToString() ?? string.Empty,
+                existing["field"]?.ToString() ?? string.Empty,
+                existing["line"]?.ToString() ?? string.Empty,
+                existing["lineText"]?.ToString() ?? string.Empty).Equals(hitKey, StringComparison.Ordinal)))
+                return false;
+
             hits.Add(hit);
             produced++;
             return produced >= maxResults;
         }
 
+        private const int LegacyResumeCursorVersion = 1;
+        private const int ResumeCursorVersion = 2;
+        private const int MaxResumeCursorLength = 32 * 1024;
+
+        private sealed class IndexGenerationMarker
+        {
+            internal readonly string Value;
+
+            internal IndexGenerationMarker(long value)
+            {
+                Value = value.ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        // A SearchIndex reference is replaced on a full rebuild/restore, while
+        // GraphRevision advances for incremental mutations. Keep both in the
+        // cursor identity: a cursor must not survive either kind of generation
+        // change, even when the replacement happens to contain the same objects.
+        private static readonly ConditionalWeakTable<SearchIndex, IndexGenerationMarker> _indexGenerationMarkers =
+            new ConditionalWeakTable<SearchIndex, IndexGenerationMarker>();
+        private static long _nextIndexGeneration;
+
+        private static string GetIndexGeneration(SearchIndex index)
+        {
+            if (index == null) return "index:none";
+            var marker = _indexGenerationMarkers.GetValue(index,
+                created => new IndexGenerationMarker(System.Threading.Interlocked.Increment(ref _nextIndexGeneration)));
+            long revision = System.Threading.Interlocked.Read(ref index.GraphRevision);
+            int objectCount = index.Objects == null ? 0 : index.Objects.Count;
+            return marker.Value + ":" + revision.ToString(CultureInfo.InvariantCulture)
+                + ":" + index.LastUpdated.Ticks.ToString(CultureInfo.InvariantCulture)
+                + ":" + objectCount.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static string Fingerprint(string value)
+        {
+            using (var sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty)))
+                    .Replace("-", string.Empty)
+                    .ToLowerInvariant();
+            }
+        }
+
+        private static void AppendFingerprintPart(StringBuilder builder, string name, string value)
+        {
+            string safe = value ?? "<null>";
+            builder.Append(name)
+                .Append('=')
+                .Append(safe.Length.ToString(CultureInfo.InvariantCulture))
+                .Append(':')
+                .Append(safe)
+                .Append(';');
+        }
+
+        private static string NormalizeCursorValues(IEnumerable<string> values, bool sort)
+        {
+            var normalized = (values ?? Enumerable.Empty<string>())
+                .Select(value => value == null ? "<null>" : value.Trim().ToLowerInvariant())
+                .ToList();
+            if (sort) normalized = normalized
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToList();
+            return string.Join("\u001f", normalized);
+        }
+
+        private static string BuildQueryFingerprint(SourceSearchCriteria criteria)
+        {
+            var builder = new StringBuilder();
+            AppendFingerprintPart(builder, "callee", criteria?.Callee);
+            AppendFingerprintPart(builder, "pattern", criteria?.Pattern);
+            AppendFingerprintPart(builder, "caseSensitive",
+                (criteria != null && criteria.CaseSensitive).ToString());
+            AppendFingerprintPart(builder, "includeComments",
+                (criteria != null && criteria.IncludeComments).ToString());
+            AppendFingerprintPart(builder, "type", criteria?.TypeFilter?.Trim());
+            AppendFingerprintPart(builder, "objectName", criteria?.ObjectName?.Trim().ToLowerInvariant());
+            AppendFingerprintPart(builder, "guid", criteria?.ObjectGuid?.Trim());
+            AppendFingerprintPart(builder, "entityKey", criteria?.ObjectEntityKey?.Trim());
+            AppendFingerprintPart(builder, "path", criteria?.ObjectPath?.Trim().Replace('\\', '/'));
+            // MaxResults/timeoutMs are page controls, not search identity; a
+            // caller may change either while continuing the same query.
+            AppendFingerprintPart(builder, "fields", criteria?.Fields == null || criteria.Fields.Count == 0
+                ? "<default>"
+                : NormalizeCursorValues(criteria.Fields, sort: false));
+
+            if (criteria?.ArgMatches != null)
+            {
+                foreach (var pair in criteria.ArgMatches.OrderBy(item => item.Key))
+                {
+                    AppendFingerprintPart(builder,
+                        "arg:" + pair.Key.ToString(CultureInfo.InvariantCulture),
+                        pair.Value);
+                }
+            }
+            return Fingerprint(builder.ToString());
+        }
+
+        private static string BuildScopeFingerprint(SourceSearchCriteria criteria)
+        {
+            bool hasExplicitScope = criteria?.ScopeExplicit == true;
+            IEnumerable<string> scope = hasExplicitScope
+                ? criteria.Scope
+                : (criteria?.Scope != null && criteria.Scope.Any() ? criteria.Scope : DefaultScope);
+            string mode = hasExplicitScope ? "explicit" : "default";
+            string values = scope == null || !scope.Any()
+                ? "<empty>"
+                : NormalizeCursorValues(scope, sort: false);
+            return Fingerprint(mode + "|" + values);
+        }
+
+        private string GetKbIdentity()
+        {
+            string path = null;
+            try { path = _objectService?.GetKbService()?.GetKbPath(); }
+            catch { }
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                try { path = _index?.KbService?.GetKbPath(); }
+                catch { }
+            }
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                try { path = Environment.GetEnvironmentVariable("GX_KB_PATH"); }
+                catch { }
+            }
+            if (string.IsNullOrWhiteSpace(path)) return "kb:none";
+            try
+            {
+                if (path.EndsWith(".gxw", StringComparison.OrdinalIgnoreCase))
+                    path = Path.GetDirectoryName(path);
+                path = Path.GetFullPath(path ?? string.Empty)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .Replace('\\', '/');
+            }
+            catch
+            {
+                path = (path ?? string.Empty).Replace('\\', '/').TrimEnd('/', '\\');
+            }
+            return "kb:" + Fingerprint(path.ToUpperInvariant()) + ";worker:" + System.Diagnostics.Process.GetCurrentProcess().Id;
+        }
+
+        // Legacy overload is retained for source-only callers/tests. Tokens
+        // produced by the service always use the bound overload below; an
+        // unbound token is intentionally rejected by the bound parser.
         internal static string BuildResumeCursor(int entryIndex, int skippedHits, bool metadata)
         {
+            return BuildResumeCursor(entryIndex, skippedHits, metadata,
+                queryFingerprint: null, scopeFingerprint: null,
+                indexGeneration: null, kbIdentity: null);
+        }
+
+        internal static string BuildResumeCursor(int entryIndex, int skippedHits, bool metadata,
+            string queryFingerprint, string scopeFingerprint, string indexGeneration, string kbIdentity)
+        {
+            bool bound = !string.IsNullOrEmpty(queryFingerprint)
+                && !string.IsNullOrEmpty(scopeFingerprint)
+                && !string.IsNullOrEmpty(indexGeneration)
+                && !string.IsNullOrEmpty(kbIdentity);
             var state = new JObject
             {
-                ["v"] = 1,
+                ["v"] = bound ? ResumeCursorVersion : LegacyResumeCursorVersion,
                 ["entry"] = Math.Max(0, entryIndex),
                 ["skip"] = Math.Max(0, skippedHits),
                 ["phase"] = metadata ? "metadata" : "source"
             };
+            if (bound)
+            {
+                state["query"] = queryFingerprint;
+                state["scope"] = scopeFingerprint;
+                state["index"] = indexGeneration;
+                state["kb"] = kbIdentity;
+            }
             return Convert.ToBase64String(Encoding.UTF8.GetBytes(state.ToString(Newtonsoft.Json.Formatting.None)))
                 .TrimEnd('=')
                 .Replace('+', '-')
                 .Replace('/', '_');
         }
 
-        internal static bool TryParseResumeCursor(string cursor, out int entryIndex,
-            out int skippedHits, out bool metadata)
+        private static bool TryDecodeResumeCursor(string cursor, out JObject state)
         {
-            entryIndex = 0;
-            skippedHits = 0;
-            metadata = false;
-            if (string.IsNullOrWhiteSpace(cursor)) return false;
-
+            state = null;
+            if (string.IsNullOrWhiteSpace(cursor) || cursor.Length > MaxResumeCursorLength) return false;
             try
             {
                 string padded = cursor.Trim().Replace('-', '+').Replace('_', '/');
@@ -190,23 +403,100 @@ namespace GxMcp.Worker.Services
                     case 1: return false;
                 }
 
-                var state = JObject.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(padded)));
-                if (state["v"]?.Value<int>() != 1) return false;
+                state = JObject.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(padded)));
+                return state != null;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool CursorFieldEquals(JObject state, string field, string expected)
+        {
+            var token = state?[field];
+            return token != null && token.Type == JTokenType.String
+                && string.Equals(token.Value<string>(), expected, StringComparison.Ordinal);
+        }
+
+        private static bool TryParseResumeCursorCore(string cursor, bool requireBinding,
+            string expectedQuery, string expectedScope, string expectedIndex, string expectedKb,
+            out int entryIndex, out int skippedHits, out bool metadata)
+        {
+            entryIndex = 0;
+            skippedHits = 0;
+            metadata = false;
+            JObject state;
+            if (!TryDecodeResumeCursor(cursor, out state)) return false;
+
+            try
+            {
+                var versionToken = state["v"];
+                if (versionToken == null || versionToken.Type != JTokenType.Integer) return false;
+                int version = versionToken.Value<int>();
+                if (version != LegacyResumeCursorVersion && version != ResumeCursorVersion) return false;
+
                 string phase = state["phase"]?.ToString() ?? string.Empty;
                 if (!string.Equals(phase, "source", StringComparison.Ordinal)
                     && !string.Equals(phase, "metadata", StringComparison.Ordinal))
                 {
                     return false;
                 }
-                entryIndex = state["entry"]?.Value<int>() ?? 0;
-                skippedHits = state["skip"]?.Value<int>() ?? 0;
+
+                var entryToken = state["entry"];
+                var skipToken = state["skip"];
+                if (entryToken == null || skipToken == null
+                    || entryToken.Type != JTokenType.Integer
+                    || skipToken.Type != JTokenType.Integer)
+                {
+                    return false;
+                }
+                entryIndex = entryToken.Value<int>();
+                skippedHits = skipToken.Value<int>();
+                if (entryIndex < 0 || skippedHits < 0) return false;
+
+                if (requireBinding)
+                {
+                    if (version != ResumeCursorVersion
+                        || !CursorFieldEquals(state, "query", expectedQuery)
+                        || !CursorFieldEquals(state, "scope", expectedScope)
+                        || !CursorFieldEquals(state, "index", expectedIndex)
+                        || !CursorFieldEquals(state, "kb", expectedKb))
+                    {
+                        entryIndex = 0;
+                        skippedHits = 0;
+                        metadata = false;
+                        return false;
+                    }
+                }
+
                 metadata = string.Equals(phase, "metadata", StringComparison.Ordinal);
-                return entryIndex >= 0 && skippedHits >= 0;
+                return true;
             }
             catch
             {
+                entryIndex = 0;
+                skippedHits = 0;
+                metadata = false;
                 return false;
             }
+        }
+
+        internal static bool TryParseResumeCursor(string cursor, out int entryIndex,
+            out int skippedHits, out bool metadata)
+        {
+            return TryParseResumeCursorCore(cursor, requireBinding: false,
+                expectedQuery: null, expectedScope: null, expectedIndex: null, expectedKb: null,
+                out entryIndex, out skippedHits, out metadata);
+        }
+
+        internal static bool TryParseResumeCursor(string cursor,
+            string expectedQuery, string expectedScope, string expectedIndex, string expectedKb,
+            out int entryIndex, out int skippedHits, out bool metadata)
+        {
+            return TryParseResumeCursorCore(cursor, requireBinding: true,
+                expectedQuery, expectedScope, expectedIndex, expectedKb,
+                out entryIndex, out skippedHits, out metadata);
         }
 
         public SourceSearchService(IndexCacheService index, ObjectService objectService)
@@ -270,6 +560,64 @@ namespace GxMcp.Worker.Services
             return SearchCore(c, ct, partial, status);
         }
 
+        private bool ScheduleContinuation(SourceSearchCriteria criteria, string nextCursor)
+        {
+            if (criteria == null || string.IsNullOrWhiteSpace(nextCursor)) return false;
+            try
+            {
+                bool queued = GxMcp.Worker.Program.EnqueueSdkAction(() => RunContinuation(criteria, nextCursor));
+                if (queued)
+                    Logger.Debug("[SEARCH-SOURCE-PHASE] continuation queued cursor=" + nextCursor);
+                return queued;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[SEARCH-SOURCE-PHASE] continuation enqueue failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        private void RunContinuation(SourceSearchCriteria criteria, string nextCursor)
+        {
+            if (criteria == null || string.IsNullOrWhiteSpace(nextCursor)) return;
+            criteria.SuppressContinuation = true;
+            criteria.ContinuationDepth = criteria.ContinuationDepth + 1;
+            criteria.Cursor = nextCursor;
+            System.Threading.CancellationToken continuationToken = criteria.ContinuationCancellationToken;
+            IDisposable registration = null;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(criteria.ContinuationCancelToken))
+                    registration = GxMcp.Worker.Helpers.WorkerCancellationRegistry.Register(
+                        criteria.ContinuationCancelToken, out continuationToken);
+                if (continuationToken.IsCancellationRequested) return;
+                JObject result;
+                try { result = JObject.Parse(SearchAsJson(criteria, continuationToken)); }
+                catch (Exception ex)
+                {
+                    Logger.Warn("[SEARCH-SOURCE-PHASE] continuation failed: " + ex.Message);
+                    return;
+                }
+                if (criteria.ContinuationDepth >= 1000)
+                {
+                    Logger.Warn("[SEARCH-SOURCE-PHASE] continuation depth limit reached; caller cursor remains authoritative.");
+                    return;
+                }
+                string continuationCursor = result["result"]?["nextCursor"]?.ToString();
+                if (string.Equals(result["code"]?.ToString(), "Timeout", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(continuationCursor))
+                    ScheduleContinuation(criteria, continuationCursor);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[SEARCH-SOURCE-PHASE] continuation callback failed: " + ex.Message);
+            }
+            finally
+            {
+                registration?.Dispose();
+            }
+        }
+
         private string SearchCore(SourceSearchCriteria c, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken),
             bool partialIndex = false, string indexStatus = "Ready")
         {
@@ -290,6 +638,91 @@ namespace GxMcp.Worker.Services
                 var hits = new JArray();
                 var unresolvedObjects = new JArray();
                 var index = _index.GetIndex();
+                bool hasMetadataFields = c.Fields != null && c.Fields.Any(field =>
+                    !string.IsNullOrWhiteSpace(field)
+                    && !string.Equals(field, "source", StringComparison.OrdinalIgnoreCase));
+                bool fieldsIncludeSource = c.Fields == null || c.Fields.Count == 0
+                    || c.Fields.Any(field => string.Equals(field, "source", StringComparison.OrdinalIgnoreCase));
+                var scanScope = c.ScopeExplicit
+                    ? (c.Scope == null || c.Scope.Count == 0 ? DefaultScope : c.Scope)
+                    : (hasMetadataFields && !fieldsIncludeSource
+                        ? new List<string>()
+                        : (c.Scope == null || c.Scope.Count == 0 ? DefaultScope : c.Scope));
+
+                // Cursor validation is deliberately performed against the same
+                // immutable search context that produced the token. A token is
+                // valid only for this query, effective scope, index generation and
+                // physical KB; changing any of those starts a new search.
+                string indexGeneration = GetIndexGeneration(index);
+                string kbIdentity = GetKbIdentity();
+                string queryFingerprint = BuildQueryFingerprint(c);
+                string scopeFingerprint = BuildScopeFingerprint(c);
+                string BuildBoundCursor(int entryIndex, int skippedHits, bool metadata)
+                {
+                    return BuildResumeCursor(entryIndex, skippedHits, metadata,
+                        queryFingerprint, scopeFingerprint, indexGeneration, kbIdentity);
+                }
+
+                int resumeEntry = -1;
+                int resumeSkipped = 0;
+                bool resumeMetadata = false;
+                if (!string.IsNullOrWhiteSpace(c.Cursor)
+                    && !TryParseResumeCursor(c.Cursor,
+                        queryFingerprint, scopeFingerprint, indexGeneration, kbIdentity,
+                        out resumeEntry, out resumeSkipped, out resumeMetadata))
+                {
+                    return Models.McpResponse.Err(code: "InvalidCursor",
+                        message: "cursor is not a valid continuation token for this search, scope, index generation and KB.");
+                }
+                bool metadataPhaseAvailable = hasMetadataFields && rx != null;
+                if (!string.IsNullOrWhiteSpace(c.Cursor)
+                    && ((resumeMetadata && !metadataPhaseAvailable)
+                        || (!resumeMetadata && scanScope.Count == 0)))
+                {
+                    return Models.McpResponse.Err(code: "InvalidCursor",
+                        message: "cursor phase does not match the fields and scope of this search.");
+                }
+
+                var partExecutions = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+                foreach (string requestedPart in scanScope)
+                {
+                    partExecutions[requestedPart] = new JObject
+                    {
+                        ["requestedPart"] = requestedPart,
+                        ["resolvedParts"] = new JArray(),
+                        ["scannedObjects"] = 0,
+                        ["indexReads"] = 0,
+                        ["storeReads"] = 0,
+                        ["cacheReads"] = 0,
+                        ["sdkReads"] = 0,
+                        ["executed"] = false,
+                        ["status"] = "pending"
+                    };
+                }
+                JObject PartExecution(string requestedPart, string resolvedPart)
+                {
+                    if (!partExecutions.TryGetValue(requestedPart, out var execution))
+                    {
+                        execution = new JObject
+                        {
+                            ["requestedPart"] = requestedPart,
+                            ["resolvedParts"] = new JArray(),
+                            ["scannedObjects"] = 0,
+                            ["indexReads"] = 0,
+                            ["storeReads"] = 0,
+                            ["cacheReads"] = 0,
+                            ["sdkReads"] = 0,
+                            ["executed"] = false,
+                            ["status"] = "pending"
+                        };
+                        partExecutions[requestedPart] = execution;
+                    }
+                    var resolved = execution["resolvedParts"] as JArray ?? new JArray();
+                    if (!resolved.Any(item => string.Equals(item.ToString(), resolvedPart, StringComparison.OrdinalIgnoreCase)))
+                        resolved.Add(resolvedPart);
+                    execution["resolvedParts"] = resolved;
+                    return execution;
+                }
 
                 // Pre-filter by literal tokens against the index so we skip FindObject for
                 // entries that demonstrably reference none of them.
@@ -297,7 +730,7 @@ namespace GxMcp.Worker.Services
 
                 // FullSource only proves absence for the primary-source aliases.
                 // Explicit or mixed parts must reach their own readers.
-                bool indexedSourceScope = IsIndexedSourceScope(c.Scope);
+                bool indexedSourceScope = scanScope.Count > 0 && IsIndexedSourceScope(scanScope);
                 if (indexedSourceScope && literals.Count > 0)
                 {
                     // Test fixtures may load only Objects; production disk indexes
@@ -317,30 +750,53 @@ namespace GxMcp.Worker.Services
                 // those exact objects (bypassing both the base type whitelist and the
                 // literal pre-filter), so a search inside one known object is O(object).
                 var objectNameSet = ParseObjectNames(c.ObjectName);
-                bool hasIdentityScope = !string.IsNullOrWhiteSpace(c.ObjectGuid)
-                    || !string.IsNullOrWhiteSpace(c.ObjectEntityKey)
-                    || !string.IsNullOrWhiteSpace(c.ObjectPath);
+                bool hasIdentityScope = HasIdentityScope(c);
 
                 IEnumerable<Models.SearchIndex.IndexEntry> query = index.Objects.Values;
-                if (hasIdentityScope)
+                if (hasIdentityScope && objectNameSet != null)
+                {
+                    // Selectors are conjunctive.  An identity filter must not
+                    // silently replace a homonym name selector; if the two
+                    // identify different objects, fail closed before any SDK read.
+                    var identityMatches = index.Objects.Values
+                        .Where(e => MatchesIdentityScope(e, c))
+                        .ToList();
+                    var intersection = identityMatches
+                        .Where(e => ObjectNameMatches(objectNameSet, e.Name))
+                        .ToList();
+                    if (intersection.Count == 0)
+                    {
+                        return Models.McpResponse.Err(
+                            code: "ConflictingObjectSelectors",
+                            message: "The objectName selector conflicts with the GUID/entityKey/path selector.",
+                            hint: "Use objectName and identity selectors that identify the same object, or remove one selector.",
+                            errorExtra: new JObject
+                            {
+                                ["requestedObjectNames"] = JArray.FromObject(objectNameSet.ToArray()),
+                                ["identitySelectors"] = new JObject
+                                {
+                                    ["guid"] = c.ObjectGuid,
+                                    ["entityKey"] = c.ObjectEntityKey,
+                                    ["path"] = c.ObjectPath
+                                }
+                            });
+                    }
+                    query = intersection;
+                }
+                else if (hasIdentityScope)
                 {
                     string targetGuid = c.ObjectGuid?.Trim();
-                    string targetKey = c.ObjectEntityKey?.Trim();
-                    string normalizedPath = c.ObjectPath?.Trim().Replace('\\', '/');
-
-                    if (!string.IsNullOrWhiteSpace(targetGuid) && index.GuidToKey != null && index.GuidToKey.TryGetValue(targetGuid, out var sKey) && index.Objects.TryGetValue(sKey, out var matchedEntry))
+                    if (!string.IsNullOrWhiteSpace(targetGuid)
+                        && index.GuidToKey != null
+                        && index.GuidToKey.TryGetValue(targetGuid, out var sKey)
+                        && index.Objects.TryGetValue(sKey, out var matchedEntry)
+                        && MatchesIdentityScope(matchedEntry, c))
                     {
-                        query = (string.IsNullOrWhiteSpace(targetKey) || string.Equals(matchedEntry.EntityKey, targetKey, StringComparison.OrdinalIgnoreCase))
-                            && (string.IsNullOrWhiteSpace(normalizedPath) || ObjectPathMatches(matchedEntry, normalizedPath))
-                            ? new[] { matchedEntry }
-                            : Enumerable.Empty<Models.SearchIndex.IndexEntry>();
+                        query = new[] { matchedEntry };
                     }
                     else
                     {
-                        query = query.Where(e =>
-                            (string.IsNullOrWhiteSpace(targetGuid) || string.Equals(e.Guid, targetGuid, StringComparison.OrdinalIgnoreCase))
-                            && (string.IsNullOrWhiteSpace(targetKey) || string.Equals(e.EntityKey, targetKey, StringComparison.OrdinalIgnoreCase))
-                            && (string.IsNullOrWhiteSpace(normalizedPath) || ObjectPathMatches(e, normalizedPath)));
+                        query = query.Where(e => MatchesIdentityScope(e, c));
                     }
                 }
                 else if (objectNameSet != null)
@@ -427,7 +883,19 @@ namespace GxMcp.Worker.Services
                 // envelope with partial hits, replacing the legacy budgetExceeded
                 // flag. The 25s internal cap is now driven by c.TimeoutMs (default
                 // 30s) so callers can tune the budget per-call.
-                int timeoutMs = c.TimeoutMs > 0 ? c.TimeoutMs : 0;
+                // TimeoutMs=0 is an explicit, legacy immediate-timeout request; the
+                // property initializer supplies the normal 30s default when omitted.
+                int requestedTimeoutMs = Math.Max(0, c.TimeoutMs);
+                bool broadSdkScan = IsDefaultSourceScope(scanScope)
+                    && HasOnlySourceFields(c.Fields)
+                    && string.IsNullOrWhiteSpace(c.ObjectName)
+                    && string.IsNullOrWhiteSpace(c.TypeFilter);
+                // Server-owned broad scans are cooperative: one STA slice is capped at
+                // roughly 250ms and returns the opaque cursor for the next P2 slice.
+                // Explicitly scoped searches retain the caller's requested wall-clock cap.
+                int timeoutMs = broadSdkScan
+                    ? Math.Min(requestedTimeoutMs, 250)
+                    : requestedTimeoutMs;
                 var swBudget = System.Diagnostics.Stopwatch.StartNew();
 
                 int produced = 0;
@@ -435,68 +903,124 @@ namespace GxMcp.Worker.Services
                 int sourceCacheHits = 0;
                 int sourceCacheMisses = 0;
                 int sourceIndexPromotions = 0;
+                int storeProbeExecuted = 0;
+                int storeProbeCandidates = 0;
+                int storeProbeHits = 0;
                 int sdkResolutions = 0;
                 long sdkResolutionTicks = 0;
                 long sourceReadTicks = 0;
                 // Issue #27 item 4: index-addressable loop so a Timeout/Cancel can report a
                 // resumable nextCursor (the absolute entry index reached).
-                int resumeEntry = -1;
-                int resumeSkipped = 0;
-                bool resumeMetadata = false;
-                if (!string.IsNullOrWhiteSpace(c.Cursor)
-                    && !TryParseResumeCursor(c.Cursor, out resumeEntry, out resumeSkipped, out resumeMetadata))
-                {
-                    return Models.McpResponse.Err(code: "InvalidCursor",
-                        message: "cursor is not a valid genexus_search_source continuation token.");
-                }
                 int startIndex = c.StartIndex > 0 ? c.StartIndex : 0;
                 if (resumeEntry >= 0) startIndex = resumeEntry;
-                int cursor = resumeMetadata ? entries.Count : startIndex;
+                int cursor = resumeMetadata || scanScope.Count == 0 ? entries.Count : startIndex;
                 bool sourcePageStoppedInsideEntry = false;
                 int sourceNextEntry = -1;
                 int sourceNextSkip = 0;
 
-                var coverage = SourceStoreService.Instance.GetCoverage(entries, c.Scope ?? DefaultScope);
-                var storedFreshGuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                if (coverage.StoredObjects > 0 && startIndex == 0 && string.IsNullOrWhiteSpace(c.Cursor))
+                // Probe the persistent store off-STA before the conservative
+                // per-entry walk. The probe only reorders a bounded candidate
+                // page; completeness and continuation still come from the same
+                // indexed cursor, so a store miss cannot hide an SDK fallback.
+                if (indexedSourceScope && literals.Count > 0 && timeoutMs > 0
+                    && startIndex == 0 && !resumeMetadata && !ct.IsCancellationRequested)
                 {
-                    var storedEntries = new List<Models.SearchIndex.IndexEntry>();
-                    foreach (var entry in entries)
+                    try
                     {
-                        if (SourceStoreService.Instance.IsStoredAndFresh(entry, c.Scope ?? DefaultScope))
+                        var storedProbeEntries = entries
+                            .Where(e => !string.IsNullOrWhiteSpace(e.Guid)
+                                && SourceStoreService.Instance.IsStoredAndFresh(e, scanScope))
+                            .Take(200)
+                            .ToList();
+                        storeProbeExecuted = 1;
+                        storeProbeCandidates = storedProbeEntries.Count;
+                        var probeHits = SourceStoreService.Instance.SearchStore(
+                            storedProbeEntries, c, rx, ct);
+                        storeProbeHits = probeHits?.Count ?? 0;
+                        if (storeProbeHits > 0)
                         {
-                            storedEntries.Add(entry);
-                            if (!string.IsNullOrEmpty(entry.Guid))
+                            var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var hit in probeHits.OfType<JObject>())
                             {
-                                storedFreshGuids.Add(entry.Guid);
+                                string guid = hit["guid"]?.ToString();
+                                if (!string.IsNullOrWhiteSpace(guid) && !rank.ContainsKey(guid))
+                                    rank[guid] = rank.Count;
+                            }
+                            if (rank.Count > 0)
+                            {
+                                entries = entries
+                                    .OrderBy(e => rank.TryGetValue(e.Guid ?? string.Empty, out int position) ? 0 : 1)
+                                    .ThenBy(e => rank.TryGetValue(e.Guid ?? string.Empty, out int position) ? position : int.MaxValue)
+                                    .ToList();
                             }
                         }
                     }
-
-                    if (storedEntries.Count > 0)
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex)
                     {
-                        var storeHits = SourceStoreService.Instance.SearchStore(storedEntries, c, rx, ct);
-                        foreach (var hit in storeHits)
-                        {
-                            hits.Add(hit);
-                            produced++;
-                            if (produced >= c.MaxResults) break;
-                        }
-                        scanned += storedEntries.Count;
+                        Logger.Debug("[SEARCH-SOURCE-PHASE] store probe unavailable: " + ex.Message);
                     }
                 }
 
-                for (cursor = startIndex; cursor < entries.Count; cursor++)
+                var extraFields = c.Fields != null
+                    ? c.Fields.Where(field => !string.IsNullOrWhiteSpace(field)
+                        && !string.Equals(field, "source", StringComparison.OrdinalIgnoreCase)).ToList()
+                    : new List<string>();
+                // Metadata-only fields are evaluated after the source/part walk;
+                // they never implicitly add a source scan to the candidate set.
+                var coverage = SourceStoreService.Instance.GetCoverage(entries, scanScope);
+
+                JObject BuildExecutionSnapshot()
+                {
+                    var executionByPart = new JObject();
+                    var coveredParts = new JArray();
+                    var uncoveredParts = new JArray();
+                    foreach (var execution in partExecutions.Values)
+                    {
+                        string requestedPart = execution["requestedPart"]?.ToString() ?? string.Empty;
+                        executionByPart[requestedPart] = execution.DeepClone();
+                        if (string.Equals(execution["status"]?.ToString(), "searched", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(execution["status"]?.ToString(), "unavailable", StringComparison.OrdinalIgnoreCase))
+                            coveredParts.Add(requestedPart);
+                        else uncoveredParts.Add(requestedPart);
+                    }
+                    var coverageByPart = new JObject();
+                    foreach (var partCoverage in coverage.PartsByPart)
+                    {
+                        coverageByPart[partCoverage.Key] = partCoverage.Value.ToJson();
+                    }
+                    return new JObject
+                    {
+                        ["coverage"] = new JObject
+                        {
+                            ["storedObjects"] = coverage.StoredObjects,
+                            ["staleObjects"] = coverage.StaleObjects,
+                            ["totalObjects"] = entries.Count,
+                            ["requestedParts"] = JArray.FromObject(scanScope),
+                            ["coveredParts"] = coveredParts,
+                            ["uncoveredParts"] = uncoveredParts,
+                            ["parts"] = coverageByPart
+                        },
+                        ["partExecution"] = new JObject
+                        {
+                            ["requestedParts"] = JArray.FromObject(scanScope),
+                            ["parts"] = executionByPart,
+                            ["metadataFields"] = JArray.FromObject(extraFields),
+                            ["storeProbe"] = new JObject
+                            {
+                                ["executed"] = storeProbeExecuted == 1,
+                                ["candidates"] = storeProbeCandidates,
+                                ["hits"] = storeProbeHits
+                            }
+                        }
+                    };
+                }
+
+                for (; cursor < entries.Count; cursor++)
                 {
                     if (resumeMetadata) break;
                     var e = entries[cursor];
                     if (produced >= c.MaxResults) break;
-
-                    if (!string.IsNullOrEmpty(e.Guid) && storedFreshGuids.Contains(e.Guid))
-                    {
-                        continue;
-                    }
 
                     // Cooperative STA slicing (Issue #293): drain pending interactive (P0) commands
                     if (StaScheduler.Instance.HasPendingInteractive)
@@ -508,40 +1032,45 @@ namespace GxMcp.Worker.Services
                     bool entryReachedLimit = false;
                     if (ct.IsCancellationRequested)
                     {
+                        JObject executionSnapshot = BuildExecutionSnapshot();
                         return Models.McpResponse.Ok(code: "Cancelled", result: new JObject
                         {
                             ["partialHits"] = hits,
                             ["totalScanned"] = scanned,
                             ["totalObjects"] = entries.Count,
-                            ["coverage"] = new JObject
-                            {
-                                ["storedObjects"] = coverage.StoredObjects,
-                                ["staleObjects"] = coverage.StaleObjects,
-                                ["totalObjects"] = entries.Count
-                            },
-                            ["nextCursor"] = BuildResumeCursor(cursor, 0, metadata: false),
+                            ["coverage"] = executionSnapshot["coverage"]?.DeepClone(),
+                            ["partExecution"] = executionSnapshot["partExecution"]?.DeepClone(),
+                            ["nextCursor"] = BuildBoundCursor(cursor, skippedHits, metadata: false),
                             ["nextOffset"] = cursor,
                             ["resumeHint"] = "Pass cursor=nextCursor to resume this scan; legacy callers may pass startIndex=nextOffset."
                         });
                     }
                     if (timeoutMs == 0 || swBudget.ElapsedMilliseconds > timeoutMs)
                     {
+                        JObject executionSnapshot = BuildExecutionSnapshot();
                         int pct = entries.Count > 0 ? (int)(100L * cursor / entries.Count) : 100;
+                        string continuationCursor = BuildBoundCursor(cursor, skippedHits, metadata: false);
+                        bool continuationScheduled = broadSdkScan
+                            && _objectService != null
+                            && requestedTimeoutMs > 0
+                            && !c.SuppressContinuation
+                            && cursor < entries.Count
+                            && ScheduleContinuation(c, continuationCursor);
                         return Models.McpResponse.Ok(code: "Timeout", result: new JObject
                         {
                             ["partialHits"] = hits,
                             ["totalScanned"] = scanned,
                             ["totalObjects"] = entries.Count,
                             ["coveragePercent"] = pct,
-                            ["coverage"] = new JObject
-                            {
-                                ["storedObjects"] = coverage.StoredObjects,
-                                ["staleObjects"] = coverage.StaleObjects,
-                                ["totalObjects"] = entries.Count
-                            },
+                            ["coverage"] = executionSnapshot["coverage"]?.DeepClone(),
+                            ["partExecution"] = executionSnapshot["partExecution"]?.DeepClone(),
                             ["timeoutMs"] = timeoutMs,
-                            ["nextCursor"] = BuildResumeCursor(cursor, 0, metadata: false),
+                             ["requestedTimeoutMs"] = requestedTimeoutMs,
+                             ["sliceBudgetMs"] = broadSdkScan ? 250 : timeoutMs,
+                             ["sliceContinuation"] = broadSdkScan,
+                            ["nextCursor"] = continuationCursor,
                             ["nextOffset"] = cursor,
+                            ["continuationScheduled"] = continuationScheduled,
                             // Full-source scan reads each object's source via the SDK (~tens of ms
                             // each), so a whole-KB scan spans many budget windows. Prefer scoping
                             // for an instant search; resume only for an exhaustive sweep.
@@ -561,10 +1090,13 @@ namespace GxMcp.Worker.Services
                     // service seam (unit tests) falls straight through to the local reader.
                     KBObject obj = null;
                     bool resolutionFailed = false;
-                    foreach (var part in c.Scope ?? DefaultScope)
+                    foreach (var part in scanScope)
                     {
                         if (produced >= c.MaxResults || resolutionFailed) break;
                         string resolvedPart = ObjectService.ResolveSearchPartName(e.Type, part);
+                        JObject execution = PartExecution(part, resolvedPart);
+                        execution["executed"] = true;
+                        execution["status"] = "searching";
                         string src = null;
                         bool haveSrc = false;
                         bool useIndexedSource = indexedSourceScope
@@ -574,12 +1106,26 @@ namespace GxMcp.Worker.Services
                         {
                             src = e.FullSource;
                             haveSrc = true;
+                            execution["indexReads"] = execution["indexReads"]!.ToObject<int>() + 1;
+                        }
+                        else if (!string.IsNullOrEmpty(e.Guid)
+                            && SourceStoreService.Instance.TryGetStoredAndFresh(
+                                e, resolvedPart, out src))
+                        {
+                            // Persisted source-store reads are off-STA and still
+                            // flow through the same per-object budget/cursor as
+                            // SDK reads. Never pre-scan the entire store in one
+                            // unbounded pass.
+                            haveSrc = true;
+                            sourceCacheHits++;
+                            execution["storeReads"] = execution["storeReads"]!.ToObject<int>() + 1;
                         }
                         else if (_objectService != null && !string.IsNullOrEmpty(e.Guid)
                             && _objectService.TryGetPartSourceRaw(e.Guid, resolvedPart, out src))
                         {
                             haveSrc = true;
                             sourceCacheHits++;
+                            execution["cacheReads"] = execution["cacheReads"]!.ToObject<int>() + 1;
                         }
                         if (!haveSrc)
                         {
@@ -607,6 +1153,7 @@ namespace GxMcp.Worker.Services
                                 ? _objectService.ReadPartSourceRaw(obj, resolvedPart)
                                 : TryGetPartSource(obj, resolvedPart);
                             haveSrc = src != null;
+                            if (haveSrc) execution["sdkReads"] = execution["sdkReads"]!.ToObject<int>() + 1;
                             sourceReadTicks += System.Diagnostics.Stopwatch.GetTimestamp() - sourceReadStart;
                         }
                         if (haveSrc && indexedSourceScope && IsSourceAlias(part) && e.FullSource == null)
@@ -622,7 +1169,14 @@ namespace GxMcp.Worker.Services
                                 e.LastUpdate > DateTime.MinValue ? (DateTime?)e.LastUpdate : null,
                                 null);
                         }
-                        if (string.IsNullOrEmpty(src)) continue;
+                        if (string.IsNullOrEmpty(src))
+                        {
+                            execution["status"] = "unavailable";
+                            execution["scannedObjects"] = execution["scannedObjects"]!.ToObject<int>() + 1;
+                            continue;
+                        }
+                        execution["status"] = "searched";
+                        execution["scannedObjects"] = execution["scannedObjects"]!.ToObject<int>() + 1;
 
                         if (!string.IsNullOrEmpty(c.Callee))
                         {
@@ -717,24 +1271,44 @@ namespace GxMcp.Worker.Services
                 // Item 22: fields=[caption,description,parmNames] — metadata-only search.
                 // Only runs when Fields contains non-source values AND a pattern is supplied.
                 bool metadataPageStoppedInsideEntry = false;
+                bool metadataInterrupted = false;
+                bool metadataCancelled = false;
                 int metadataNextEntry = -1;
                 int metadataNextSkip = 0;
-                var extraFields = c.Fields != null
-                    ? c.Fields.Where(f => !string.Equals(f, "source", StringComparison.OrdinalIgnoreCase)).ToList()
-                    : new List<string>();
+                int metadataPosition = 0;
+                List<Models.SearchIndex.IndexEntry> metadataEntries = null;
                 if (extraFields.Count > 0 && rx != null)
                 {
-                    var allEntries = index.Objects.Values
-                        .Where(e => objectNameSet == null || ObjectNameMatches(objectNameSet, e.Name))
+                    metadataEntries = index.Objects.Values
+                        .Where(e => MatchesSearchObjectScope(e, c, objectNameSet))
                         .Where(e => string.IsNullOrEmpty(c.TypeFilter) || string.Equals(e.Type, c.TypeFilter, StringComparison.OrdinalIgnoreCase))
                         .ToList();
-                    int metadataStart = resumeMetadata ? Math.Max(0, resumeEntry) : 0;
-                    for (int metadataCursor = metadataStart; metadataCursor < allEntries.Count; metadataCursor++)
+                    int metadataStart = resumeMetadata
+                        ? Math.Max(0, resumeEntry)
+                        : Math.Max(0, c.StartIndex);
+                    metadataPosition = metadataStart;
+                    for (int metadataCursor = metadataStart; metadataCursor < metadataEntries.Count; metadataCursor++)
                     {
-                        var e = allEntries[metadataCursor];
+                        metadataPosition = metadataCursor;
+                        var e = metadataEntries[metadataCursor];
+                        if (ct.IsCancellationRequested)
+                        {
+                            metadataInterrupted = true;
+                            metadataCancelled = true;
+                            metadataNextEntry = metadataCursor;
+                            metadataNextSkip = resumeMetadata && metadataCursor == resumeEntry
+                                ? resumeSkipped : 0;
+                            break;
+                        }
+                        if (timeoutMs == 0 || swBudget.ElapsedMilliseconds > timeoutMs)
+                        {
+                            metadataInterrupted = true;
+                            metadataNextEntry = metadataCursor;
+                            metadataNextSkip = resumeMetadata && metadataCursor == resumeEntry
+                                ? resumeSkipped : 0;
+                            break;
+                        }
                         if (produced >= c.MaxResults) break;
-                        if (ct.IsCancellationRequested) break;
-                        if (swBudget.ElapsedMilliseconds > timeoutMs) break;
                         int metadataSkipped = resumeMetadata && metadataCursor == resumeEntry ? resumeSkipped : 0;
                         int metadataConsumed = metadataSkipped;
                         bool entryReachedLimit = false;
@@ -829,21 +1403,77 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
+                if (metadataInterrupted && metadataEntries != null
+                    && metadataNextEntry >= 0 && metadataNextEntry < metadataEntries.Count)
+                {
+                    JObject executionSnapshot = BuildExecutionSnapshot();
+                    int pct = metadataEntries.Count > 0
+                        ? (int)(100L * metadataNextEntry / metadataEntries.Count)
+                        : 100;
+                    string continuationCursor = BuildBoundCursor(
+                        metadataNextEntry, metadataNextSkip, metadata: true);
+                    string interruptionCode = metadataCancelled ? "Cancelled" : "Timeout";
+                    var interruptedResult = new JObject
+                    {
+                        ["partialHits"] = hits,
+                        ["hits"] = hits,
+                        ["totalScanned"] = scanned,
+                        ["totalObjects"] = metadataEntries.Count,
+                        ["metadataTotalObjects"] = metadataEntries.Count,
+                        ["coveragePercent"] = pct,
+                        ["coverage"] = executionSnapshot["coverage"]?.DeepClone(),
+                        ["partExecution"] = executionSnapshot["partExecution"]?.DeepClone(),
+                        ["timeoutMs"] = timeoutMs,
+                        ["requestedTimeoutMs"] = requestedTimeoutMs,
+                        ["nextCursor"] = continuationCursor,
+                        ["nextOffset"] = metadataNextEntry,
+                        ["resumeHint"] = "Pass cursor=nextCursor to resume the metadata scan; the cursor is bound to this query, scope, index generation and KB."
+                    };
+                    return Models.McpResponse.Ok(code: interruptionCode, result: interruptedResult);
+                }
+
                 bool truncated = produced >= c.MaxResults;
                 // Issue #27 item 4: when maxResults truncated the scan mid-object, expose an
                 // opaque cursor carrying the number of already-consumed hits. Replaying the
                 // object and skipping that exact prefix prevents both duplicate and lost hits.
+                bool sourceObjectBoundaryRemaining = truncated
+                    && !sourcePageStoppedInsideEntry
+                    && !resumeMetadata
+                    && scanScope.Count > 0
+                    && cursor < entries.Count;
+                bool metadataObjectBoundaryRemaining = metadataEntries != null
+                    && truncated && !metadataPageStoppedInsideEntry
+                    && !sourceObjectBoundaryRemaining
+                    && metadataPosition < metadataEntries.Count;
                 bool hasMoreEntries = sourcePageStoppedInsideEntry
+                    || sourceObjectBoundaryRemaining
                     || metadataPageStoppedInsideEntry
-                    || (truncated && cursor < entries.Count);
+                    || metadataObjectBoundaryRemaining;
                 int nextOffset = sourcePageStoppedInsideEntry ? sourceNextEntry
+                    : sourceObjectBoundaryRemaining ? cursor
                     : metadataPageStoppedInsideEntry ? metadataNextEntry
+                    : metadataObjectBoundaryRemaining ? metadataPosition
                     : cursor;
                 string nextCursor = sourcePageStoppedInsideEntry
-                    ? BuildResumeCursor(sourceNextEntry, sourceNextSkip, metadata: false)
+                    ? BuildBoundCursor(sourceNextEntry, sourceNextSkip, metadata: false)
+                    : sourceObjectBoundaryRemaining
+                        ? BuildBoundCursor(cursor, resumeEntry == cursor ? resumeSkipped : 0, metadata: false)
                     : metadataPageStoppedInsideEntry
-                        ? BuildResumeCursor(metadataNextEntry, metadataNextSkip, metadata: true)
+                        ? BuildBoundCursor(metadataNextEntry, metadataNextSkip, metadata: true)
                         : null;
+                if (hasMoreEntries && string.IsNullOrWhiteSpace(nextCursor))
+                {
+                    // Never publish a numeric nextCursor. This branch is the
+                    // object-boundary page stop (as opposed to a stop inside an
+                    // object), and still has to be resumable through the same
+                    // opaque token contract.
+                    int boundarySkip = resumeEntry == nextOffset
+                        ? resumeSkipped : 0;
+                    nextCursor = BuildBoundCursor(nextOffset, boundarySkip,
+                        metadata: metadataPageStoppedInsideEntry || metadataObjectBoundaryRemaining);
+                }
+                JObject finalExecutionSnapshot = BuildExecutionSnapshot();
+
                 var resultPayload = new JObject
                 {
                     ["count"] = produced,
@@ -855,12 +1485,8 @@ namespace GxMcp.Worker.Services
                     ["partial"] = partialIndex,
                     ["scannedObjects"] = scanned,
                     ["totalObjects"] = entries.Count,
-                    ["coverage"] = new JObject
-                    {
-                        ["storedObjects"] = coverage.StoredObjects,
-                        ["staleObjects"] = coverage.StaleObjects,
-                        ["totalObjects"] = entries.Count
-                    },
+                    ["coverage"] = finalExecutionSnapshot["coverage"]?.DeepClone(),
+                    ["partExecution"] = finalExecutionSnapshot["partExecution"]?.DeepClone(),
                     // v2.8.0: canonical pagination block — total is now the scoped object count.
                     ["pagination"] = new JObject
                     {
@@ -874,9 +1500,7 @@ namespace GxMcp.Worker.Services
                 };
                 if (hasMoreEntries)
                 {
-                    resultPayload["nextCursor"] = nextCursor != null
-                        ? (JToken)nextCursor
-                        : (JToken)nextOffset;
+                    resultPayload["nextCursor"] = nextCursor;
                 }
                 if (partialIndex)
                 {
@@ -1080,6 +1704,38 @@ namespace GxMcp.Worker.Services
             return string.Equals(path, expected, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(withoutRoot, expected, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(withoutRoot.Replace('/', '.'), expected, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool HasIdentityScope(SourceSearchCriteria criteria)
+        {
+            return !string.IsNullOrWhiteSpace(criteria?.ObjectGuid)
+                || !string.IsNullOrWhiteSpace(criteria?.ObjectEntityKey)
+                || !string.IsNullOrWhiteSpace(criteria?.ObjectPath);
+        }
+
+        private static bool MatchesIdentityScope(Models.SearchIndex.IndexEntry entry, SourceSearchCriteria criteria)
+        {
+            if (entry == null || criteria == null || !HasIdentityScope(criteria)) return entry != null;
+            string targetGuid = criteria.ObjectGuid?.Trim();
+            string targetKey = criteria.ObjectEntityKey?.Trim();
+            string targetPath = criteria.ObjectPath?.Trim();
+            return (string.IsNullOrWhiteSpace(targetGuid)
+                    || string.Equals(entry.Guid, targetGuid, StringComparison.OrdinalIgnoreCase))
+                && (string.IsNullOrWhiteSpace(targetKey)
+                    || string.Equals(entry.EntityKey, targetKey, StringComparison.OrdinalIgnoreCase))
+                && (string.IsNullOrWhiteSpace(targetPath)
+                    || ObjectPathMatches(entry, targetPath));
+        }
+
+        // Metadata searches use the same object identity predicate as the source
+        // scan. In particular, a GUID/EntityKey/path filter must narrow the
+        // candidate list before any metadata field is read.
+        private static bool MatchesSearchObjectScope(Models.SearchIndex.IndexEntry entry,
+            SourceSearchCriteria criteria, HashSet<string> objectNameSet)
+        {
+            if (entry == null) return false;
+            if (HasIdentityScope(criteria) && !MatchesIdentityScope(entry, criteria)) return false;
+            return objectNameSet == null || ObjectNameMatches(objectNameSet, entry.Name);
         }
 
         internal static bool MatchesAnyLiteral(Models.SearchIndex.IndexEntry e, System.Collections.Generic.List<string> literals)

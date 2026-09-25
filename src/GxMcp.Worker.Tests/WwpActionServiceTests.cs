@@ -246,6 +246,8 @@ namespace GxMcp.Worker.Tests
         [InlineData("list", "list_actions")]
         [InlineData("add_action", "add_grid_action")]
         [InlineData("add_tab", "add_tab")]
+        [InlineData("move_grid_column", "move_grid_column")]
+        [InlineData("add_grid_variable", "add_grid_variable")]
         public void PublishedActionNamesNormalizeToWorkerOperations(string action, string expected)
         {
             Assert.Equal(expected, WwpActionService.NormalizeOperation(action));
@@ -396,6 +398,52 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void GridAuthoringMarkerIsCarriedIntoThePatternWritePreflight()
+        {
+            var args = JObject.Parse("{\"mode\":\"full\",\"part\":\"PatternInstance\",\"patternEditMode\":\"grid-column\",\"content\":\"<instance/>\"}");
+            var normalized = WriteService.NormalizeFacadeArgs(args);
+
+            Assert.True(normalized.AllowGridStructure);
+        }
+
+        [Fact]
+        public void Project_IncludesGridOrderAndIdentityForPostWriteVerification()
+        {
+            var document = XDocument.Parse(
+                "<instance><grid name='Main' controlName='MainGrid'>" +
+                "<gridVariable variable='11111111-1111-1111-1111-111111111111-Name' length='10' />" +
+                "<gridAttribute attribute='2-Code' description='Code' />" +
+                "</grid></instance>");
+            var project = typeof(WwpActionService).GetMethod("Project",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            var catalog = (JObject)project.Invoke(null, new object[] { document });
+
+            var grid = (JObject)catalog["grids"]![0]!;
+            Assert.Equal("Main", grid["name"]?.ToString());
+            Assert.Equal(2, ((JArray)grid["columns"]!).Count);
+            Assert.Equal("gridVariable", grid["columns"]![0]!["kind"]?.ToString());
+            Assert.Equal("11111111-1111-1111-1111-111111111111-Name",
+                grid["columns"]![0]!["attributes"]!["variable"]?.ToString());
+        }
+
+        [Fact]
+        public void MoveGridColumn_AmbiguousIdentityIsRejected()
+        {
+            var document = XDocument.Parse(
+                "<instance><grid name='Main'>" +
+                "<gridVariable variable='11111111-1111-1111-1111-111111111111-Name' />" +
+                "<gridVariable variable='11111111-1111-1111-1111-111111111111-Name' />" +
+                "</grid></instance>");
+            var result = WwpActionService.ApplyMoveGridColumnXml(document, new JObject
+            {
+                ["attribute"] = "11111111-1111-1111-1111-111111111111-Name",
+                ["position"] = "first"
+            });
+
+            Assert.Equal("AmbiguousGridColumn", result["code"]?.ToString());
+        }
+
+        [Fact]
         public void AddGridAttribute_ReconcilesOnlyRequestedCaption()
         {
             var before = XDocument.Parse("<instance><grid childrenOrderedList='A,B'><gridAttribute attribute='2-ProcessingComplete' description='=Attribute.ContextualTitle' custom='keep'/></grid></instance>");
@@ -424,6 +472,69 @@ namespace GxMcp.Worker.Tests
                 before, persisted, "ProcessingComplete", existedBefore: false);
 
             Assert.Single(unrelated);
+        }
+
+        [Fact]
+        public void MoveGridColumn_ReordersOnlyTheRequestedColumn()
+        {
+            var document = XDocument.Parse("<PatternInstance><grid><gridAttribute attribute='1-First'/><gridAttribute attribute='2-Second' description='Second'/><gridAttribute attribute='3-Third'/></grid></PatternInstance>");
+            JObject result = WwpActionService.ApplyMoveGridColumnXml(document, new JObject
+            {
+                ["attribute"] = "3-Third",
+                ["before"] = "1-First",
+                ["caption"] = "Moved"
+            });
+
+            Assert.Null(result["error"]);
+            Assert.Equal(new[] { "3-Third", "1-First", "2-Second" },
+                document.Descendants("gridAttribute").Select(e => (string)e.Attribute("attribute")));
+            Assert.Equal("Moved", (string)document.Descendants("gridAttribute").First().Attribute("description"));
+        }
+
+        [Fact]
+        public void AddGridVariable_RequiresIdentityAndPreservesColumnOrder()
+        {
+            var document = XDocument.Parse("<PatternInstance><grid><gridAttribute attribute='1-First'/></grid></PatternInstance>");
+            JObject missing = WwpActionService.ApplyAddGridVariableXml(document, new JObject
+            {
+                ["variable"] = "Selected",
+                ["caption"] = "Selected"
+            });
+            Assert.Equal("GridVariableIdentityRequired", (string)missing["code"]);
+
+            JObject result = WwpActionService.ApplyAddGridVariableXml(document, new JObject
+            {
+                ["variable"] = "Selected",
+                ["variableReference"] = "guid-Selected",
+                ["caption"] = "Selected",
+                ["basicType"] = "VarChar",
+                ["length"] = 40,
+                ["before"] = "1-First"
+            });
+            Assert.Null(result["error"]);
+            XElement added = document.Descendants("gridVariable").Single();
+            Assert.Equal("guid-Selected", (string)added.Attribute("variable"));
+            Assert.Equal("40", (string)added.Attribute("basicCLength"));
+            Assert.Equal("1-First", (string)document.Descendants("gridAttribute").First().Attribute("attribute"));
+        }
+
+        [Fact]
+        public void GridVariableVerificationRequiresTheRequestedGuidAndNameTogether()
+        {
+            const string requestedGuid = "11111111-1111-1111-1111-111111111111";
+            const string homonymGuid = "22222222-2222-2222-2222-222222222222";
+            string reference = requestedGuid + "-Selected";
+
+            Assert.False(WwpActionService.GridVariableIdentityMatches(
+                "Selected", null, "Selected", reference));
+            Assert.False(WwpActionService.GridVariableIdentityMatches(
+                "Selected", homonymGuid, "Selected", reference));
+            Assert.True(WwpActionService.GridVariableIdentityMatches(
+                "Selected", requestedGuid, "Selected", reference));
+            Assert.False(WwpActionService.GridVariableIdentityMatches(
+                "Other", requestedGuid, "Selected", reference));
+            Assert.False(WwpActionService.GridVariableIdentityMatches(
+                "Selected", requestedGuid, "Selected", requestedGuid));
         }
 
         [Fact]

@@ -13,7 +13,8 @@ const {
     ensureStagedGateway,
     cleanOldRuntimes,
     verifyManifest,
-    classifyProcessRuntime
+    classifyProcessRuntime,
+    getRuntimeProcessUsage
 } = require('./runtime-stager');
 
 function sha256(content) {
@@ -167,12 +168,65 @@ test('runtime-stager: ensureStagedGateway fails closed and cleans tmp on manifes
             packageRoot: fakePkg,
             publishDir: fakePublish,
             runtimeRoot,
-            forceStaging: true
+            forceStaging: true,
+            getRunningProcesses: () => []
         });
     }, /Manifest verification failed/);
 
     // Assert that target dir was not created and no tmp dir left behind
     assert.equal(fs.readdirSync(runtimeRoot).length, 0);
+});
+
+test('runtime-stager: temporary staging cleanup retains a live process and reports the final-probe skip', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-stage-live-process-'));
+    t.after(() => {
+        try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+
+    const fakePkg = path.join(tmpRoot, 'package');
+    const fakePublish = path.join(fakePkg, 'publish');
+    const runtimeRoot = path.join(tmpRoot, 'runtime');
+    fs.mkdirSync(fakePublish, { recursive: true });
+    fs.writeFileSync(path.join(fakePkg, 'package.json'), JSON.stringify({ version: '3.9.1' }));
+    fs.writeFileSync(path.join(fakePublish, 'GxMcp.Gateway.exe'), 'partial gateway');
+    fs.writeFileSync(path.join(fakePublish, 'gxmcp-manifest.json'), JSON.stringify({
+        artifacts: [{ path: 'GxMcp.Gateway.exe', size: 9999, sha256: 'deadbeef' }]
+    }));
+
+    let probeCalls = 0;
+    let stagingError;
+    try {
+        ensureStagedGateway({
+            packageRoot: fakePkg,
+            publishDir: fakePublish,
+            runtimeRoot,
+            forceStaging: true,
+            getRunningProcesses: () => {
+                probeCalls++;
+                if (probeCalls === 1) return [];
+                const tmpName = fs.readdirSync(runtimeRoot).find((name) => name.includes('.tmp-'));
+                return [{
+                    pid: 5150,
+                    exePath: path.join(runtimeRoot, tmpName, 'worker', 'GxMcp.Worker.exe')
+                }];
+            }
+        });
+    } catch (err) {
+        stagingError = err;
+    }
+
+    assert.ok(stagingError);
+    assert.match(stagingError.message, /Manifest verification failed/);
+    assert.match(stagingError.message, /Runtime cleanup skipped/);
+    assert.equal(stagingError.runtimeCleanup.processProbeAvailable, true);
+    assert.equal(stagingError.runtimeCleanup.skipped.length, 1);
+    assert.equal(stagingError.runtimeCleanup.skipped[0].reason, 'in-use-before-delete');
+    assert.deepEqual(stagingError.runtimeCleanup.skipped[0].pids, [5150]);
+    assert.equal(probeCalls, 2);
+    assert.equal(
+        fs.readdirSync(runtimeRoot).filter((name) => name.includes('.tmp-')).length,
+        1
+    );
 });
 
 test('runtime-stager: cleanOldRuntimes retains current version plus keepCount newest versions', (t) => {
@@ -196,7 +250,7 @@ test('runtime-stager: cleanOldRuntimes retains current version plus keepCount ne
     fs.utimesSync(v4, 4000, 4000);
 
     // Current is v4. Keep count = 2 -> keep v4, v3, v2. v1 should be deleted.
-    cleanOldRuntimes(tmpRoot, v4, 2);
+    cleanOldRuntimes(tmpRoot, v4, 2, { getRunningProcesses: () => [] });
 
     assert.equal(fs.existsSync(v4), true, 'current version must be kept');
     assert.equal(fs.existsSync(v3), true, 'newest previous version must be kept');
@@ -218,4 +272,236 @@ test('runtime-stager: classifyProcessRuntime identifies staged vs npx-cache', ()
         classifyProcessRuntime('C:\\Projetos\\Genexus18MCP\\publish\\GxMcp.Gateway.exe', runtimeRoot),
         'other'
     );
+});
+
+test('runtime-stager: cleanOldRuntimes retains a runtime with a live child process and reports its PID', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-in-use-'));
+    t.after(() => {
+        try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+
+    const oldRuntime = path.join(tmpRoot, '3.6.0-old');
+    const currentRuntime = path.join(tmpRoot, '3.9.0-current');
+    fs.mkdirSync(oldRuntime);
+    fs.mkdirSync(currentRuntime);
+    fs.utimesSync(oldRuntime, 1000, 1000);
+    fs.utimesSync(currentRuntime, 2000, 2000);
+
+    const result = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => [{
+            pid: 4242,
+            exePath: path.join(oldRuntime, 'worker', 'GxMcp.Worker.exe')
+        }]
+    });
+
+    assert.equal(fs.existsSync(oldRuntime), true);
+    assert.equal(result.skipped.length, 1);
+    assert.equal(result.skipped[0].reason, 'in-use');
+    assert.deepEqual(result.skipped[0].pids, [4242]);
+});
+
+test('runtime-stager: cleanOldRuntimes renames before removal and leaves the original on rename failure', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-atomic-'));
+    t.after(() => {
+        try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+
+    const oldRuntime = path.join(tmpRoot, '3.6.0-atomic');
+    const currentRuntime = path.join(tmpRoot, '3.9.0-current');
+    fs.mkdirSync(oldRuntime);
+    fs.mkdirSync(currentRuntime);
+    fs.writeFileSync(path.join(oldRuntime, 'keep.txt'), 'payload');
+    fs.utimesSync(oldRuntime, 1000, 1000);
+    fs.utimesSync(currentRuntime, 2000, 2000);
+
+    const renameCalls = [];
+    const result = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => [],
+        renameSync: (from, to) => {
+            renameCalls.push([from, to]);
+            fs.renameSync(from, to);
+        }
+    });
+
+    assert.equal(renameCalls.length, 1);
+    assert.equal(fs.existsSync(oldRuntime), false);
+    assert.equal(result.deleted.length, 1);
+
+    const failedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-rename-fail-'));
+    t.after(() => {
+        try { fs.rmSync(failedRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+    const failedOld = path.join(failedRoot, '3.6.0-failed');
+    const failedCurrent = path.join(failedRoot, '3.9.0-current');
+    fs.mkdirSync(failedOld);
+    fs.mkdirSync(failedCurrent);
+    fs.writeFileSync(path.join(failedOld, 'keep.txt'), 'payload');
+
+    const failed = cleanOldRuntimes(failedRoot, failedCurrent, 0, {
+        getRunningProcesses: () => [],
+        renameSync: () => { throw new Error('directory is in use'); }
+    });
+    assert.equal(fs.existsSync(failedOld), true);
+    assert.equal(failed.failed.length, 1);
+    assert.match(failed.failed[0].error, /directory is in use/);
+});
+
+test('runtime-stager: process-probe failure is fail-closed and reported', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-probe-fail-'));
+    t.after(() => {
+        try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+    const oldRuntime = path.join(tmpRoot, 'old');
+    const currentRuntime = path.join(tmpRoot, 'current');
+    fs.mkdirSync(oldRuntime);
+    fs.mkdirSync(currentRuntime);
+
+    const result = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => ({ ok: false, processes: [], error: 'access denied' })
+    });
+    assert.equal(result.processProbeAvailable, false);
+    assert.equal(fs.existsSync(oldRuntime), true);
+    assert.equal(result.skipped[0].reason, 'process-probe-unavailable');
+});
+
+test('runtime-stager: a process appearing during retirement restores the original directory name', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-race-'));
+    t.after(() => {
+        try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+    const oldRuntime = path.join(tmpRoot, 'old');
+    const currentRuntime = path.join(tmpRoot, 'current');
+    fs.mkdirSync(oldRuntime);
+    fs.mkdirSync(currentRuntime);
+    fs.writeFileSync(path.join(oldRuntime, 'payload.txt'), 'keep');
+
+    let calls = 0;
+    const result = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => {
+            calls++;
+            return calls < 3
+                ? []
+                : [{ pid: 777, exePath: path.join(oldRuntime, 'GxMcp.Gateway.exe') }];
+        }
+    });
+
+    assert.equal(fs.existsSync(oldRuntime), true);
+    assert.equal(fs.existsSync(path.join(oldRuntime, 'payload.txt')), true);
+    assert.equal(result.skipped[0].reason, 'in-use-after-rename');
+    assert.equal(result.skipped[0].restored, true);
+});
+
+test('runtime-stager: a process appearing at the final delete probe restores the renamed runtime', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-final-race-'));
+    t.after(() => {
+        try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+    const oldRuntime = path.join(tmpRoot, 'old');
+    const currentRuntime = path.join(tmpRoot, 'current');
+    fs.mkdirSync(oldRuntime);
+    fs.mkdirSync(currentRuntime);
+    fs.writeFileSync(path.join(oldRuntime, 'payload.txt'), 'keep');
+
+    let calls = 0;
+    let deletingPath = null;
+    const result = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => {
+            calls++;
+            if (calls < 4 || !deletingPath) return [];
+            return [{ pid: 778, exePath: path.join(deletingPath, 'GxMcp.Gateway.exe') }];
+        },
+        renameSync: (from, to) => {
+            deletingPath = to;
+            fs.renameSync(from, to);
+        }
+    });
+
+    assert.equal(fs.existsSync(oldRuntime), true);
+    assert.equal(fs.existsSync(path.join(oldRuntime, 'payload.txt')), true);
+    assert.equal(result.skipped[0].reason, 'in-use-before-delete');
+    assert.equal(result.skipped[0].restored, true);
+});
+
+test('runtime-stager: a failed removal leaves a retryable tombstone and the next pass collects it', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-tombstone-'));
+    t.after(() => {
+        try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+    const oldRuntime = path.join(tmpRoot, 'old');
+    const currentRuntime = path.join(tmpRoot, 'current');
+    fs.mkdirSync(oldRuntime);
+    fs.mkdirSync(currentRuntime);
+    fs.writeFileSync(path.join(oldRuntime, 'payload.txt'), 'keep');
+
+    const failed = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => [],
+        rmSync: () => { throw new Error('temporary delete failure'); }
+    });
+    assert.equal(failed.failed.length, 1);
+    assert.equal(fs.existsSync(oldRuntime), false);
+    assert.equal(fs.readdirSync(tmpRoot).some((name) => name.includes('.deleting-')), true);
+
+    const retried = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => []
+    });
+    assert.equal(retried.failed.length, 0);
+    assert.equal(fs.readdirSync(tmpRoot).some((name) => name.includes('.deleting-')), false);
+});
+test('runtime-stager: a failed tombstone restore is retained when the live process still reports the original path', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-tombstone-restore-'));
+    t.after(() => {
+        try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+    const oldRuntime = path.join(tmpRoot, 'old');
+    const currentRuntime = path.join(tmpRoot, 'current');
+    fs.mkdirSync(oldRuntime);
+    fs.mkdirSync(currentRuntime);
+    fs.writeFileSync(path.join(oldRuntime, 'payload.txt'), 'keep');
+
+    let deletingPath = null;
+    const first = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => deletingPath
+            ? [{ pid: 779, exePath: path.join(oldRuntime, 'GxMcp.Gateway.exe') }]
+            : [],
+        renameSync: (from, to) => {
+            if (from.includes('.deleting-') && to === oldRuntime) {
+                throw new Error('restore failed while process is live');
+            }
+            deletingPath = to;
+            fs.renameSync(from, to);
+        }
+    });
+    assert.equal(first.skipped[0].restored, false);
+    assert.equal(fs.existsSync(oldRuntime), false);
+    assert.equal(fs.readdirSync(tmpRoot).some((name) => name.includes('.deleting-')), true);
+
+    const second = cleanOldRuntimes(tmpRoot, currentRuntime, 0, {
+        getRunningProcesses: () => [{ pid: 779, exePath: path.join(oldRuntime, 'GxMcp.Gateway.exe') }]
+    });
+    assert.equal(second.skipped.some((entry) => entry.reason === 'in-use'), true);
+    assert.equal(fs.readdirSync(tmpRoot).some((name) => name.includes('.deleting-')), true);
+});
+
+test('runtime-stager: getRuntimeProcessUsage maps Gateway, broker, and Worker PIDs to their runtime', (t) => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-usage-'));
+    t.after(() => {
+        try { fs.rmSync(runtimeRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+    const runtimeDir = path.join(runtimeRoot, '3.8.0-old');
+    const siblingDir = path.join(runtimeRoot, '3.8.0-old-suffix');
+    fs.mkdirSync(runtimeDir);
+    fs.mkdirSync(siblingDir);
+    const gateway = path.join(runtimeDir, 'GxMcp.Gateway.exe');
+    const worker = path.join(runtimeDir, 'worker', 'GxMcp.Worker.exe');
+    const usage = getRuntimeProcessUsage(runtimeRoot, [
+        { pid: 10, exePath: gateway },
+        { pid: 11, exePath: worker },
+        { pid: 12, exePath: path.join(siblingDir, 'GxMcp.Gateway.exe') }
+    ]);
+
+    assert.equal(usage.length, 2);
+    const oldUsage = usage.find((entry) => entry.name === '3.8.0-old');
+    const siblingUsage = usage.find((entry) => entry.name === '3.8.0-old-suffix');
+    assert.deepEqual(oldUsage.pids, [10, 11]);
+    assert.deepEqual(siblingUsage.pids, [12]);
 });

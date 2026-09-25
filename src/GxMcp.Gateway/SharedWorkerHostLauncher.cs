@@ -110,10 +110,22 @@ namespace GxMcp.Gateway
             info.EnvironmentVariables["GXMCP_DRIVER"] = driver ?? string.Empty;
             info.EnvironmentVariables["GXMCP_TARGET_MAJOR"] = major ?? string.Empty;
             info.EnvironmentVariables["GXMCP_OPERATIONAL_STATE_KEY"] = identity.Key;
+            // Keep the Worker's durable jobs root identical to the Gateway's
+            // StateScope.JobsPath during a soft reload.
+            var stateScope = StateScope.Create(id: StateScope.ProcessScopeId);
+            info.EnvironmentVariables["GXMCP_JOBS_DIR"] = Path.GetDirectoryName(
+                stateScope.JobsPath(kb.KbId, kb.ContextGeneration))!;
             if (!string.IsNullOrWhiteSpace(Configuration.CurrentConfigPath))
                 info.EnvironmentVariables["GXMCP_PROFILE_CONFIG_PATH"] = Configuration.CurrentConfigPath;
             if (!string.IsNullOrWhiteSpace(legacyProvider))
                 info.EnvironmentVariables["GXMCP_GXPUBLIC_PROVIDER"] = legacyProvider;
+            if (config.Server != null)
+            {
+                if (config.Server.SourceStoreMaxMB > 0)
+                    info.EnvironmentVariables["GXMCP_SOURCE_STORE_MAX_MB"] = config.Server.SourceStoreMaxMB.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (!string.IsNullOrWhiteSpace(config.Server.SourceStoreBackfill))
+                    info.EnvironmentVariables["GXMCP_SOURCE_STORE_BACKFILL"] = config.Server.SourceStoreBackfill;
+            }
             info.EnvironmentVariables["GXMCP_SHARED_HOST"] = "1";
             try
             {

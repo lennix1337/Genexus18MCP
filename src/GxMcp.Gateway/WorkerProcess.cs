@@ -956,6 +956,12 @@ namespace GxMcp.Gateway
                     new OperationalStateKey(StateScope.ProcessScopeId, Kb.KbId, Kb.ContextGeneration).Token;
                 string scopedOperationalDir = Path.GetDirectoryName(CrashLedger.ResolveScopedPath(StateScope.ProcessScopeId, Kb.KbId, Kb.ContextGeneration))!;
                 startInfo.EnvironmentVariables["GXMCP_LOG_DIR"] = scopedOperationalDir;
+                // The Worker must read/write the same durable jobs file as the
+                // Gateway during soft reload; the operational key alone hashes to
+                // a different legacy state root.
+                string scopedJobsDir = Path.GetDirectoryName(StateScope.Create(id: StateScope.ProcessScopeId)
+                    .JobsPath(Kb.KbId, Kb.ContextGeneration))!;
+                startInfo.EnvironmentVariables["GXMCP_JOBS_DIR"] = scopedJobsDir;
                 startInfo.EnvironmentVariables["GXMCP_CRASH_LEDGER_PATH"] = Path.Combine(scopedOperationalDir, "crash-ledger.jsonl");
                 if (!string.IsNullOrWhiteSpace(_config.Server?.ArtifactOutputDirectory))
                 {
@@ -963,6 +969,13 @@ namespace GxMcp.Gateway
                     // KB-specific path here: the same configured root is safe for every
                     // worker because the Worker resolves the per-KB scope.
                     startInfo.EnvironmentVariables["GXMCP_ARTIFACT_OUTPUT_DIR"] = _config.Server.ArtifactOutputDirectory;
+                }
+                if (_config.Server != null)
+                {
+                    if (_config.Server.SourceStoreMaxMB > 0)
+                        startInfo.EnvironmentVariables["GXMCP_SOURCE_STORE_MAX_MB"] = _config.Server.SourceStoreMaxMB.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    if (!string.IsNullOrWhiteSpace(_config.Server.SourceStoreBackfill))
+                        startInfo.EnvironmentVariables["GXMCP_SOURCE_STORE_BACKFILL"] = _config.Server.SourceStoreBackfill;
                 }
                 // v2.8.5: hand the worker the authoritative server version so
                 // genexus_doctor reports the same number as whoami (the worker

@@ -40,7 +40,7 @@ namespace GxMcp.Gateway
         {
             "axiCompact", "projection", "fields", "full",
             "kb", "kbAlias", "alias", "workingDir", "correlationId",
-            "dryRun", "confirm", "force"
+            "dryRun", "confirm", "force", "until"
         };
 
         public sealed class ValidationResult
@@ -168,11 +168,190 @@ namespace GxMcp.Gateway
                 }
             }
 
+            if (string.Equals(toolName, "genexus_variable", StringComparison.OrdinalIgnoreCase))
+                ValidateVariableDimensions(args, violations);
+
             return new ValidationResult
             {
                 Ok = violations.Count == 0,
                 Violations = violations
             };
+        }
+
+        private static void ValidateVariableDimensions(JObject? args, List<Violation> violations)
+        {
+            if (args == null) return;
+
+            ValidateVariableDimensionFields(
+                args,
+                string.Empty,
+                args["dimensions"],
+                args["dimensionSizes"],
+                args["collection"],
+                violations);
+
+            if (args["variables"] is not JArray batch) return;
+            for (int index = 0; index < batch.Count; index++)
+            {
+                string path = "variables[" + index + "]";
+                if (batch[index] is not JObject item)
+                {
+                    // The generic array check cannot inspect a non-object item;
+                    // report it here so a malformed batch cannot reach the Worker.
+                    violations.Add(new Violation
+                    {
+                        Path = path,
+                        Expected = "object",
+                        Actual = batch[index]?.Type.ToString().ToLowerInvariant() ?? "null"
+                    });
+                    continue;
+                }
+
+                ValidateVariableDimensionFields(
+                    item,
+                    path + ".",
+                    item["dimensions"],
+                    item["dimensionSizes"],
+                    item["collection"],
+                    violations);
+            }
+        }
+
+        private static void ValidateVariableDimensionFields(
+            JObject args,
+            string pathPrefix,
+            JToken? dimensionsToken,
+            JToken? sizesToken,
+            JToken? collectionToken,
+            List<Violation> violations)
+        {
+            bool hasDimensions = dimensionsToken != null && dimensionsToken.Type != JTokenType.Null;
+            bool hasSizes = sizesToken != null && sizesToken.Type != JTokenType.Null;
+            if (!hasDimensions && !hasSizes) return;
+
+            int? dimensions = null;
+            if (hasDimensions && dimensionsToken!.Type == JTokenType.Integer)
+            {
+                if (int.TryParse(dimensionsToken.ToString(), out int parsedDimensions))
+                {
+                    dimensions = parsedDimensions;
+                    if (dimensions < 1 || dimensions > 2)
+                    {
+                        violations.Add(new Violation
+                        {
+                            Path = pathPrefix + "dimensions",
+                            Expected = "1 or 2",
+                            Actual = dimensionsToken.ToString()
+                        });
+                    }
+                }
+                else
+                {
+                    violations.Add(new Violation
+                    {
+                        Path = pathPrefix + "dimensions",
+                        Expected = "1 or 2",
+                        Actual = dimensionsToken.ToString()
+                    });
+                }
+            }
+
+            if (!hasDimensions)
+            {
+                violations.Add(new Violation
+                {
+                    Path = pathPrefix + "dimensions",
+                    Expected = "1 or 2 when dimensionSizes is provided",
+                    Actual = "missing"
+                });
+            }
+            else if (dimensionsToken!.Type != JTokenType.Integer)
+            {
+                if (!string.IsNullOrEmpty(pathPrefix))
+                {
+                    violations.Add(new Violation
+                    {
+                        Path = pathPrefix + "dimensions",
+                        Expected = "integer 1 or 2",
+                        Actual = dimensionsToken.Type.ToString().ToLowerInvariant()
+                    });
+                }
+            }
+            else if (!hasSizes)
+            {
+                violations.Add(new Violation
+                {
+                    Path = pathPrefix + "dimensionSizes",
+                    Expected = dimensions.HasValue
+                        ? "positive array with length " + dimensions.Value
+                        : "positive array",
+                    Actual = "missing"
+                });
+            }
+            else if (sizesToken!.Type != JTokenType.Array)
+            {
+                if (!string.IsNullOrEmpty(pathPrefix))
+                {
+                    violations.Add(new Violation
+                    {
+                        Path = pathPrefix + "dimensionSizes",
+                        Expected = "array",
+                        Actual = sizesToken.Type.ToString().ToLowerInvariant()
+                    });
+                }
+            }
+            else
+            {
+                var sizes = (JArray)sizesToken;
+                if (dimensions.HasValue && sizes.Count != dimensions.Value)
+                {
+                    violations.Add(new Violation
+                    {
+                        Path = pathPrefix + "dimensionSizes",
+                        Expected = "length " + dimensions.Value,
+                        Actual = "length " + sizes.Count
+                    });
+                }
+
+                for (int index = 0; index < sizes.Count; index++)
+                {
+                    JToken size = sizes[index];
+                    bool positiveInteger = size.Type == JTokenType.Integer
+                        && int.TryParse(size.ToString(), out int parsedSize)
+                        && parsedSize > 0;
+                    if (!positiveInteger)
+                    {
+                        violations.Add(new Violation
+                        {
+                            Path = pathPrefix + "dimensionSizes[" + index + "]",
+                            Expected = "positive integer",
+                            Actual = size.Type == JTokenType.Null ? "null" : size.ToString()
+                        });
+                    }
+                }
+            }
+
+            if (collectionToken != null && collectionToken.Type != JTokenType.Null
+                && collectionToken.Type != JTokenType.Boolean && !string.IsNullOrEmpty(pathPrefix))
+            {
+                violations.Add(new Violation
+                {
+                    Path = pathPrefix + "collection",
+                    Expected = "boolean",
+                    Actual = collectionToken.Type.ToString().ToLowerInvariant()
+                });
+            }
+
+            if (dimensions.HasValue && dimensions.Value >= 1 && dimensions.Value <= 2 &&
+                collectionToken?.Type == JTokenType.Boolean && collectionToken.Value<bool>())
+            {
+                violations.Add(new Violation
+                {
+                    Path = pathPrefix + "collection",
+                    Expected = "false when dimensions are set",
+                    Actual = "true"
+                });
+            }
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────

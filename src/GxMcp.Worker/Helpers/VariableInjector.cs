@@ -9,6 +9,7 @@ using GxMcp.Worker.Services;
 using Artech.Genexus.Common.Objects;
 using Artech.Common.Collections;
 using Artech.Genexus.Common;
+using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Helpers
 {
@@ -354,6 +355,24 @@ namespace GxMcp.Worker.Helpers
             return fallbackIndex;
         }
 
+        public static int? GetVariableInternalId(object v, int fallbackIndex)
+        {
+            if (v == null) return null;
+            if (v is global::Artech.Genexus.Common.Variable typed)
+                return GetVariableInternalId(typed, fallbackIndex);
+            try
+            {
+                var idProp = v.GetType().GetProperty("Id",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                object raw = idProp?.GetValue(v, null);
+                if (raw is int i && i > 0) return i;
+                if (raw is short s && s > 0) return s;
+                if (raw is long l && l > 0 && l <= int.MaxValue) return (int)l;
+                if (raw is string text && int.TryParse(text, out var parsed) && parsed > 0) return parsed;
+            }
+            catch { }
+            return fallbackIndex;
+        }
 
         public static string GetVariablesAsText(KBObject obj)
         {
@@ -368,8 +387,9 @@ namespace GxMcp.Worker.Helpers
             foreach (global::Artech.Genexus.Common.Variable v in varPart.Variables)
             {
                 string typeRepr = ResolveTypeRepresentation(varPart.Model, v);
+                string arraySuffix = VariableDimensionSupport.FormatDeclarationSuffix(v);
                 string collectionSuffix = v.IsCollection ? " Collection" : "";
-                sb.AppendLine(string.Format("&{0} : {1}{2}", v.Name, typeRepr, collectionSuffix));
+                sb.AppendLine(string.Format("&{0}{1} : {2}{3}", v.Name, arraySuffix, typeRepr, collectionSuffix));
             }
             return sb.ToString();
         }
@@ -645,11 +665,28 @@ namespace GxMcp.Worker.Helpers
                         }
                     }
 
+                    // Collection and fixed-size dimensions are different GeneXus
+                    // concepts. Apply the array metadata after the type/binding
+                    // setters (which can reset property-bag state), then keep the
+                    // collection flag last for the existing type-reset workaround.
+                    if (declaration.Dimensions > 0 && isCollection)
+                        throw new InvalidOperationException("Variable '" + name + "' cannot be both a collection and a fixed-size array.");
+
                     // Collection flag LAST: setting v.Type (above) resets IsCollection in the SDK,
                     // so assigning it before the type silently produced a non-collection variable
                     // (its .Count failed as "unknown function"). Only the typed add path — which
                     // sets collection after the type — yielded a real collection until now (issue #45).
                     try { v.IsCollection = isCollection; } catch { /* not all types are collectible */ }
+                    if (declaration.Dimensions > 0)
+                    {
+                        var dimensionSizes = new JArray(declaration.DimensionSizes.Cast<object>().ToArray());
+                        if (!VariableDimensionSupport.TryApply(v, declaration.Dimensions, dimensionSizes, out var dimensionFailure))
+                            throw new InvalidOperationException("Variable '" + name + "' dimensions could not be applied: " + dimensionFailure);
+                    }
+                    else if (!VariableDimensionSupport.TryClear(v, out var clearDimensionFailure))
+                    {
+                        throw new InvalidOperationException("Variable '" + name + "' dimensions could not be cleared: " + clearDimensionFailure);
+                    }
                 }
             }
 

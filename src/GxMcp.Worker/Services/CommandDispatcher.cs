@@ -1059,6 +1059,7 @@ namespace GxMcp.Worker.Services
             var activeBuilds = BuildService.GetActiveBuildsSummary();
             statusJson["activeBuilds"] = activeBuilds;
             statusJson["buildBusy"] = activeBuilds.Count > 0;
+            try { statusJson["sourceStore"] = SourceStoreBackfillService.Instance.GetStateJson(); } catch { }
             // The STA single-flight tracker covers every SDK command, including Undo.
             // Merge it into the public status instead of reporting isBusy=false while
             // the worker is actively restoring snapshots.
@@ -1117,6 +1118,7 @@ namespace GxMcp.Worker.Services
                     ? (JToken)IndexCacheService.LastFlushErrorMessage
                     : JValue.CreateNull()
             };
+            try { j["sourceStore"] = SourceStoreBackfillService.Instance.GetStateJson(); } catch { }
 
             // Keep the warm-start decision explainable without forcing callers to
             // inspect worker logs. Integrity hashes are intentionally skipped here;
@@ -1526,7 +1528,10 @@ namespace GxMcp.Worker.Services
                     TimeoutMs = args?["timeoutMs"]?.ToObject<int?>() ?? 30000
                 };
                 if (args?["scope"] is JArray scopeArr)
+                {
                     criteria.Scope = scopeArr.Select(t => t.ToString()).ToList();
+                    criteria.ScopeExplicit = true;
+                }
                 // Item 22: fields=[source,caption,description,parmNames]
                 if (args?["fields"] is JArray fieldsArr)
                     criteria.Fields = fieldsArr.Select(t => t.ToString()).ToList();
@@ -1546,6 +1551,8 @@ namespace GxMcp.Worker.Services
                 string sourceSearchResult;
                 using (GxMcp.Worker.Helpers.WorkerCancellationRegistry.Register(ssCancelToken, out var ssCt))
                 {
+                    criteria.ContinuationCancellationToken = ssCt;
+                    criteria.ContinuationCancelToken = ssCancelToken;
                     sourceSearchResult = _sourceSearchService.SearchAsJson(criteria, ssCt);
                 }
                 int inlineTopSearchSource = Math.Min(3, args?["inline_read_top"]?.ToObject<int?>() ?? 0);
@@ -1900,7 +1907,9 @@ namespace GxMcp.Worker.Services
                         args?["objectModule"]?.ToString(), varDryRun,
                         args?["expectedVersion"]?.ToString(),
                         args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true,
-                        args?["collection"]?.ToObject<bool?>());
+                        args?["collection"]?.ToObject<bool?>(),
+                       args?["dimensions"]?.ToObject<int?>(),
+                       args?["dimensionSizes"] as JArray);
                 }
                 // issue #32 item 1: batch form — a `variables` array adds many in one call
                 // (one save/flush), avoiding N sequential round-trips + concurrent-write risk.
@@ -1919,8 +1928,10 @@ namespace GxMcp.Worker.Services
                     args?["decimals"]?.ToObject<int?>(),
                     args?["collection"]?.ToObject<bool?>(),
                     args?["basedOn"]?.ToString(),
-                    args?["basedOnAttribute"]?.ToString());
-                return _saveSpecifyOrchestrator.MaybeValidateAfterWrite(addResp, target, args, "Variables");
+                    args?["basedOnAttribute"]?.ToString(),
+                    args?["dimensions"]?.ToObject<int?>(),
+                    args?["dimensionSizes"] as JArray);
+                 return _saveSpecifyOrchestrator.MaybeValidateAfterWrite(addResp, target, args, "Variables");
             }
             if (action == "DeleteVariable")
             {
@@ -1944,7 +1955,9 @@ namespace GxMcp.Worker.Services
                         args?["objectModule"]?.ToString(), varDryRun,
                         args?["expectedVersion"]?.ToString(),
                         args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true,
-                        args?["collection"]?.ToObject<bool?>());
+                        args?["collection"]?.ToObject<bool?>(),
+                       args?["dimensions"]?.ToObject<int?>(),
+                       args?["dimensionSizes"] as JArray);
                 }
                 var modResp = _writeService.ModifyVariable(
                     target,
@@ -1957,8 +1970,10 @@ namespace GxMcp.Worker.Services
                     args?["length"]?.ToObject<int?>(),
                     args?["decimals"]?.ToObject<int?>(),
                     args?["collection"]?.ToObject<bool?>(),
-                    args?["basedOnAttribute"]?.ToObject<string>());
-                return _saveSpecifyOrchestrator.MaybeValidateAfterWrite(modResp, target, args, "Variables");
+                    args?["basedOnAttribute"]?.ToObject<string>(),
+                    args?["dimensions"]?.ToObject<int?>(),
+                    args?["dimensionSizes"] as JArray);
+                 return _saveSpecifyOrchestrator.MaybeValidateAfterWrite(modResp, target, args, "Variables");
             }
             if (action == "ValidatePayload")
             {
@@ -2419,6 +2434,9 @@ namespace GxMcp.Worker.Services
                     target,
                     args?["printBlockName"]?.ToString());
             }
+            if (action == "AddReportControl") return _layoutService.AddReportControl(target, args);
+            if (action == "MoveReportControl") return _layoutService.MoveReportControl(target, args);
+            if (action == "RemoveReportControl") return _layoutService.RemoveReportControl(target, args);
             return null;
         }
 

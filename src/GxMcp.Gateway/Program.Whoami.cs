@@ -120,6 +120,9 @@ namespace GxMcp.Gateway
             // in-memory index. Cached so subsequent whoami calls don't pay
             // another round-trip — refreshed every TryRefreshIndexStateFromWorkerAsync.
             public JArray? RecentlyChanged;
+            // Persisted source-store/backfill progress is worker-owned but mirrored here
+            // with the index state so whoami and doctor remain useful when the worker is busy.
+            public JObject? SourceStore;
         }
         private static IndexStateSnapshot _lastKnownIndexState = new IndexStateSnapshot();
         private static readonly object _lastKnownIndexStateLock = new object();
@@ -225,7 +228,10 @@ namespace GxMcp.Gateway
                         : stalledAtUtc ?? previous?.StalledAtUtc,
                     // Preserve prior recentlyChanged when the caller doesn't pass a fresh
                     // value — search/lifecycle pushes update telemetry without it.
-                    RecentlyChanged = recentlyChanged ?? previous?.RecentlyChanged
+                    RecentlyChanged = recentlyChanged ?? previous?.RecentlyChanged,
+                    SourceStore = previous?.SourceStore != null
+                        ? (JObject)previous.SourceStore.DeepClone()
+                        : null
                 };
                 if (!string.IsNullOrEmpty(mirrorAlias))
                     _lastKnownIndexStatesByKb[mirrorAlias] = snapshot;
@@ -296,6 +302,33 @@ namespace GxMcp.Gateway
                 if (cacheValidation != null)
                     snapshot.CacheValidation = (JObject)cacheValidation.DeepClone();
 
+                if (!string.IsNullOrEmpty(alias))
+                    _lastKnownIndexStatesByKb[alias!] = snapshot;
+                else
+                    _lastKnownIndexState = snapshot;
+            }
+        }
+
+        private static void UpdateLastKnownSourceStore(string? kbAlias, JObject? sourceStore)
+        {
+            if (sourceStore == null) return;
+            string? alias = NormalizeKbAlias(kbAlias) ?? ResolveKbAliasForIndexRefresh();
+            lock (_lastKnownIndexStateLock)
+            {
+                IndexStateSnapshot snapshot;
+                if (!string.IsNullOrEmpty(alias))
+                {
+                    if (!_lastKnownIndexStatesByKb.TryGetValue(alias!, out var existing) || existing == null)
+                        snapshot = new IndexStateSnapshot { KbAlias = alias };
+                    else
+                        snapshot = existing;
+                }
+                else
+                {
+                    snapshot = _lastKnownIndexState;
+                }
+
+                snapshot.SourceStore = (JObject)sourceStore.DeepClone();
                 if (!string.IsNullOrEmpty(alias))
                     _lastKnownIndexStatesByKb[alias!] = snapshot;
                 else
@@ -567,6 +600,9 @@ namespace GxMcp.Gateway
                 ["cacheValidation"] = snap.CacheValidation != null
                     ? (JToken)snap.CacheValidation.DeepClone()
                     : JValue.CreateNull(),
+                ["sourceStore"] = snap.SourceStore != null
+                    ? (JToken)snap.SourceStore.DeepClone()
+                    : JValue.CreateNull(),
                 // v2.6.8: top-5 recently-changed objects — set only when the worker
                 // had populated lifecycle data to surface. Omitted otherwise so the
                 // whoami payload stays tight for cold/legacy KBs.
@@ -778,6 +814,7 @@ namespace GxMcp.Gateway
                 workerAlive, recoverable, stalled, lastProgressAtUtc, stalledAtUtc);
             UpdateLastKnownIndexDiagnostics(kbAlias, resumedFrom, checkpointActive,
                 checkpointCapturedAtUtc, cacheValidation);
+            UpdateLastKnownSourceStore(kbAlias, state["sourceStore"] as JObject);
             return true;
         }
 
@@ -1294,6 +1331,7 @@ namespace GxMcp.Gateway
                     ["ageHours"] = JValue.CreateNull()
                 },
                 ["telemetry"] = metrics,
+                ["buildQueue"] = JobRegistry.BuildLifecycleQueueSnapshot(sessionId),
                 ["warnings"] = warnings,
                 ["hint"] = warnings.Count > 0 ? warnings[0] : JValue.CreateNull()
             };
@@ -1575,6 +1613,10 @@ namespace GxMcp.Gateway
                 // nextSteps shape. Empty when state is healthy + nothing pending.
                 ["suggestedNext"] = BuildSuggestedNextBlock(kbPath, kbExists, kbValid, activeAlias)
             };
+
+            var lifecycleQueue = JobRegistry.BuildLifecycleQueueSnapshot(sessionId);
+            if (lifecycleQueue.Count > 0)
+                payload["buildQueue"] = lifecycleQueue;
 
             // A post-timeout mutation is never retried implicitly. Surface the
             // durable fence only when it needs attention so the first-turn

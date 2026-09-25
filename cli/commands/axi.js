@@ -818,42 +818,55 @@ function buildRuntimeStagingCheck() {
         const {
             resolveDefaultRuntimeRoot,
             listStagedRuntimes,
-            getRunningGxMcpProcesses,
+            probeRunningGxMcpProcesses,
+            getRuntimeProcessUsage,
             classifyProcessRuntime,
             shouldStage
         } = require('../lib/runtime-stager');
 
         const runtimeRoot = resolveDefaultRuntimeRoot();
         const stagedList = listStagedRuntimes(runtimeRoot);
-        const runningProcs = getRunningGxMcpProcesses();
+        const processProbe = probeRunningGxMcpProcesses();
+        const runningProcs = processProbe.processes || [];
+        if (processProbe.ok === false) {
+            return {
+                id: 'runtime_staging',
+                status: 'warn',
+                detail: `Runtime process inspection was incomplete; GC is fail-closed. ${processProbe.error || 'The process probe did not return executable paths.'}`
+            };
+        }
         const npxProcs = runningProcs.filter((p) => classifyProcessRuntime(p.exePath, runtimeRoot) === 'npx-cache');
         const stagedProcs = runningProcs.filter((p) => classifyProcessRuntime(p.exePath, runtimeRoot) === 'staged');
+        const inUseRuntimes = getRuntimeProcessUsage(runtimeRoot, runningProcs);
+        const inUseDetail = inUseRuntimes.length > 0
+            ? ` Retained in-use runtime(s): ${inUseRuntimes.map((entry) => `${entry.name} (PIDs: ${entry.pids.join(', ')})`).join('; ')}.`
+            : '';
 
         if (npxProcs.length > 0) {
             return {
                 id: 'runtime_staging',
                 status: 'warn',
-                detail: `${npxProcs.length} process(es) running directly from npx cache (PIDs: ${npxProcs.map((p) => p.pid).join(', ')}). Terminate them to prevent EBUSY during upgrades.`
+                detail: `${npxProcs.length} process(es) running directly from npx cache (PIDs: ${npxProcs.map((p) => p.pid).join(', ')}). Terminate them to prevent EBUSY during upgrades.${inUseDetail}`
             };
         }
         if (shouldStage()) {
             return {
                 id: 'runtime_staging',
                 status: 'pass',
-                detail: `Staging active at ${runtimeRoot}. ${stagedList.length} staged version(s) found, ${stagedProcs.length} active process(es).`
+                detail: `Staging active at ${runtimeRoot}. ${stagedList.length} staged version(s) found, ${stagedProcs.length} active process(es).${inUseDetail}`
             };
         }
         if (process.env.GENEXUS_MCP_GATEWAY_EXE) {
             return {
                 id: 'runtime_staging',
                 status: 'pass',
-                detail: `Fixed-path runtime override active via GENEXUS_MCP_GATEWAY_EXE (${process.env.GENEXUS_MCP_GATEWAY_EXE}). Staging bypassed.`
+                detail: `Fixed-path runtime override active via GENEXUS_MCP_GATEWAY_EXE (${process.env.GENEXUS_MCP_GATEWAY_EXE}). Staging bypassed.${inUseDetail}`
             };
         }
         return {
             id: 'runtime_staging',
             status: 'pass',
-            detail: 'Development checkout active. Runtime staging bypassed.'
+            detail: `Development checkout active. Runtime staging bypassed.${inUseDetail}`
         };
     } catch {
         return {

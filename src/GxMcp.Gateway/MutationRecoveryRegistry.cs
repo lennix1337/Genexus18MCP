@@ -20,6 +20,12 @@ namespace GxMcp.Gateway
         private const int MaxJournalEntries = 1024;
         private const long MaxJournalBytes = 1024 * 1024;
 
+        // A manifest can affect an unknown set of objects and parts. Keep its
+        // recovery fence explicit and conservative instead of pretending that
+        // the manifest path is an object named Source.
+        internal const string KbRecoveryTarget = "__KB__";
+        internal const string KbRecoveryPart = "KB";
+
         private volatile ConcurrentDictionary<string, RecoveryRequirement> _pending = new();
         private readonly Dictionary<string, RecoveryRequirement> _undurable = new();
         private bool _journalObserved;
@@ -50,6 +56,13 @@ namespace GxMcp.Gateway
             LoadJournal();
         }
 
+        internal static bool IsKbLevelRecoveryTarget(string? target, string? part)
+            => string.Equals(target?.Trim(), KbRecoveryTarget, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(part?.Trim(), KbRecoveryPart, StringComparison.OrdinalIgnoreCase);
+
+        internal static bool IsKbLevelRecovery(RecoveryRequirement? requirement)
+            => requirement != null && IsKbLevelRecoveryTarget(requirement.Target, requirement.Part);
+
         public bool IsHealthy => _journalHealthy && !_journalBusy;
         public string JournalError => _journalHealthy && _journalBusy ? "Mutation recovery journal busy; retry after the other Gateway finishes." : _journalError;
         public int Count => _pending.Count;
@@ -60,17 +73,97 @@ namespace GxMcp.Gateway
             .ThenBy(item => item.Part, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        internal IReadOnlyList<RecoveryRequirement> FindForRead(
+            string? kbAlias, JObject? readArgs, string? requestedPart = null)
+        {
+            if (_pending.Count == 0 || string.IsNullOrWhiteSpace(kbAlias)) return Array.Empty<RecoveryRequirement>();
+            string alias = kbAlias.Trim();
+            string ownerKey = _defaultOwner?.Token ?? string.Empty;
+            string? name = Normalize(readArgs?["name"]?.ToString() ?? readArgs?["target"]?.ToString());
+            string? guid = Normalize(readArgs?["guid"]?.ToString() ?? readArgs?["objectGuid"]?.ToString());
+            string? entityKey = Normalize(readArgs?["entityKey"]?.ToString());
+            string? type = Normalize(readArgs?["type"]?.ToString() ?? readArgs?["typeFilter"]?.ToString());
+            string? path = Normalize(readArgs?["path"]?.ToString());
+            string? part = Normalize(requestedPart);
+            return _pending.Values
+                .Where(item => string.Equals(item.OwnerKey, ownerKey, StringComparison.Ordinal))
+                .Where(item => !IsKbLevelRecovery(item))
+                .Where(item => string.Equals(item.KbAlias, alias, StringComparison.OrdinalIgnoreCase))
+                .Where(item => part == null || string.Equals(item.Part, part, StringComparison.OrdinalIgnoreCase))
+                .Where(item =>
+                {
+                    bool guidMatches = guid != null && !string.IsNullOrWhiteSpace(item.TargetGuid)
+                        && string.Equals(item.TargetGuid, guid, StringComparison.OrdinalIgnoreCase);
+                    bool entityMatches = entityKey != null && !string.IsNullOrWhiteSpace(item.TargetEntityKey)
+                        && string.Equals(item.TargetEntityKey, entityKey, StringComparison.OrdinalIgnoreCase);
+                    if (name != null && !string.Equals(item.Target, name, StringComparison.OrdinalIgnoreCase)
+                        && !guidMatches && !entityMatches) return false;
+                    if (guid != null && !string.IsNullOrWhiteSpace(item.TargetGuid)
+                        && !guidMatches) return false;
+                    if (entityKey != null && !string.IsNullOrWhiteSpace(item.TargetEntityKey)
+                        && !string.Equals(item.TargetEntityKey, entityKey, StringComparison.OrdinalIgnoreCase)) return false;
+                    if (type != null && !string.IsNullOrWhiteSpace(item.TargetType)
+                        && !string.Equals(item.TargetType, type, StringComparison.OrdinalIgnoreCase)) return false;
+                    if (path != null && !string.IsNullOrWhiteSpace(item.TargetPath)
+                        && !string.Equals(item.TargetPath, path, StringComparison.OrdinalIgnoreCase)) return false;
+                    // A fence that recorded stable identity cannot be cleared by a
+                    // name-only read. Otherwise two homonymous objects can satisfy
+                    // the same recovery gate by accident.
+                    bool strongIdentity = guidMatches || entityMatches;
+                    if (!string.IsNullOrWhiteSpace(item.TargetGuid) && guid == null && !entityMatches) return false;
+                    if (!string.IsNullOrWhiteSpace(item.TargetEntityKey) && entityKey == null && !guidMatches) return false;
+                    if (!strongIdentity && !string.IsNullOrWhiteSpace(item.TargetPath) && path == null) return false;
+                    if (!strongIdentity && !string.IsNullOrWhiteSpace(item.TargetType) && type == null) return false;
+                    return true;
+                })
+                .OrderBy(item => item.RequiredAtUtc)
+                .ToList();
+        }
+
+        private static string? Normalize(string? value)
+            => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+        private static bool HasStableIdentity(RecoveryRequirement requirement)
+            => requirement != null
+                && (!string.IsNullOrWhiteSpace(requirement.TargetGuid)
+                    || !string.IsNullOrWhiteSpace(requirement.TargetEntityKey)
+                    || !string.IsNullOrWhiteSpace(requirement.TargetPath)
+                    || !string.IsNullOrWhiteSpace(requirement.TargetType));
+
         public void RequireRead(string? kbAlias, string? target, string? part, string? operationId)
         {
-            RequireReadCore(_defaultOwner, kbAlias, target, part, operationId);
+            RequireReadCore(_defaultOwner, kbAlias, target, part, operationId,
+                null, null, null, null, null);
+        }
+
+        public void RequireRead(
+            string? kbAlias, string? target, string? part, string? operationId,
+            string? targetGuid, string? targetEntityKey, string? targetType,
+            string? targetPath, string? expectedVersion)
+        {
+            RequireReadCore(_defaultOwner, kbAlias, target, part, operationId,
+                targetGuid, targetEntityKey, targetType, targetPath, expectedVersion);
         }
 
         internal void RequireRead(OperationalStateKey owner, string target, string? part, string? operationId)
         {
-            RequireReadCore(owner, owner.KbId, target, part, operationId);
+            RequireReadCore(owner, owner.KbId, target, part, operationId,
+                null, null, null, null, null);
         }
 
-        private void RequireReadCore(OperationalStateKey? owner, string? kbAlias, string? target, string? part, string? operationId)
+        internal void RequireRead(
+            OperationalStateKey owner, string target, string? part, string? operationId,
+            string? targetGuid, string? targetEntityKey, string? targetType,
+            string? targetPath, string? expectedVersion)
+        {
+            RequireReadCore(owner, owner.KbId, target, part, operationId,
+                targetGuid, targetEntityKey, targetType, targetPath, expectedVersion);
+        }
+
+        private void RequireReadCore(
+            OperationalStateKey? owner, string? kbAlias, string? target, string? part, string? operationId,
+            string? targetGuid, string? targetEntityKey, string? targetType,
+            string? targetPath, string? expectedVersion)
         {
             if (string.IsNullOrWhiteSpace(kbAlias) || string.IsNullOrWhiteSpace(target)) return;
             var requirement = new RecoveryRequirement
@@ -80,11 +173,17 @@ namespace GxMcp.Gateway
                 Target = target.Trim(),
                 Part = string.IsNullOrWhiteSpace(part) ? "Source" : part.Trim(),
                 OperationId = operationId?.Trim() ?? string.Empty,
+                TargetGuid = Normalize(targetGuid) ?? string.Empty,
+                TargetEntityKey = Normalize(targetEntityKey) ?? string.Empty,
+                TargetType = Normalize(targetType) ?? string.Empty,
+                TargetPath = Normalize(targetPath) ?? string.Empty,
+                ExpectedVersion = Normalize(expectedVersion) ?? string.Empty,
                 RequiredAtUtc = DateTime.UtcNow
             };
             lock (_journalLock)
             {
-                string key = Key(requirement.OwnerKey, requirement.KbAlias, requirement.Target, requirement.Part);
+                string key = Key(requirement.OwnerKey, requirement.KbAlias, requirement.Target, requirement.Part,
+                    requirement.TargetGuid, requirement.TargetEntityKey, requirement.TargetType, requirement.TargetPath);
                 _undurable[key] = requirement;
                 try
                 {
@@ -96,7 +195,8 @@ namespace GxMcp.Gateway
                 }
                 catch (Exception ex)
                 {
-                    _pending[Key(requirement.OwnerKey, requirement.KbAlias, requirement.Target, requirement.Part)] = requirement;
+                    _pending[Key(requirement.OwnerKey, requirement.KbAlias, requirement.Target, requirement.Part,
+                        requirement.TargetGuid, requirement.TargetEntityKey, requirement.TargetType, requirement.TargetPath)] = requirement;
                     MarkJournalUnhealthy("Mutation recovery journal persistence failed: " + ex.Message);
                     // Preserve newly observed uncertainty even if the existing
                     // journal cannot be trusted or the destination is locked.
@@ -108,12 +208,16 @@ namespace GxMcp.Gateway
         public bool TryGet(string? kbAlias, string? target, out RecoveryRequirement requirement)
         {
             requirement = null!;
-            if (string.IsNullOrWhiteSpace(kbAlias) || string.IsNullOrWhiteSpace(target)) return false;
-            string prefix = (_defaultOwner.HasValue ? _defaultOwner.Value.Token.ToLowerInvariant() : string.Empty)
-                + "|" + Prefix(kbAlias, target) + "|";
-            var found = _pending
-                .Where(pair => pair.Key.StartsWith(prefix, StringComparison.Ordinal))
-                .Select(pair => pair.Value)
+            if (string.IsNullOrWhiteSpace(kbAlias)) return false;
+            string alias = kbAlias.Trim();
+            string ownerKey = _defaultOwner?.Token ?? string.Empty;
+            string? normalizedTarget = Normalize(target);
+            var found = _pending.Values
+                .Where(item => string.Equals(item.OwnerKey, ownerKey, StringComparison.Ordinal))
+                .Where(item => string.Equals(item.KbAlias, alias, StringComparison.OrdinalIgnoreCase))
+                .Where(item => IsKbLevelRecovery(item)
+                    || (normalizedTarget != null
+                        && string.Equals(item.Target, normalizedTarget, StringComparison.OrdinalIgnoreCase)))
                 .OrderBy(item => item.RequiredAtUtc)
                 .FirstOrDefault();
             if (found == null) return false;
@@ -124,39 +228,104 @@ namespace GxMcp.Gateway
         public bool TryGet(string? kbAlias, string? target, string? part, out RecoveryRequirement requirement)
         {
             requirement = null!;
-            if (string.IsNullOrWhiteSpace(kbAlias) || string.IsNullOrWhiteSpace(target)) return false;
-            return _pending.TryGetValue(Key(_defaultOwner.HasValue ? _defaultOwner.Value.Token : string.Empty, kbAlias, target, part), out requirement!);
+            if (string.IsNullOrWhiteSpace(kbAlias)) return false;
+            string alias = kbAlias.Trim();
+            string ownerKey = _defaultOwner?.Token ?? string.Empty;
+            string? normalizedTarget = Normalize(target);
+            string normalizedPart = string.IsNullOrWhiteSpace(part) ? "Source" : part.Trim();
+            var found = _pending.Values
+                .Where(item => string.Equals(item.OwnerKey, ownerKey, StringComparison.Ordinal))
+                .Where(item => string.Equals(item.KbAlias, alias, StringComparison.OrdinalIgnoreCase))
+                .Where(item => IsKbLevelRecovery(item)
+                    || (normalizedTarget != null
+                        && string.Equals(item.Target, normalizedTarget, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(item.Part, normalizedPart, StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(item => item.RequiredAtUtc)
+                .FirstOrDefault();
+            if (found == null) return false;
+            requirement = found;
+            return true;
         }
 
         internal bool TryGet(OperationalStateKey owner, string target, string? part, out RecoveryRequirement requirement)
         {
-            return _pending.TryGetValue(Key(owner.Token, owner.KbId, target, part), out requirement!);
+            requirement = null!;
+            string? normalizedTarget = Normalize(target);
+            string normalizedPart = string.IsNullOrWhiteSpace(part) ? "Source" : part.Trim();
+            var found = _pending.Values
+                .Where(item => string.Equals(item.OwnerKey, owner.Token, StringComparison.Ordinal))
+                .Where(item => string.Equals(item.KbAlias, owner.KbId, StringComparison.OrdinalIgnoreCase))
+                .Where(item => IsKbLevelRecovery(item)
+                    || (normalizedTarget != null
+                        && string.Equals(item.Target, normalizedTarget, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(item.Part, normalizedPart, StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(item => item.RequiredAtUtc)
+                .FirstOrDefault();
+            if (found == null) return false;
+            requirement = found;
+            return true;
         }
 
         internal bool ConfirmRead(OperationalStateKey owner, string target, string? part)
         {
-            return ConfirmReadCore(Key(owner.Token, owner.KbId, target, part), null, useCurrent: true);
+            string? key = FindKey(owner.Token, owner.KbId, target, part);
+            return key != null && ConfirmReadCore(key, null, useCurrent: true);
         }
 
         public bool ConfirmRead(string? kbAlias, string? target, string? part)
         {
             if (string.IsNullOrWhiteSpace(kbAlias) || string.IsNullOrWhiteSpace(target)) return false;
-            return ConfirmReadCore(Key(_defaultOwner?.Token ?? string.Empty, kbAlias, target, part), null, useCurrent: true);
+            string? key = FindKey(_defaultOwner?.Token ?? string.Empty, kbAlias, target, part);
+            return key != null && ConfirmReadCore(key, null, useCurrent: true);
         }
 
         public bool ConfirmRead(string? kbAlias, string? target, string? part, RecoveryRequirement? observedRequirement)
         {
             if (string.IsNullOrWhiteSpace(kbAlias) || string.IsNullOrWhiteSpace(target)) return false;
-            return ConfirmReadCore(Key(_defaultOwner?.Token ?? string.Empty, kbAlias, target, part), observedRequirement, useCurrent: false);
+            if (observedRequirement == null) return false;
+            string key = Key(observedRequirement.OwnerKey, observedRequirement.KbAlias, observedRequirement.Target, observedRequirement.Part,
+                observedRequirement.TargetGuid, observedRequirement.TargetEntityKey, observedRequirement.TargetType, observedRequirement.TargetPath);
+            return ConfirmReadCore(key, observedRequirement, useCurrent: false);
         }
 
-        private bool ConfirmReadCore(string key, RecoveryRequirement? observed, bool useCurrent)
+        /// <summary>
+        /// Clear a KB-level manifest fence only after the caller has independently
+        /// verified the late operation result (terminal + persisted + reread). Normal
+        /// object/part reads intentionally cannot use this path.
+        /// </summary>
+        internal bool ConfirmVerifiedOperationRead(RecoveryRequirement? observedRequirement)
+        {
+            if (observedRequirement == null || !IsKbLevelRecovery(observedRequirement)) return false;
+            string key = Key(observedRequirement.OwnerKey, observedRequirement.KbAlias,
+                observedRequirement.Target, observedRequirement.Part,
+                observedRequirement.TargetGuid, observedRequirement.TargetEntityKey,
+                observedRequirement.TargetType, observedRequirement.TargetPath);
+            return ConfirmReadCore(key, observedRequirement, useCurrent: false, allowKbLevel: true);
+        }
+
+        private bool ConfirmReadCore(
+            string key,
+            RecoveryRequirement? observed,
+            bool useCurrent,
+            bool allowKbLevel = false)
         {
             lock (_journalLock)
             {
                 if (!_journalHealthy) return false;
-                if (useCurrent) _pending.TryGetValue(key, out observed);
-                if (observed == null || Key(observed.OwnerKey, observed.KbAlias, observed.Target, observed.Part) != key) return false;
+                if (IsKbLevelRecovery(observed) && !allowKbLevel) return false;
+                if (useCurrent)
+                {
+                    _pending.TryGetValue(key, out observed);
+                    // A current lookup has no read identity evidence. Do not let
+                    // the legacy convenience overload clear an identity-bound
+                    // fence; callers must pass the observed requirement selected
+                    // through FindForRead.
+                    if (observed != null && HasStableIdentity(observed)) return false;
+                }
+                if (IsKbLevelRecovery(observed) && !allowKbLevel) return false;
+                if (observed == null
+                    || Key(observed.OwnerKey, observed.KbAlias, observed.Target, observed.Part,
+                        observed.TargetGuid, observed.TargetEntityKey, observed.TargetType, observed.TargetPath) != key) return false;
                 try
                 {
                     using var lease = AcquireJournalLock();
@@ -186,29 +355,65 @@ namespace GxMcp.Gateway
 
         public static JObject BuildBlockedEnvelope(RecoveryRequirement requirement)
         {
-            return new JObject
+            bool kbLevel = IsKbLevelRecovery(requirement);
+            var result = new JObject
             {
                 ["status"] = "error",
                 ["target"] = requirement.Target,
                 ["operationId"] = requirement.OperationId,
-                ["error"] = new JObject
-                {
-                    ["code"] = "PostTimeoutReadRequired",
-                    ["message"] = "A previous write timed out or was cancelled, so its persisted state is unknown.",
-                    ["hint"] = "Call genexus_read for the target and part. A successful full read clears this recovery fence; then retry from the returned versionToken.",
-                    ["retryable"] = false,
-                    ["reconciliationRequired"] = true,
-                    ["nextSteps"] = new JArray
-                    {
-                        new JObject
-                        {
-                            ["tool"] = "genexus_read",
-                            ["args"] = new JObject { ["name"] = requirement.Target, ["part"] = requirement.Part },
-                            ["why"] = "Confirm whether the timed-out mutation was persisted before retrying."
-                        }
-                    }
-                }
+                // An empty array is intentional for a manifest import: the
+                // affected object/part set is unknown, so claiming Source (or
+                // any other single part) would be false.
+                ["affectedParts"] = kbLevel ? new JArray() : new JArray(requirement.Part),
+                ["recoveryScope"] = kbLevel ? "kb" : "object"
             };
+
+            if (!kbLevel)
+            {
+                result["targetIdentity"] = new JObject
+                {
+                    ["name"] = requirement.Target,
+                    ["guid"] = string.IsNullOrWhiteSpace(requirement.TargetGuid) ? JValue.CreateNull() : requirement.TargetGuid,
+                    ["entityKey"] = string.IsNullOrWhiteSpace(requirement.TargetEntityKey) ? JValue.CreateNull() : requirement.TargetEntityKey,
+                    ["type"] = string.IsNullOrWhiteSpace(requirement.TargetType) ? JValue.CreateNull() : requirement.TargetType,
+                    ["path"] = string.IsNullOrWhiteSpace(requirement.TargetPath) ? JValue.CreateNull() : requirement.TargetPath
+                };
+            }
+
+            var error = new JObject
+            {
+                ["code"] = "PostTimeoutReadRequired",
+                ["message"] = kbLevel
+                    ? "A previous KB-level import timed out or was cancelled; the affected object and part set is unknown."
+                    : "A previous write timed out or was cancelled, so its persisted state is unknown.",
+                ["hint"] = kbLevel
+                    ? "Reconcile the manifest/KB state before retrying. No single object/part read can clear this fence."
+                    : "Call genexus_read for the target and part with limit=0. A successful complete read clears this recovery fence; then retry from the returned versionToken.",
+                ["retryable"] = false,
+                ["reconciliationRequired"] = true
+            };
+            error["nextSteps"] = kbLevel
+                ? new JArray()
+                : new JArray
+                {
+                    new JObject
+                    {
+                        ["tool"] = "genexus_read",
+                        ["args"] = new JObject
+                        {
+                            ["name"] = requirement.Target,
+                            ["guid"] = string.IsNullOrWhiteSpace(requirement.TargetGuid) ? null : requirement.TargetGuid,
+                            ["entityKey"] = string.IsNullOrWhiteSpace(requirement.TargetEntityKey) ? null : requirement.TargetEntityKey,
+                            ["type"] = string.IsNullOrWhiteSpace(requirement.TargetType) ? null : requirement.TargetType,
+                            ["path"] = string.IsNullOrWhiteSpace(requirement.TargetPath) ? null : requirement.TargetPath,
+                            ["part"] = requirement.Part,
+                            ["limit"] = 0
+                        },
+                        ["why"] = "Confirm whether the timed-out mutation was persisted before retrying."
+                    }
+                };
+            result["error"] = error;
+            return result;
         }
 
         public static JObject BuildJournalBlockedEnvelope(string? journalError)
@@ -399,7 +604,8 @@ namespace GxMcp.Gateway
 
         private static void Merge(IDictionary<string, RecoveryRequirement> entries, RecoveryRequirement entry)
         {
-            string key = Key(entry.OwnerKey, entry.KbAlias, entry.Target, entry.Part);
+            string key = Key(entry.OwnerKey, entry.KbAlias, entry.Target, entry.Part,
+                entry.TargetGuid, entry.TargetEntityKey, entry.TargetType, entry.TargetPath);
             if (!entries.TryGetValue(key, out var previous) || entry.RequiredAtUtc >= previous.RequiredAtUtc)
                 entries[key] = entry;
         }
@@ -451,7 +657,11 @@ namespace GxMcp.Gateway
             .Take(32).Select(item => new JObject
             {
                 ["kbAlias"] = item.KbAlias, ["target"] = item.Target, ["part"] = item.Part,
-                ["operationId"] = item.OperationId, ["requiredAtUtc"] = item.RequiredAtUtc
+                ["scope"] = IsKbLevelRecovery(item) ? "kb" : "object",
+                ["operationId"] = item.OperationId, ["requiredAtUtc"] = item.RequiredAtUtc,
+                ["targetGuid"] = item.TargetGuid, ["targetEntityKey"] = item.TargetEntityKey,
+                ["targetType"] = item.TargetType, ["targetPath"] = item.TargetPath,
+                ["expectedVersion"] = item.ExpectedVersion
             }));
 
         private sealed class JournalBusyException : IOException { }
@@ -475,14 +685,41 @@ namespace GxMcp.Gateway
                 && !string.IsNullOrWhiteSpace(requirement.Part)
                 && requirement.RequiredAtUtc != default;
 
+        private string? FindKey(string ownerKey, string kbAlias, string target, string? part)
+        {
+            string prefix = KeyPrefix(ownerKey, kbAlias, target, part);
+            return _pending
+                .Where(pair => pair.Key.StartsWith(prefix, StringComparison.Ordinal))
+                .OrderBy(pair => pair.Value.RequiredAtUtc)
+                .Select(pair => pair.Key)
+                .FirstOrDefault();
+        }
+
         private static string Prefix(string kbAlias, string target)
             => kbAlias.Trim().ToLowerInvariant() + "|" + target.Trim().ToLowerInvariant();
 
+        private static string KeyPrefix(string ownerKey, string kbAlias, string target, string? part)
+            => (ownerKey ?? string.Empty).Trim().ToLowerInvariant() + "|"
+                + Prefix(kbAlias, target) + "|"
+                + (string.IsNullOrWhiteSpace(part) ? "source" : part.Trim().ToLowerInvariant()) + "|";
+
         private static string Key(string kbAlias, string target, string? part)
-            => Key(string.Empty, kbAlias, target, part);
+            => Key(string.Empty, kbAlias, target, part, null, null, null, null);
 
         private static string Key(string ownerKey, string kbAlias, string target, string? part)
-            => (ownerKey ?? string.Empty).Trim().ToLowerInvariant() + "|" + Prefix(kbAlias, target) + "|" + (string.IsNullOrWhiteSpace(part) ? "source" : part.Trim().ToLowerInvariant());
+            => Key(ownerKey, kbAlias, target, part, null, null, null, null);
+
+        private static string Key(
+            string ownerKey, string kbAlias, string target, string? part,
+            string? targetGuid, string? targetEntityKey, string? targetType, string? targetPath)
+            => KeyPrefix(ownerKey, kbAlias, target, part)
+                + string.Join("|", new[]
+                {
+                    Normalize(targetGuid)?.ToLowerInvariant() ?? string.Empty,
+                    Normalize(targetEntityKey)?.ToLowerInvariant() ?? string.Empty,
+                    Normalize(targetType)?.ToLowerInvariant() ?? string.Empty,
+                    Normalize(targetPath)?.ToLowerInvariant() ?? string.Empty
+                });
     }
 
     internal sealed class RecoveryRequirement
@@ -492,6 +729,11 @@ namespace GxMcp.Gateway
         public string Target { get; set; } = string.Empty;
         public string Part { get; set; } = string.Empty;
         public string OperationId { get; set; } = string.Empty;
+        public string TargetGuid { get; set; } = string.Empty;
+        public string TargetEntityKey { get; set; } = string.Empty;
+        public string TargetType { get; set; } = string.Empty;
+        public string TargetPath { get; set; } = string.Empty;
+        public string ExpectedVersion { get; set; } = string.Empty;
         public DateTime RequiredAtUtc { get; set; }
     }
 }

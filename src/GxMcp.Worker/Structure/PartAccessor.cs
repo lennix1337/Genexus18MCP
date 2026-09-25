@@ -79,6 +79,135 @@ namespace GxMcp.Worker.Structure
 
             return null;
         }
+        /// <summary>
+        /// Returns the variables-bearing part even when a GeneXus major exposes it as a
+        /// kind-specific part that does not derive from VariablesPart.  Read/inspect paths
+        /// use this structural accessor; typed write paths should continue to require the
+        /// native VariablesPart contract before mutating it.
+        /// </summary>
+        public static KBObjectPart GetVariablesLikePart(KBObject obj)
+        {
+            if (obj == null) return null;
+            try
+            {
+                var typed = obj.Parts.Get<VariablesPart>();
+                if (typed != null) return typed;
+            }
+            catch { }
+
+            foreach (KBObjectPart part in obj.Parts)
+            {
+                if (part == null) continue;
+                string typeName = part.GetType().Name;
+                string descriptorName = part.TypeDescriptor?.Name;
+                if (VariablesPartTypeNameCandidates.Any(candidate =>
+                    string.Equals(typeName, candidate, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(descriptorName, candidate, StringComparison.OrdinalIgnoreCase)))
+                    return part;
+            }
+
+            foreach (KBObjectPart part in obj.Parts)
+            {
+                if (part != null
+                    && (FindVariablesProperty(part.GetType()) != null
+                        || FindVariablesMethod(part.GetType()) != null))
+                    return part;
+            }
+            return null;
+        }
+
+        private static PropertyInfo FindVariablesProperty(Type type)
+        {
+            if (type == null) return null;
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            return type.GetProperty("Variables", flags)
+                ?? type.GetProperty("VariablesList", flags)
+                ?? type.GetProperty("VariableList", flags)
+                ?? type.GetProperty("VariableDefinitions", flags)
+                ?? type.GetProperty("VariablesDefinition", flags);
+        }
+
+        private static MethodInfo FindVariablesMethod(Type type)
+        {
+            if (type == null) return null;
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            return type.GetMethod("GetVariables", flags)
+                ?? type.GetMethod("GetVariablesList", flags)
+                ?? type.GetMethod("GetVariableList", flags);
+        }
+
+        /// <summary>
+        /// Enumerates the structural variables collection without assuming every
+        /// item derives from the major-specific Variable CLR type. K2B/older SDK
+        /// builds can expose proxy declarations with the same named properties;
+        /// dropping them here made both explicit reads and inspect silently lose
+        /// part of the model.
+        /// </summary>
+        public static IEnumerable<object> GetVariableObjects(KBObject obj)
+        {
+            var part = GetVariablesLikePart(obj);
+            if (part == null) yield break;
+            object value = null;
+            try
+            {
+                var property = FindVariablesProperty(part.GetType());
+                if (property != null) value = property.GetValue(part, null);
+                if (value == null)
+                {
+                    var method = FindVariablesMethod(part.GetType());
+                    if (method != null && method.GetParameters().Length == 0)
+                        value = method.Invoke(part, null);
+                }
+            }
+            catch { }
+            if (!(value is System.Collections.IEnumerable enumerable)) yield break;
+            foreach (object item in enumerable)
+            {
+                if (item != null) yield return item;
+            }
+        }
+
+        public static IEnumerable<global::Artech.Genexus.Common.Variable> GetVariables(KBObject obj)
+            => GetVariableObjects(obj).OfType<global::Artech.Genexus.Common.Variable>();
+
+        public static bool HasReadableVariablesCollection(KBObject obj)
+        {
+            var part = GetVariablesLikePart(obj);
+            if (part == null) return false;
+            try
+            {
+                var property = FindVariablesProperty(part.GetType());
+                if (property != null)
+                {
+                    property.GetValue(part, null);
+                    return true;
+                }
+                var method = FindVariablesMethod(part.GetType());
+                if (method != null && method.GetParameters().Length == 0)
+                {
+                    method.Invoke(part, null);
+                    return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        public static string GetVariableName(object variable)
+        {
+            if (variable == null) return string.Empty;
+            if (variable is global::Artech.Genexus.Common.Variable typed) return typed.Name ?? string.Empty;
+            try
+            {
+                const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.IgnoreCase;
+                var property = variable.GetType().GetProperty("Name", flags)
+                    ?? variable.GetType().GetProperty("VariableName", flags)
+                    ?? variable.GetType().GetProperty("Code", flags);
+                return property?.GetValue(variable, null)?.ToString() ?? string.Empty;
+            }
+            catch { return variable.ToString() ?? string.Empty; }
+        }
+
         public static bool MatchesSourcePart(string requestedPartName, string sourcePartName)
         {
             if (string.IsNullOrWhiteSpace(requestedPartName))
@@ -316,6 +445,8 @@ namespace GxMcp.Worker.Structure
                 if (p.TypeDescriptor != null && p.TypeDescriptor.Name.Equals(partName, StringComparison.OrdinalIgnoreCase)) return p;
                 if (p is ISource && MatchesSourcePart(partName, p.TypeDescriptor?.Name)) return p;
                 if (p.GetType().Name.Equals("VariablesPart") && partName.Equals("Variables", StringComparison.OrdinalIgnoreCase)) return p;
+                if (partName.Equals("Variables", StringComparison.OrdinalIgnoreCase)
+                    && p.GetType().GetProperty("Variables", BindingFlags.Public | BindingFlags.Instance) != null) return p;
             }
 
             if (partName.Equals("Source", StringComparison.OrdinalIgnoreCase) || partName.Equals("Code", StringComparison.OrdinalIgnoreCase))

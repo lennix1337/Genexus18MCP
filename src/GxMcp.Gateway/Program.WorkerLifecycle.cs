@@ -365,6 +365,19 @@ namespace GxMcp.Gateway
                 }
 
                 _operationTracker.CompleteFromWorker(id, val);
+                if (_operationTracker.TryGetOperationIdForRequest(id, out var completedOperationId))
+                {
+                    try
+                    {
+                        int reconciled = TryReconcileMutationRecoveryFromOperation(completedOperationId, val);
+                        if (reconciled > 0)
+                            Log($"[Recovery] Late worker completion reconciled {reconciled} fence(s) for operation {completedOperationId}.");
+                    }
+                    catch (Exception recoveryEx)
+                    {
+                        Log($"[Recovery] Late worker completion reconciliation failed for {completedOperationId}: {recoveryEx.Message}");
+                    }
+                }
                 if (_pendingRequests.TryRemove(id, out var pending))
                 {
                     // PERF: hand the parsed envelope to the caller so SendWorkerCommandAsync
@@ -442,7 +455,11 @@ namespace GxMcp.Gateway
                 ?? response["result"]?["_meta"]?["cacheOutcome"]?.ToString();
         }
 
-        internal static JObject BuildWorkerRpcRequest(JObject workerCommand, string requestId, string? operationId = null)
+        internal static JObject BuildWorkerRpcRequest(
+            JObject workerCommand,
+            string requestId,
+            string? operationId = null,
+            string? sessionId = null)
         {
             // PERFORMANCE (perf-review): zero-copy RPC envelope. The previous version
             // DeepCloned every hoisted field AND the whole command under `params` — 5
@@ -478,6 +495,8 @@ namespace GxMcp.Gateway
             };
             if (!string.IsNullOrWhiteSpace(operationId))
                 meta["progressToken"] = operationId;
+            if (!string.IsNullOrWhiteSpace(sessionId))
+                meta["sessionId"] = sessionId;
             rpc["_meta"] = meta;
 
             return rpc;
@@ -577,7 +596,10 @@ namespace GxMcp.Gateway
             {
                 workerAttempt++;
                 string attemptRequestId = workerAttempt == 1 ? requestId : Guid.NewGuid().ToString();
-                var workerRequest = BuildWorkerRpcRequest(workerCommand, attemptRequestId, operationId);
+                string effectiveSessionId = mcpSessionId;
+                if (string.IsNullOrWhiteSpace(effectiveSessionId))
+                    effectiveSessionId = _currentSessionContext.Value?.OwnerScopeId;
+                var workerRequest = BuildWorkerRpcRequest(workerCommand, attemptRequestId, operationId, effectiveSessionId);
                 var worker = await GetActiveWorkerAsync();
 
                 // Don't bill worker cold-start against the per-tool timeout. If the worker is
@@ -805,6 +827,12 @@ namespace GxMcp.Gateway
                 if (verdict == null) return; // still running / transient — leave running, next poll retries
 
                 var (success, summary, result) = verdict.Value;
+                // Status is intentionally a warning-delta surface. Hydrate the
+                // registry with Worker Result before completing the Gateway job so
+                // action=result can still return the complete warning list.
+                JObject? fullResult = await ReadWorkerLifecycleResultAsync(
+                    job.WorkerTaskId, toolArgs, CancellationToken.None);
+                if (fullResult != null) result = fullResult;
                 if (result["workerTaskId"] == null) result["workerTaskId"] = job.WorkerTaskId;
                 JobRegistry.Complete(job.Id, success, summary, result);
                 Log($"[AsyncBuild] Reconcile resolved job={job.Id} success={success} (background poller had not yet completed it).");
@@ -971,15 +999,21 @@ namespace GxMcp.Gateway
         {
             if (job == null) throw new ArgumentNullException(nameof(job));
 
-            return new JObject
+            bool queued = string.Equals(job.Status, "queued", StringComparison.OrdinalIgnoreCase);
+            var payload = new JObject
             {
                 ["job_id"] = job.Id,
                 ["operationId"] = job.Id,
-                ["status"] = "running",
+                ["status"] = queued ? "queued" : "running",
                 ["estimated_seconds"] = job.EstimatedSeconds,
                 ["pollTarget"] = "op:" + job.Id,
+                ["queuePosition"] = queued && job.QueuePosition > 0 ? (JToken)job.QueuePosition : JValue.CreateNull(),
+                ["queuedMs"] = job.QueuedMs,
                 ["hint"] = acceptedSummary + " poll genexus_lifecycle(action='status'|'result', target='op:" + job.Id + "') or watch _meta.background_jobs."
             };
+            if (queued)
+                payload["message"] = "Lifecycle operation queued on the Worker FIFO.";
+            return payload;
         }
 
         // Issue #79: only edit/variable jobs carry the watchdog bound in their accepted
@@ -1006,13 +1040,17 @@ namespace GxMcp.Gateway
 
         internal static JObject BuildAsyncLifecycleAcceptedPayload(JobEntry job, string? action)
         {
-            string acceptedSummary = string.Equals(action, "validate", StringComparison.OrdinalIgnoreCase)
-                ? "Validate accepted;"
-                : string.Equals(action, "build_all", StringComparison.OrdinalIgnoreCase)
-                    ? "Build All accepted;"
-                : string.Equals(action, "rebuild", StringComparison.OrdinalIgnoreCase)
-                    ? "Rebuild accepted;"
-                    : "Build accepted;";
+            string acceptedSummary = action?.Trim().ToLowerInvariant() switch
+            {
+                "validate" => "Validate accepted;",
+                "validate-kb" => "KB validation accepted;",
+                "specify" => "Specify accepted;",
+                "reorg" => "Reorganization accepted;",
+                "index" => "Index refresh accepted;",
+                "build_all" => "Build All accepted;",
+                "rebuild" => "Rebuild accepted;",
+                _ => "Build accepted;"
+            };
             return BuildAsyncAcceptedPayload(job, acceptedSummary);
         }
 

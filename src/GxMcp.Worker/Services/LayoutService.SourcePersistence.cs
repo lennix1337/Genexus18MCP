@@ -15,8 +15,30 @@ namespace GxMcp.Worker.Services
     // (plan TECHDEBT-03). Pure move, no logic changes — see plans/README.md TECHDEBT-03.
     public partial class LayoutService
     {
-        private string PersistVisualXml(KBObject obj, LayoutContextResult context, string target, string normalizedXml, string baselineXml = null, string compositionRepairToken = null)
+        private string PersistVisualXml(KBObject obj, LayoutContextResult context, string target, string normalizedXml, string baselineXml = null, string compositionRepairToken = null, string baseVersion = null)
         {
+            if (!string.IsNullOrWhiteSpace(baseVersion))
+            {
+                var versionContext = LoadVisualContext(obj, target,
+                    context?.Surface ?? VisualSurface.Any);
+                if (versionContext.Error != null) return versionContext.Error;
+                string actualVersion = WriteService.ComputeContentVersionToken(
+                    obj, versionContext.Document?.ToString(SaveOptions.DisableFormatting));
+                if (!string.Equals(baseVersion, actualVersion, StringComparison.Ordinal))
+                {
+                    return Models.McpResponse.Err(
+                        code: "StaleObject",
+                        message: "The visual layout changed before the guarded write could be applied.",
+                        hint: "Read the current layout again and retry with the new versionToken.",
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["expectedVersion"] = baseVersion,
+                            ["actualVersion"] = actualVersion
+                        });
+                }
+            }
+
             var kb = _objectService.GetKbService().GetKB();
             if (kb == null)
             {
@@ -70,7 +92,8 @@ namespace GxMcp.Worker.Services
                                 target: target);
                         }
 
-                        if (!ReportLayoutHelper.WriteLayout(context.VisualPart, normalizedXml, baselineXml))
+                        if (!ReportLayoutHelper.WriteLayout(context.VisualPart, normalizedXml, baselineXml,
+                            allowEnsureSaveFallback: false))
                         {
                             transaction.Rollback();
                             return Models.McpResponse.Err(

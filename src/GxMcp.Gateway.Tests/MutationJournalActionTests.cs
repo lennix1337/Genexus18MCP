@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -112,6 +113,193 @@ namespace GxMcp.Gateway.Tests
             var (guarded, truncated) = new ResponseSizeGuard(100, _ => { }).Apply(payload, "genexus_read", new JObject());
             Assert.True(truncated);
             Assert.False(Program.IsCompleteMutationRecoveryRead(guarded));
+        }
+
+        [Fact]
+        public void ToolSpecificRecoveryPartsAndPartsArrayAreEnumerated()
+        {
+            var variableTargets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_variable",
+                new JObject { ["name"] = "Panel", ["action"] = "add" }).ToList();
+            Assert.Equal(new[] { ("Panel", "Variables") }, variableTargets);
+
+            var formTargets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_edit_form",
+                new JObject { ["name"] = "Panel", ["action"] = "add_button" }).ToList();
+            Assert.Contains(("Panel", "WebForm"), formTargets);
+
+            var layoutTargets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_layout",
+                new JObject { ["name"] = "Panel", ["action"] = "set_property" }).ToList();
+            Assert.Contains(("Panel", "WebForm"), layoutTargets);
+            var reportTargets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_layout",
+                new JObject { ["name"] = "Report", ["action"] = "add_printblock" }).ToList();
+            Assert.Contains(("Report", "Layout"), reportTargets);
+
+            var multiPartTargets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_read",
+                new JObject
+                {
+                    ["name"] = "Panel",
+                    ["parts"] = new JArray("Variables", "Rules")
+                }).ToList();
+            Assert.Equal(new[] { ("Panel", "Rules"), ("Panel", "Variables") }, multiPartTargets);
+            Assert.DoesNotContain(("Panel", "Source"), multiPartTargets);
+        }
+
+        [Fact]
+        public void IoBatchMutationsEnumerateAffectedObjectFences()
+        {
+            var deleteTargets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_io",
+                new JObject
+                {
+                    ["action"] = "delete_kb_objects",
+                    ["targets"] = new JArray("Procedure:OldProc", "Transaction:OldTrans")
+                }).ToList();
+            Assert.Equal(new[] { "Procedure:OldProc", "Transaction:OldTrans" },
+                deleteTargets.Select(item => item.Target));
+            Assert.All(deleteTargets, item => Assert.Equal("Source", item.Part));
+
+            var importTargets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_io",
+                new JObject
+                {
+                    ["action"] = "import_text_to_kb",
+                    ["name"] = "ImportedProcedure",
+                    ["part"] = "Rules"
+                }).ToList();
+            Assert.Equal(("ImportedProcedure", "Rules"), Assert.Single(importTargets));
+        }
+
+        [Fact]
+        public void ManifestImportWithoutObjectSelectorUsesKbLevelRecoveryFence()
+        {
+            var targets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_io",
+                new JObject
+                {
+                    ["action"] = "import_text_to_kb",
+                    ["inputPath"] = "C:/manifests/import.json"
+                }).ToList();
+
+            Assert.Equal(("__KB__", "KB"), Assert.Single(targets));
+
+            var wildcardTargets = Program.EnumerateMutationRecoveryTargets(
+                "genexus_io",
+                new JObject
+                {
+                    ["action"] = "import_text_to_kb",
+                    ["name"] = "*"
+                }).ToList();
+            Assert.Equal(("__KB__", "KB"), Assert.Single(wildcardTargets));
+        }
+
+        [Fact]
+        public void ManifestImportTimeoutRegistersKbFenceWithoutPartReadClaim()
+        {
+            var registry = new MutationRecoveryRegistry();
+            var args = new JObject
+            {
+                ["action"] = "import_text_to_kb",
+                ["inputPath"] = "C:/manifests/import.json"
+            };
+            var payload = new JObject();
+
+            Assert.True(Program.RegisterTimeoutRecoveryFence(
+                registry, "manifest-kb", "genexus_io", args, operationId: null, timeoutPayload: payload));
+            Assert.True(payload["reReadRequired"]?.Value<bool>());
+            Assert.Equal("kb", payload["recoveryScope"]?.ToString());
+            var wireResult = Program.BuildToolResultContent(
+                payload, isError: true, toolName: "genexus_io", toolArgs: args);
+            var wirePayload = JObject.Parse(wireResult["content"]![0]!["text"]!.Value<string>()!);
+            Assert.True(wirePayload["reReadRequired"]?.Value<bool>());
+            Assert.Equal("kb", wirePayload["recoveryScope"]?.ToString());
+            Assert.True(registry.TryGet(
+                "manifest-kb", MutationRecoveryRegistry.KbRecoveryTarget,
+                MutationRecoveryRegistry.KbRecoveryPart, out var requirement));
+
+            var blocked = MutationRecoveryRegistry.BuildBlockedEnvelope(requirement);
+            Assert.Equal("kb", blocked["recoveryScope"]?.ToString());
+            Assert.Empty((JArray)blocked["affectedParts"]!);
+            Assert.Empty((JArray)blocked["error"]?["nextSteps"]!);
+            Assert.Empty(registry.FindForRead(
+                "manifest-kb", new JObject { ["name"] = "ImportedProcedure" }, "Source"));
+        }
+
+        [Fact]
+        public void KbManifestFenceRequiresVerifiedOperationEvidence()
+        {
+            var registry = new MutationRecoveryRegistry();
+            registry.RequireRead(
+                "manifest-kb", MutationRecoveryRegistry.KbRecoveryTarget,
+                MutationRecoveryRegistry.KbRecoveryPart, "manifest-op");
+            Assert.True(registry.TryGet(
+                "manifest-kb", MutationRecoveryRegistry.KbRecoveryTarget,
+                MutationRecoveryRegistry.KbRecoveryPart, out var requirement));
+
+            Assert.Empty(registry.FindForRead(
+                "manifest-kb", new JObject { ["name"] = "ImportedProcedure" }, "Source"));
+            Assert.False(registry.ConfirmRead(
+                "manifest-kb", requirement.Target, requirement.Part, requirement));
+            Assert.True(registry.ConfirmVerifiedOperationRead(requirement));
+            Assert.Equal(0, registry.Count);
+        }
+
+        [Fact]
+        public void FullObjectReadWithVersionedNestedResultIsCompleteRecoveryEvidence()
+        {
+            var payload = new JObject
+            {
+                ["code"] = "FullObjectRead",
+                ["result"] = new JObject
+                {
+                    ["versionToken"] = "v-complete",
+                    ["offset"] = 0
+                }
+            };
+
+            Assert.True(Program.IsFullObjectMutationRecoveryRead(payload));
+            Assert.True(Program.IsCompleteMutationRecoveryRead(payload));
+
+            ((JObject)payload["result"]!)["truncated"] = true;
+            Assert.False(Program.IsFullObjectMutationRecoveryRead(payload));
+            Assert.False(Program.IsCompleteMutationRecoveryRead(payload));
+        }
+
+        [Fact]
+        public void RecoveryHintRequestsCompleteAffectedPartRead()
+        {
+            var registry = new MutationRecoveryRegistry();
+            registry.RequireRead("kb", "Panel", "Variables", "op-1");
+            Assert.True(registry.TryGet("kb", "Panel", "Variables", out var requirement));
+            var envelope = MutationRecoveryRegistry.BuildBlockedEnvelope(requirement);
+            var next = envelope["error"]?["nextSteps"]?[0]?["args"];
+            Assert.Equal("Panel", next?["name"]?.ToString());
+            Assert.Equal("Variables", next?["part"]?.ToString());
+            Assert.Equal(0, next?["limit"]?.Value<int>());
+        }
+
+        [Fact]
+        public void OnlyTerminalPersistedAndRereadOperationCanReconcileFence()
+        {
+            var complete = new JObject
+            {
+                ["status"] = "Completed",
+                ["workerPayload"] = new JObject
+                {
+                    ["persisted"] = true,
+                    ["rereadConfirmed"] = true
+                }
+            };
+            Assert.True(Program.IsTerminalPersistedReread(complete));
+
+            ((JObject)complete["workerPayload"]!)["rereadConfirmed"] = false;
+            Assert.False(Program.IsTerminalPersistedReread(complete));
+            ((JObject)complete["workerPayload"]!)["rereadConfirmed"] = true;
+            complete["status"] = "Running";
+            Assert.False(Program.IsTerminalPersistedReread(complete));
         }
     }
 }

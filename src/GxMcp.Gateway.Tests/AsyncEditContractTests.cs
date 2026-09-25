@@ -145,6 +145,13 @@ namespace GxMcp.Gateway.Tests
 
             Assert.Equal("transport-request", rpc["id"]?.ToString());
             Assert.Equal("one-operation-id", rpc["_meta"]?["progressToken"]?.ToString());
+            Assert.Null(rpc["_meta"]?["sessionId"]);
+
+            JObject sessionRpc = Program.BuildWorkerRpcRequest(
+                new JObject { ["module"] = "Read", ["action"] = "Object" },
+                requestId: "session-request",
+                sessionId: "session-a");
+            Assert.Equal("session-a", sessionRpc["_meta"]?["sessionId"]?.ToString());
         }
 
         [Fact]

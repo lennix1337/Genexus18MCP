@@ -41,6 +41,40 @@ namespace GxMcp.Worker.Services
         // build, and status labels registered out-of-band (tests) must not count as live.
         private static readonly ConcurrentDictionary<string, BuildTaskStatus> _inFlightBuilds = new ConcurrentDictionary<string, BuildTaskStatus>();
 
+        // Gateway admission normally prevents a second lifecycle request from reaching
+        // the STA.  Keep a Worker-side FIFO as the final safety net for independent
+        // Gateways/legacy callers: it admits before RunBuild is scheduled, coalesces
+        // equivalent work, and exposes queued task ids through the normal status API.
+        private static readonly object _buildAdmissionLock = new object();
+        private static readonly Dictionary<string, BuildAdmissionQueue> _buildAdmissionQueues =
+            new Dictionary<string, BuildAdmissionQueue>(StringComparer.OrdinalIgnoreCase);
+
+        private sealed class BuildAdmissionEntry
+        {
+            public string TaskId;
+            public string Key;
+            public string Action;
+            public string Target;
+            public string Scope;
+            public List<string> Targets = new List<string>();
+            public BuildTaskStatus Status;
+            public bool Queued;
+        }
+
+        private sealed class BuildAdmissionQueue
+        {
+            public BuildAdmissionEntry Active;
+            public readonly List<BuildAdmissionEntry> Pending = new List<BuildAdmissionEntry>();
+        }
+
+        private sealed class BuildAdmissionDecision
+        {
+            public bool Execute;
+            public bool Reject;
+            public BuildAdmissionEntry Entry;
+            public bool Coalesced;
+        }
+
         private static readonly System.Collections.Generic.Dictionary<string, int> _phaseProgressMap =
             new System.Collections.Generic.Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase)
             {
@@ -558,8 +592,10 @@ namespace GxMcp.Worker.Services
         public class BuildTaskStatus
         {
             public string TaskId { get; set; }
-            public string Status { get; set; }            // Accepted | Running | Succeeded | Failed | Error | Cancelled | ReorgRequired
-            public string Phase { get; set; }             // Starting | OpeningKB | Specifying | Generating | Compiling | Finishing | Done
+            public string Status { get; set; }            // Queued | Running | Succeeded | Failed | Error | Cancelled | ReorgRequired
+            public string Phase { get; set; }             // Queued | Starting | OpeningKB | Specifying | Generating | Compiling | Finishing | Done
+            public int? QueuePosition { get; set; }
+            public long? QueuedMs { get; set; }
             public string Action { get; set; }
             [JsonProperty("buildMode", NullValueHandling = NullValueHandling.Ignore)]
             public string BuildMode { get; set; }
@@ -760,6 +796,7 @@ namespace GxMcp.Worker.Services
             [JsonIgnore] internal DateTime StartedAt { get; set; }
             [JsonIgnore] internal StringBuilder FullOutput { get; set; } = new StringBuilder();
             [JsonIgnore] internal object _lock = new object();
+            [JsonIgnore] internal DateTime? EnqueuedAtUtc { get; set; }
             // v2.6.6 Stream F (FR#19 follow-up): event-driven long-poll. Polling
             // `status` every ~250ms generated 24 round-trips for a 10-minute
             // build. Wait callers block on this signal until HandleLine sees a
@@ -1041,7 +1078,9 @@ namespace GxMcp.Worker.Services
         // no Compile, no deploy) for the target so the agent sees spc*/gen* diagnostics
         // without the full ~compile+deploy build. Reuses the whole build-task pipeline;
         // the #13 error split surfaces the spec diagnostics under codeErrors.
-        public string Specify(string target)
+        public string Specify(string target) => Specify(target, queueLifecycle: true);
+
+        public string Specify(string target, bool queueLifecycle)
         {
             var plan = BuildCompileCheckPlan(target, buildPlanCap: 200, includeCallers: false, callerCap: 0);
             if (plan.TargetResolutionAvailable && plan.AmbiguousTargets.Count > 0)
@@ -1065,7 +1104,8 @@ namespace GxMcp.Worker.Services
                 ? string.Join(",", plan.CanonicalSeeds)
                 : target;
             return Build("Build", canonicalTarget, includeCallees: "none", buildPlanCap: 200,
-                skipFullDeploy: false, notifyOnFailure: null, fastIncremental: false, specifyOnly: true);
+                skipFullDeploy: false, notifyOnFailure: null, fastIncremental: false,
+                specifyOnly: true, queueLifecycle: queueLifecycle);
         }
 
         // mode=compile_check: "did my edits break the build?" without the ~200s
@@ -1086,7 +1126,7 @@ namespace GxMcp.Worker.Services
         public const int CompileCheckDefaultCallerCap = 40;
 
         public string CompileCheck(string target, int buildPlanCap = 200,
-            bool includeCallers = true, int callerCap = 0)
+            bool includeCallers = true, int callerCap = 0, bool queueLifecycle = true)
         {
             var plan = BuildCompileCheckPlan(target, buildPlanCap, includeCallers, callerCap);
             string validationError = BuildCompileCheckValidationError(plan, target);
@@ -1102,7 +1142,8 @@ namespace GxMcp.Worker.Services
                 compileCheckCallers: plan.CallersAdded, compileCheckTruncated: plan.Truncated,
                 compileCheckGraphAvailable: plan.CallerGraphAvailable,
                 compileCheckCallersRequested: includeCallers,
-                compileCheckCallerCap: plan.CallerCap);
+                compileCheckCallerCap: plan.CallerCap,
+                queueLifecycle: queueLifecycle);
             return result;
         }
 
@@ -1422,6 +1463,455 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private static bool ConcurrentBuildsAllowed()
+            => string.Equals(Environment.GetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS"),
+                "1", StringComparison.OrdinalIgnoreCase);
+
+        private static string BuildAdmissionScope(string kbPath)
+            => string.IsNullOrWhiteSpace(kbPath) ? "__default-kb__" : kbPath;
+
+        private static string NewBuildTaskId()
+            => Guid.NewGuid().ToString("N").Substring(0, 8);
+
+        private static BuildTaskStatus CreateAdmissionStatus(
+            string taskId,
+            string action,
+            string target,
+            List<string> targets,
+            string kbPath,
+            bool queued,
+            int queuePosition)
+        {
+            var now = DateTime.UtcNow;
+            return new BuildTaskStatus
+            {
+                TaskId = taskId,
+                Action = action,
+                Target = target,
+                Targets = targets == null ? null : targets.ToList(),
+                KbPath = kbPath,
+                Status = queued ? "Queued" : "Running",
+                Phase = queued ? "Queued" : "Starting",
+                QueuePosition = queued ? (int?)queuePosition : null,
+                QueuedMs = 0,
+                EnqueuedAtUtc = now,
+                StartedAt = queued ? default(DateTime) : now,
+                StartTime = queued ? null : now.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            };
+        }
+
+        private static string BuildAdmissionKey(
+            string action,
+            string target,
+            string includeCallees,
+            int buildPlanCap,
+            bool skipFullDeploy,
+            bool fullDeploy,
+            bool fastIncremental,
+            bool specifyOnly,
+            bool compileCheck,
+            string environment)
+        {
+            var targets = ParseTargets(target)
+                .Select(item => item.Trim().ToLowerInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return string.Join("|", new[]
+            {
+                (action ?? string.Empty).Trim().ToLowerInvariant(),
+                string.Join(",", targets),
+                (includeCallees ?? "transitive").Trim().ToLowerInvariant(),
+                buildPlanCap.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                skipFullDeploy ? "1" : "0",
+                fullDeploy ? "1" : "0",
+                fastIncremental ? "1" : "0",
+                specifyOnly ? "1" : "0",
+                compileCheck ? "1" : "0",
+                (environment ?? string.Empty).Trim().ToLowerInvariant()
+            });
+        }
+
+        private static BuildAdmissionDecision AdmitBuildRequest(
+            string kbPath,
+            string action,
+            string target,
+            string includeCallees,
+            int buildPlanCap,
+            bool skipFullDeploy,
+            bool fullDeploy,
+            bool fastIncremental,
+            bool specifyOnly,
+            bool compileCheck,
+            string environment,
+            bool allowQueue)
+        {
+            var targets = ParseTargets(target);
+            string scope = BuildAdmissionScope(kbPath);
+            string key = BuildAdmissionKey(action, target, includeCallees, buildPlanCap,
+                skipFullDeploy, fullDeploy, fastIncremental, specifyOnly, compileCheck, environment);
+
+            if (ConcurrentBuildsAllowed())
+            {
+                string taskId = NewBuildTaskId();
+                var status = CreateAdmissionStatus(taskId, action, target, targets, kbPath, false, 0);
+                return new BuildAdmissionDecision
+                {
+                    Execute = true,
+                    Entry = new BuildAdmissionEntry
+                    {
+                        TaskId = taskId,
+                        Key = key,
+                        Action = action,
+                        Target = target,
+                        Scope = scope,
+                        Targets = targets,
+                        Status = status
+                    }
+                };
+            }
+
+            lock (_buildAdmissionLock)
+            {
+                if (!_buildAdmissionQueues.TryGetValue(scope, out var queue))
+                {
+                    queue = new BuildAdmissionQueue();
+                    _buildAdmissionQueues[scope] = queue;
+                }
+
+                // A task can be registered by an older caller without an admission
+                // record. Adopt it as the active slot instead of starting a duplicate.
+                if (queue.Active == null)
+                {
+                    var legacyActive = GetActiveBuilds(kbPath).FirstOrDefault();
+                    if (legacyActive != null)
+                    {
+                        queue.Active = new BuildAdmissionEntry
+                        {
+                            TaskId = legacyActive.TaskId,
+                            Key = BuildAdmissionKey(legacyActive.Action, legacyActive.Target,
+                                includeCallees, buildPlanCap, skipFullDeploy, fullDeploy,
+                                fastIncremental, specifyOnly, compileCheck, environment),
+                            Action = legacyActive.Action,
+                            Target = legacyActive.Target,
+                            Scope = scope,
+                            Targets = legacyActive.Targets == null
+                                ? ParseTargets(legacyActive.Target)
+                                : legacyActive.Targets.ToList(),
+                            Status = legacyActive
+                        };
+                    }
+                }
+
+                if (queue.Active != null)
+                {
+                    // Build/specify/compile-check requests use the FIFO by default. The
+                    // explicit queueLifecycle=false escape hatch remains for legacy
+                    // callers that deliberately require fail-fast BuildAlreadyRunning
+                    // semantics; the MCP lifecycle router never sets it false.
+                    if (!allowQueue)
+                    {
+                        return new BuildAdmissionDecision
+                        {
+                            Execute = false,
+                            Reject = true,
+                            Entry = queue.Active
+                        };
+                    }
+
+                    if (string.Equals(queue.Active.Key, key, StringComparison.Ordinal))
+                    {
+                        return new BuildAdmissionDecision
+                        {
+                            Execute = false,
+                            Entry = queue.Active,
+                            Coalesced = true
+                        };
+                    }
+
+                    // A duplicate may already be waiting behind a different active
+                    // operation. Coalesce against the pending entry as well; otherwise
+                    // repeated identical requests would create a second execution.
+                    var existingPending = queue.Pending.FirstOrDefault(item =>
+                        string.Equals(item.Key, key, StringComparison.Ordinal));
+                    if (existingPending != null)
+                    {
+                        return new BuildAdmissionDecision
+                        {
+                            Execute = false,
+                            Entry = existingPending,
+                            Coalesced = true
+                        };
+                    }
+
+                    string queuedTaskId = NewBuildTaskId();
+                    var queuedStatus = CreateAdmissionStatus(
+                        queuedTaskId, action, target, targets, kbPath, true, queue.Pending.Count + 1);
+                    var queued = new BuildAdmissionEntry
+                    {
+                        TaskId = queuedTaskId,
+                        Key = key,
+                        Action = action,
+                        Target = target,
+                        Scope = scope,
+                        Targets = targets,
+                        Queued = true,
+                        Status = queuedStatus
+                    };
+                    queue.Pending.Add(queued);
+                    _tasks[queuedTaskId] = queuedStatus;
+                    return new BuildAdmissionDecision { Execute = false, Entry = queued };
+                }
+
+                string admittedTaskId = NewBuildTaskId();
+                var admittedStatus = CreateAdmissionStatus(
+                    admittedTaskId, action, target, targets, kbPath, false, 0);
+                var admitted = new BuildAdmissionEntry
+                {
+                    TaskId = admittedTaskId,
+                    Key = key,
+                    Action = action,
+                    Target = target,
+                    Scope = scope,
+                    Targets = targets,
+                    Status = admittedStatus
+                };
+                queue.Active = admitted;
+                _tasks[admittedTaskId] = admittedStatus;
+                return new BuildAdmissionDecision { Execute = true, Entry = admitted };
+            }
+        }
+
+        private static string BuildAdmissionResponse(BuildAdmissionDecision decision)
+        {
+            var entry = decision?.Entry;
+            var status = entry?.Status;
+            bool queued = false;
+            int? queuePosition = null;
+            long queuedMs = 0;
+            string currentStatus = status?.Status;
+            if (decision?.Reject == true)
+            {
+                string activePhase = status?.Phase;
+                if (status != null)
+                {
+                    lock (status._lock)
+                    {
+                        currentStatus = status.Status;
+                        activePhase = status.Phase;
+                    }
+                }
+                return new JObject
+                {
+                    ["status"] = "BuildAlreadyRunning",
+                    ["code"] = "BuildAlreadyRunning",
+                    ["message"] = "A build is already running (taskId=" + entry?.TaskId
+                        + ", action=" + entry?.Action + ", phase=" + activePhase
+                        + "). Builds are serialized per worker. Poll it via genexus_lifecycle action=status target="
+                        + entry?.TaskId + ", or cancel it via action=cancel before starting another.",
+                    ["activeTaskId"] = entry?.TaskId,
+                    ["activeAction"] = entry?.Action,
+                    ["activePhase"] = activePhase,
+                    ["activeTarget"] = entry?.Target
+                }.ToString(Formatting.None);
+            }
+            if (status != null)
+            {
+                lock (status._lock)
+                {
+                    queued = string.Equals(status.Status, "Queued", StringComparison.OrdinalIgnoreCase);
+                    queuePosition = queued ? status.QueuePosition : null;
+                    queuedMs = queued
+                        ? status.QueuedMs ?? (status.EnqueuedAtUtc.HasValue
+                            ? Math.Max(0L, (long)(DateTime.UtcNow - status.EnqueuedAtUtc.Value).TotalMilliseconds)
+                            : 0L)
+                        : 0L;
+                    currentStatus = status.Status;
+                }
+            }
+
+            string responseStatus = queued
+                ? "Queued"
+                : string.IsNullOrWhiteSpace(currentStatus) || string.Equals(currentStatus, "Running", StringComparison.OrdinalIgnoreCase)
+                    ? "Accepted"
+                    : currentStatus;
+            var payload = new JObject
+            {
+                ["status"] = responseStatus,
+                ["operationId"] = entry?.TaskId,
+                ["taskId"] = entry?.TaskId,
+                ["queuePosition"] = queuePosition.HasValue ? (JToken)queuePosition.Value : JValue.CreateNull(),
+                ["queuedMs"] = queuedMs,
+                ["coalesced"] = decision?.Coalesced == true,
+                ["action"] = entry?.Action,
+                ["target"] = entry?.Target,
+                ["targets"] = status?.Targets == null ? JValue.CreateNull() : JArray.FromObject(status.Targets),
+                ["message"] = queued
+                    ? "Build request admitted to the per-Worker FIFO."
+                    : decision?.Coalesced == true
+                        ? "Equivalent lifecycle request joined the existing Worker operation."
+                        : "Build task started in background."
+            };
+            return payload.ToString(Formatting.None);
+        }
+
+        private void RunBuildAndReleaseQueue(BuildAdmissionEntry entry, BuildTaskStatus status, string action, List<string> targets)
+        {
+            try
+            {
+                RunBuild(status, action, targets);
+            }
+            finally
+            {
+                // RunBuild normally terminalizes every path. Keep the FIFO finite even
+                // if an unexpected future runner path returns without a terminal label.
+                if (status != null && !IsTerminalStatus(status.Status))
+                {
+                    lock (status._lock)
+                    {
+                        if (!IsTerminalStatus(status.Status))
+                        {
+                            status.Status = "Error";
+                            status.Phase = "Done";
+                            status.Error = "Build worker returned without a terminal status.";
+                            status.EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                            status.ElapsedSeconds = status.StartedAt == default(DateTime)
+                                ? 0
+                                : Math.Round((DateTime.UtcNow - status.StartedAt).TotalSeconds, 1);
+                            try { status.StateChangeSignal.Set(); } catch { }
+                        }
+                    }
+                }
+                CompleteBuildAdmission(entry);
+            }
+        }
+
+        private void CompleteBuildAdmission(BuildAdmissionEntry completed)
+        {
+            if (completed == null) return;
+            BuildAdmissionEntry next = null;
+            lock (_buildAdmissionLock)
+            {
+                string scope = completed.Scope ?? BuildAdmissionScope(completed.Status?.KbPath ?? GetKBPath());
+                if (!_buildAdmissionQueues.TryGetValue(scope, out var queue)
+                    || queue.Active == null
+                    || !string.Equals(queue.Active.TaskId, completed.TaskId, StringComparison.OrdinalIgnoreCase))
+                    return;
+                queue.Active = null;
+                while (queue.Pending.Count > 0)
+                {
+                    var candidate = queue.Pending[0];
+                    queue.Pending.RemoveAt(0);
+                    if (candidate.Status == null)
+                        continue;
+                    if (IsTerminalStatus(candidate.Status.Status))
+                        continue;
+                    next = candidate;
+                    break;
+                }
+                if (next != null)
+                {
+                    queue.Active = next;
+                    next.Queued = false;
+                    var now = DateTime.UtcNow;
+                    lock (next.Status._lock)
+                    {
+                        next.Status.Status = "Running";
+                        next.Status.Phase = "Starting";
+                        next.Status.StartedAt = now;
+                        next.Status.StartTime = now.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+                        next.Status.QueuePosition = null;
+                        next.Status.QueuedMs = next.Status.EnqueuedAtUtc.HasValue
+                            ? Math.Max(0L, (long)(now - next.Status.EnqueuedAtUtc.Value).TotalMilliseconds)
+                            : 0L;
+                        try { next.Status.StateChangeSignal.Set(); } catch { }
+                    }
+                    for (int i = 0; i < queue.Pending.Count; i++)
+                    {
+                        lock (queue.Pending[i].Status._lock)
+                            queue.Pending[i].Status.QueuePosition = i + 1;
+                    }
+                }
+                else if (queue.Pending.Count == 0)
+                {
+                    _buildAdmissionQueues.Remove(scope);
+                }
+            }
+            if (next != null)
+            {
+                var captured = next;
+                Task.Run(() => RunBuildAndReleaseQueue(captured, captured.Status,
+                    captured.Action, captured.Targets));
+            }
+        }
+
+        private static bool TryCancelQueuedBuildAdmission(string taskId)
+        {
+            if (string.IsNullOrWhiteSpace(taskId)) return false;
+            lock (_buildAdmissionLock)
+            {
+                foreach (var pair in _buildAdmissionQueues.ToList())
+                {
+                    var queue = pair.Value;
+                    var found = queue.Pending.FirstOrDefault(item =>
+                        string.Equals(item.TaskId, taskId, StringComparison.OrdinalIgnoreCase));
+                    if (found == null) continue;
+                    queue.Pending.Remove(found);
+                    for (int i = 0; i < queue.Pending.Count; i++)
+                    {
+                        lock (queue.Pending[i].Status._lock)
+                            queue.Pending[i].Status.QueuePosition = i + 1;
+                    }
+                    if (queue.Active == null && queue.Pending.Count == 0)
+                        _buildAdmissionQueues.Remove(pair.Key);
+
+                    if (found.Status != null)
+                    {
+                        lock (found.Status._lock)
+                        {
+                            if (!IsTerminalStatus(found.Status.Status))
+                            {
+                                found.Status.Status = "Cancelled";
+                                found.Status.Phase = "Done";
+                                found.Status.EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                                found.Status.QueuedMs = found.Status.EnqueuedAtUtc.HasValue
+                                    ? Math.Max(0L, (long)(DateTime.UtcNow - found.Status.EnqueuedAtUtc.Value).TotalMilliseconds)
+                                    : 0L;
+                                found.Status.QueuePosition = null;
+                                try { found.Status.StateChangeSignal.Set(); } catch { }
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        internal static void ResetBuildAdmissionForTest()
+        {
+            List<BuildAdmissionEntry> pending;
+            lock (_buildAdmissionLock)
+            {
+                pending = _buildAdmissionQueues.Values
+                    .SelectMany(queue => queue.Pending)
+                    .ToList();
+                _buildAdmissionQueues.Clear();
+            }
+            foreach (var entry in pending)
+            {
+                if (entry?.Status == null) continue;
+                lock (entry.Status._lock)
+                {
+                    if (IsTerminalStatus(entry.Status.Status)) continue;
+                    entry.Status.Status = "Cancelled";
+                    entry.Status.Phase = "Done";
+                    entry.Status.QueuePosition = null;
+                    try { entry.Status.StateChangeSignal.Set(); } catch { }
+                }
+            }
+        }
+
         // Item 28 — EXPERIMENTAL. When fastIncremental=true, ask the configured
         // IFastIncrementalDecision what we can skip given the current dirty set.
         // Three short-circuit envelopes are surfaced ahead of the normal
@@ -1432,13 +1922,15 @@ namespace GxMcp.Worker.Services
         public string Build(string action, string target, string includeCallees, int buildPlanCap, bool skipFullDeploy, string notifyOnFailure, bool fastIncremental, bool fullDeploy = false)
             => Build(action, target, includeCallees, buildPlanCap, skipFullDeploy, notifyOnFailure, fastIncremental, specifyOnly: false, fullDeploy: fullDeploy);
 
-        public string Build(string action, string target, string includeCallees, int buildPlanCap, bool skipFullDeploy, string notifyOnFailure, bool fastIncremental, bool specifyOnly, bool fullDeploy = false)
+        public string Build(string action, string target, string includeCallees, int buildPlanCap, bool skipFullDeploy, string notifyOnFailure, bool fastIncremental, bool specifyOnly, bool fullDeploy = false, bool queueLifecycle = true)
             => Build(action, target, includeCallees, buildPlanCap, skipFullDeploy, notifyOnFailure, fastIncremental, specifyOnly,
-                     compileCheck: false, compileCheckCallers: null, compileCheckTruncated: false, compileCheckGraphAvailable: true, fullDeploy: fullDeploy);
+                     compileCheck: false, compileCheckCallers: null, compileCheckTruncated: false, compileCheckGraphAvailable: true,
+                     fullDeploy: fullDeploy, queueLifecycle: queueLifecycle);
 
         public string Build(string action, string target, string includeCallees, int buildPlanCap, bool skipFullDeploy, string notifyOnFailure, bool fastIncremental, bool specifyOnly,
                             bool compileCheck, List<string> compileCheckCallers, bool compileCheckTruncated, bool compileCheckGraphAvailable,
-                            bool fullDeploy = false, bool compileCheckCallersRequested = true, int compileCheckCallerCap = 0)
+                            bool fullDeploy = false, bool compileCheckCallersRequested = true, int compileCheckCallerCap = 0,
+                            bool queueLifecycle = true)
         {
             if (string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrWhiteSpace(target))
@@ -1458,30 +1950,9 @@ namespace GxMcp.Worker.Services
                 if (reorgGuard != null) return reorgGuard;
             }
 
-            // issue #42 (P3c) — reject a second build while one is already running.
-            // Builds are serialized per worker/KB (the SDK is single-model, in-process);
-            // two concurrent IdeWebBuildAndDeploy passes race the generated output.
-            // Opt out with GXMCP_ALLOW_CONCURRENT_BUILDS=1.
-            if (!string.Equals(Environment.GetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS"), "1", StringComparison.OrdinalIgnoreCase))
-            {
-                var active = GetActiveBuilds(GetKBPath()).FirstOrDefault();
-                if (active != null)
-                {
-                    return JsonConvert.SerializeObject(new
-                    {
-                        status = "BuildAlreadyRunning",
-                        code = "BuildAlreadyRunning",
-                        message = "A build is already running (taskId=" + active.TaskId + ", action=" + active.Action
-                            + ", phase=" + active.Phase + "). Builds are serialized per worker. Poll it via "
-                            + "genexus_lifecycle action=status target=" + active.TaskId
-                            + ", or cancel it via action=cancel before starting another.",
-                        activeTaskId = active.TaskId,
-                        activeAction = active.Action,
-                        activePhase = active.Phase,
-                        activeTarget = active.Target
-                    });
-                }
-            }
+            // Lifecycle admission is handled below, immediately before the task is
+            // created. Requests waiting for the STA therefore receive a queue handle
+            // instead of a late BuildAlreadyRunning rejection.
 
             // Parse target: single name OR comma/semicolon-separated list for batch "Build With These Only"
             var targets = ParseTargets(target);
@@ -1563,7 +2034,58 @@ namespace GxMcp.Worker.Services
                 targets = plan.Expanded;
             }
 
-            string taskId = Guid.NewGuid().ToString().Substring(0, 8);
+            string kbPath = GetKBPath();
+            // Admission is the first operation that reserves the per-Worker slot.
+            // In particular, do this before creating a task or probing SDK metadata:
+            // a second request must receive a queue handle rather than wait behind
+            // the STA and only then discover that another build is active.
+            var admission = AdmitBuildRequest(
+                kbPath,
+                action,
+                target,
+                includeCallees,
+                buildPlanCap,
+                skipFullDeploy,
+                fullDeploy,
+                fastIncremental,
+                specifyOnly,
+                compileCheck,
+                environment: null,
+                allowQueue: queueLifecycle);
+            if (admission.Reject)
+                return BuildAdmissionResponse(admission);
+            if (!admission.Execute && admission.Coalesced)
+                return BuildAdmissionResponse(admission);
+
+            bool queuedAdmission = !admission.Execute;
+            var admittedEntry = admission.Entry;
+            var status = admittedEntry?.Status;
+            if (status == null)
+            {
+                // Defensive fallback: the admission helper always creates a status for
+                // an executing request. Keep a malformed helper result from leaking
+                // a null task into the registry.
+                status = new BuildTaskStatus
+                {
+                    TaskId = NewBuildTaskId(),
+                    Action = action,
+                    Target = target,
+                    Targets = targets.Count > 0 ? targets : null,
+                    Status = "Error",
+                    Phase = "Done",
+                    KbPath = kbPath
+                };
+                if (admittedEntry != null) admittedEntry.Status = status;
+            }
+            string taskId = status.TaskId;
+            if (status.KbPath == null) status.KbPath = kbPath;
+            if (admittedEntry != null)
+            {
+                admittedEntry.Action = action;
+                admittedEntry.Target = target;
+                admittedEntry.Targets = targets;
+            }
+
             // Resolve through KbService so the result follows the same SDK shape
             // probing used by whoami/environment telemetry.  On GeneXus 18 U5 the
             // active environment is not consistently exposed through
@@ -1575,6 +2097,7 @@ namespace GxMcp.Worker.Services
             {
                 try { envName = _kbService?.GetKB()?.DesignModel?.Environment?.Name; } catch { }
             }
+            status.Environment = envName;
             bool targetedBuild = action != null
                 && action.Equals("Build", StringComparison.OrdinalIgnoreCase)
                 && targets.Count > 0;
@@ -1605,40 +2128,32 @@ namespace GxMcp.Worker.Services
                     fastIncrementalAppliedPath = "targeted";
             }
 
-            var status = new BuildTaskStatus {
-                TaskId = taskId,
-                Action = action,
-                BuildMode = string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase) ? "BuildAll" : null,
-                Environment = envName,
-                Target = target,
-                // Always echo the parsed list so the agent can confirm what got dispatched,
-                // including the single-target case. Doc contract says "the parsed list".
-                Targets = targets.Count > 0 ? targets : null,
-                Status = "Running",
-                Phase = "Starting",
-                StartTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                StartedAt = DateTime.UtcNow,
-                BuildPlan = plan,
-                SpecifyOnly = specifyOnly && targetedBuild,
-                SkipFullDeploy = effectiveSkipFullDeploy,
-                FullDeploy = fullDeploy
-                    && string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase),
-                NotifyOnFailureUrl = notifyOnFailure,
-                // Item 28 — surface decision on the task so status/result echo it.
-                FastIncrementalRequested = fastIncremental,
-                FastIncrementalFallback = fiDecision?.ForceFullBuild == true,
-                FastIncrementalFallbackReason = fiDecision?.ForceFullBuild == true ? fiDecision.FallbackReason : null,
-                FastIncrementalCanSkipDeploy = fiDecision?.CanSkipDeploy == true && fiDecision.ForceFullBuild == false,
-                FastIncrementalCanSkipSpecify = fiDecision?.ForceFullBuild == false ? fiDecision.CanSkipSpecify : null,
-                FastIncrementalForceFullBuild = fastIncremental && fiDecision?.ForceFullBuild == true,
-                FastIncrementalAppliedPath = fastIncrementalAppliedPath,
-                CompileCheck = compileCheck,
-                CompileCheckCallersRequested = compileCheck && compileCheckCallersRequested,
-                CompileCheckCallerCap = compileCheck ? compileCheckCallerCap : 0,
-                CompileCheckCallers = (compileCheck && compileCheckCallers != null && compileCheckCallers.Count > 0) ? compileCheckCallers : null,
-                CompileCheckTruncated = compileCheck && compileCheckTruncated,
-                CompileCheckGraphAvailable = compileCheck && compileCheckGraphAvailable
-            };
+            status.Action = action;
+            status.BuildMode = string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase) ? "BuildAll" : null;
+            status.Target = target;
+            // Always echo the parsed list so the agent can confirm what got dispatched,
+            // including the single-target case. Doc contract says "the parsed list".
+            status.Targets = targets.Count > 0 ? targets : null;
+            status.BuildPlan = plan;
+            status.SpecifyOnly = specifyOnly && targetedBuild;
+            status.SkipFullDeploy = effectiveSkipFullDeploy;
+            status.FullDeploy = fullDeploy
+                && string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase);
+            status.NotifyOnFailureUrl = notifyOnFailure;
+            // Item 28 — surface decision on the task so status/result echo it.
+            status.FastIncrementalRequested = fastIncremental;
+            status.FastIncrementalFallback = fiDecision?.ForceFullBuild == true;
+            status.FastIncrementalFallbackReason = fiDecision?.ForceFullBuild == true ? fiDecision.FallbackReason : null;
+            status.FastIncrementalCanSkipDeploy = fiDecision?.CanSkipDeploy == true && fiDecision.ForceFullBuild == false;
+            status.FastIncrementalCanSkipSpecify = fiDecision?.ForceFullBuild == false ? fiDecision.CanSkipSpecify : null;
+            status.FastIncrementalForceFullBuild = fastIncremental && fiDecision?.ForceFullBuild == true;
+            status.FastIncrementalAppliedPath = fastIncrementalAppliedPath;
+            status.CompileCheck = compileCheck;
+            status.CompileCheckCallersRequested = compileCheck && compileCheckCallersRequested;
+            status.CompileCheckCallerCap = compileCheck ? compileCheckCallerCap : 0;
+            status.CompileCheckCallers = (compileCheck && compileCheckCallers != null && compileCheckCallers.Count > 0) ? compileCheckCallers : null;
+            status.CompileCheckTruncated = compileCheck && compileCheckTruncated;
+            status.CompileCheckGraphAvailable = compileCheck && compileCheckGraphAvailable;
 
             // Best-effort caller lookup for hint (only meaningful for single-object builds)
             if (targets.Count == 1)
@@ -1651,17 +2166,31 @@ namespace GxMcp.Worker.Services
                 }
             }
 
+            if (queuedAdmission)
+                return BuildAdmissionResponse(admission);
+
             _tasks[taskId] = status;
             // Retention sweep (never breaks registration — SweepBuildTasks is total).
             SweepBuildTasks();
 
-            // issue #42 (P3c): register the in-flight build here — synchronously, before the
-            // background task is scheduled — so a second Build() call cannot slip through the
-            // "already running" guard during the window before RunBuild's own registration runs.
+            // Register the executing build synchronously, before the background task is
+            // scheduled. The admission record already owns the FIFO slot; this registry
+            // is the liveness source used by older callers and diagnostics.
             if (status.KbPath == null) { try { status.KbPath = GetKBPath(); } catch { } }
-            _inFlightBuilds[status.TaskId] = status;
+            if (!string.Equals(status.Status, "Queued", StringComparison.OrdinalIgnoreCase))
+                _inFlightBuilds[status.TaskId] = status;
 
-            Task.Run(() => RunBuild(status, action, targets));
+            try
+            {
+                var capturedEntry = admittedEntry;
+                Task.Run(() => RunBuildAndReleaseQueue(
+                    capturedEntry, status, action, targets));
+            }
+            catch (Exception ex)
+            {
+                SetFailure(status, "Unable to schedule build worker: " + ex.Message);
+                CompleteBuildAdmission(admittedEntry);
+            }
 
             string acceptedMessage;
             if (compileCheck)
@@ -1722,7 +2251,10 @@ namespace GxMcp.Worker.Services
             return JsonConvert.SerializeObject(new {
                 status = "Accepted",
                 message = acceptedMessage,
+                operationId = taskId,
                 taskId = taskId,
+                queuePosition = (int?)null,
+                queuedMs = 0L,
                 targets = targets.Count > 0 ? targets : null,
                 compileCheck = compileCheckPayload,
                 callersToAlsoBuild = status.CallersToAlsoBuild,
@@ -1883,6 +2415,12 @@ namespace GxMcp.Worker.Services
             {
                 lock (status._lock)
                 {
+                    if (string.Equals(status.Status, "Queued", StringComparison.OrdinalIgnoreCase)
+                        && status.EnqueuedAtUtc.HasValue)
+                    {
+                        status.QueuedMs = Math.Max(0L,
+                            (long)(DateTime.UtcNow - status.EnqueuedAtUtc.Value).TotalMilliseconds);
+                    }
                     if (status.Status == "Running" && status.StartedAt != default(DateTime))
                         status.ElapsedSeconds = Math.Round((DateTime.UtcNow - status.StartedAt).TotalSeconds, 1);
 
@@ -1913,6 +2451,10 @@ namespace GxMcp.Worker.Services
                     var meta = paginatedWarnings["_meta"] as JObject ?? new JObject();
                     meta["snapshot"] = status.ComputeBaseline();
                     jo["_meta"] = meta;
+                    jo["operationId"] = status.TaskId;
+                    jo["queuePosition"] = status.QueuePosition.HasValue
+                        ? (JToken)status.QueuePosition.Value : JValue.CreateNull();
+                    jo["queuedMs"] = status.QueuedMs ?? 0L;
 
                     return jo.ToString(Formatting.None);
                 }
@@ -1929,67 +2471,171 @@ namespace GxMcp.Worker.Services
         // - Terminal task → returns immediately regardless of since.
         // - Unknown taskId → returns immediately (Task ID not found).
         // - Baseline mismatch → returns immediately.
-        public string GetStatusWait(string taskId, int waitSeconds, string sinceBaseline, int page = 1, int pageSize = 50, bool compact = false)
+        public string GetStatusWait(string taskId, int waitSeconds, string sinceBaseline, int page = 1, int pageSize = 50, bool compact = false, string until = "change")
         {
+            if (!string.IsNullOrWhiteSpace(until)
+                && !string.Equals(until, "change", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(until, "terminal", StringComparison.OrdinalIgnoreCase))
+            {
+                return McpResponse.Err(
+                    code: "InvalidStatusUntil",
+                    message: "until must be 'change' or 'terminal'.",
+                    target: taskId);
+            }
             if (waitSeconds < 0) waitSeconds = 0;
             if (waitSeconds > 600) waitSeconds = 600;
+            string waitUntil = string.Equals(until, "terminal", StringComparison.OrdinalIgnoreCase)
+                ? "terminal" : "change";
+            bool waitForTerminal = waitUntil == "terminal";
+            int warningCursor = ParseWarningCursor(sinceBaseline, out bool warningCursorProvided);
 
-            // No taskId, or wait disabled → match legacy GetStatus shape.
+            // No taskId, or wait disabled → match legacy GetStatus shape while still
+            // applying the warning cursor contract.
             if (string.IsNullOrEmpty(taskId) || waitSeconds == 0)
             {
-                return AnnotateWithBaseline(GetStatus(taskId, page, pageSize, compact), taskId);
+                string immediate = GetStatus(taskId, page, pageSize, compact);
+                immediate = ApplyWarningDelta(immediate, taskId, sinceBaseline, warningCursorProvided, warningCursor);
+                return AnnotateWithBaseline(immediate, taskId);
             }
 
-            BuildTaskStatus status;
-            if (!_tasks.TryGetValue(taskId, out status))
+            if (!_tasks.TryGetValue(taskId, out var status))
             {
                 // Unknown taskId — GetStatus emits "Task ID not found"; return immediately.
                 return AnnotateWithBaseline(GetStatus(taskId, page, pageSize, compact), taskId);
             }
 
-            string currentBaseline;
+            string initialBaseline;
             bool terminal;
             lock (status._lock)
             {
-                currentBaseline = status.ComputeBaseline();
+                initialBaseline = status.ComputeBaseline();
                 terminal = IsTerminalStatus(status.Status);
             }
 
-            // Terminal -> always return now. A changed baseline means the caller is
-            // behind, so return immediately. With no prior snapshot, establish the
-            // current baseline and still honor waitSeconds; otherwise the public
-            // wait parameter is silently reduced to a zero-second status read.
-            bool baselineDiffers = !string.IsNullOrEmpty(sinceBaseline)
-                                   && !string.Equals(sinceBaseline, currentBaseline, StringComparison.Ordinal);
-            if (terminal || baselineDiffers)
+            // A legacy baseline cursor means "return if the caller is behind".  A
+            // numeric/warning cursor is independent of the state baseline and should
+            // not disable the wait.
+            bool baselineDiffers = !warningCursorProvided
+                && !string.IsNullOrEmpty(sinceBaseline)
+                && !string.Equals(sinceBaseline, initialBaseline, StringComparison.Ordinal);
+            if (terminal || (baselineDiffers && !waitForTerminal))
+                return AnnotateWithBaseline(
+                    ApplyWarningDelta(GetStatus(taskId, page, pageSize, compact), taskId, sinceBaseline,
+                        warningCursorProvided, warningCursor), taskId);
+
+            var deadline = DateTime.UtcNow.AddSeconds(waitSeconds);
+            while (DateTime.UtcNow < deadline)
             {
-                return AnnotateWithBaseline(GetStatus(taskId, page, pageSize, compact), taskId);
+                // Reset before the post-reset recheck so a warning/phase edge racing
+                // with this waiter cannot be lost.
+                try { status.StateChangeSignal.Reset(); } catch { }
+                string postResetBaseline;
+                bool postResetTerminal;
+                lock (status._lock)
+                {
+                    postResetBaseline = status.ComputeBaseline();
+                    postResetTerminal = IsTerminalStatus(status.Status);
+                }
+                if (postResetTerminal
+                    || (!waitForTerminal && !string.Equals(postResetBaseline, initialBaseline, StringComparison.Ordinal)))
+                {
+                    return AnnotateWithBaseline(
+                        ApplyWarningDelta(GetStatus(taskId, page, pageSize, compact), taskId, sinceBaseline,
+                            warningCursorProvided, warningCursor), taskId);
+                }
+
+                int remainingMs = (int)Math.Max(1, Math.Min(250, (deadline - DateTime.UtcNow).TotalMilliseconds));
+                try { status.StateChangeSignal.Wait(remainingMs); }
+                catch (ObjectDisposedException) { break; }
+
+                string observedBaseline;
+                bool observedTerminal;
+                lock (status._lock)
+                {
+                    observedBaseline = status.ComputeBaseline();
+                    observedTerminal = IsTerminalStatus(status.Status);
+                }
+                bool changed = !string.Equals(observedBaseline, initialBaseline, StringComparison.Ordinal);
+                if (observedTerminal || (changed && !waitForTerminal))
+                {
+                    return AnnotateWithBaseline(
+                        ApplyWarningDelta(GetStatus(taskId, page, pageSize, compact), taskId, sinceBaseline,
+                            warningCursorProvided, warningCursor), taskId);
+                }
             }
 
-            // Wait. ManualResetEventSlim was reset by a previous waiter or never set;
-            // we reset BEFORE wait so an in-flight signal racing with us is honoured.
-            // (We re-check the baseline after wait so a spurious wake is harmless.)
-            try { status.StateChangeSignal.Reset(); } catch { }
-            // Re-check baseline AFTER reset: HandleLine might have signalled and we'd
-            // miss the edge otherwise.
-            string postResetBaseline;
-            lock (status._lock) { postResetBaseline = status.ComputeBaseline(); }
-            if (!string.Equals(postResetBaseline, currentBaseline, StringComparison.Ordinal)
-                || IsTerminalStatus(GetStatusValue(status)))
-            {
-                return AnnotateWithBaseline(GetStatus(taskId, page, pageSize, compact), taskId);
-            }
+            return AnnotateWithBaseline(
+                ApplyWarningDelta(GetStatus(taskId, page, pageSize, compact), taskId, sinceBaseline,
+                    warningCursorProvided, warningCursor), taskId);
+        }
 
+        private static int ParseWarningCursor(string since, out bool provided)
+        {
+            provided = false;
+            if (string.IsNullOrWhiteSpace(since)) return 0;
+            string value = since.Trim();
+            if (value.StartsWith("warnings:", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring("warnings:".Length);
+            else if (value.StartsWith("warningCursor=", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring("warningCursor=".Length);
+            if (int.TryParse(value, out int cursor) && cursor >= 0)
+            {
+                provided = true;
+                return cursor;
+            }
             try
             {
-                status.StateChangeSignal.Wait(TimeSpan.FromSeconds(waitSeconds));
+                if (JObject.Parse(since)["warningCursor"]?.ToObject<int?>() is int parsedCursor && parsedCursor >= 0)
+                {
+                    provided = true;
+                    return parsedCursor;
+                }
             }
-            catch (ObjectDisposedException)
-            {
-                // Task pruned during wait — fall through to GetStatus (will report not found).
-            }
+            catch { }
+            return 0;
+        }
 
-            return AnnotateWithBaseline(GetStatus(taskId, page, pageSize, compact), taskId);
+        private static string ApplyWarningDelta(
+            string statusJson,
+            string taskId,
+            string since,
+            bool cursorProvided,
+            int cursor)
+        {
+            if (string.IsNullOrWhiteSpace(statusJson) || string.IsNullOrWhiteSpace(taskId)) return statusJson;
+            if (!_tasks.TryGetValue(taskId, out var status)) return statusJson;
+            try
+            {
+                var payload = JObject.Parse(statusJson);
+                List<string> warnings;
+                int warningCount;
+                lock (status._lock)
+                {
+                    warnings = status.Warnings?.ToList() ?? new List<string>();
+                    warningCount = status.WarningCount;
+                }
+                int available = warnings.Count;
+                int start = cursorProvided ? Math.Min(Math.Max(cursor, 0), available) : 0;
+                var delta = new JArray(warnings.Skip(start).Cast<object>().ToArray());
+                payload["newWarnings"] = delta;
+                payload["warningCount"] = warningCount;
+                payload["warningTotal"] = warningCount;
+                var meta = payload["_meta"] as JObject ?? new JObject();
+                meta["warningCursor"] = available;
+                meta["warningCount"] = warningCount;
+                payload["warningCursor"] = available;
+                payload["_meta"] = meta;
+                // Status is always a delta surface. The complete (paginated) list is
+                // available from Result; repeating it on every status poll makes a
+                // long warning-producing build grow quadratically on the wire.
+                // Remove both serializer casings: BuildTaskStatus emits PascalCase
+                // `Warnings`, while the wire delta contract uses lowercase `warnings`.
+                payload["warnings"] = new JArray();
+                payload.Remove("Warnings");
+                payload.Remove("warningsAggregated");
+                return payload.ToString(Formatting.None);
+            }
+            catch { return statusJson; }
         }
 
         private static string GetStatusValue(BuildTaskStatus s)
@@ -2047,6 +2693,10 @@ namespace GxMcp.Worker.Services
                     var paginatedResult = BatchService.BuildResultPayload(status.Errors, page, pageSize);
                     jo["items"] = paginatedResult["items"];
                     jo["_meta"] = paginatedResult["_meta"];
+                    jo["operationId"] = status.TaskId;
+                    jo["queuePosition"] = status.QueuePosition.HasValue
+                        ? (JToken)status.QueuePosition.Value : JValue.CreateNull();
+                    jo["queuedMs"] = status.QueuedMs ?? 0L;
 
                     return jo.ToString(Formatting.None);
                 }
@@ -2070,11 +2720,41 @@ namespace GxMcp.Worker.Services
                            "Call lifecycle action=status without a target to list recent tasks."
                 });
 
+            // A queued request has no process yet. Remove it from the FIFO and
+            // terminalize its status before looking at Process, otherwise a queued
+            // cancel would be reported as "already finished".
+            if (TryCancelQueuedBuildAdmission(taskId))
+            {
+                return JsonConvert.SerializeObject(new
+                {
+                    status = "Cancelled",
+                    operationId = taskId,
+                    taskId = taskId,
+                    message = "Queued build request cancelled before execution."
+                });
+            }
+
             try
             {
                 Process p;
                 lock (status._lock)
                 {
+                    if (string.Equals(status.Status, "Queued", StringComparison.OrdinalIgnoreCase))
+                    {
+                        status.Status = "Cancelled";
+                        status.Phase = "Done";
+                        status.QueuePosition = null;
+                        status.EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                        try { status.StateChangeSignal.Set(); } catch { }
+                        return JsonConvert.SerializeObject(new
+                        {
+                            status = "Cancelled",
+                            operationId = taskId,
+                            taskId = taskId,
+                            message = "Queued build request cancelled before execution."
+                        });
+                    }
+
                     p = status.Process;
                     if (p == null || p.HasExited)
                         return JsonConvert.SerializeObject(new { status = status.Status, message = "Task already finished" });
@@ -2126,6 +2806,13 @@ namespace GxMcp.Worker.Services
             {
                 try
                 {
+                    if (string.Equals(status.Status, "Queued", StringComparison.OrdinalIgnoreCase)
+                        && TryCancelQueuedBuildAdmission(status.TaskId))
+                    {
+                        cancelled++;
+                        continue;
+                    }
+
                     Process p;
                     lock (status._lock)
                     {
@@ -3400,6 +4087,26 @@ namespace GxMcp.Worker.Services
         internal static bool RemoveBuildTaskForTest(string taskId) { return _tasks.TryRemove(taskId, out _); }
         internal static bool TryGetBuildTaskForTest(string taskId, out BuildTaskStatus status) { return _tasks.TryGetValue(taskId, out status); }
 
+        private void CompleteTrackedBuildAdmission(BuildTaskStatus status)
+        {
+            if (status == null || string.IsNullOrWhiteSpace(status.TaskId)) return;
+            BuildAdmissionEntry activeToComplete = null;
+            lock (_buildAdmissionLock)
+            {
+                foreach (var pair in _buildAdmissionQueues)
+                {
+                    var active = pair.Value.Active;
+                    if (active != null && string.Equals(active.TaskId, status.TaskId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        activeToComplete = active;
+                        break;
+                    }
+                }
+            }
+            if (activeToComplete != null)
+                CompleteBuildAdmission(activeToComplete);
+        }
+
         private void RunBuild(BuildTaskStatus status, string action, List<string> targets)
         {
             string tempFile = null;
@@ -3488,6 +4195,11 @@ namespace GxMcp.Worker.Services
                 status.Process = null;
                 // issue #42 — build no longer in flight; unblock the next build.
                 if (status?.TaskId != null) _inFlightBuilds.TryRemove(status.TaskId, out _);
+                // A legacy/direct build can be adopted as the active FIFO entry when a
+                // lifecycle request arrives while it is already running. Release the
+                // admission slot from the same terminal path as normal FIFO work; the
+                // wrapper's second release attempt is intentionally idempotent.
+                CompleteTrackedBuildAdmission(status);
                 // Don't leak the phase tag onto unrelated work on this thread.
                 Helpers.Logger.CurrentPhase = null;
             }

@@ -136,11 +136,24 @@ namespace GxMcp.Worker.Services
                 if (string.IsNullOrWhiteSpace(patternKey))
                     return McpResponse.Err(code: "MissingPatternKey", message: "Pattern key is required.", hint: "Pass pattern='WorkWithPlus' or a known GUID.", target: objectName);
 
+                // Recognize the embedded K2BTools designer before resolving a
+                // pattern key or touching the pattern engine. Applying a pattern
+                // here cannot create a PatternInstance, so return the same
+                // structured unsupported/recovery envelope used by guarded edits.
+                KBObject designerApplyCandidate = null;
+                try { designerApplyCandidate = ResolveObject(objectName); } catch { /* preserve normal apply diagnostics */ }
+                if (designerApplyCandidate != null
+                    && K2bWebPanelDesignerService.TryRead(designerApplyCandidate, out var k2bApplyDesigner))
+                {
+                    return K2bWebPanelDesignerService.BuildEditRejectionResponse(
+                        k2bApplyDesigner, designerApplyCandidate.Name, "PatternApply", "patternInstanceUnsupported");
+                }
+
                 if (!TryResolvePattern(patternKey, out PatternManifest pattern))
                     return PatternUnavailable(patternKey, "Unknown pattern key. Pass an installed pattern name (see availablePatterns), the alias 'WWP', or a pattern GUID.", Registry.Names());
                 Guid patternId = pattern.Id;
 
-                KBObject obj = ResolveObject(objectName);
+                KBObject obj = designerApplyCandidate ?? ResolveObject(objectName);
                 if (obj == null)
                 {
                     // Reuse existing not-found shape (best-effort: tests may inject a null _objectService)
@@ -204,11 +217,18 @@ namespace GxMcp.Worker.Services
                 if (string.IsNullOrWhiteSpace(objectName))
                     return McpResponse.Err(code: "MissingObjectName", message: "Object name is required.", hint: "Pass name=<KBObject name>.", target: objectName);
 
+                KBObject earlyReapplyDesigner = null;
+                try { earlyReapplyDesigner = ResolveObject(objectName); } catch { /* preserve normal reapply diagnostics */ }
+                if (earlyReapplyDesigner != null
+                    && K2bWebPanelDesignerService.TryRead(earlyReapplyDesigner, out var earlyK2bDesigner))
+                    return K2bWebPanelDesignerService.BuildEditRejectionResponse(
+                        earlyK2bDesigner, earlyReapplyDesigner.Name, "PatternReapply", "patternInstanceUnsupported");
+
                 PatternManifest requested = null;
                 if (!string.IsNullOrWhiteSpace(patternKey) && !TryResolvePattern(patternKey, out requested))
                     return PatternUnavailable(patternKey, "Unknown pattern key. Pass an installed pattern name (see availablePatterns), the alias 'WWP', or a pattern GUID.", Registry.Names());
 
-                KBObject obj = ResolveObject(objectName);
+                KBObject obj = earlyReapplyDesigner ?? ResolveObject(objectName);
                 if (obj == null)
                 {
                     if (_objectService != null)
@@ -656,6 +676,10 @@ namespace GxMcp.Worker.Services
 
         internal string ApplyPatternToObject(KBObject obj, Guid patternId, string patternKey, JObject settings, bool reapply, string objectNameForResponse = null, object knownInstance = null)
         {
+            if (obj != null && K2bWebPanelDesignerService.TryRead(obj, out var embeddedDesigner))
+                return K2bWebPanelDesignerService.BuildEditRejectionResponse(
+                    embeddedDesigner, obj.Name, reapply ? "PatternReapply" : "PatternApply", "patternInstanceUnsupported");
+
             // Route by pattern identity, not by the key spelling: every WorkWithPlus key
             // (name, alias, GUID) takes the WorkWithPlus route below.
             if (patternId != WorkWithPlusPatternId)
@@ -2678,6 +2702,19 @@ namespace GxMcp.Worker.Services
                         "pattern key is empty or null.",
                         "Pass pattern='WorkWithPlus' or a known GUID."));
                     return DiagnoseResponse(objectName, patternKey, findings);
+                }
+
+                // A K2BTools WebPanel Designer is an embedded designer object, not
+                // an SDK pattern instance. Resolve that fact before pattern-key
+                // lookup so `pattern: "K2BTools"` is diagnosed honestly instead
+                // of becoming Unknown pattern key / WWPInstanceNotFound.
+                KBObject designerCandidate = null;
+                try { designerCandidate = ResolveObject(objectName); } catch { /* preserve normal pattern diagnostics */ }
+                if (designerCandidate != null
+                    && K2bWebPanelDesignerService.TryRead(designerCandidate, out var k2bDesigner))
+                {
+                    return K2bWebPanelDesignerService.BuildPatternDiagnosis(
+                        objectName, patternKey, k2bDesigner, Registry.Names());
                 }
 
                 // ── 2. Pattern resolution ────────────────────────────────────────

@@ -80,6 +80,38 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void Applying_worker_state_mirrors_source_store_backfill_progress()
+        {
+            Program.ResetIndexStateMirrorForTest();
+            try
+            {
+                Assert.True(Program.ApplyIndexStateFromWorkerResult(new JObject
+                {
+                    ["indexStatus"] = "Ready",
+                    ["freshness"] = "current",
+                    ["totalObjects"] = 10,
+                    ["sourceStore"] = new JObject
+                    {
+                        ["storedObjects"] = 7,
+                        ["staleObjects"] = 2,
+                        ["totalObjects"] = 10,
+                        ["state"] = "running",
+                        ["etaMs"] = 1200
+                    }
+                }, "source-store-kb"));
+
+                var block = Program.BuildIndexBlockForTest("source-store-kb");
+                Assert.Equal(7, block["sourceStore"]?["storedObjects"]?.ToObject<int>());
+                Assert.Equal("running", block["sourceStore"]?["state"]?.ToString());
+                Assert.Equal(1200, block["sourceStore"]?["etaMs"]?.ToObject<int>());
+            }
+            finally
+            {
+                Program.ResetIndexStateMirrorForTest();
+            }
+        }
+
+        [Fact]
         public void Applying_worker_state_preserves_jsonnet_date_tokens()
         {
             Program.ResetIndexStateMirrorForTest();

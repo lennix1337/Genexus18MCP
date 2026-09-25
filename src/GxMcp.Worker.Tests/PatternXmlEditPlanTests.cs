@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Xml.Linq;
 using GxMcp.Worker.Helpers;
 using Xunit;
@@ -86,6 +87,82 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("Insert", (string)plan.Changes[0]["operation"]);
             Assert.Contains("webComponent", (string)plan.Changes[0]["path"]);
             Assert.Equal(requested, plan.Xml);
+        }
+
+        [Fact]
+        public void GridColumnReorderIsAllowedOnlyThroughTheGridAuthoringMode()
+        {
+            const string current = "<instance><grid name='Main' childrenOrderedList='A,B'><gridAttribute attribute='A'/><gridAttribute attribute='B'/></grid></instance>";
+            const string requested = "<instance><grid name='Main' childrenOrderedList='B,A'><gridAttribute attribute='B'/><gridAttribute attribute='A'/></grid></instance>";
+
+            Assert.NotNull(PatternXmlEditPlan.Create(current, requested).ErrorCode);
+            var plan = PatternXmlEditPlan.Create(current, requested, allowGridStructure: true);
+            Assert.Null(plan.ErrorCode);
+            Assert.Contains(plan.Changes, change => (string)change["operation"] == "GridOrder");
+        }
+
+        [Fact]
+        public void GridColumnReorderAllowsNonColumnChildrenAndPreservesTheirContent()
+        {
+            const string current =
+                "<instance><grid name='Main'>" +
+                "<gridAttribute attribute='1-First'/>" +
+                "<action name='Keep'/>" +
+                "<gridAttribute attribute='2-Second'/>" +
+                "<filter value='Keep'/>" +
+                "</grid></instance>";
+            const string requested =
+                "<instance><grid name='Main'>" +
+                "<gridAttribute attribute='2-Second'/>" +
+                "<gridAttribute attribute='1-First'/>" +
+                "<action name='Keep'/>" +
+                "<filter value='Keep'/>" +
+                "</grid></instance>";
+
+            var plan = PatternXmlEditPlan.Create(current, requested, allowGridStructure: true);
+            Assert.Null(plan.ErrorCode);
+            Assert.Equal(requested, plan.Xml);
+            Assert.Contains(plan.Changes, change => (string)change["operation"] == "GridOrder");
+
+            var altered = requested.Replace("value='Keep'", "value='Changed'");
+            var rejected = PatternXmlEditPlan.Create(current, altered, allowGridStructure: true);
+            Assert.NotNull(rejected.ErrorCode);
+            Assert.Empty(rejected.Changes);
+            var changedUnselectedColumn = requested.Replace(
+                "<gridAttribute attribute='1-First'/>",
+                "<gridAttribute attribute='1-First' description='Changed'/>");
+            Assert.NotNull(PatternXmlEditPlan.Create(
+                current, changedUnselectedColumn, allowGridStructure: true).ErrorCode);
+            Assert.NotNull(PatternXmlEditPlan.Create(current, requested).ErrorCode);
+
+            // Moving the first column to the same relative column position can
+            // still move it across an interleaved action child.
+            const string forwardCurrent =
+                "<instance><grid><gridAttribute attribute='1-First'/>" +
+                "<action name='Keep'/><gridAttribute attribute='2-Second'/></grid></instance>";
+            const string forwardRequested =
+                "<instance><grid><action name='Keep'/>" +
+                "<gridAttribute attribute='1-First'/><gridAttribute attribute='2-Second'/></grid></instance>";
+            var forward = PatternXmlEditPlan.Create(forwardCurrent, forwardRequested, allowGridStructure: true);
+            Assert.Null(forward.ErrorCode);
+            Assert.Contains(forward.Changes, change => (string)change["operation"] == "GridOrder");
+        }
+
+        [Fact]
+        public void GridVariableInsertionIsNarrowlyAllowedButArbitraryGridEditsRemainRejected()
+        {
+            const string current = "<instance><grid name='Main'><gridAttribute attribute='A'/></grid></instance>";
+            const string requested = "<instance><grid name='Main'><gridAttribute attribute='A'/><gridVariable name='V' variable='11111111-1111-1111-1111-111111111111-V' basicType='VarChar' basicCLength='10'/></grid></instance>";
+            var allowed = PatternXmlEditPlan.Create(current, requested, allowGridStructure: true);
+            Assert.Null(allowed.ErrorCode);
+            Assert.Contains(allowed.Changes, change => (string)change["operation"] == "Insert");
+
+            var rejected = PatternXmlEditPlan.Create(current, requested);
+            Assert.Equal("PatternStructureChangeUnsupported", rejected.ErrorCode);
+            Assert.Empty(rejected.Changes);
+
+            const string arbitrary = "<instance><grid name='Main'><gridAttribute attribute='A'/><footer name='Changed'/></grid></instance>";
+            Assert.NotNull(PatternXmlEditPlan.Create(current, arbitrary, allowGridStructure: true).ErrorCode);
         }
 
         [Fact]

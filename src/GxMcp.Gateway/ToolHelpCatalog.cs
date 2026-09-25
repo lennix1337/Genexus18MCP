@@ -52,12 +52,12 @@ namespace GxMcp.Gateway
                 "# genexus_lifecycle\n\n" +
                 "Build, validate, index, or poll the active Knowledge Base.\n\n" +
                 "## Actions\n" +
-                "- `build` — non-blocking when `estimated_seconds >= 20`; returns `{ operationId, job_id, status: 'running', pollTarget: 'op:<id>' }` and surfaces `_meta.background_jobs` on the next call. Pass `wait_until_done: true` to block until terminal (single turn instead of polling).\n" +
+                "- `build` — non-blocking when `estimated_seconds >= 20`; returns `{ operationId, job_id, status: 'running', pollTarget: 'op:<id>' }` and surfaces `_meta.background_jobs` on the next call. Pass `wait_until_done: true` to block until terminal (single turn instead of polling); the same terminal wait is available for `specify`, `validate-kb`, `reorg`, and forced `index`.\n" +
                 "- `build_all` — incremental Build All for the entire selected KB (`ForceRebuild=false`). It is global and rejects `target`; if the SDK reports a required reorganization it returns `status: 'ReorgRequired'` without applying the reorg.\n" +
                 "- `rebuild` — forced Rebuild All (`ForceRebuild=true`) and remains compatible with directed targets.\n" +
                 "- `validate` — inline validation/specifier check. Returns the result in the same call; it does not currently use the background-job path.\n" +
                 "- `index` — rebuilds the search index. Pass `force=true` to ignore the on-disk cache.\n" +
-                "- `status` — accepts either a `taskId` or `job_id` via `target`; pass `wait_seconds > 0` to long-poll up to 600s. A positive lifecycle status wait is not cut to the generic 50s no-progress cap; without `target`, `wait` blocks on the search index and `freshness` sets the target state: `freshness='current'` waits for a warm-start delta refresh to finish (a snapshot restored from the warm cache is `Ready` but `stale`, so a status-only wait returns immediately). The reply carries `waitSatisfied` so a timeout is distinguishable from success.\n" +
+                "- `status` — accepts a Gateway operation id (`op:<id>` or the bare id) and a legacy Worker `taskId`; pass `wait_seconds > 0` to long-poll up to 600s. Use `until=change|terminal` (`wait_until_done=true` implies `terminal`). Status warning output is cursor-based (`newWarnings` plus totals); use `action=result` for the full warning list. A positive lifecycle status wait is not cut to the generic 50s no-progress cap; without `target`, `wait` blocks on the search index and `freshness` sets the target state: `freshness='current'` waits for a warm-start delta refresh to finish (a snapshot restored from the warm cache is `Ready` but `stale`, so a status-only wait returns immediately). The reply carries `waitSatisfied` so a timeout is distinguishable from success.\n" +
                 "- `result` — fetch the completion payload of a finished operation.\n" +
                 "- `inspect` — read the redacted durable mutation journal for an operation key after a lost response; it never replays the write.\n" +
                 "- `reconcile` — close an unknown mutation fence only after an independent read and explicit `confirmed: true` verification; use a fresh key for any later write.\n" +
@@ -72,7 +72,7 @@ namespace GxMcp.Gateway
                 "1. **Check `effective_status`.** `SucceededWithGaps` means the build reported success but the evidence gate found no fresh generated `.cs` for one or more targets — the code you edited may NOT be regenerated. Treat it as a soft failure and investigate before moving on.\n" +
                 "2. **Read `generateEvidence`.** `{ ok, objectsChecked, objectsBuilt, filesWritten[], staleOrMissing[], referencedButNotBuilt[]? }`. `staleOrMissing` lists targets whose `.cs` is older than the build start (or absent). `referencedButNotBuilt` appears when `includeCallees: none` dropped objects your target calls — rebuild with `includeCallees: direct|transitive` to regenerate them.\n" +
                 "3. **Check `staleGenerated`.** Objects edited via the MCP this session that have not been successfully rebuilt since. Build them (or a full build) before you rely on the generated output.\n" +
-                "4. **A second build is refused with `status: BuildAlreadyRunning`** while one is in flight (builds serialize per worker). Poll `activeTaskId` or cancel it first; opt out with env `GXMCP_ALLOW_CONCURRENT_BUILDS=1`.\n" +
+                "4. **Build/specify requests use a per-Worker FIFO.** A second request returns `status: queued` with `queuePosition`, `queuedMs`, and an `operationId`; identical normalized requests coalesce to one operation. Poll the returned id, use `wait_until_done=true`, or cancel it. Set `GXMCP_ALLOW_CONCURRENT_BUILDS=1` only when concurrent SDK builds are explicitly safe.\n" +
                 "5. A build that stops making progress (phase/counts frozen) is force-failed after `GXMCP_BUILD_NOPROGRESS_SEC` (default 180s; 0 disables) instead of sitting `Running` for the full timeout.\n\n" +
                 "## Examples\n" +
                 "- `{ action: 'build', target: 'InvoiceProc' }`\n" +
@@ -183,12 +183,13 @@ namespace GxMcp.Gateway
                 "- `basedOn` — domain name for compatible typed variables (`Attribute:<name>` also binds an attribute)\n" +
                 "- `basedOnAttribute` — attribute name (or `Attribute:<name>`) binding the variable by native SDK identity, preserving picture/semantics (e.g. `9999999999` vs `ZZZZZZZZZ9`)\n" +
                 "- `typeName: 'Attribute:<name>'` — same attribute binding via the type slot; `variables[]` items accept `basedOn`/`basedOnAttribute` too\n" +
+                "- `dimensions: 1|2` plus `dimensionSizes: [size]` or `[rows, columns]` declares a fixed-size vector/matrix; the SDK persists the native ATT dimension properties. `collection=true` and dimensions are mutually exclusive.\n" +
                 "- `async: true` returns immediately with `operationId` / `job_id`; poll `genexus_lifecycle action=status|result target=op:<id>` for completion.\n\n" +
                 "## Notes\n" +
                 "- GAM / WWP+ framework-managed variables are protected and return a refusal instead of mutating them.\n" +
                 "- `modify` preserves the variable name and description while changing the type atomically.\n" +
                 "- `modify` refuses to silently drop an `Attribute:` binding (`AttributeBindingWouldBeLost`); pass `basedOnAttribute` to preserve or retarget it.\n" +
-                "- Untyped `add` inherits a same-named attribute *with its binding*; reads (`genexus_read part=Variables`, `genexus_inspect include=[\"variables\"]`) surface `basedOn`/`basedOnAttribute`.\n\n" +
+                "- Untyped `add` inherits a same-named attribute *with its binding*; reads (`genexus_read part=Variables`, `genexus_inspect include=[\"variables\"]`) surface `basedOn`/`basedOnAttribute` and `dimensions`/`dimensionSizes` for fixed-size arrays.\n\n" +
                 "## Examples\n" +
                 "- `{ action: 'add', name: 'InvoiceProc', varName: '&Total', typeName: 'Numeric(10.2)' }`\n" +
                 "- `{ action: 'modify', name: 'InvoiceProc', varName: '&State', newTypeName: 'Character(20)', async: true }`\n" +
@@ -369,7 +370,8 @@ namespace GxMcp.Gateway
                 "- `get_preview` — get visual representation or HTML mockup preview.\n" +
                 "- `scan_mutators` — inspect potential mutations and event-binding risks.\n" +
                 "- `add_printblock` / `rename_printblock` / `delete_printblock` — manage Procedure printblocks.\n" +
-                "- `design_system` — inspect applied design system tokens and styling.\n",
+                "- `add_report_control` / `move_report_control` / `remove_report_control` - typed report-band controls with geometry, relative placement, optimistic `baseVersion` (required, including dryRun), dry-run diff, independent reread and rollback. `get_tree` includes geometry, font metadata, and the authoritative `versionToken`.\n" +
+                "- `design_system` - inspect applied design system tokens and styling.\n",
 
             ["genexus_versioning"] =
                 "# genexus_versioning\n\n" +
@@ -562,11 +564,11 @@ namespace GxMcp.Gateway
                 "# genexus_edit_form\n\n" +
                 "Apply typed semantic edits to a WebForm control tree.\n\n" +
                 "## Actions\n" +
-                "- `add_textblock` and `add_button` — create controls with their captions and placement.\n" +
+                "- `add_textblock` and `add_button` — create controls with their captions and placement. On legacy `<BODY>` WebForms the writer emits sibling-compatible `CaptionExpression` tokens and normalizes `event`/`'Event'` quoting; pass an explicit `controlId` for stable re-reads.\n" +
                 "- `set_visibility` — change a control's visibility expression.\n" +
                 "- `remove_control` — remove a named control after checking references.\n" +
                 "- `wrap_in_fieldset` — wrap selected controls in a fieldset container.\n\n" +
-                "Every action mutates the layout. Prefer a read of the authoritative WebForm/PatternInstance first and verify the persisted tree after the write.\n",
+                "Every action mutates the layout. Prefer a read of the authoritative WebForm/PatternInstance first and verify the persisted tree after the write. Pass `baseVersion` and `rollbackOnFailure` for guarded persistence; a read-back mismatch is reported as persisted-but-unverified rather than silently restored. `dryRun` returns a bounded changed-fragment diff and the same descriptor transformation preview used by the real save.\n",
 
             ["genexus_module"] =
                 "# genexus_module\n\n" +
@@ -667,7 +669,9 @@ namespace GxMcp.Gateway
                 "- `add_user_action` — add a form-level UserAction directly under a named form container (usually `TableActions`). The event is derived deterministically as `Do<actionName>`; do not pass a Procedure.\n" +
                 "- `add_tab`, `move_tab`, and `remove_tab` — edit WebPanel tabs and typed nested controls.\n" +
                 "- `set_table_type` — change only an existing WWP table's native `type` (`Regular` or `Responsive`) by path, preserving child identity and metadata with reread/rollback guards.\n" +
-                "- `add_grid_attribute` — add one typed Attribute column without changing unrelated children.\n\n" +
+                "- `add_grid_attribute` — add one typed Attribute column without changing unrelated children; pass the PatternInstance `baseVersion` even for dryRun.\n" +
+                "- `move_grid_column` — move an existing attribute/variable column by verified identity, with optional `before`, position, caption and `baseVersion` (required even for dryRun).\n" +
+                "- `add_grid_variable` — add a presentation variable with a verified `variableReference` (`GUID-Name`), caption, Character/VarChar length and optional placement; unrelated bindings and metadata are preserved.\n\n" +
                 "- `replace_web_component_with_user_action` — use the U16 Patterns SDK to replace one existing form-level WebComponent with a UserAction DropDownComponent at an explicit path. The operation preserves the referenced Gxobject, snapshots the complete PatternInstance and parent projection, saves through the native element commands, re-reads, and rolls back on divergence.\n\n" +
                 "- `settings_templates` includes embedded Settings templates and separate WorkWithPlus for Web Template objects linked to Settings/Main. `guid` identifies Settings; `template=wwp:<guid>` selects a separate template. Use returned paths, offset/limit, and the same baseVersion on subsequent pages.\n" +
                 "- `settings_read` returns separate templates' stored XML attributes; offset=0, limit=0 also includes the exact XML. WWP default resolvers are not invoked. Embedded templates retain the SDK property projection.\n" +

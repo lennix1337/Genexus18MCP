@@ -29,7 +29,7 @@ if ($productionSource -notmatch [regex]::Escape("ResolutionPolicy = 'strict'")) 
 if ($productionSource -match 'DefaultKb\s*=|KBs\s*=') {
     throw 'The live config must not auto-open a second KB alias.'
 }
-foreach ($requiredText in @('GXMCP_LIVE_GATEWAY_EXE', 'GXMCP_LOG_DIR', 'GXMCP_LIVE_RPC_TIMEOUT_MS', 'GXMCP_LIVE_SUMMARY_PATH', 'live-summary.json', 'Show-LiveSummary', 'Assert-LiveGatewayMaster', '-filter $TestFilter', 'gxw32.exe', 'Legacy GXPublic live runs require -SkipBuild')) {
+foreach ($requiredText in @('GXMCP_LIVE_GATEWAY_EXE', 'GXMCP_LOG_DIR', 'GXMCP_LIVE_RPC_TIMEOUT_MS', 'GXMCP_LIVE_SUMMARY_PATH', 'live-summary.json', 'Show-LiveSummary', 'Assert-LiveGatewayMaster', '-filter $TestFilter', 'gxw32.exe', 'Legacy GXPublic live runs require -SkipBuild', 'live=$Status', "1 'failed'")) {
     if ($productionSource -notmatch [regex]::Escape($requiredText)) { throw "Live entrypoint lost required harness guard: $requiredText" }
 }
 $harnessSource = Get-Content (Join-Path $root 'src/GxMcp.Gateway.Tests/LiveGatewayHarness.cs') -Raw

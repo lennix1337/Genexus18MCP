@@ -678,13 +678,15 @@ namespace GxMcp.Worker.Tests
             Assert.Empty(dirty);
         }
 
-        // ── issue #42 (P3c): reject concurrent builds on the same KB ─────────
+        // ── lifecycle FIFO admission for concurrent build-class requests ────
 
         [Fact]
-        public void Build_ConcurrentBuildRunning_ReturnsBuildAlreadyRunning()
+        public void Build_ConcurrentBuildRunning_QueuesByDefault()
         {
-            // Seed a genuinely in-flight build (in _inFlightBuilds, as RunBuild does),
-            // then a second Build() on the same worker must refuse with BuildAlreadyRunning.
+            // Seed a genuinely in-flight build (in _inFlightBuilds, as RunBuild does).
+            // The public Worker entry point now joins the same FIFO used by the
+            // Gateway; callers that need the old fail-fast behavior must opt out
+            // explicitly with queueLifecycle:false.
             var (running, runningId) = SeedInFlightBuild("Build", "FirstProc");
             var prev = Environment.GetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS");
             Environment.SetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS", null);
@@ -693,8 +695,10 @@ namespace GxMcp.Worker.Tests
                 var svc = new BuildService();
                 string json = svc.Build("Build", "SecondProc", "none", 200, false);
                 var jo = JObject.Parse(json);
-                Assert.Equal("BuildAlreadyRunning", jo["status"]?.ToString());
-                Assert.Equal(runningId, jo["activeTaskId"]?.ToString());
+                Assert.Equal("Queued", jo["status"]?.ToString());
+                Assert.Equal(1, jo["queuePosition"]?.ToObject<int>());
+                Assert.False(string.IsNullOrWhiteSpace(jo["operationId"]?.ToString()));
+                Assert.NotEqual(runningId, jo["operationId"]?.ToString());
             }
             finally
             {
@@ -724,21 +728,11 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void Build_SecondCallImmediatelyAfterFirst_IsRejectedSynchronously()
+        public void Build_SecondCallImmediatelyAfterFirst_IsQueuedSynchronously()
         {
-            // issue #42 (P3c) TOCTOU: the in-flight registration must happen
-            // synchronously inside Build() (before Task.Run schedules RunBuild), so a
-            // second Build() call arriving in that window cannot slip through the
-            // "already running" guard. No delay between the two calls — that is the
-            // whole point of this test.
-            //
-            // GX_KB_PATH must be a real (if empty) directory: with it unset/empty,
-            // RunBuild's own early-return ("KB Path not found") completes and removes
-            // the in-flight entry in well under a millisecond on a warm thread pool,
-            // racing this test's second synchronous call. A real path routes RunBuild
-            // past that early return into the external MSBuild.exe spawn, which has
-            // enough real OS overhead to keep the first build's entry alive for the
-            // immediate second call — without needing a live GeneXus KB/SDK.
+            // The admission record is installed synchronously before Task.Run is
+            // scheduled, so a second call cannot slip through a TOCTOU window. The
+            // second call now receives a queue handle instead of BuildAlreadyRunning.
             var prevAllow = Environment.GetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS");
             var prevKb = Environment.GetEnvironmentVariable("GX_KB_PATH");
             string tempKb = Path.Combine(Path.GetTempPath(), "gxmcp-race-test-" + Guid.NewGuid().ToString("N"));
@@ -746,6 +740,7 @@ namespace GxMcp.Worker.Tests
             Environment.SetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS", null);
             Environment.SetEnvironmentVariable("GX_KB_PATH", tempKb);
             string firstTaskId = null;
+            string secondTaskId = null;
             try
             {
                 var svc = new BuildService();
@@ -758,9 +753,10 @@ namespace GxMcp.Worker.Tests
 
                 string secondJson = svc.Build("Build", "RaceSecondProc", "none", 200, false);
                 var secondJo = JObject.Parse(secondJson);
-                Assert.Equal("BuildAlreadyRunning", secondJo["status"]?.ToString());
-                Assert.Equal("BuildAlreadyRunning", secondJo["code"]?.ToString());
-                Assert.Equal(firstTaskId, secondJo["activeTaskId"]?.ToString());
+                secondTaskId = secondJo["taskId"]?.ToString();
+                Assert.Equal("Queued", secondJo["status"]?.ToString());
+                Assert.Equal(1, secondJo["queuePosition"]?.ToObject<int>());
+                Assert.NotEqual(firstTaskId, secondTaskId);
             }
             finally
             {
@@ -772,6 +768,111 @@ namespace GxMcp.Worker.Tests
                     InFlightRegistry().TryRemove(firstTaskId, out _);
                     TasksRegistry().TryRemove(firstTaskId, out _);
                 }
+                if (secondTaskId != null)
+                {
+                    InFlightRegistry().TryRemove(secondTaskId, out _);
+                    TasksRegistry().TryRemove(secondTaskId, out _);
+                }
+            }
+        }
+
+        [Fact]
+        public void Build_LifecycleAdmission_QueuesAndCoalesces()
+        {
+            var (running, runningId) = SeedInFlightBuild("Build", "FirstProc");
+            var prev = Environment.GetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS");
+            Environment.SetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS", null);
+            try
+            {
+                var svc = new BuildService();
+                var first = JObject.Parse(svc.Build(
+                    "Build", " Alpha, Beta ", "transitive", 200, false,
+                    notifyOnFailure: null, fastIncremental: false, specifyOnly: false,
+                    fullDeploy: false, compileCheck: false, compileCheckCallers: null,
+                    compileCheckTruncated: false, compileCheckGraphAvailable: true,
+                    queueLifecycle: true));
+                var duplicate = JObject.Parse(svc.Build(
+                    "Build", "beta;alpha", "transitive", 200, false,
+                    notifyOnFailure: null, fastIncremental: false, specifyOnly: false,
+                    fullDeploy: false, compileCheck: false, compileCheckCallers: null,
+                    compileCheckTruncated: false, compileCheckGraphAvailable: true,
+                    queueLifecycle: true));
+                var second = JObject.Parse(svc.Build(
+                    "Build", "Gamma", "transitive", 200, false,
+                    notifyOnFailure: null, fastIncremental: false, specifyOnly: false,
+                    fullDeploy: false, compileCheck: false, compileCheckCallers: null,
+                    compileCheckTruncated: false, compileCheckGraphAvailable: true,
+                    queueLifecycle: true));
+
+                Assert.Equal("Queued", first["status"]?.ToString());
+                Assert.Equal("Queued", second["status"]?.ToString());
+                Assert.Equal(1, first["queuePosition"]?.ToObject<int>());
+                Assert.Equal(2, second["queuePosition"]?.ToObject<int>());
+                Assert.Equal(first["operationId"]?.ToString(), duplicate["operationId"]?.ToString());
+                Assert.True(duplicate["coalesced"]?.ToObject<bool>());
+                Assert.NotEqual(runningId, first["operationId"]?.ToString());
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS", prev);
+                InFlightRegistry().TryRemove(runningId, out _);
+            }
+        }
+
+        [Fact]
+        public void Build_LifecycleQueuePreservesSpecifyMode()
+        {
+            var (_, runningId) = SeedInFlightBuild("Build", "ActiveObject");
+            var previous = Environment.GetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS");
+            Environment.SetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS", null);
+            try
+            {
+                var svc = new BuildService();
+                var response = JObject.Parse(svc.Specify("QueuedObject", queueLifecycle: true));
+                var taskId = response["operationId"]?.ToString();
+                Assert.Equal("Queued", response["status"]?.ToString());
+                Assert.False(string.IsNullOrWhiteSpace(taskId));
+
+                var status = GetTaskFromRegistry(taskId!);
+                Assert.NotNull(status);
+                Assert.True(status!.SpecifyOnly);
+                Assert.Equal("Queued", status.Status);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS", previous);
+                InFlightRegistry().TryRemove(runningId, out _);
+            }
+        }
+
+        [Fact]
+        public void Build_LifecycleQueue_CancelsPendingRequest()
+        {
+            var (_, runningId) = SeedInFlightBuild("Build", "ActiveObject");
+            var previous = Environment.GetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS");
+            Environment.SetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS", null);
+            try
+            {
+                var svc = new BuildService();
+                var queued = JObject.Parse(svc.Build(
+                    "Build", "QueuedObject", "transitive", 200, false,
+                    notifyOnFailure: null, fastIncremental: false, specifyOnly: false,
+                    fullDeploy: false, compileCheck: false, compileCheckCallers: null,
+                    compileCheckTruncated: false, compileCheckGraphAvailable: true,
+                    queueLifecycle: true));
+                string taskId = queued["operationId"]!.ToString();
+                var cancelled = JObject.Parse(svc.Cancel(taskId));
+                Assert.Equal("Cancelled", cancelled["status"]?.ToString());
+
+                var status = GetTaskFromRegistry(taskId);
+                Assert.NotNull(status);
+                Assert.Equal("Cancelled", status!.Status);
+                Assert.Null(status.QueuePosition);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("GXMCP_ALLOW_CONCURRENT_BUILDS", previous);
+                InFlightRegistry().TryRemove(runningId, out _);
             }
         }
 

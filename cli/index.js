@@ -455,6 +455,15 @@ async function launchGateway(passthroughArgs, options) {
         const { ensureStagedGateway } = require('./lib/runtime-stager');
         const staged = ensureStagedGateway();
         gatewayExePath = staged.gatewayExePath;
+        const cleanup = staged.cleanup;
+        if (cleanup && (cleanup.skipped?.length || cleanup.failed?.length || cleanup.processProbeAvailable === false)) {
+            const summary = [
+                cleanup.processProbeAvailable === false ? 'process probe unavailable' : null,
+                cleanup.skipped?.length ? `${cleanup.skipped.length} skipped` : null,
+                cleanup.failed?.length ? `${cleanup.failed.length} failed` : null
+            ].filter(Boolean).join(', ');
+            if (!options.quiet) launcherStderr.write(`[genexus-mcp] Runtime cleanup incomplete: ${summary}.\n`);
+        }
     } catch (stageErr) {
         if (!options.quiet) {
             launcherStderr.write(`[genexus-mcp] Warning: Runtime staging failed (${stageErr.message}), falling back to direct binary.\n`);

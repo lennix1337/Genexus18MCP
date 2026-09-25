@@ -5,6 +5,8 @@ using System.IO;
 using System.Threading;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
+using GxMcp.Worker.Models;
 using GxMcp.Worker.Services;
 using GxMcp.Worker.Helpers;
 using Newtonsoft.Json;
@@ -56,6 +58,16 @@ namespace GxMcp.Worker
         {
             var raw = Environment.GetEnvironmentVariable(variable);
             return int.TryParse(raw, out var value) && value > 0 && value <= 4096 ? value : fallback;
+        }
+
+        // jobs.json has its own gateway-scoped root; keep RuntimePaths.StateRoot
+        // available for the Worker's other state (preview/source-store files).
+        internal static string ResolveJobsFilePath()
+        {
+            string jobsRoot = Environment.GetEnvironmentVariable("GXMCP_JOBS_DIR");
+            if (string.IsNullOrWhiteSpace(jobsRoot))
+                jobsRoot = RuntimePaths.StateRoot;
+            return Path.Combine(jobsRoot, "jobs.json");
         }
 
         internal static bool EnqueueSdkAction(Action action) => SdkExecutor.TryEnqueue(action);
@@ -436,8 +448,7 @@ namespace GxMcp.Worker
                 // file lifecycle without touching the gateway.
                 try
                 {
-                    string stateDir = Path.Combine(Path.GetDirectoryName(workerExePath) ?? Path.GetTempPath(), "state");
-                    string jobsFile = Path.Combine(stateDir, "jobs.json");
+                    string jobsFile = ResolveJobsFilePath();
                     if (File.Exists(jobsFile))
                     {
                         Logger.Info("[SoftReload] found pending jobs snapshot at " + jobsFile + " (size=" + new FileInfo(jobsFile).Length + ")");
@@ -721,10 +732,18 @@ namespace GxMcp.Worker
                 finally { _sdkBusy = 0; _sdkBusyOp = null; _sdkBusyOperationId = null; }
             }
 
+            int sdkActionBurst = 0;
             while (SdkActionQueue.TryTake(out var job))
             {
                 try { job(); }
                 catch (Exception ex) { Logger.Error("SDK Action Error: " + ex.Message); }
+                sdkActionBurst++;
+                // Background slices must yield to both interactive and normal
+                // commands. A continuation can enqueue its next slice from inside
+                // this callback; returning after a bounded burst lets the STA
+                // message pump dispatch those commands before another slice runs.
+                var depths = GxMcp.Worker.Services.StaScheduler.Instance.GetQueueDepths();
+                if (depths.p0 > 0 || depths.p1 > 0 || sdkActionBurst >= 4) break;
             }
         }
 
@@ -745,7 +764,7 @@ namespace GxMcp.Worker
                 // Gateway writes its own scoped job snapshot; this path is diagnostic only.
                 try
                 {
-                    string jobsPath = Path.Combine(RuntimePaths.StateRoot, "jobs.json");
+                    string jobsPath = ResolveJobsFilePath();
                     SendNotification("notifications/worker/persist_jobs_request", new {
                         path = jobsPath,
                         reason = "soft_reload"
@@ -1090,9 +1109,12 @@ namespace GxMcp.Worker
             if (_sdkBusy != 1) return false;
             string busyOp = _sdkBusyOp;
             if (string.IsNullOrEmpty(busyOp)) return false;
-            bool isUnsliceableBuild = busyOp.IndexOf("build", StringComparison.OrdinalIgnoreCase) >= 0
-                                   || busyOp.IndexOf("specify", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (!isUnsliceableBuild) return false;
+            bool isLongSdkOperation = busyOp.IndexOf("build", StringComparison.OrdinalIgnoreCase) >= 0
+                                   || busyOp.IndexOf("specify", StringComparison.OrdinalIgnoreCase) >= 0
+                                   || busyOp.IndexOf("search", StringComparison.OrdinalIgnoreCase) >= 0
+                                   || busyOp.IndexOf("source", StringComparison.OrdinalIgnoreCase) >= 0
+                                   || busyOp.IndexOf("index", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!isLongSdkOperation) return false;
 
             if (obj == null && !string.IsNullOrEmpty(line))
             {
@@ -1111,21 +1133,73 @@ namespace GxMcp.Worker
 
             if (string.IsNullOrEmpty(target)) return false;
 
-            var entries = _dispatcher?.GetIndexCacheService()?.GetIndex()?.FindByName(target);
-            var entry = entries != null && entries.Count > 0 ? entries[0] : null;
-            if (entry != null && Guid.TryParse(entry.Guid, out var guid))
+            var indexCache = _dispatcher?.GetIndexCacheService();
+            var index = indexCache?.TryGetLoadedIndex();
+            if (index == null) return false;
+
+            string requestedType = obj["params"]?["type"]?.ToString();
+            string requestedGuid = obj["params"]?["guid"]?.ToString();
+            IEnumerable<SearchIndex.IndexEntry> candidates;
+            if (Guid.TryParse(target, out var targetGuid))
             {
-                string cacheKey = ObjectService.BuildReadCacheKey(guid, part, offset, limit, "mcp", false);
+                var byGuid = index.FindByGuid(targetGuid.ToString());
+                candidates = byGuid == null
+                    ? Enumerable.Empty<SearchIndex.IndexEntry>()
+                    : new[] { byGuid };
+            }
+            else if (!string.IsNullOrWhiteSpace(requestedGuid))
+            {
+                var byGuid = index.FindByGuid(requestedGuid);
+                candidates = byGuid == null
+                    ? Enumerable.Empty<SearchIndex.IndexEntry>()
+                    : new[] { byGuid };
+            }
+            else
+            {
+                candidates = index.FindByName(target);
+            }
+
+            var filteredCandidates = candidates
+                .Where(e => e != null
+                    && (string.IsNullOrWhiteSpace(requestedType)
+                        || string.Equals(e.Type, requestedType, StringComparison.OrdinalIgnoreCase))
+                    && (string.IsNullOrWhiteSpace(obj["params"]?["name"]?.ToString())
+                        || string.Equals(e.Name, obj["params"]?["name"]?.ToString(), StringComparison.OrdinalIgnoreCase))
+                    && (string.IsNullOrWhiteSpace(obj["params"]?["path"]?.ToString())
+                        || string.Equals((e.Path ?? string.Empty).Replace('\\', '/'),
+                            obj["params"]?["path"]?.ToString().Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                    && (string.IsNullOrWhiteSpace(obj["params"]?["entityKey"]?.ToString())
+                        || string.Equals(e.EntityKey, obj["params"]?["entityKey"]?.ToString(), StringComparison.OrdinalIgnoreCase)))
+                .Take(2)
+                .ToList();
+            var entry = filteredCandidates.FirstOrDefault();
+            // A homonymous read is not an exact cache hit. Let the normal resolver
+            // handle disambiguation rather than serving another object's source.
+            if (entry == null || filteredCandidates.Count != 1)
+                return false;
+
+            if (Guid.TryParse(entry.Guid, out var guid))
+            {
+                string resolvedPart = ObjectService.ResolveSearchPartName(entry.Type, part);
+                string cacheKey = ObjectService.BuildReadCacheKey(guid, resolvedPart, offset, limit, "mcp", false);
                 if (ObjectService.TryGetReadCache(cacheKey, out string payload))
                 {
                     try
                     {
                         var resObj = GxMcp.Common.JsonIngress.ParseObject(payload);
+                        if (resObj["error"] != null
+                            || string.Equals(resObj["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase)
+                            || resObj["source"] == null
+                            || resObj["source"].Type == JTokenType.Null)
+                            return false;
                         var meta = resObj["_meta"] as JObject ?? new JObject();
                         meta["servedFrom"] = "cache";
                         if (resObj["versionToken"] != null)
                             meta["cachedVersionToken"] = resObj["versionToken"].ToString();
                         meta["concurrentOperation"] = busyOp;
+                        resObj["servedFrom"] = "cache";
+                        if (resObj["versionToken"] != null)
+                            resObj["cachedVersionToken"] = resObj["versionToken"].ToString();
                         resObj["_meta"] = meta;
 
                         string idJson = obj["id"]?.ToString() ?? "null";

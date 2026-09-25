@@ -230,6 +230,33 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(metadata, parsedMetadata);
         }
 
+        [Fact]
+        public void BoundResumeCursor_RejectsDifferentQueryScopeIndexOrKb()
+        {
+            string cursor = SourceSearchService.BuildResumeCursor(
+                4, 2, metadata: false,
+                queryFingerprint: "query-a",
+                scopeFingerprint: "scope-a",
+                indexGeneration: "index-a",
+                kbIdentity: "kb-a");
+
+            Assert.True(SourceSearchService.TryParseResumeCursor(
+                cursor, "query-a", "scope-a", "index-a", "kb-a",
+                out int entry, out int skipped, out bool metadata));
+            Assert.Equal(4, entry);
+            Assert.Equal(2, skipped);
+            Assert.False(metadata);
+
+            Assert.False(SourceSearchService.TryParseResumeCursor(
+                cursor, "query-b", "scope-a", "index-a", "kb-a", out _, out _, out _));
+            Assert.False(SourceSearchService.TryParseResumeCursor(
+                cursor, "query-a", "scope-b", "index-a", "kb-a", out _, out _, out _));
+            Assert.False(SourceSearchService.TryParseResumeCursor(
+                cursor, "query-a", "scope-a", "index-b", "kb-a", out _, out _, out _));
+            Assert.False(SourceSearchService.TryParseResumeCursor(
+                cursor, "query-a", "scope-a", "index-a", "kb-b", out _, out _, out _));
+        }
+
         [Theory]
         [InlineData("")]
         [InlineData("not-a-cursor")]

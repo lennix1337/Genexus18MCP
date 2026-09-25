@@ -93,7 +93,7 @@ The table below is the machine-checkable action contract for every umbrella tool
 | `genexus_properties` | `get` | `set`, `move` |
 | `genexus_structure` | `get_visual`, `get_indexes`, `get_logic`, `check_subtypes` | `update_visual`, `create_index`, `drop_index`, `set_attribute`, `set_level`, `set_domain`, `update_group`, `move_attribute`, `remove_attribute` |
 | `genexus_authoring` | — | `add_external_method`, `add_external_property`, `add_menu_option`, `add_condition` |
-| `genexus_layout` | `get_tree`, `find_controls`, `inspect_surface`, `get_preview`, `scan_mutators`, `list_controls`, `design_system` | `set_property`, `set_properties`, `rename_printblock`, `add_printblock`, `delete_printblock` |
+| `genexus_layout` | `get_tree`, `find_controls`, `inspect_surface`, `get_preview`, `scan_mutators`, `list_controls`, `design_system` | `set_property`, `set_properties`, `rename_printblock`, `add_printblock`, `delete_printblock`, `add_report_control`, `move_report_control`, `remove_report_control` |
 | `genexus_doc` | `health` | `wiki`, `visualize` |
 | `genexus_kb` | `list`, `list_environments`, `get_environment`, `get_startup` | `open`, `close`, `select`, `set_session_default`, `set_default`, `set_persistent_default`, `set_startup`, `set_environment`, `create` |
 | `genexus_navigation` | — | `view` |
@@ -110,14 +110,14 @@ The table below is the machine-checkable action contract for every umbrella tool
 | `genexus_db` | `drift_check`, `drift_report`, `optimize_analyze`, `optimize_suggest`, `optimize_report`, `sql_ddl`, `sql_navigation`, `records_query`, `types_list`, `types_describe`, `types_validate`, `reorg_impact`, `reorg_preview` | `sample_data`, `records_insert`, `records_update`, `translations_import` |
 | `genexus_versioning` | `history_list`, `history_get`, `time_travel`, `blame`, `diff`, `diff_generated` | `history_save`, `history_restore`, `undo` |
 | `genexus_io` | `asset_find`, `asset_read`, `read_blob`, `ocr`, `validate_kb_text_files`, `validate_text_in_memory`, `list_text_files`, `text_mirror_status` | `asset_write`, `export_part`, `import_part`, `export_kb_to_text`, `import_text_to_kb`, `text_mirror_start`, `text_mirror_stop`, `text_mirror_catchup`, `text_mirror_set_references`, `delete_kb_objects`, `export_unified`, `screenshot_publish` |
-| `genexus_variable` | — | `add`, `delete`, `modify` |
+| `genexus_variable` | — | `add`, `delete`, `modify` (add/modify accept `dimensions=1|2` with positive `dimensionSizes`; reads expose the persisted fixed-size metadata) |
 | `genexus_telemetry` | `executions`, `watch_event`, `friction_tail`, `learning_report`, `logs`, `profile_analyze`, `profile_hotspots`, `profile_correlate` | `friction_append` |
 | `genexus_create` | `sd_panel_inspect` | `object`, `object_atomic`, `popup`, `sd_panel_create`, `sd_panel_edit`, `save_as`, `scaffold`, `translate`, `sample`, `template`, `curl_procedure` |
 | `genexus_memory` | `recall`, `list` | `save`, `forget`, `promote`, `consolidate` |
 | `genexus_transfer` | `inspect` | `export`, `import` |
 | `genexus_deploy` | `list_targets` | `deploy` |
 | `genexus_generator_reference` | `list`, `dry_run_add`, `dry_run_remove` | `add`, `remove` |
-| `genexus_wwp` | `list`, `settings_templates`, `settings_read` | `add_action`, `add_user_action`, `update_action`, `move_action`, `remove_action`, `add_tab`, `move_tab`, `remove_tab`, `set_table_type`, `add_grid_attribute`, `replace_web_component_with_user_action`, `settings_edit` |
+| `genexus_wwp` | `list`, `settings_templates`, `settings_read` | `add_action`, `add_user_action`, `update_action`, `move_action`, `remove_action`, `add_tab`, `move_tab`, `remove_tab`, `set_table_type`, `add_grid_attribute`, `move_grid_column`, `add_grid_variable`, `replace_web_component_with_user_action`, `settings_edit` |
 
 Real-KB validation gate: `genexus_structure action=get_visual` with a homonymous
 target must be exercised against a KB that contains the relevant Transaction/Table
@@ -154,10 +154,10 @@ semantics documented in #65, and the homonym-routing behavior tracked in #34.
 | `genexus_versioning` | active | Versioning umbrella: `History -> List | Get_Source | Save | Restore`, `Undo`, `TimeTravel`, `Blame`, `Diff` |
 | `genexus_io` | active | IO umbrella: `Asset -> Find | Read | Write`, Object Text batch `ExportKbToText | ImportTextToKb | ValidateKbTextFiles | ValidateTextInMemory | ListTextInMemory | DeleteKbObjects`, native SDK tree `src/`/`ref/` with incremental modes and sectioned `part=all`/`parts[]` documents, installed reference modules/packages routed to `ref/`, module metadata (`module.toml`) and optional official packages (`.opc`) and Transaction table projections (`#tables`), filesystem controls (`listOnly | skip | stopOnError | includeChildren | ignore | forceSave | rollbackOnFailure`), manifest/hash validation, watermark mirror (`Start | Stop | Status | Catchup | SetReferences`), `Object -> ExportText | ImportText` (`import_part` accepts `includePersistedText=true` for full response text), `Export -> Unified`, `ScreenshotPublish` |
 | `genexus_db` | active | Database umbrella: `DbDrift`, `DbOptimize`, `Analyze -> GetSQL / GetSqlForNavigation / GenerateSampleData`, typed Transaction records (`QueryRecords / InsertRecord / UpdateRecord`), `Types`, `ReorgImpact` |
-| `genexus_layout` | active | WebForm control tree, layout properties, printblock management |
+| `genexus_layout` | active | WebForm control tree, layout properties, printblock and report-control management |
 | `genexus_edit_form` | active | Semantic WebForm element manipulation |
 | `genexus_apply_pattern` | active | Pattern application for any installed pattern (registry discovered from `Packages\Patterns`), diagnose and reapply without a WorkWithPlus fallback, and WorkWithPlus action-group/form-action configuration |
-| `genexus_wwp` | active | Typed WorkWithPlus grid/form actions, tabs, nested controls, native table-type changes, grid attributes, and native WebComponent-to-DropDownComponent replacement with preview, concurrency checks, verification, and rollback; an existing object without a WorkWithPlus instance returns `WWPInstanceNotFound` with `detectedPatterns` |
+| `genexus_wwp` | active | Typed WorkWithPlus grid/form actions, tabs, nested controls, native table-type changes, grid attributes/variables, and native WebComponent-to-DropDownComponent replacement with preview, physical KB identity, parent/PatternInstance projection checks, concurrency checks, verification, and conditional rollback; an existing object without a WorkWithPlus instance returns `WWPInstanceNotFound` with `detectedPatterns` |
 | `genexus_security` | active | `Security -> audit_gam | scan_secrets | scan_native` (native SDK scanner) |
 | `genexus_kb` | active | Multi-KB pool management, startup object, and environment switching |
 | `genexus_kb_version` | active | SDK `KBVersionHelper` model version tree and branch management; `changed_objects` provides a read-only Design-vs-frozen NEW/CHANGED inventory or stable `ChangedObjectsNotSupported` when the SDK surface is unavailable |

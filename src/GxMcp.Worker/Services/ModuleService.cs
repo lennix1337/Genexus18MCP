@@ -1,8 +1,11 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
+using Module = Artech.Architecture.Common.Objects.Module;
 using System.Xml;
 using Artech.Architecture.Common.Objects;
 using Artech.Architecture.Common.Services;
@@ -627,14 +630,173 @@ namespace GxMcp.Worker.Services
 
             bool rebuild = args?["rebuild"]?.ToObject<bool?>() ?? false;
             string opcFile;
-            bool ok = svc.Package(module, new List<KBModel> { model }, rebuild, outputDirectory, out opcFile);
-            return OperationResult(ok ? "ModulePackaged" : "ModulePackageDeclined", ok, new JObject
+            bool packageOk;
+            bool packageSupported = TryInvokePackage(svc, module, model, rebuild, outputDirectory, out packageOk, out opcFile);
+            if (!packageSupported)
+                return McpResponse.Err(code: "ModulePackageUnsupported", message: "The installed GeneXus SDK does not expose a supported Module.Package signature.");
+            return OperationResult(packageOk ? "ModulePackaged" : "ModulePackageDeclined", packageOk, new JObject
             {
                 ["name"] = name,
                 ["outputDirectory"] = outputDirectory,
                 ["opcFile"] = opcFile,
                 ["rebuild"] = rebuild
             });
+        }
+
+        private static bool TryInvokePackage(
+            IModuleManagerService svc,
+            Module module,
+            KBModel model,
+            bool rebuild,
+            string outputDirectory,
+            out bool packageOk,
+            out string opcFile)
+        {
+            packageOk = false;
+            opcFile = null;
+            if (svc == null || module == null) return false;
+            var candidates = svc.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Where(m => string.Equals(m.Name, "Package", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(m => m.GetParameters().Length)
+                .ToList();
+            foreach (var method in candidates)
+            {
+                var parameters = method.GetParameters();
+                var values = new object[parameters.Length];
+                for (int i = 0; i < parameters.Length; i++)
+                {
+                    var p = parameters[i];
+                    if (p.ParameterType == typeof(Module) || p.ParameterType.IsInstanceOfType(module))
+                        values[i] = module;
+                    else if (p.ParameterType == typeof(bool))
+                        values[i] = rebuild;
+                    else if (p.ParameterType == typeof(string))
+                    {
+                        if (p.IsOut || p.ParameterType.IsByRef) values[i] = null;
+                        else if (p.Name.IndexOf("out", StringComparison.OrdinalIgnoreCase) >= 0
+                            || p.Name.IndexOf("file", StringComparison.OrdinalIgnoreCase) >= 0)
+                            values[i] = outputDirectory;
+                        else values[i] = outputDirectory;
+                    }
+                    else if (p.ParameterType.IsAssignableFrom(typeof(List<KBModel>)))
+                        values[i] = new List<KBModel> { model };
+                    else if (p.ParameterType.IsAssignableFrom(typeof(KBModel)))
+                        values[i] = model;
+                    else if (p.ParameterType.IsByRef) values[i] = null;
+                    else return false; // unsupported shape; try another overload
+                }
+                try
+                {
+                    object result = method.Invoke(svc, values);
+                    for (int i = 0; i < parameters.Length; i++)
+                    {
+                        if (parameters[i].ParameterType.IsByRef)
+                        {
+                            if (parameters[i].ParameterType.GetElementType() == typeof(string))
+                                opcFile = values[i] as string;
+                        }
+                    }
+                    packageOk = result is bool boolResult ? boolResult : true;
+                    return true;
+                }
+                catch (TargetInvocationException ex)
+                {
+                    GxMcp.Worker.Helpers.Logger.Warn("Module.Package invocation failed: " + (ex.InnerException ?? ex).Message);
+                    return true;
+                }
+                catch { /* try another SDK overload */ }
+            }
+            return false;
+        }
+
+        private static bool TryInvokeSdk(
+            object target,
+            string methodName,
+            object[] suppliedArguments,
+            out object result,
+            out Exception error)
+        {
+            result = null;
+            error = null;
+            if (target == null || string.IsNullOrWhiteSpace(methodName)) return false;
+            Exception lastError = null;
+            foreach (var method in target.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Where(candidate => string.Equals(candidate.Name, methodName, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!TryMapSdkArguments(method.GetParameters(), suppliedArguments, out object[] values)) continue;
+                try
+                {
+                    result = method.Invoke(target, values);
+                    error = null;
+                    return true;
+                }
+                catch (TargetInvocationException ex)
+                {
+                    lastError = ex.InnerException ?? ex;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                }
+            }
+            error = lastError;
+            return false;
+        }
+
+        private static bool TryMapSdkArguments(ParameterInfo[] parameters, object[] supplied, out object[] values)
+        {
+            values = new object[parameters?.Length ?? 0];
+            var assigned = new bool[values.Length];
+            supplied = supplied ?? Array.Empty<object>();
+            for (int argumentIndex = 0; argumentIndex < supplied.Length; argumentIndex++)
+            {
+                object argument = supplied[argumentIndex];
+                int best = -1;
+                for (int parameterIndex = 0; parameterIndex < parameters.Length; parameterIndex++)
+                {
+                    if (assigned[parameterIndex] || parameters[parameterIndex].ParameterType.IsByRef) continue;
+                    Type parameterType = parameters[parameterIndex].ParameterType;
+                    if (argument == null)
+                    {
+                        if (!parameterType.IsValueType || Nullable.GetUnderlyingType(parameterType) != null) { best = parameterIndex; break; }
+                        continue;
+                    }
+                    if (parameterType == argument.GetType() || parameterType.IsInstanceOfType(argument))
+                    {
+                        best = parameterIndex;
+                        break;
+                    }
+                    if (parameterType.IsAssignableFrom(argument.GetType()))
+                    {
+                        best = parameterIndex;
+                        break;
+                    }
+                }
+                if (best < 0) return false;
+                values[best] = argument;
+                assigned[best] = true;
+            }
+            for (int parameterIndex = 0; parameterIndex < parameters.Length; parameterIndex++)
+            {
+                if (assigned[parameterIndex]) continue;
+                ParameterInfo parameter = parameters[parameterIndex];
+                if (parameter.ParameterType.IsByRef || parameter.IsOptional)
+                    values[parameterIndex] = null;
+                else if (parameter.HasDefaultValue)
+                    values[parameterIndex] = parameter.DefaultValue;
+                else
+                    return false;
+            }
+            return true;
+        }
+
+        private static IEnumerable<object> EnumerateSdkObjects(object value)
+        {
+            if (!(value is IEnumerable enumerable)) yield break;
+            foreach (object item in enumerable)
+            {
+                if (item != null) yield return item;
+            }
         }
 
         private string Publish(IModuleManagerService svc, KBModel model, JObject args)
@@ -649,14 +811,22 @@ namespace GxMcp.Worker.Services
             if (!(args?["confirm"]?.ToObject<bool?>() ?? false))
                 return McpResponse.Err(code: "ConfirmRequired", message: "action=publish requires confirm=true.", hint: "Publishing uploads a module to an external server.");
 
-            bool ok;
-            if (!string.IsNullOrWhiteSpace(opcFile)) ok = svc.Publish(opcFile, serverId);
+            object publishResult;
+            Exception publishError;
+            bool invoked;
+            if (!string.IsNullOrWhiteSpace(opcFile))
+                invoked = TryInvokeSdk(svc, "Publish", new object[] { opcFile, serverId }, out publishResult, out publishError);
             else
             {
                 Module module = ResolveModule(name);
                 if (module == null) return McpResponse.Err(code: "ModuleNotFound", message: "Module '" + name + "' not found in this KB.");
-                ok = svc.Publish(module, serverId);
+                invoked = TryInvokeSdk(svc, "Publish", new object[] { module, serverId }, out publishResult, out publishError);
             }
+            if (!invoked && publishError != null)
+                return McpResponse.Err(code: "ModuleOperationFailed", message: "Module publish failed: " + RootExceptionLabel(publishError), hint: "Inspect the worker log for the SDK exception.");
+            if (!invoked)
+                return McpResponse.Err(code: "ModulePublishUnsupported", message: "The installed GeneXus SDK does not expose a supported Module Publish signature.");
+            bool ok = publishResult is bool publishBool ? publishBool : true;
             return OperationResult(ok ? "ModulePublished" : "ModulePublishDeclined", ok, new JObject
             {
                 ["name"] = name,
@@ -681,7 +851,17 @@ namespace GxMcp.Worker.Services
             IModuleManagerServer server = string.IsNullOrWhiteSpace(serverId) ? null : FindServer(svc, serverId);
             if (!string.IsNullOrWhiteSpace(serverId) && server == null)
                 return McpResponse.Err(code: "ModuleServerNotFound", message: "Module server '" + serverId + "' is not configured.");
-            bool ok = server == null ? svc.Restore(model, module) : svc.Restore(model, server, module);
+            object[] restoreArgs = server == null
+                ? new object[] { model, module }
+                : new object[] { model, server, module };
+            object restoreResult;
+            Exception restoreError;
+            bool restoreInvoked = TryInvokeSdk(svc, "Restore", restoreArgs, out restoreResult, out restoreError);
+            if (!restoreInvoked && restoreError != null)
+                return McpResponse.Err(code: "ModuleOperationFailed", message: "Module restore failed: " + RootExceptionLabel(restoreError), hint: "Inspect the worker log for the SDK exception.");
+            if (!restoreInvoked)
+                return McpResponse.Err(code: "ModuleRestoreUnsupported", message: "The installed GeneXus SDK does not expose a supported Module Restore signature.");
+            bool ok = restoreResult is bool restoreBool ? restoreBool : true;
             return OperationResult(ok ? "ModuleRestored" : "ModuleRestoreDeclined", ok, new JObject { ["name"] = name, ["server"] = serverId });
         }
 
@@ -698,7 +878,14 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Err(code: "BadArgs", message: "Unknown serverType '" + typeValue + "'.", hint: "Use Directory, Nexus, NexusNuGet or ModuleServer.");
 
             bool preserve = args?["preserveConfiguration"]?.ToObject<bool?>() ?? true;
-            IModuleManagerServer server = svc.AddServer(serverType, serverId, source, preserve);
+            object addResult;
+            Exception addError;
+            bool addInvoked = TryInvokeSdk(svc, "AddServer", new object[] { serverType, serverId, source, preserve }, out addResult, out addError);
+            if (!addInvoked && addError != null)
+                return McpResponse.Err(code: "ModuleOperationFailed", message: "Module server add failed: " + RootExceptionLabel(addError), hint: "Inspect the worker log for the SDK exception.");
+            if (!addInvoked)
+                return McpResponse.Err(code: "ModuleServerAddUnsupported", message: "The installed GeneXus SDK does not expose a supported AddServer signature.");
+            IModuleManagerServer server = addResult as IModuleManagerServer;
             if (server == null) return McpResponse.Err(code: "ModuleServerAddDeclined", message: "The SDK declined the module server.");
             return McpResponse.Ok(code: "ModuleServerAdded", result: ServerToJson(server));
         }
@@ -717,9 +904,21 @@ namespace GxMcp.Worker.Services
             foreach (IModuleManagerServer server in servers)
             {
                 if (server == null) continue;
-                IEnumerable<ModulePackage> packages = string.IsNullOrWhiteSpace(filter) ? server.List() : server.List(filter);
+                object listResult;
+                Exception listError;
+                object[] listArguments = string.IsNullOrWhiteSpace(filter)
+                    ? Array.Empty<object>()
+                    : new object[] { filter };
+                if (!TryInvokeSdk(server, "List", listArguments, out listResult, out listError))
+                    return McpResponse.Err(code: "ModuleServerListUnsupported", message: "The configured server does not expose a supported List signature.", target: server.Name);
+                if (listError != null)
+                    return McpResponse.Err(code: "ModuleServerListFailed", message: listError.Message, target: server.Name);
                 var modules = new JArray();
-                foreach (ModulePackage package in packages ?? Enumerable.Empty<ModulePackage>()) modules.Add(PackageToJson(package));
+                foreach (object packageObject in EnumerateSdkObjects(listResult))
+                {
+                    var package = packageObject as ModulePackage;
+                    if (package != null) modules.Add(PackageToJson(package));
+                }
                 results.Add(new JObject
                 {
                     ["server"] = server.Name,
@@ -852,22 +1051,42 @@ namespace GxMcp.Worker.Services
             return McpResponse.Ok(code: code, result: details);
         }
 
+        private static object ReadSdkProperty(object target, string propertyName)
+        {
+            if (target == null) return null;
+            try
+            {
+                return target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)
+                    ?.GetValue(target, null);
+            }
+            catch { return null; }
+        }
+
         private static JObject ServerToJson(IModuleManagerServer server)
         {
             var result = new JObject
             {
                 ["name"] = server?.Name,
                 ["canDelete"] = server?.CanDelete ?? false,
-                ["canUpdate"] = server?.CanUpdate ?? false,
+                ["canUpdate"] = ReadSdkProperty(server, "CanUpdate") is bool canUpdate && canUpdate,
                 ["needsProfile"] = server?.NeedsProfile ?? false
             };
             if (server is IModuleManagerConfigurableServer configurable)
             {
                 result["serverType"] = configurable.ServerType.ToString();
                 result["sourceConfigured"] = !string.IsNullOrWhiteSpace(configurable.Source);
-                result["preserveConfiguration"] = configurable.PreserveConfiguration;
+                result["preserveConfiguration"] = ReadSdkProperty(configurable, "PreserveConfiguration") is bool preserve
+                    ? (JToken)preserve
+                    : JValue.CreateNull();
             }
             return result;
+        }
+
+        private static JToken ToJToken(object value)
+        {
+            if (value == null) return JValue.CreateNull();
+            if (value is JToken token) return token;
+            return JToken.FromObject(value);
         }
 
         private static JObject PackageToJson(ModulePackage package)
@@ -881,8 +1100,8 @@ namespace GxMcp.Worker.Services
                 ["owner"] = package?.Owner,
                 ["author"] = package?.Author,
                 ["hasDatabase"] = package?.HasDatabase ?? false,
-                ["serverUrl"] = package?.ServerUrl,
-                ["tags"] = package?.Tags
+                ["serverUrl"] = ToJToken(ReadSdkProperty(package, "ServerUrl")),
+                ["tags"] = ToJToken(ReadSdkProperty(package, "Tags"))
             };
         }
 

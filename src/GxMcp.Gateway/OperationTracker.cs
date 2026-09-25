@@ -2,6 +2,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Gateway
@@ -81,6 +83,13 @@ namespace GxMcp.Gateway
             {
                 metric.RegisterTimeout();
             }
+        }
+
+        internal bool TryGetOperationIdForRequest(string requestId, out string operationId)
+        {
+            operationId = null;
+            return !string.IsNullOrWhiteSpace(requestId)
+                && _requestToOperation.TryGetValue(requestId, out operationId);
         }
 
         public void CompleteFromWorker(string requestId, JObject workerPayload)
@@ -290,6 +299,8 @@ namespace GxMcp.Gateway
                 {
                     ["status"] = record.Status,
                     ["operationId"] = record.OperationId,
+                    ["phase"] = record.Phase,
+                    ["progressMessage"] = record.LastProgressMessage,
                     ["toolName"] = record.ToolName,
                     ["correlationId"] = record.CorrelationId,
                     ["timedOut"] = record.TimedOut,
@@ -336,6 +347,8 @@ namespace GxMcp.Gateway
                 {
                     ["status"] = record.Status,
                     ["operationId"] = record.OperationId,
+                    ["phase"] = record.Phase,
+                    ["progressMessage"] = record.LastProgressMessage,
                     ["toolName"] = record.ToolName,
                     ["correlationId"] = record.CorrelationId,
                     ["timedOut"] = record.TimedOut,
@@ -364,6 +377,114 @@ namespace GxMcp.Gateway
                 AttachTimedOutHint(payload, record);
                 return payload;
             }
+        }
+
+        /// <summary>
+        /// Waits for a tracked Gateway operation to make observable progress or reach a
+        /// terminal state.  Lifecycle status used to return the initial Running record as
+        /// soon as it was found, even when <c>wait</c> was explicitly supplied.  Keep this
+        /// wait in the Gateway (rather than forwarding it to the Worker) because timed-out
+        /// edits and other non-Worker operations are represented only by this tracker.
+        /// </summary>
+        internal async Task<JObject> WaitForOperationAsync(
+            string operationId,
+            int waitSeconds,
+            string until = "change",
+            CancellationToken cancellationToken = default)
+        {
+            int boundedWait = Math.Min(Math.Max(waitSeconds, 0), 600);
+            bool waitForTerminal = string.Equals(until, "terminal", StringComparison.OrdinalIgnoreCase);
+            JObject current = BuildOperationStatus(operationId);
+            string baselineStatus = current["status"]?.ToString() ?? string.Empty;
+            string baselineUpdated = current["updatedAtUtc"]?.ToString(Newtonsoft.Json.Formatting.None) ?? string.Empty;
+
+            bool terminal = IsTerminalOperationStatus(baselineStatus);
+            if (boundedWait <= 0 || terminal || string.Equals(baselineStatus, "NotFound", StringComparison.OrdinalIgnoreCase))
+            {
+                AnnotateWaitResult(current, boundedWait, waitForTerminal, terminal,
+                    waited: false, timedOut: false, cancelled: false);
+                return current;
+            }
+
+            DateTime deadline = DateTime.UtcNow.AddSeconds(boundedWait);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    AnnotateWaitResult(current, boundedWait, waitForTerminal, terminal,
+                        waited: false, timedOut: false, cancelled: true);
+                    return current;
+                }
+
+                int remainingMs = (int)Math.Max(1, Math.Min(250, (deadline - DateTime.UtcNow).TotalMilliseconds));
+                try
+                {
+                    await Task.Delay(remainingMs, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    AnnotateWaitResult(current, boundedWait, waitForTerminal, terminal,
+                        waited: true, timedOut: false, cancelled: true);
+                    return current;
+                }
+
+                current = BuildOperationStatus(operationId);
+                string status = current["status"]?.ToString() ?? string.Empty;
+                string updated = current["updatedAtUtc"]?.ToString(Newtonsoft.Json.Formatting.None) ?? string.Empty;
+                bool nowTerminal = IsTerminalOperationStatus(status);
+                bool changed = !string.Equals(status, baselineStatus, StringComparison.Ordinal)
+                    || !string.Equals(updated, baselineUpdated, StringComparison.Ordinal);
+                bool satisfied = waitForTerminal
+                    ? nowTerminal
+                    : changed || nowTerminal;
+                if (satisfied || string.Equals(status, "NotFound", StringComparison.OrdinalIgnoreCase))
+                {
+                    AnnotateWaitResult(current, boundedWait, waitForTerminal, nowTerminal,
+                        waited: true, timedOut: false, cancelled: false);
+                    return current;
+                }
+            }
+
+            current = BuildOperationStatus(operationId);
+            string finalStatus = current["status"]?.ToString() ?? string.Empty;
+            bool finalTerminal = IsTerminalOperationStatus(finalStatus);
+            AnnotateWaitResult(current, boundedWait, waitForTerminal, finalTerminal,
+                waited: true, timedOut: !finalTerminal, cancelled: false);
+            return current;
+        }
+
+        private static bool IsTerminalOperationStatus(string status)
+        {
+            return string.Equals(status, "Completed", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(status, "Stalled", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(status, "NotFound", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void AnnotateWaitResult(
+            JObject payload,
+            int requestedSeconds,
+            bool untilTerminal,
+            bool terminal,
+            bool waited,
+            bool timedOut,
+            bool cancelled)
+        {
+            if (payload == null) return;
+            payload["waitSatisfied"] = !timedOut && !cancelled;
+            payload["waitRequestedSeconds"] = requestedSeconds;
+            payload["waitUntil"] = untilTerminal ? "terminal" : "change";
+            payload["waited"] = waited;
+            if (cancelled)
+                payload["cancelled"] = true;
+            if (timedOut)
+            {
+                payload["waitTimedOut"] = true;
+                payload["waitMessage"] = "The operation made no observable change before the requested wait expired.";
+            }
+            if (terminal)
+                payload["terminal"] = true;
         }
 
         public JObject BuildMetricsPayload()

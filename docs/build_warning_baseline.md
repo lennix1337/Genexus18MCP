@@ -13,16 +13,15 @@ $env:GX_PATH = 'C:\Program Files (x86)\GeneXus\GeneXus18'
 ```
 
 <!-- BEGIN GENERATED WARNING BASELINE -->
-Captured on 2026-09-23 from the machine-readable baseline.
+Captured on 2026-09-25 from the machine-readable baseline.
 
-The actionable baseline is **199** distinct (code, file, line) locations. Line-only moves remain visible and do not count as new diagnostics.
+The actionable baseline is **213** distinct (code, file, line) locations. Line-only moves remain visible and do not count as new diagnostics.
 
 | Project | CS8600 | CS8602 | CS8603 | CS8604 | CS8605 | CS8618 | CS8620 | CS8625 | Other | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| GxMcp.Gateway | 59 | 4 | 9 | 14 | 0 | 5 | 1 | 1 | 1 | 94 |
+| GxMcp.Gateway | 70 | 5 | 9 | 15 | 0 | 5 | 1 | 2 | 2 | 109 |
 | GxMcp.Gateway.Tests | 35 | 15 | 2 | 18 | 6 | 0 | 21 | 7 | 0 | 104 |
-| Global | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
-| **Total** | 94 | 19 | 11 | 32 | 6 | 5 | 22 | 8 | 2 | **199** |
+| **Total** | 105 | 20 | 11 | 33 | 6 | 5 | 22 | 9 | 2 | **213** |
 <!-- END GENERATED WARNING BASELINE -->
 
 ## Policy

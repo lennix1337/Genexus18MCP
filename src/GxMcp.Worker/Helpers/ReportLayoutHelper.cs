@@ -163,7 +163,11 @@ namespace GxMcp.Worker.Helpers
                             { "BorderColor", "BorderColor" },
                             { "Alignment", "Alignment" },
                             { "WordWrap", "WordWrap" },
-                            { "Visible", "Visible" }
+                            { "Visible", "Visible" },
+                            { "Font", "Font" },
+                            { "FontName", "FontName" },
+                            { "FontSize", "FontSize" },
+                            { "Picture", "Picture" }
                         };
 
                         // Type-specific report control properties (ReportLine, ReportRectangle,
@@ -199,7 +203,7 @@ namespace GxMcp.Worker.Helpers
             return root.ToString();
         }
 
-        public static bool WriteLayout(KBObjectPart part, string xml, string baselineXml = null)
+        public static bool WriteLayout(KBObjectPart part, string xml, string baselineXml = null, bool allowEnsureSaveFallback = true)
         {
             if (part == null || string.IsNullOrWhiteSpace(xml)) return false;
 
@@ -468,6 +472,61 @@ namespace GxMcp.Worker.Helpers
                     }
                 }
 
+                // Explicit control removal: a typed remove_report_control request supplies
+                // the complete projected XML, so controls present in the baseline but absent
+                // from the requested block are intentional deletions.  Without this pass a
+                // remove request would update the XML projection and then silently leave the
+                // SDK control in place.  The baseline guard keeps partial legacy writes from
+                // accidentally treating omitted controls as deletions.
+                if (baselineDoc != null)
+                {
+                    foreach (var baselineBlock in baselineDoc.Descendants("PrintBlock"))
+                    {
+                        string baselineBlockName = GetXmlIdentity(baselineBlock, "ControlName", "Name");
+                        var requestedBlock = visualDoc.Descendants("PrintBlock")
+                            .FirstOrDefault(b => string.Equals(GetXmlIdentity(b, "ControlName", "Name"), baselineBlockName, StringComparison.OrdinalIgnoreCase));
+                        if (requestedBlock == null) continue;
+
+                        var requestedNames = new HashSet<string>(
+                            requestedBlock.Elements("Control")
+                                .Select(c => GetXmlIdentity(c, "ControlName", "Name"))
+                                .Where(n => !string.IsNullOrWhiteSpace(n)),
+                            StringComparer.OrdinalIgnoreCase);
+                        var bandObj = bandsList.FirstOrDefault(b => IsMatchingReportBand(b, baselineBlockName));
+                        if (bandObj == null) continue;
+                        var items = GetCollection(bandObj, "Items", "Elements", "Controls", "Components");
+                        if (items == null) continue;
+                        foreach (var item in items.Cast<object>().ToList())
+                        {
+                            string itemName = GetObjectIdentity(item);
+                            if (string.IsNullOrWhiteSpace(itemName) || requestedNames.Contains(itemName)) continue;
+                            if (TryRemoveBandControl(bandObj, items, item))
+                            {
+                                anyChange = true;
+                                appliedAssignments++;
+                                Logger.Info("ReportLayoutHelper.WriteLayout: removed control '" + itemName + "' from print block '" + baselineBlockName + "'.");
+                            }
+                        }
+                    }
+                }
+
+                foreach (var bandObj in bandsList)
+                {
+                    string blockName = GetBandName(bandObj) ?? GetBandControlName(bandObj);
+                    var requestedBlock = visualDoc.Descendants("PrintBlock")
+                        .FirstOrDefault(b => string.Equals(
+                            b.Attribute("ControlName")?.Value ?? b.Attribute("Name")?.Value,
+                            blockName, StringComparison.OrdinalIgnoreCase));
+                    if (requestedBlock == null) continue;
+                    var items = GetCollection(bandObj, "Items", "Elements", "Controls", "Components");
+                    if (items == null) continue;
+                    if (ApplyRequestedControlOrder(items, requestedBlock))
+                    {
+                        anyChange = true;
+                        appliedAssignments++;
+                    }
+                }
+
                 if (anyChange)
                 {
                     try
@@ -488,19 +547,26 @@ namespace GxMcp.Worker.Helpers
                     }
                     catch (Exception ex)
                     {
-                        Logger.Warn("ReportLayoutHelper.WriteLayout Save failed. Trying fallback without validation barriers: " + ex.Message);
-                        try
+                        if (allowEnsureSaveFallback)
                         {
-                            if (part.KBObject != null)
+                            Logger.Warn("ReportLayoutHelper.WriteLayout Save failed. Trying fallback without validation barriers: " + ex.Message);
+                            try
                             {
-                                part.KBObject.EnsureSave(false);
-                                Logger.Info("ReportLayoutHelper.WriteLayout fallback EnsureSave(false) succeeded.");
-                                return true;
+                                if (part.KBObject != null)
+                                {
+                                    part.KBObject.EnsureSave(false);
+                                    Logger.Info("ReportLayoutHelper.WriteLayout fallback EnsureSave(false) succeeded.");
+                                    return true;
+                                }
+                            }
+                            catch (Exception fallbackEx)
+                            {
+                                Logger.Error("ReportLayoutHelper.WriteLayout fallback failed: " + fallbackEx.Message);
                             }
                         }
-                        catch (Exception fallbackEx)
+                        else
                         {
-                            Logger.Error("ReportLayoutHelper.WriteLayout fallback failed: " + fallbackEx.Message);
+                            Logger.Warn("ReportLayoutHelper.WriteLayout strict report save failed: " + ex.Message);
                         }
 
                         Logger.Error("ReportLayoutHelper.WriteLayout Save failed: " + ex.Message);
@@ -747,9 +813,66 @@ namespace GxMcp.Worker.Helpers
             }
         }
 
+        private static bool ApplyRequestedControlOrder(object items, XElement requestedBlock)
+        {
+            if (items == null || requestedBlock == null) return false;
+            var current = (items as System.Collections.IEnumerable)?.Cast<object>().ToList();
+            if (current == null || current.Count == 0) return false;
+            var desiredNames = requestedBlock.Elements("Control")
+                .Select(el => el.Attribute("ControlName")?.Value ?? el.Attribute("Name")?.Value)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToList();
+            if (desiredNames.Count != current.Count) return false;
+            var byName = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            foreach (object item in current)
+            {
+                string name = GetObjectIdentity(item);
+                if (string.IsNullOrWhiteSpace(name) || byName.ContainsKey(name)) return false;
+                byName[name] = item;
+            }
+            var desired = new List<object>();
+            foreach (string name in desiredNames)
+            {
+                if (!byName.TryGetValue(name, out object item)) return false;
+                desired.Add(item);
+            }
+            if (desired.Select(GetObjectIdentity)
+                .SequenceEqual(current.Select(GetObjectIdentity), StringComparer.OrdinalIgnoreCase)) return false;
+
+            var collectionType = items.GetType();
+            var countProperty = collectionType.GetProperty("Count", BindingFlags.Public | BindingFlags.Instance);
+            var itemMethod = collectionType.GetMethod("get_Item", BindingFlags.Public | BindingFlags.Instance)
+                ?? collectionType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .FirstOrDefault(method => string.Equals(method.Name, "Item", StringComparison.OrdinalIgnoreCase)
+                        && method.GetParameters().Length == 1);
+            var removeAt = collectionType.GetMethod("RemoveAt", BindingFlags.Public | BindingFlags.Instance);
+            var insert = collectionType.GetMethod("Insert", BindingFlags.Public | BindingFlags.Instance);
+            if (countProperty == null || itemMethod == null || removeAt == null || insert == null
+                || itemMethod.GetParameters().Length != 1 || removeAt.GetParameters().Length != 1
+                || insert.GetParameters().Length != 2) return false;
+            int count = Convert.ToInt32(countProperty.GetValue(items, null));
+            try
+            {
+                for (int i = count - 1; i >= 0; i--) removeAt.Invoke(items, new object[] { i });
+                for (int i = 0; i < desired.Count; i++) insert.Invoke(items, new object[] { i, desired[i] });
+                return true;
+            }
+            catch
+            {
+                try
+                {
+                    int remaining = Convert.ToInt32(countProperty.GetValue(items, null));
+                    for (int i = remaining - 1; i >= 0; i--) removeAt.Invoke(items, new object[] { i });
+                    for (int i = 0; i < current.Count; i++) insert.Invoke(items, new object[] { i, current[i] });
+                }
+                catch { }
+                return false;
+            }
+        }
+
         private static bool IsExcludedAttribute(string name)
         {
-            string[] excluded = { "ControlName", "Name", "TypeName", "ControlSource" };
+            string[] excluded = { "ControlName", "Name", "TypeName" };
             return excluded.Contains(name, StringComparer.OrdinalIgnoreCase);
         }
 
@@ -947,6 +1070,19 @@ namespace GxMcp.Worker.Helpers
             {
                 yield return "Y";
                 yield return "Top";
+                yield break;
+            }
+
+            if (string.Equals(visualAttributeName, "ControlSource", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return "ControlSource";
+                yield return "AttributeReference";
+                yield break;
+            }
+            if (string.Equals(visualAttributeName, "Picture", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return "Picture";
+                yield return "ImageReference";
                 yield break;
             }
 
@@ -1616,6 +1752,71 @@ namespace GxMcp.Worker.Helpers
                 }
             }
 
+            return false;
+        }
+
+        private static string GetXmlIdentity(XElement element, params string[] names)
+        {
+            if (element == null) return null;
+            foreach (string name in names)
+            {
+                var value = element.Attributes().FirstOrDefault(a => string.Equals(a.Name.LocalName, name, StringComparison.OrdinalIgnoreCase))?.Value;
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            }
+            return null;
+        }
+
+        private static string GetObjectIdentity(object item)
+        {
+            if (item == null) return null;
+            var type = item.GetType();
+            string name = type.GetProperty("Name", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(item, null)?.ToString();
+            string controlName = type.GetProperty("ControlName", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(item, null)?.ToString();
+            return !string.IsNullOrWhiteSpace(controlName) ? controlName : name;
+        }
+
+        private static bool TryRemoveBandControl(object band, System.Collections.IEnumerable items, object item)
+        {
+            if (band == null || items == null || item == null) return false;
+            var collectionType = items.GetType();
+            var remove = collectionType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(m => string.Equals(m.Name, "Remove", StringComparison.OrdinalIgnoreCase)
+                    && m.GetParameters().Length == 1
+                    && m.GetParameters()[0].ParameterType.IsAssignableFrom(item.GetType()));
+            if (remove != null)
+            {
+                try
+                {
+                    object result = remove.Invoke(items, new[] { item });
+                    return !(result is bool removed) || removed;
+                }
+                catch { }
+            }
+
+            if (items is System.Collections.IList list)
+            {
+                int index = list.IndexOf(item);
+                if (index >= 0)
+                {
+                    list.RemoveAt(index);
+                    return true;
+                }
+            }
+
+            var removeChild = band.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(m => (string.Equals(m.Name, "RemoveChild", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(m.Name, "RemoveControl", StringComparison.OrdinalIgnoreCase))
+                    && m.GetParameters().Length == 1
+                    && m.GetParameters()[0].ParameterType.IsAssignableFrom(item.GetType()));
+            if (removeChild != null)
+            {
+                try
+                {
+                    object result = removeChild.Invoke(band, new[] { item });
+                    return !(result is bool removed) || removed;
+                }
+                catch { }
+            }
             return false;
         }
 

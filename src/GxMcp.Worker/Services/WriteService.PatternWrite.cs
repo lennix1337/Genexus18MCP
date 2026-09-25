@@ -11,7 +11,7 @@ namespace GxMcp.Worker.Services
     // — see plans/007-decompose-writeservice.md.
     public partial class WriteService
     {
-        private string WritePatternPart(global::Artech.Architecture.Common.Objects.KBObject obj, string target, string partName, string xml, bool dryRun = false, bool strictVerify = true)
+        private string WritePatternPart(global::Artech.Architecture.Common.Objects.KBObject obj, string target, string partName, string xml, bool dryRun = false, bool strictVerify = true, bool allowGridStructure = false)
         {
             string currentXml;
             global::Artech.Architecture.Common.Objects.KBObject currentInstance;
@@ -38,7 +38,7 @@ namespace GxMcp.Worker.Services
             string normalizedInput;
             if (string.Equals(partName, "PatternInstance", StringComparison.OrdinalIgnoreCase))
             {
-                var plan = PatternXmlEditPlan.Create(currentXml, xml);
+                var plan = PatternXmlEditPlan.Create(currentXml, xml, allowGridStructure);
                 if (plan.ErrorCode != null)
                     return CreateWriteError("Pattern edit rejected", target, partName,
                         plan.Error + " Use the appropriate SDK pattern authoring action for structural edits; this does not certify save isolation.",
@@ -279,8 +279,8 @@ namespace GxMcp.Worker.Services
                                 var nsArr = verifyJobj["nextSteps"] as JArray ?? new JArray();
                                 nsArr.Add(new JObject
                                 {
-                                    ["tool"] = "genexus_history",
-                                    ["args"] = new JObject { ["action"] = "restore", ["discard"] = true, ["target"] = target },
+                                    ["tool"] = "genexus_versioning",
+                                    ["args"] = new JObject { ["action"] = "history_restore", ["discard"] = true, ["name"] = target, ["part"] = partName },
                                     ["why"] = "Restore to the pre-write snapshot to undo the failed pattern write."
                                 });
                                 verifyJobj["nextSteps"] = nsArr;
@@ -312,8 +312,8 @@ namespace GxMcp.Worker.Services
                             var nsArr = sdkErrJobj["nextSteps"] as JArray ?? new JArray();
                             nsArr.Add(new JObject
                             {
-                                ["tool"] = "genexus_history",
-                                ["args"] = new JObject { ["action"] = "restore", ["discard"] = true, ["target"] = target },
+                                ["tool"] = "genexus_versioning",
+                                ["args"] = new JObject { ["action"] = "history_restore", ["discard"] = true, ["name"] = target, ["part"] = partName },
                                 ["why"] = "Restore to the pre-write snapshot to undo the failed pattern write."
                             });
                             sdkErrJobj["nextSteps"] = nsArr;

@@ -20,7 +20,7 @@ namespace GxMcp.Worker.Tests
             string writeSrc = System.IO.File.ReadAllText(System.IO.Path.Combine(servicesDir, "WriteService.VisualWrite.cs"))
                 + System.IO.File.ReadAllText(System.IO.Path.Combine(servicesDir, "WriteService.PatternWrite.cs"));
 
-            Assert.Contains("PatternXmlEditPlan.Create(currentXml, xml)", writeSrc);
+            Assert.Contains("PatternXmlEditPlan.Create(currentXml, xml, allowGridStructure)", writeSrc);
             Assert.Contains("normalizedInput = plan.Xml;", writeSrc);
             Assert.DoesNotContain("PatternChildOrderReconciler.Reconcile", writeSrc);
             Assert.DoesNotContain("AttachReconcileReport", writeSrc);

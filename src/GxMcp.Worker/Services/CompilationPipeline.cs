@@ -147,13 +147,19 @@ namespace GxMcp.Worker.Services
             {
                 int wait = args["wait"]?.ToObject<int?>() ?? 0;
                 string since = args["since"]?.ToString();
+                string until = args["until"]?.ToString();
+                if (string.IsNullOrWhiteSpace(until)
+                    && (args["wait_until_done"]?.ToObject<bool?>() == true
+                        || request["wait_until_done"]?.ToObject<bool?>() == true))
+                    until = "terminal";
                 return _buildService.GetStatusWait(
                     target,
                     wait,
                     since,
                     args["page"]?.ToObject<int?>() ?? 1,
                     args["pageSize"]?.ToObject<int?>() ?? 50,
-                    args["compact"]?.ToObject<bool?>() ?? false);
+                    args["compact"]?.ToObject<bool?>() ?? false,
+                    until ?? "change");
             }
             if (action == "Result") return _buildService.GetResult(
                 target,
@@ -180,13 +186,18 @@ namespace GxMcp.Worker.Services
                         callerCap: args["callerCap"]?.ToObject<int?>() ?? 0);
                 }
 
-                if (action == "Specify") return _buildService.Specify(target);
+                bool? requestedQueueLifecycle = args["queueLifecycle"]?.ToObject<bool?>()
+                    ?? request["queueLifecycle"]?.ToObject<bool?>();
+                bool queueLifecycle = requestedQueueLifecycle ?? true;
+
+                if (action == "Specify") return _buildService.Specify(target, queueLifecycle);
 
                 if (action == "CompileCheck") return _buildService.CompileCheck(
                     target,
                     args["buildPlanCap"]?.ToObject<int?>() ?? 200,
                     includeCallers: args["callers"]?.ToObject<bool?>() ?? true,
-                    callerCap: args["callerCap"]?.ToObject<int?>() ?? 0);
+                    callerCap: args["callerCap"]?.ToObject<int?>() ?? 0,
+                    queueLifecycle: queueLifecycle);
 
                 if (action == "ReorgPreview") return _buildService.ReorgPreview(target);
 
@@ -198,7 +209,12 @@ namespace GxMcp.Worker.Services
                 bool fastIncremental = args["fastIncremental"]?.ToObject<bool?>() ?? false;
                 bool fullDeploy = (args["deploy"]?.ToObject<bool?>() ?? false) || (request["deploy"]?.ToObject<bool?>() ?? false);
 
-                string resultJson = _buildService.Build(action, target, incCallees, buildCap, skipFullDeploy, notifyOnFailure, fastIncremental, fullDeploy);
+                string resultJson = _buildService.Build(
+                    action, target, incCallees, buildCap, skipFullDeploy, notifyOnFailure,
+                    fastIncremental, specifyOnly: false, compileCheck: false,
+                    compileCheckCallers: null, compileCheckTruncated: false,
+                    compileCheckGraphAvailable: true, fullDeploy: fullDeploy,
+                    queueLifecycle: queueLifecycle);
 
                 // Enrich with harvested diagnostics if build failed and log is present
                 return EnrichWithDiagnostics(resultJson);

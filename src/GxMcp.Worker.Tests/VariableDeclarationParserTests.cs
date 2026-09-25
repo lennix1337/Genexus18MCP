@@ -17,6 +17,40 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void TryParse_PreservesVectorAndMatrixDimensions()
+        {
+            Assert.True(VariableDeclarationParser.TryParse(
+                "&Vector(999) : Attribute:SomeKey",
+                out var vector));
+            Assert.Equal("Vector", vector.Name);
+            Assert.Equal(1, vector.Dimensions);
+            Assert.Equal(new[] { 999 }, vector.DimensionSizes);
+
+            Assert.True(VariableDeclarationParser.TryParse(
+                "&Matrix(10,20) : Numeric(8.2)",
+                out var matrix));
+            Assert.Equal("Matrix", matrix.Name);
+            Assert.Equal("Numeric", matrix.TypeName);
+            Assert.Equal(8, matrix.Length);
+            Assert.Equal(2, matrix.Decimals);
+            Assert.Equal(2, matrix.Dimensions);
+            Assert.Equal(new[] { 10, 20 }, matrix.DimensionSizes);
+        }
+
+        [Fact]
+        public void TryParse_DoesNotConfuseTypeLengthWithArraySize()
+        {
+            Assert.True(VariableDeclarationParser.TryParse(
+                "&Plain : Character(40)",
+                out var declaration));
+
+            Assert.Equal("Plain", declaration.Name);
+            Assert.Equal(0, declaration.Dimensions);
+            Assert.Empty(declaration.DimensionSizes);
+            Assert.Equal(40, declaration.Length);
+        }
+
+        [Fact]
         public void TrySplitModuleQualifiedTypeName_ReturnsObjectAndModule()
         {
             Assert.True(VariableDeclarationParser.TrySplitModuleQualifiedTypeName(
