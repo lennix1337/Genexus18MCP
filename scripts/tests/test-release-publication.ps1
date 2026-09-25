@@ -51,7 +51,13 @@ foreach ($marker in @('ExpectedCommit', 'refs/tags/$Tag^{}', 'npm view "genexus-
 $fakeBin = Join-Path $env:TEMP ('gxmcp-publication-bin-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
 try {
-    $expectedCommit = (git rev-list -n 1 $tag).Trim()
+    # The publication verification below is hermetic: git, gh and npm are all
+    # stubbed. The commit only has to be a real sha, so derive it from HEAD.
+    # Resolving it from the release tag would make this test require that tag to
+    # exist, which is false between the release's version commit and its tag
+    # creation -- exactly the window the documented resume path runs in, so a
+    # retry of the same version could never pass its own preflight.
+    $expectedCommit = (git rev-parse HEAD).Trim()
     $assetObjects = foreach ($assetName in $assets) {
         $localAssetPath = Join-Path $artifactRoot $assetName
         [ordered]@{
