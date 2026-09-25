@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## v3.9.1 - 2026-09-25
+
+
+### Tracked issues
+
+- [#304](https://github.com/lennix1337/Genexus18MCP/issues/304) — [Bug][Follow-up #294] Runtime GC can partially delete a runtime still used by a live Gateway/broker/Worker
+- [#305](https://github.com/lennix1337/Genexus18MCP/issues/305) — [Follow-up #291] Lifecycle operations: queue instead of BuildAlreadyRunning, delta status, unified operation ids, remaining long actions
+- [#306](https://github.com/lennix1337/Genexus18MCP/issues/306) — [Follow-up #293] STA scheduler: client identity never reaches the Worker in shared-host (round-robin inert); scans not sliced
+- [#307](https://github.com/lennix1337/Genexus18MCP/issues/307) — [Follow-up #292] Source store is only filled lazily: add background backfill and warm-start refresh
+- [#308](https://github.com/lennix1337/Genexus18MCP/issues/308) — [Bug][Data loss] Any WebForm write on a GeneXus 17 legacy HTML WebForm strips every `CaptionExpression` (all labels, tab captions and button texts disappear)
+- [#309](https://github.com/lennix1337/Genexus18MCP/issues/309) — [Bug][Safety] Visual (WebForm) writes commit before verifying: `rollbackOnFailure` is ignored, the response says `persisted: false` although the change is saved, and `dryRun`/`validate:"only"` cannot predict the damage
+- [#310](https://github.com/lennix1337/Genexus18MCP/issues/310) — [Bug] `genexus_edit_form add_button` / `add_textblock` produce markup that does not match GX17 legacy HTML WebForms, and the schema hints warn about valid legacy attributes
+- [#311](https://github.com/lennix1337/Genexus18MCP/issues/311) — [Bug] `PostTimeoutReadRequired` fence after a timed-out `genexus_variable` cannot be cleared by any read the hint suggests (fence is keyed to part `Source`; whole-object reads never qualify)
+- [#312](https://github.com/lennix1337/Genexus18MCP/issues/312) — [Regression 3.9.0] `genexus_search_source` ignores `scope` (`webForm`, `rules`, `conditions`, `layout`) once the source store holds the object's primary part
+- [#313](https://github.com/lennix1337/Genexus18MCP/issues/313) — [Feature][Follow-up #260] K2BTools WebPanelDesigner objects (layout form, no PatternInstance) are invisible to the pattern tools: support reading/editing their grid definition and regenerating editor methods
+- [#314](https://github.com/lennix1337/Genexus18MCP/issues/314) — [Feature] Procedure report layouts: add, move and remove controls inside print blocks (today only print blocks themselves can be managed)
+- [#315](https://github.com/lennix1337/Genexus18MCP/issues/315) — [Feature] `genexus_variable`: support dimensioned (array) variables, and expose dimensions on read
+- [#316](https://github.com/lennix1337/Genexus18MCP/issues/316) — [DX] Papercuts seen on 3.9.0: `inspect include=variables` empty for a K2B WebPanel, `read part=WebForm` ignores `offset/limit`, `lifecycle status wait` on `op:<id>` returns immediately
+- [#318](https://github.com/lennix1337/Genexus18MCP/issues/318) — [DX] `Nexus IDE checks` falha sem causa classificada nem remediação quando há update do VS Code em andamento no host (mutex `vscode-updating`)
+- [#319](https://github.com/lennix1337/Genexus18MCP/issues/319) — [Docs] `GXMCP_BUSY_WAIT_MS` e `GXMCP_BUSY_REJECT_MS` sem entrada em `docs/environment_variables.md`
+
+
 ### Changed
 
 - Documented `GXMCP_BUSY_WAIT_MS` and `GXMCP_BUSY_REJECT_MS` in `docs/environment_variables.md`, including the STA queue semantics, the per-command override precedence, and that both are read per request. ([#319](https://github.com/lennix1337/Genexus18MCP/issues/319))

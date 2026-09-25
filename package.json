@@ -1,6 +1,6 @@
 {
   "name": "genexus-mcp",
-  "version": "3.9.0",
+  "version": "3.9.1",
   "mcpName": "io.github.lennix1337/genexus",
   "description": "GeneXus 16, GeneXus 17, GeneXus 18 MCP server with native SDK support; basic legacy compatibility for GeneXus Evolution 3, GeneXus Evolution 2, GeneXus Evolution 1, GeneXus 15, GeneXus 9.0, GeneXus 8.0 via com-gxpublic and dotnet-reflection drivers — read, edit, and analyze Knowledge Base objects directly from Claude, Cursor, and other AI agents over the Model Context Protocol.",
   "keywords": [

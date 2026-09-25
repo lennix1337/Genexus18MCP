@@ -1,13 +1,13 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "3.9.0",
-  "tag": "v3.9.0",
-  "collectedAtUtc": "2026-09-24T01:24:57.5027455Z",
+  "version": "3.9.1",
+  "tag": "v3.9.1",
+  "collectedAtUtc": "2026-09-25T20:28:14.1000029Z",
   "issues": [
     {
-      "number": 284,
-      "title": "[Docs] GXMCP_SHARED_CHILD usada no shared-host sem entrada em docs/environment_variables.md",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/284",
+      "number": 304,
+      "title": "[Bug][Follow-up #294] Runtime GC can partially delete a runtime still used by a live Gateway/broker/Worker",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/304",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -15,9 +15,9 @@
       "milestone": null
     },
     {
-      "number": 285,
-      "title": "[Bug] shared-host: broker writes the Worker's stdin in the ANSI/OEM code page, so non-ASCII arguments arrive as U+FFFD (accented patch `find` never matches; accented writes at risk)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/285",
+      "number": 305,
+      "title": "[Follow-up #291] Lifecycle operations: queue instead of BuildAlreadyRunning, delta status, unified operation ids, remaining long actions",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/305",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -25,9 +25,9 @@
       "milestone": null
     },
     {
-      "number": 286,
-      "title": "[Bug] ISO-8601 string arguments are parsed as JSON dates and rejected by schema validation (`since` / `modifiedBefore` unusable)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/286",
+      "number": 306,
+      "title": "[Follow-up #293] STA scheduler: client identity never reaches the Worker in shared-host (round-robin inert); scans not sliced",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/306",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -35,9 +35,9 @@
       "milestone": null
     },
     {
-      "number": 287,
-      "title": "[Bug] `genexus_analyze mode=callers` never matches `Obj.Call(` / `.Udp(` / `.Submit(` / `.Link(`, so every lookup ends as `CallerSitesUnconfirmed`",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/287",
+      "number": 307,
+      "title": "[Follow-up #292] Source store is only filled lazily: add background backfill and warm-start refresh",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/307",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -45,9 +45,9 @@
       "milestone": null
     },
     {
-      "number": 288,
-      "title": "[Bug] Worker still writes build logs, job state and rotated logs under its install directory (npx cache)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/288",
+      "number": 308,
+      "title": "[Bug][Data loss] Any WebForm write on a GeneXus 17 legacy HTML WebForm strips every `CaptionExpression` (all labels, tab captions and button texts disappear)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/308",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -55,9 +55,9 @@
       "milestone": null
     },
     {
-      "number": 289,
-      "title": "[Perf] Every successful write echoes the whole persisted part (`result.source`): ~35 KB median response for a ~115-char patch",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/289",
+      "number": 309,
+      "title": "[Bug][Safety] Visual (WebForm) writes commit before verifying: `rollbackOnFailure` is ignored, the response says `persisted: false` although the change is saved, and `dryRun`/`validate:\"only\"` cannot predict the damage",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/309",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -65,9 +65,9 @@
       "milestone": null
     },
     {
-      "number": 290,
-      "title": "[Perf] Exact-identity reads are blocked until the index is `freshness=current`, causing multi-minute stalls at session start on large KBs",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/290",
+      "number": 310,
+      "title": "[Bug] `genexus_edit_form add_button` / `add_textblock` produce markup that does not match GX17 legacy HTML WebForms, and the schema hints warn about valid legacy attributes",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/310",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -75,9 +75,9 @@
       "milestone": null
     },
     {
-      "number": 291,
-      "title": "[Design] One operation model for long lifecycle actions: honor `wait_until_done` on `specify`, queue instead of `BuildAlreadyRunning`, delta status, single id namespace",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/291",
+      "number": 311,
+      "title": "[Bug] `PostTimeoutReadRequired` fence after a timed-out `genexus_variable` cannot be cleared by any read the hint suggests (fence is keyed to part `Source`; whole-object reads never qualify)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/311",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -85,9 +85,9 @@
       "milestone": null
     },
     {
-      "number": 292,
-      "title": "[Perf] Source search: persisted source is capped at 8 MiB, so unscoped `search_source` falls back to an SDK scan (~13 objects/s) and times out at 1-2% coverage",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/292",
+      "number": 312,
+      "title": "[Regression 3.9.0] `genexus_search_source` ignores `scope` (`webForm`, `rules`, `conditions`, `layout`) once the source store holds the object's primary part",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/312",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -95,9 +95,9 @@
       "milestone": null
     },
     {
-      "number": 293,
-      "title": "[Design] STA scheduler: priorities, cooperative slicing and bounded waits instead of instant `WorkerBusy` (critical for shared-host)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/293",
+      "number": 313,
+      "title": "[Feature][Follow-up #260] K2BTools WebPanelDesigner objects (layout form, no PatternInstance) are invisible to the pattern tools: support reading/editing their grid definition and regenerating editor methods",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/313",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -105,9 +105,9 @@
       "milestone": null
     },
     {
-      "number": 294,
-      "title": "[Ops] Run the Gateway/Worker from a staged, versioned runtime instead of the npx cache (upgrade `EBUSY` → `CONNECTION_CLOSED`)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/294",
+      "number": 314,
+      "title": "[Feature] Procedure report layouts: add, move and remove controls inside print blocks (today only print blocks themselves can be managed)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/314",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -115,9 +115,9 @@
       "milestone": null
     },
     {
-      "number": 295,
-      "title": "[DX] Contract papercuts: batch `properties get`, typed `PartNotFound` listing Rules, missing near-match diagnostics on `NoMatch`",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/295",
+      "number": 315,
+      "title": "[Feature] `genexus_variable`: support dimensioned (array) variables, and expose dimensions on read",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/315",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -125,9 +125,9 @@
       "milestone": null
     },
     {
-      "number": 296,
-      "title": "[Perf] Default tool surface costs ~134 KB of schema per session: lean default profile and per-profile budgets",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/296",
+      "number": 316,
+      "title": "[DX] Papercuts seen on 3.9.0: `inspect include=variables` empty for a K2B WebPanel, `read part=WebForm` ignores `offset/limit`, `lifecycle status wait` on `op:<id>` returns immediately",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/316",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -135,9 +135,9 @@
       "milestone": null
     },
     {
-      "number": 297,
-      "title": "[Tracking] Field review of the end-to-end MCP flow: bottlenecks found and suggested order of work (#285-#296)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/297",
+      "number": 318,
+      "title": "[DX] `Nexus IDE checks` falha sem causa classificada nem remediação quando há update do VS Code em andamento no host (mutex `vscode-updating`)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/318",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -145,49 +145,9 @@
       "milestone": null
     },
     {
-      "number": 298,
-      "title": "genexus_io import_part part=Variables silently strips the module qualifier from SDT variables, and reports WriteNotPersisted while saving",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/298",
-      "state": "open",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 299,
-      "title": "[Docs] Document shared Worker driver and provider environment variables",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/299",
-      "state": "open",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 301,
-      "title": "[Bug] import_part reports WriteNotPersisted when the only difference is CRLF vs LF — isolates the unexplained transformation in #265",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/301",
-      "state": "open",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 302,
-      "title": "[Bug/DX] genexus_search_source silently ignores an unknown argument instead of rejecting it, turning a scoped search into a full-KB scan",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/302",
-      "state": "open",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 303,
-      "title": "[Regression of #225] KB_LEASE_EXPIRED still hits genexus_lifecycle mid-session on 3.8.0 / GeneXus 18",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/303",
+      "number": 319,
+      "title": "[Docs] `GXMCP_BUSY_WAIT_MS` e `GXMCP_BUSY_REJECT_MS` sem entrada em `docs/environment_variables.md`",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/319",
       "state": "open",
       "labels": [
         "fixed-pending-release"
