@@ -68,6 +68,27 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void An_unreadable_cache_directory_refuses_the_install_instead_of_skipping_identity()
+        {
+            // GetSettings only exists from GeneXus 17. On an older major the cache
+            // identity cannot be verified, and this flow promises it is, so the
+            // install is refused rather than performed unchecked.
+            var package = ModuleInstallPackage.Read(Write("Common", Guid.NewGuid(), "1.2.3"));
+            Assert.Equal("ModuleCacheUnavailable", Assert.Throws<ModuleInstallPlanException>(
+                () => ModuleInstallSdkBackend.PinCachedPackage(null, package)).Code);
+            Assert.Equal("ModuleCacheUnavailable", Assert.Throws<ModuleInstallPlanException>(
+                () => ModuleInstallSdkBackend.PinCachedPackage("   ", package)).Code);
+        }
+
+        [Fact]
+        public void A_manager_without_the_settings_member_yields_no_cache_path_rather_than_throwing()
+        {
+            // Probed defensively: the member is resolved by name, so an SDK that
+            // never declared it must degrade to "unavailable", not crash the Worker.
+            Assert.Null(ModuleInstallSdkBackend.TryGetModuleCachePath(null));
+        }
+
+        [Fact]
         public void Reads_nested_members_and_hash_without_modifying_package()
         {
             string path = Write("Common", Guid.NewGuid(), "1.2.3");

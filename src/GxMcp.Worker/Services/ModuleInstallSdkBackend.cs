@@ -141,7 +141,7 @@ namespace GxMcp.Worker.Services
             {
                 if (ModuleInstallPackage.Read(package.FilePath).Sha256 != package.Sha256)
                     throw new InvalidOperationException("ModulePackageChanged");
-                using (var cached = PinCachedPackage(manager.GetSettings()?.CachePath, package))
+                using (var cached = PinCachedPackage(TryGetModuleCachePath(manager), package))
                 {
                     CacheDiagnostics.Add(new JObject { ["module"] = package.Metadata.Name, ["cachePinned"] = cached != null,
                         ["cacheProbedPath"] = package.Metadata.Name + "_" + package.Metadata.ID + "/" + package.Metadata.Version + "/" + package.Metadata.GetStorageName(),
@@ -167,6 +167,34 @@ namespace GxMcp.Worker.Services
                         }
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Resolves the SDK module cache directory. <c>GetSettings</c> only exists
+        /// from GeneXus 17, so a direct call would stop the Worker from compiling
+        /// against GeneXus 16. Returns null when the directory cannot be read, and
+        /// the caller refuses the install: without the cache path the existing
+        /// cache identity cannot be verified, which this flow promises.
+        /// </summary>
+        internal static string TryGetModuleCachePath(IModuleManagerService manager)
+        {
+            if (manager == null) return null;
+            try
+            {
+                var settings = manager.GetType()
+                    .GetMethod("GetSettings", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                        null, Type.EmptyTypes, null)
+                    ?.Invoke(manager, null);
+                if (settings == null) return null;
+                return settings.GetType()
+                    .GetProperty("CachePath", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                    ?.GetValue(settings) as string;
+            }
+            catch (Exception ex)
+            {
+                GxMcp.Worker.Helpers.Logger.Warn("Module cache path probe failed: " + ex.Message);
+                return null;
             }
         }
 

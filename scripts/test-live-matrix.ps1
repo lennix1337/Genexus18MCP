@@ -69,12 +69,25 @@ function Get-MatrixSelection {
     )
 
     $known = @($Catalog.supportedMajors | ForEach-Object { [string]$_.major })
-    $requested = if (@($RequestedMajors).Count -eq 0) {
-        $known
-    } else {
-        @($RequestedMajors | ForEach-Object {
+    # An omitted -Majors arrives as $null, and @($null).Count is 1, not 0. Testing
+    # the raw parameter for emptiness therefore never selected every catalog major
+    # when the flag was simply not passed. Filter first so both $null and @() mean
+    # "use the whole catalog".
+    $requestedInput = @($RequestedMajors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    # Wrapped in @() because a single requested major would otherwise be unrolled
+    # to a scalar by the if-expression, and .Count on a scalar is an error under
+    # Set-StrictMode -Version Latest.
+    $requested = @(
+        if ($requestedInput.Count -eq 0) {
+            $known
+        } else {
+            $requestedInput | ForEach-Object {
                 [string]$_ -split '[,;\s]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-            })
+            }
+        }
+    )
+    if ($requested.Count -eq 0) {
+        throw "No live-test major could be resolved. Supported majors: $($known -join ', ')."
     }
     $seen = @{}
     $selection = foreach ($major in $requested) {
@@ -101,7 +114,10 @@ function Write-MatrixSummary {
     param(
         [Parameter(Mandatory = $true)][string]$Status,
         [Parameter(Mandatory = $true)][object]$Build,
-        [Parameter(Mandatory = $true)][object[]]$Results,
+        # Empty is legitimate: a build that fails before any major runs has no
+        # per-major result. Without this the failure-reporting path itself dies
+        # with a parameter-binding error instead of reporting the failure.
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Results,
         [string[]]$SelectedMajors,
         [string]$Reason
     )

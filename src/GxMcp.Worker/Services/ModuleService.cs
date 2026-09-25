@@ -10,6 +10,7 @@ using Module = Artech.Architecture.Common.Objects.Module;
 using System.Xml;
 using Artech.Architecture.Common.Objects;
 using Artech.Architecture.Common.Services;
+using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
 using Newtonsoft.Json.Linq;
 
@@ -114,8 +115,14 @@ namespace GxMcp.Worker.Services
                     string name = args?["name"]?.ToString();
                     if (string.IsNullOrWhiteSpace(name) || !string.IsNullOrWhiteSpace(args?["opcFile"]?.ToString()))
                         throw new ModuleInstallPlanException("BadArgs", "install_builtin requires a built-in name and does not accept opcFile.");
-                    if (!manager.IsBuiltInModule(name)) throw new ModuleInstallPlanException("ModuleBuiltinNotRegistered", "The selected SDK does not register this built-in module.");
-                    string builtinVersion = manager.GetBuiltinModuleVersion(name);
+                    if (!TryIsBuiltInModule(manager, name, out bool registered))
+                        throw new ModuleInstallPlanException("ModuleBuiltinCheckUnsupported",
+                            "The installed SDK does not expose built-in module registration, so this module cannot be verified as built-in.");
+                    if (!registered)
+                        throw new ModuleInstallPlanException("ModuleBuiltinNotRegistered", "The selected SDK does not register this built-in module.");
+                    if (!TryGetBuiltinModuleVersion(manager, name, out string builtinVersion))
+                        throw new ModuleInstallPlanException("ModuleBuiltinVersionUnsupported",
+                            "The installed SDK does not expose the built-in module version, so the exact version cannot be verified before installing.");
                     if (string.IsNullOrWhiteSpace(builtinVersion)) throw new ModuleInstallPlanException("ModuleBuiltinVersionUnavailable", "The SDK did not report the built-in version.");
                     if (!string.IsNullOrWhiteSpace(requestedVersion) && requestedVersion != builtinVersion)
                         throw new ModuleInstallPlanException("ModuleBuiltinVersionConflict", "The requested version differs from the SDK registered built-in version.");
@@ -605,6 +612,41 @@ namespace GxMcp.Worker.Services
                 ["opcFile"] = opcFile,
                 ["rebuild"] = rebuild
             });
+        }
+
+        /// <summary>
+        /// Resolves <c>IModuleManagerService.IsBuiltInModule</c> across SDK majors.
+        /// The member only exists from GeneXus 17, so a direct call would make the
+        /// Worker fail to compile against an older major. Returns false when the
+        /// answer cannot be established, which the caller must treat as
+        /// unverifiable rather than as "not a built-in module".
+        /// </summary>
+        private static bool TryIsBuiltInModule(IModuleManagerService manager, string name, out bool registered)
+        {
+            registered = false;
+            if (manager == null) return false;
+            var method = manager.GetType().GetMethod("IsBuiltInModule", BindingFlags.Public | BindingFlags.Instance,
+                null, new[] { typeof(string) }, null);
+            if (method == null || method.ReturnType != typeof(bool)) return false;
+            try { registered = (bool)method.Invoke(manager, new object[] { name }); return true; }
+            catch (Exception ex) { Logger.Warn("IsBuiltInModule probe failed for '" + name + "': " + ex.Message); return false; }
+        }
+
+        /// <summary>
+        /// Resolves <c>IModuleManagerService.GetBuiltinModuleVersion</c>, which only
+        /// exists on GeneXus 18. Returns false when the version cannot be read, so
+        /// the caller refuses the install instead of installing an unverified
+        /// version.
+        /// </summary>
+        private static bool TryGetBuiltinModuleVersion(IModuleManagerService manager, string name, out string version)
+        {
+            version = null;
+            if (manager == null) return false;
+            var method = manager.GetType().GetMethod("GetBuiltinModuleVersion", BindingFlags.Public | BindingFlags.Instance,
+                null, new[] { typeof(string) }, null);
+            if (method == null || method.ReturnType != typeof(string)) return false;
+            try { version = method.Invoke(manager, new object[] { name }) as string; return true; }
+            catch (Exception ex) { Logger.Warn("GetBuiltinModuleVersion probe failed for '" + name + "': " + ex.Message); return false; }
         }
 
         private static bool TryInvokePackage(
