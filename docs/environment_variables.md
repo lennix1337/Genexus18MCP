@@ -39,6 +39,17 @@ The effective path remains in every successful response: wiki returns `result.fi
 
 Worker-owned state, diagnostics, build logs, and temporary output stay outside the executable/package directory. Managed Workers receive an opaque operational-state key from the Gateway so separate KB generations do not share default runtime folders. Build responses keep the same `fullLogPath` contract; only the destination root changes.
 
+### STA scheduler busy handling
+
+The GeneXus model is single-threaded: only one SDK operation runs at a time on the Worker's STA thread. The scheduler answers `WorkerBusy` instead of blocking indefinitely, and these two variables control that behavior.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_BUSY_WAIT_MS` | Maximum queue age tolerated for an SDK command. Evaluated when the command is dequeued on the STA thread: an item that waited longer than this is rejected with `WorkerBusy` rather than executed late. Raise it for long builds, lower it to fail fast in interactive use. Per-command tuning (`busyWaitMs`) still wins over this environment value. | `15000` ms |
+| `GXMCP_BUSY_REJECT_MS` | Immediate-rejection window for low-priority commands that arrive while a long operation is already running: they are rejected with `WorkerBusy` without entering the queue once the in-flight operation has run for at least this long. `0` or a negative value disables the rejection and always queues instead. | `3000` ms |
+
+Both are read per request, so changing them affects the next command without restarting the Worker. See the `WorkerBusy` hints returned by the affected tools for the actionable value.
+
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `GXMCP_STATE_DIR` | Optional Worker state root (for example preview configuration and source-store files). | `%LOCALAPPDATA%\GenexusMCP\state\<operational-key-hash>` |

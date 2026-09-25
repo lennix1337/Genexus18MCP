@@ -705,3 +705,119 @@ function Test-GxMcpReleaseWorkflowRun {
         [string]$Run.headBranch -ceq $Tag -and
         [string]$Run.event -cin $allowedEvents
 }
+
+function Get-GxMcpVsCodeUpdateMutexName {
+    <#
+      .SYNOPSIS
+        Resolves the mutex name VS Code checks when it refuses to start mid-update.
+      .DESCRIPTION
+        Mirrors src\nexus-ide\src\test\runTest.ts so the probe inspects the runtime
+        the phase actually launches: the version comes from NEXUS_IDE_VSCODE_VERSION
+        and falls back to 1.111.0, the cache root is <extension>\.vscode-test, and
+        the runtime unpacks to vscode-win32-x64-archive-<version>\<hash>\resources\app.
+        Only the top-level win32MutexName counts. The key also appears inside the
+        "embedded" object for the Sessions sub-product, and VS Code's
+        checkInnoSetupMutex gates on the top-level value. Windows-only: returns
+        $null everywhere else, and on any unresolvable layout, so the caller can
+        report "not confirmed" instead of guessing.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [AllowNull()][string]$Version
+    )
+
+    if ($env:OS -ne 'Windows_NT') { return $null }
+    $effectiveVersion = if ([string]::IsNullOrWhiteSpace($Version)) { [string]$env:NEXUS_IDE_VSCODE_VERSION } else { $Version }
+    if ([string]::IsNullOrWhiteSpace($effectiveVersion)) { $effectiveVersion = '1.111.0' }
+    $archiveRoot = Join-Path $RepositoryRoot "src\nexus-ide\.vscode-test\vscode-win32-x64-archive-$effectiveVersion"
+    if (-not (Test-Path -LiteralPath $archiveRoot -PathType Container)) { return $null }
+
+    $products = @(Get-ChildItem -LiteralPath $archiveRoot -Recurse -Filter 'product.json' -File -ErrorAction SilentlyContinue)
+    foreach ($product in $products) {
+        if ([string]$product.DirectoryName -notmatch 'resources[\\/]app$') { continue }
+        $parsed = $null
+        try { $parsed = Get-Content -LiteralPath $product.FullName -Raw | ConvertFrom-Json } catch { continue }
+        $mutexName = [string]$parsed.win32MutexName
+        if (-not [string]::IsNullOrWhiteSpace($mutexName)) { return "$mutexName-updating" }
+    }
+    return $null
+}
+
+function Test-GxMcpVsCodeUpdateMutexHeld {
+    <#
+      .SYNOPSIS
+        Probes whether a named mutex currently exists on this host.
+      .DESCRIPTION
+        Returns $true when the mutex is held, $false when it is free, and $null
+        when the answer cannot be established (non-Windows, blank name, or a
+        platform error). Callers must treat $null as "unconfirmed".
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowNull()][string]$MutexName
+    )
+
+    if ($env:OS -ne 'Windows_NT' -or [string]::IsNullOrWhiteSpace($MutexName)) { return $null }
+    $createdNew = $false
+    $opened = $false
+    try {
+        $opened = [System.Threading.Mutex]::TryOpenExisting($MutexName, [ref]$createdNew)
+    } catch {
+        return $null
+    } finally {
+        if ($opened) { try { $opened.Dispose() } catch { } }
+    }
+    return [bool]$opened
+}
+
+function Get-GxMcpPreflightHostBlocker {
+    <#
+      .SYNOPSIS
+        Labels a failed preflight phase whose output identifies host state.
+      .DESCRIPTION
+        Pure classification. It never changes status, exitCode, or whether the
+        command runs: a consumer may label the cause, never the outcome. The
+        preflight aggregate already accepts 'unavailable' as an approved terminal
+        status, so downgrading a phase here would certify a release that ran no
+        Electron test at all.
+
+        The trigger is a specific signature in the phase's own captured output;
+        an optional probe only adds confirmation. Inject -MutexProbe in tests.
+        Returns $null when nothing matches, otherwise a details object carrying
+        code, cause, remediation, evidence and mutexConfirmed.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()][AllowEmptyString()][string]$Stdout = '',
+        [AllowNull()][AllowEmptyString()][string]$Stderr = '',
+        [string]$RepositoryRoot,
+        [AllowNull()][scriptblock]$MutexProbe
+    )
+
+    # Scoped deliberately: the signature is VS Code startup text, and labelling
+    # some other phase from it would be worse than not labelling at all.
+    if ($Name -ne 'Nexus IDE checks') { return $null }
+    $signature = 'Code is currently being updated'
+    $combined = [string]$Stdout + "`n" + [string]$Stderr
+    if ($combined.IndexOf($signature, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return $null }
+
+    $probe = $MutexProbe
+    if ($null -eq $probe) {
+        $probe = {
+            param($probeRoot)
+            $mutexName = Get-GxMcpVsCodeUpdateMutexName -RepositoryRoot $probeRoot
+            if ($null -eq $mutexName) { return $null }
+            return (Test-GxMcpVsCodeUpdateMutexHeld -MutexName $mutexName)
+        }
+    }
+    $mutexHeld = $null
+    try { $mutexHeld = & $probe $RepositoryRoot } catch { $mutexHeld = $null }
+    if ($mutexHeld -isnot [bool]) { $mutexHeld = $null }
+
+    return [ordered]@{
+        code = 'vscode-update-in-progress'
+        cause = 'VS Code update in progress on this host: the Electron test runtime refused to start, so this is host state and not a repository regression.'
+        remediation = 'Finish the VS Code update (close every VS Code window and let the installer complete), then re-run. Pass -ResumeSummaryPath <previous summary> to reuse the phases that already passed.'
+        evidence = $signature
+        mutexConfirmed = $mutexHeld
+    }
+}

@@ -75,7 +75,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'A local KB must be sufficient for the dry-run live gate without a fixture manifest.' }
     $local = Get-Content -LiteralPath $localSummary -Raw | ConvertFrom-Json
     $localLive = @($local.phases | Where-Object name -eq 'live KB gate' | Select-Object -Last 1)
-    if ($localLive.status -ne 'dry-run' -or $local.liveKbPath -ne (Join-Path $fixtureRoot 'KBTeste')) { throw 'Local KB live source was not recorded in the preflight summary.' }
+    # Normalize both sides: the preflight resolves the recorded path, while
+    # $fixtureRoot still carries whatever form %TEMP% had.  On hosts where TEMP
+    # is an 8.3 short path the raw comparison would fail even though the live
+    # gate passed and the same directory was selected.
+    $expectedLocalKb = ConvertTo-GxMcpReleasePath -Path (Join-Path $fixtureRoot 'KBTeste') -BasePath $root
+    $actualLocalKb = ConvertTo-GxMcpReleasePath -Path ([string]$local.liveKbPath) -BasePath $root
+    if ($localLive.status -ne 'dry-run' -or $actualLocalKb -ne $expectedLocalKb) { throw 'Local KB live source was not recorded in the preflight summary.' }
+
+    # Regression guard: a path that differs only by normalization (dot segments)
+    # must still be recognized as the same recorded KB, which is what fails on
+    # an 8.3 %TEMP%.
+    $dotSegmentKb = ConvertTo-GxMcpReleasePath -Path (Join-Path (Join-Path $fixtureRoot '.') 'KBTeste') -BasePath $root
+    if ($dotSegmentKb -ne $expectedLocalKb) { throw 'Release path normalization must collapse equivalent path forms.' }
 
     $releaseSource = Get-Content -LiteralPath (Join-Path $root 'release.ps1') -Raw
     if ($releaseSource -match "'-SkipLive'") { throw 'Canonical release entrypoint must allow configured live preflight values to participate.' }
@@ -210,6 +222,26 @@ try {
     if ([string]::IsNullOrWhiteSpace([string]$fingerprint)) {
         throw 'Artifact fingerprint must be one scalar value when all release artifacts exist.'
     }
+    # Mirror the published bytes into the source build paths the process-smoke
+    # fingerprint compares against. Test-GxMcpReleasePreflightCertificate
+    # recomputes that fingerprint from Expected.root, so pointing the resume case
+    # at this fixture keeps the assertion hermetic. Reading the live repository
+    # here instead makes the test a false negative whenever publish/ was not
+    # produced by the immediately-preceding build: the preflight runs
+    # 'PowerShell script tests' in parallel with 'dotnet test -c Release', and that
+    # lane rewrites src\GxMcp.Worker\bin\Release underneath the read.
+    foreach ($mirror in @(
+            @{ Source = 'src/GxMcp.Gateway/bin/Release/net10.0-windows/GxMcp.Gateway.exe'; From = 'publish/GxMcp.Gateway.exe' },
+            @{ Source = 'src/GxMcp.Worker/bin/x86/Release/GxMcp.Worker.exe'; From = 'publish/worker/GxMcp.Worker.exe' }
+        )) {
+        $target = Join-Path $artifactRoot ($mirror.Source -replace '/', '\')
+        New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $artifactRoot ($mirror.From -replace '/', '\')) -Destination $target -Force
+    }
+    $processSmokeFingerprint = Get-GxMcpReleaseProcessSmokeFingerprint -RepositoryRoot $artifactRoot
+    if ([string]$processSmokeFingerprint -notmatch '^[0-9a-f]{64}$') {
+        throw 'The process-smoke fingerprint must resolve from the fixture artifact pair.'
+    }
     $trxRoot = Join-Path $fixtureRoot 'process-trx'
     New-Item -ItemType Directory -Path $trxRoot -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $trxRoot 'process.trx'), '<TestRun><ResultSummary><Counters total="3" executed="3" /></ResultSummary></TestRun>')
@@ -221,7 +253,7 @@ try {
         supportedMajors = @([pscustomobject]@{ major = '18'; defaultInstallPath = 'C:\SDK\GeneXus18' })
     }
     $resumeExpected = Resolve-GxMcpReleasePreflightInputs `
-        -Root $root -Catalog $resumeCatalog -GxPath 'C:\SDK\GeneXus18' -Version '3.5.0' `
+        -Root $artifactRoot -Catalog $resumeCatalog -GxPath 'C:\SDK\GeneXus18' -Version '3.5.0' `
         -SourceCommit 'source-commit' -LiveKbPath 'C:\KBs\Fixture' `
         -LiveFixtureManifest 'C:\Fixtures\release.json' -RequireBuildAll -ArtifactFingerprint $fingerprint
     $matchingResume = [pscustomobject]@{
@@ -234,7 +266,7 @@ try {
         requireBuildAll = $resumeExpected.requireBuildAll; skipLive = $resumeExpected.skipLive
         skipWarningBaseline = $resumeExpected.skipWarningBaseline; artifactFingerprint = $resumeExpected.artifactFingerprint
         processSmokeMode = 'serial-after-parallel'; processSmokeTestCount = 3
-        processSmokeResultsPath = $trxRoot; processSmokeBinaryFingerprint = Get-GxMcpReleaseProcessSmokeFingerprint -RepositoryRoot $root
+        processSmokeResultsPath = $trxRoot; processSmokeBinaryFingerprint = $processSmokeFingerprint
         phases = @(
             foreach ($phaseName in (Get-GxMcpMandatoryPreflightPhaseNames)) {
                 $command = switch ($phaseName) {

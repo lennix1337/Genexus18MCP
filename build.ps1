@@ -147,6 +147,17 @@ try {
 Write-Host "   > Building Gateway (Debug)..."
 Invoke-DotNet (@("build", $gatewayProject, "-c", "Debug", "--nologo") + $versionArguments) "Gateway debug build failed."
 
+# `dotnet publish -o <temp>` does not produce the non-RID build output, so
+# src\GxMcp.Gateway\bin\Release\net10.0-windows\GxMcp.Gateway.exe would keep whatever
+# an earlier `dotnet build`/`dotnet test` left there. The release preflight
+# certificate proves the published Gateway is the same build the test lanes ran
+# by comparing those two files byte-for-byte, and the SDK stamps the commit into
+# the assembly, so a stale copy silently breaks the fingerprint after any commit.
+# Build Release here with the same version arguments as the publish above so the
+# two are the same deterministic compilation.
+Write-Host "   > Building Gateway (Release, fingerprint source)..."
+Invoke-DotNet (@("build", $gatewayProject, "-c", "Release", "--nologo") + $versionArguments) "Gateway release build failed."
+
 # 3. Build Worker (.NET Framework 4.8)
 $sdkManifestArguments = @()
 if (-not [string]::IsNullOrWhiteSpace($env:GxMcpSdkManifest)) {
@@ -154,7 +165,15 @@ if (-not [string]::IsNullOrWhiteSpace($env:GxMcpSdkManifest)) {
     $sdkManifestArguments += "-p:GxMcpSdkManifest=$selectedSdkManifest"
 }
 Write-Host "   > Building Worker (Release)..."
-Invoke-DotNet (@("build", $workerProject, "-c", "Release", "--nologo", "-p:GX_PATH=$buildGxPath") + $versionArguments + $sdkManifestArguments) "Worker build failed."
+# The solution maps Release|Any CPU to Release|x86 for the Worker, so every test
+# lane and the release process-smoke lane exercise an x86-platform build. Building
+# the project directly defaults to AnyCPU, which produces different bytes: the
+# release preflight then refuses to bind the process-smoke binaries to publish
+# ("Process smoke binaries could not be bound to the current publish artifacts"),
+# and before that guard existed the shipped Worker was not bit-identical to the
+# tested one. Build with the same platform the solution uses so publish/ contains
+# exactly the binary the tests ran.
+Invoke-DotNet (@("build", $workerProject, "-c", "Release", "--nologo", "-p:Platform=x86", "-p:GX_PATH=$buildGxPath") + $versionArguments + $sdkManifestArguments) "Worker build failed."
 
 Write-Host "   > Building Worker (Debug)..."
 Invoke-DotNet (@("build", $workerProject, "-c", "Debug", "--nologo", "-p:GX_PATH=$buildGxPath") + $versionArguments + $sdkManifestArguments) "Worker debug build failed."

@@ -259,6 +259,117 @@ try {
         }
     }
 
+    # Get-GxMcpReleaseProcessSmokeFingerprint proves the published Gateway is the
+    # same build the test lanes ran by comparing publish\GxMcp.Gateway.exe with
+    # the non-RID build output byte-for-byte; that pair has no alternate source
+    # path. `dotnet publish -o <dir>` never writes the non-RID build output, so
+    # build.ps1 must issue a Release *build* for the Gateway. Without it the
+    # certificate silently breaks as soon as the copied assembly goes stale,
+    # which a commit does on its own because the SDK stamps the revision into it.
+    $contractSource = Get-Content -LiteralPath $contractPath -Raw
+    if ($contractSource -notmatch "Source = 'src/GxMcp\.Gateway/bin/Release/net10\.0-windows/GxMcp\.Gateway\.exe'") {
+        throw 'The process-smoke fingerprint no longer compares a non-RID Gateway Release build.'
+    }
+    $gatewayPairBlock = [regex]::Match($contractSource, "(?s)\{\s*Source = 'src/GxMcp\.Gateway.*?\}").Value
+    if ($gatewayPairBlock -match 'AlternateSource') {
+        throw 'The Gateway fingerprint pair must stay bound to a single source build path.'
+    }
+    $buildScriptSource = Get-Content -LiteralPath (Join-Path $root 'build.ps1') -Raw
+    if (-not $buildScriptSource.Contains('("build", $gatewayProject, "-c", "Release"')) {
+        throw 'build.ps1 must build the Gateway in Release so the process-smoke fingerprint has a source binary to compare against publish.'
+    }
+    # The Worker is the other half of the fingerprint pair, and the solution
+    # platform mapping is what decides it. Release|Any CPU maps the Worker to the
+    # x86 project platform, so every test lane and the process-smoke lane exercise
+    # an x86-platform build. Compiling the project directly instead (AnyCPU)
+    # produces different bytes: the certificate refuses to bind the process-smoke
+    # binaries to publish, and the published Worker is not the tested one.
+    $slnSource = Get-Content -LiteralPath (Join-Path $root 'Genexus18MCP.sln') -Raw
+    $workerProjectEntry = [regex]::Match($slnSource, '(?s)Project\("\{[^}]+\}"\) = "GxMcp\.Worker", "src\\GxMcp\.Worker\\GxMcp\.Worker\.csproj", "\{(?<guid>[0-9A-Fa-f-]+)\}"')
+    if (-not $workerProjectEntry.Success) { throw 'Could not resolve the Worker project GUID from the solution.' }
+    $workerGuid = $workerProjectEntry.Groups['guid'].Value.ToUpperInvariant()
+    $releaseMapping = [regex]::Match($slnSource, "\{$workerGuid\}\.Release\|Any CPU\.ActiveCfg\s*=\s*(?<platform>[^\r\n]+)")
+    if (-not $releaseMapping.Success) { throw 'The solution no longer maps Release|Any CPU for the Worker.' }
+    # "Release|x86" is configuration|platform: compare the platform half.
+    $solutionWorkerPlatform = ($releaseMapping.Groups['platform'].Value.Trim() -split '\|')[-1].Trim()
+    $buildScriptWorkerPlatform = ''
+    if ($buildScriptSource -match '\$workerProject,\s*"-c",\s*"Release"[^\r\n]*?"-p:Platform=(?<platform>[^"]+)"') {
+        $buildScriptWorkerPlatform = [string]$Matches['platform']
+    }
+    if ($solutionWorkerPlatform -ne $buildScriptWorkerPlatform) {
+        throw "The Worker Release platform must match the solution ($solutionWorkerPlatform); build.ps1 builds '$buildScriptWorkerPlatform', so publish/ would not contain the tested binary."
+    }
+
+    # --- Nexus IDE host-blocker classification (issue #318) -----------------
+    # The classifier may only label a cause. It must never turn a failed phase
+    # into 'unavailable', because the aggregate accepts that as an approved
+    # terminal status and would certify a release that ran no Electron test.
+    $vscodeSignature = 'Error: Code is currently being updated. Please wait for the update to complete before launching.'
+    $nexusOutput = "compile ok`nlint ok`n$vscodeSignature`nExit code: 1`nFailed to run tests TestRunFailedError: Test run failed with code 1"
+
+    $other = Get-GxMcpPreflightHostBlocker -Name 'PowerShell script tests' -Stdout $nexusOutput
+    if ($null -ne $other) { throw 'The VS Code signature must not label an unrelated phase.' }
+    $noSignature = Get-GxMcpPreflightHostBlocker -Name 'Nexus IDE checks' -Stdout "compile ok`nlint ok`nExit code: 1" -MutexProbe { param($r) $true }
+    if ($null -ne $noSignature) { throw 'A plain Nexus IDE failure must stay unlabelled.' }
+
+    $probeCalls = 0
+    $confirmed = Get-GxMcpPreflightHostBlocker -Name 'Nexus IDE checks' -Stdout $nexusOutput -MutexProbe { param($r) $script:probeCalls++; return $true }
+    if ($null -eq $confirmed) { throw 'The VS Code updater signature was not classified.' }
+    if ([string]$confirmed.code -ne 'vscode-update-in-progress') { throw "Unexpected host blocker code: $($confirmed.code)." }
+    if ($confirmed.mutexConfirmed -isnot [bool] -or -not $confirmed.mutexConfirmed) { throw 'A confirmed mutex must be reported as a boolean true.' }
+    if ([string]::IsNullOrWhiteSpace([string]$confirmed.remediation) -or
+        [string]$confirmed.remediation -notmatch 'ResumeSummaryPath') { throw 'The remediation must tell the operator how to recover.' }
+    if ($script:probeCalls -ne 1) { throw 'The injected mutex probe must run exactly once per classification.' }
+
+    $unconfirmed = Get-GxMcpPreflightHostBlocker -Name 'Nexus IDE checks' -Stderr $vscodeSignature -MutexProbe { param($r) return $null }
+    if ($null -eq $unconfirmed -or $null -ne $unconfirmed.mutexConfirmed) { throw 'An unestablished probe must report unconfirmed, not false.' }
+    $throwing = Get-GxMcpPreflightHostBlocker -Name 'Nexus IDE checks' -Stdout $nexusOutput -MutexProbe { param($r) throw 'probe exploded' }
+    if ($null -eq $throwing -or $null -ne $throwing.mutexConfirmed) { throw 'A throwing probe must degrade to unconfirmed.' }
+
+    # The classifier exposes no status/exitCode parameter, so it cannot alter an
+    # outcome. Lock the wiring too: the classification must run only on an
+    # already-failed phase and must never assign the outcome itself.
+    $preflightSource = Get-Content -LiteralPath (Join-Path $root 'scripts/release-preflight.ps1') -Raw
+    $hostBlockerBlock = [regex]::Match($preflightSource, '(?s)if \(\$null -ne \$hostBlocker\) \{.*?\r?\n        \}').Value
+    if ([string]::IsNullOrWhiteSpace($hostBlockerBlock)) { throw 'The preflight no longer attaches host-blocker details to a failed phase.' }
+    if ($hostBlockerBlock -match '\$(phase\.status|phase\.exitCode)\s*=') {
+        throw 'Host-blocker classification must never change the phase outcome.'
+    }
+    $failedGuard = [regex]::Match($preflightSource, '(?s)if \(\$phase\.status -eq ''failed''\) \{.*?Get-GxMcpPreflightHostBlocker')
+    if (-not $failedGuard.Success) {
+        throw 'Host-blocker classification must be guarded by an already-failed phase.'
+    }
+
+    # Real probe: build a runtime layout that mirrors runTest.ts resolution and
+    # prove the top-level win32MutexName wins over the 'embedded' sub-product key.
+    $runtimeRoot = Join-Path $temp 'runtime-repo'
+    $appDir = Join-Path $runtimeRoot 'src\nexus-ide\.vscode-test\vscode-win32-x64-archive-9.9.9\abc123\resources\app'
+    New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $appDir 'product.json'), '{"win32MutexName":"gxmcpfixture","win32VersionedUpdate":true,"embedded":{"win32MutexName":"gxpembedded"}}', [Text.UTF8Encoding]::new($false))
+    $resolvedMutex = Get-GxMcpVsCodeUpdateMutexName -RepositoryRoot $runtimeRoot -Version '9.9.9'
+    if ($resolvedMutex -ne 'gxmcpfixture-updating') { throw "The probe must use the top-level win32MutexName: got '$resolvedMutex'." }
+    if ($null -ne (Get-GxMcpVsCodeUpdateMutexName -RepositoryRoot $runtimeRoot -Version '0.0.0')) {
+        throw 'An unresolvable runtime version must not be guessed.'
+    }
+    if ($null -ne (Get-GxMcpVsCodeUpdateMutexName -RepositoryRoot $runtimeRoot)) {
+        throw 'Without an explicit version the probe must honor the runTest.ts default/env rule, not a stale layout.'
+    }
+
+    $held = [System.Threading.Mutex]::new($false, 'gxmcp-release-contract-fixture')
+    try {
+        if ((Test-GxMcpVsCodeUpdateMutexHeld -MutexName 'gxmcp-release-contract-fixture') -ne $true) {
+            throw 'The probe must detect a mutex that is held.'
+        }
+    } finally {
+        $held.Dispose()
+    }
+    if ((Test-GxMcpVsCodeUpdateMutexHeld -MutexName 'gxmcp-release-contract-absent') -ne $false) {
+        throw 'The probe must report a free mutex as false.'
+    }
+    if ($null -ne (Test-GxMcpVsCodeUpdateMutexHeld -MutexName '   ')) {
+        throw 'A blank mutex name must be unconfirmed rather than false.'
+    }
+
     Write-Host 'release-contract: canonical fingerprint, full preflight identity and exact workflow matching passed' -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }

@@ -353,6 +353,19 @@ function Complete-PreflightPhase {
         foreach ($line in @($State.Stderr -split "`n" | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ } | Select-Object -Last 40)) {
             Write-Host "    stderr: $line" -ForegroundColor DarkYellow
         }
+        # Runs only after the process already exited non-zero, so a host probe
+        # never decides whether a phase runs. It can only add a cause: status and
+        # exitCode are left exactly as the process reported them, because the
+        # aggregate accepts 'unavailable' as approved and downgrading here would
+        # certify a release that ran no Electron test.
+        if ($phase.status -eq 'failed') {
+            $hostBlocker = Get-GxMcpPreflightHostBlocker -Name ([string]$phase.name) -Stdout $State.Stdout -Stderr $State.Stderr -RepositoryRoot $root
+            if ($null -ne $hostBlocker) {
+                $phase.details = $hostBlocker
+                $phase.reason = "$($phase.reason) $($hostBlocker.cause) Remediation: $($hostBlocker.remediation)"
+                Write-Host "    host blocker: $($hostBlocker.code) (mutex confirmed: $($hostBlocker.mutexConfirmed))" -ForegroundColor Yellow
+            }
+        }
     }
     $phase
 }
