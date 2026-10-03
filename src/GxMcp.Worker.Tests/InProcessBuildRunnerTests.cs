@@ -427,6 +427,17 @@ namespace GxMcp.Worker.Tests
             Assert.True(InProcessBuildRunner.IsEnvironmentCopyStale(new DateTime(2026, 1, 1), null));
             Assert.False(InProcessBuildRunner.IsEnvironmentCopyStale(null, null));
         }
+
+        [Fact]
+        public void Object_without_an_environment_copy_is_never_built()
+        {
+            var design = new object();
+            var copy = new object();
+            Assert.True(InProcessBuildRunner.IsNeverBuilt(design, null, separateEnvironment: true));
+            Assert.False(InProcessBuildRunner.IsNeverBuilt(design, copy, separateEnvironment: true));
+            // Without a separate environment model the design model is what gets specified.
+            Assert.False(InProcessBuildRunner.IsNeverBuilt(design, null, separateEnvironment: false));
+        }
     }
 
     public sealed class FakeOutputCarrierTask
