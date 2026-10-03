@@ -140,6 +140,41 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("SpecifyTargetUnresolved", response["error"]?["code"]?.ToString());
         }
 
+        [Fact]
+        public void Specify_KeepsTheTypeOfATargetThatSharesItsNameWithItsTable()
+        {
+            var idx = new IndexCacheService();
+            idx.ReplaceAll(new[]
+            {
+                new SearchIndex.IndexEntry { Guid = Guid.NewGuid().ToString(), Name = "Order", Type = "Transaction", IsEnriched = true },
+                new SearchIndex.IndexEntry { Guid = Guid.NewGuid().ToString(), Name = "Order", Type = "Table", IsEnriched = true }
+            });
+            var svc = new BuildService();
+            svc.SetIndexCacheService(idx);
+
+            var jo = JObject.Parse(svc.Specify("Transaction:Order"));
+
+            Assert.Equal("Accepted", jo["status"]?.ToString());
+            Assert.Equal("Transaction:Order", GetTaskFromRegistry(jo["taskId"]?.ToString()).Target);
+        }
+
+        [Fact]
+        public void Specify_CanonicalizesAUniqueTypedTargetToItsName()
+        {
+            var idx = new IndexCacheService();
+            idx.ReplaceAll(new[]
+            {
+                new SearchIndex.IndexEntry { Guid = Guid.NewGuid().ToString(), Name = "Existing", Type = "Procedure", IsEnriched = true }
+            });
+            var svc = new BuildService();
+            svc.SetIndexCacheService(idx);
+
+            var jo = JObject.Parse(svc.Specify("Procedure:Existing"));
+
+            Assert.Equal("Accepted", jo["status"]?.ToString());
+            Assert.Equal("Existing", GetTaskFromRegistry(jo["taskId"]?.ToString()).Target);
+        }
+
         // ── BuildDryRun() ────────────────────────────────────────────────────
 
         [Fact]

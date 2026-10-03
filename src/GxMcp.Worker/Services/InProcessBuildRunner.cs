@@ -1444,7 +1444,9 @@ namespace GxMcp.Worker.Services
                 Type entityKeyType = specifyObjects.GetParameters()[1].ParameterType.GetGenericArguments()[0];
                 var keys = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(entityKeyType));
                 var unresolved = new List<string>();
+                var neverBuilt = new List<string>();
                 var staleCopies = new List<string>();
+                bool separateEnvironment = targetModel != null && !ReferenceEquals(targetModel, designModel);
                 foreach (var target in targets)
                 {
                     object kbObject = ResolveTargetKBObject(designModel, target);
@@ -1454,15 +1456,26 @@ namespace GxMcp.Worker.Services
                         unresolved.Add(target);
                         continue;
                     }
+                    object environmentCopy = separateEnvironment ? ResolveTargetKBObject(targetModel, target) : null;
+                    // Specifying a key the environment model does not hold throws inside the
+                    // SDK and leaves the specifier wedged until the Worker is recycled.
+                    if (IsNeverBuilt(kbObject, environmentCopy, separateEnvironment))
+                    {
+                        neverBuilt.Add(target);
+                        continue;
+                    }
                     keys.Add(key);
-                    if (targetModel != null && !ReferenceEquals(targetModel, designModel)
-                        && IsEnvironmentCopyStale(ReadLastUpdate(kbObject), ReadLastUpdate(ResolveTargetKBObject(targetModel, target))))
+                    if (separateEnvironment && IsEnvironmentCopyStale(ReadLastUpdate(kbObject), ReadLastUpdate(environmentCopy)))
                         staleCopies.Add(target);
                 }
 
+                if (neverBuilt.Count > 0)
+                    lineSink("error : never built, not specified: " + string.Join(", ", neverBuilt)
+                        + ". GeneXus specifies the environment's copy of an object, which its first build creates; build it once, then run the spec-check.", true);
                 if (keys.Count == 0)
                 {
-                    lineSink("error : none of the requested target(s) resolved to a KBObject: " + string.Join(", ", unresolved) + ". Nothing was specified.", true);
+                    if (unresolved.Count > 0)
+                        lineSink("error : none of the requested target(s) resolved to a KBObject: " + string.Join(", ", unresolved) + ". Nothing was specified.", true);
                     return false;
                 }
                 if (unresolved.Count > 0)
@@ -1488,6 +1501,9 @@ namespace GxMcp.Worker.Services
                 return null;
             }
         }
+
+        internal static bool IsNeverBuilt(object designObject, object environmentCopy, bool separateEnvironment)
+            => separateEnvironment && designObject != null && environmentCopy == null;
 
         // A target missing from the environment model was never built, so its copy is
         // as stale as one whose design object changed after the last build.
