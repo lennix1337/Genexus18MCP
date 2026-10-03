@@ -1268,7 +1268,12 @@ namespace GxMcp.Worker.Services
                     continue;
                 }
 
-                plan.CanonicalSeeds.Add(candidates[0].Name);
+                // A bare name that also names another object (a Transaction and its
+                // Table) would be ambiguous again when Specify hands the seed to Build.
+                var resolved = candidates[0];
+                plan.CanonicalSeeds.Add(index.FindByName(resolved.Name).Count == 1
+                    ? resolved.Name
+                    : resolved.Type + ":" + resolved.Name);
             }
 
             if (plan.AmbiguousTargets.Count > 0 || plan.UnresolvedTargets.Count > 0)
