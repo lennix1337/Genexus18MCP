@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x86</Platforms>
+    <PlatformTarget>x86</PlatformTarget>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AssemblyName>GxMcp.K2bIdeBridge</AssemblyName>
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+    <GX_PATH Condition="'$(GX_PATH)' == ''">C:\Program Files (x86)\GeneXus\GeneXus17</GX_PATH>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Artech.Architecture.Common"><HintPath>$(GX_PATH)\Artech.Architecture.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Artech.Common"><HintPath>$(GX_PATH)\Artech.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Artech.Common.Properties"><HintPath>$(GX_PATH)\Artech.Common.Properties.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Artech.Udm.Framework"><HintPath>$(GX_PATH)\Artech.Udm.Framework.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Artech.Architecture.UI.Framework"><HintPath>$(GX_PATH)\Artech.Architecture.UI.Framework.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Artech.K2B.ObjectDesigner"><HintPath>$(GX_PATH)\Packages\Artech.K2B.ObjectDesigner.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>$(GX_PATH)\Newtonsoft.Json.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Security" />
+  </ItemGroup>
+</Project>

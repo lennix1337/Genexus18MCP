@@ -88,7 +88,7 @@ function stopLingeringGatewayStubs(dirPath, deps = {}) {
     const escapedDir = canonicalDir.replace(/'/g, "''");
     const processPipeline = [
         `Get-CimInstance Win32_Process -Filter "Name = 'GxMcp.Gateway.exe'"`,
-        'Where-Object { if (-not $_.ExecutablePath -or -not $targetDirectory) { return $false }; $processDirectory = (Get-Item -LiteralPath ([System.IO.Path]::GetDirectoryName($_.ExecutablePath)) -ErrorAction SilentlyContinue).FullName; $processDirectory -and [System.StringComparer]::OrdinalIgnoreCase.Equals($processDirectory, $targetDirectory) }',
+        'Where-Object { if (-not $targetDirectory) { return $false }; $imagePath = $_.ExecutablePath; if (-not $imagePath) { $imagePath = (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).Path }; if (-not $imagePath) { return $false }; $processDirectory = (Get-Item -LiteralPath ([System.IO.Path]::GetDirectoryName($imagePath)) -ErrorAction SilentlyContinue).FullName; $processDirectory -and [System.StringComparer]::OrdinalIgnoreCase.Equals($processDirectory, $targetDirectory) }',
         'ForEach-Object { $processId = $_.ProcessId; Stop-Process -Id $processId -Force; try { Wait-Process -Id $processId -Timeout 5 -ErrorAction SilentlyContinue } catch { } }'
     ].join(' | ');
     const script = `$ErrorActionPreference = 'SilentlyContinue'; $targetDirectory = (Get-Item -LiteralPath '${escapedDir}' -ErrorAction SilentlyContinue).FullName; ${processPipeline}`;

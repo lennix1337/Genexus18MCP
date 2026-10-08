@@ -19,6 +19,18 @@ by default.
 suite when a variable read under `src/` is missing from this page, so a new
 `GetEnvironmentVariable` call cannot land undocumented.
 
+## K2B IDE Designer bridge
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_K2B_IDE_KB` | Exact KB directory allowed in the GeneXus IDE extension. Set before launching the IDE. | unset (extension inactive) |
+| `GXMCP_K2B_IDE_PIPE` | Local named pipe shared by the IDE extension and MCP Worker. Set in both processes. | unset (bridge unavailable) |
+| `GXMCP_K2B_IDE_TARGET` | Optional WebPanel name restriction for the IDE session. | unset (any open WebPanel in that KB) |
+| `GXMCP_K2B_IDE_LOG` | Optional IDE extension diagnostic log path. | unset |
+
+See [K2B IDE Designer bridge](k2b-ide-bridge.md) for installation and the
+read-preview-save workflow.
+
 ## Update / self-update
 
 | Variable | Purpose | Default |

@@ -11,6 +11,8 @@
 
 ### Added
 
+- An opt-in IDE bridge inspects and edits already-active K2B WebPanel Designers through the native GeneXus document path, with explicit KB/pipe selection, preview and version checks. It does not activate inactive Designers or convert legacy HWs ([#313](https://github.com/lennix1337/Genexus18MCP/issues/313), PR #320).
+
 - **WorkWithPlus variable grids.** `genexus_wwp action=add_grid` now accepts ordered, typed variable columns without an SDT collection. Set `gridName`, `containerName` and `columns` to create a grid loaded by the panel's own events, including editable columns. [#442](https://github.com/lennix1337/Genexus18MCP/issues/442).
 
 ### Changed

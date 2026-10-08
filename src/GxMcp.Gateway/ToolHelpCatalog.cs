@@ -635,6 +635,16 @@ namespace GxMcp.Gateway
                 "Every action mutates the layout. Prefer a read of the authoritative WebForm/PatternInstance first and verify the persisted tree after the write. Pass `baseVersion` and `rollbackOnFailure` for guarded persistence; a read-back mismatch is reported as persisted-but-unverified rather than silently restored. `dryRun` returns a bounded changed-fragment diff and the same descriptor transformation preview used by the real save.\n" +
                 "  The PatternInstance part is a property-edit route only. It never infers a layout reordering: the childrenOrderedList attribute and the other child-order metadata are owned by the pattern, and XML document order is not a reliable description of it, so changing them — or adding, removing or renaming nodes — is rejected as PatternMetadataChangeUnsupported / PatternStructureChangeUnsupported. Use the SDK pattern authoring actions for structural work.\n",
 
+            ["genexus_k2b_designer"] =
+                "# genexus_k2b_designer\n\n" +
+                "Read and edit an already-active K2B WebPanel Designer in the open GeneXus IDE. " +
+                "The IDE extension and MCP Worker must share GXMCP_K2B_IDE_PIPE, and the IDE must be started with GXMCP_K2B_IDE_KB set to the same KB.\n\n" +
+                "Use inspect or tree to obtain node paths and a version. Use preview with operation, path, and the fields required by that operation to validate a change. " +
+                "Then pass expectedVersion for set_property, add_node, move_node, or remove_node. Removal also requires confirm=true.\n\n" +
+                "The target WebPanel must be open with Designer active and free of unsaved changes. " +
+                "This tool cannot activate an inactive Designer or convert a legacy HW. " +
+                "After a native IDE save, reread the Designer to confirm persistence.\n",
+
             ["genexus_module"] =
                 "# genexus_module\n\n" +
                 "Inspect and manage modules through the GeneXus Module Manager.\n\n" +

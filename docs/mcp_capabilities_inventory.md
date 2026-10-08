@@ -103,6 +103,7 @@ The table below is the machine-checkable action contract for every umbrella tool
 | `genexus_sandbox` | — | `create`, `remove` |
 | `genexus_worker_pool` | — | `warm_spares` |
 | `genexus_edit_form` | — | `add_textblock`, `add_button`, `set_visibility`, `remove_control`, `wrap_in_fieldset` |
+| `genexus_k2b_designer` | `inspect`, `tree`, `preview` | `set_property`, `add_node`, `move_node`, `remove_node` |
 | `genexus_module` | `list` (SDK identity/path-aware, deterministic), `list_modules_servers`, `search_modules_in_servers` | `install`, `install_builtin` (dryRun=true plans local dependencies/objects/exact versions; application verifies inventory, with no implicit lifecycle or automatic rollback), `update`, `package`, `publish`, `restore`, `add_modules_server` |
 | `genexus_gxserver` | `status`, `pending`, `ignored`, `conflicts`, `history`, `pipeline_list`, `pipeline_runs`, `pipeline_output` | `commit`, `update`, `lock`, `resolve`, `pipeline_run`, `pipeline_abort` |
 | `genexus_kb_version` | `list`, `changed_objects` (Design vs frozen, paginated, read-only) | `freeze`, `branch`, `set_active`, `revert` |
@@ -173,9 +174,11 @@ semantics documented in #65, and the homonym-routing behavior tracked in #34.
 | `genexus_db` | active | Database umbrella: `DbDrift`, `DbOptimize`, `Analyze -> GetSQL / GetSqlForNavigation / GenerateSampleData`, typed Transaction records (`QueryRecords / InsertRecord / UpdateRecord`), `Types`, `ReorgImpact` |
 | `genexus_layout` | active | WebForm control tree, layout properties, printblock and report-control management; report fonts validate installed families and preserve unspecified components; report verification failures return recovery evidence without unsafe automatic restore |
 | `genexus_edit_form` | active | Semantic WebForm element manipulation |
+| `genexus_k2b_designer` | requires IDE bridge | Native editing of already-active K2B WebPanel Designers in the open GeneXus IDE; requires matching KB and pipe, an open clean document, and an expected version for writes |
 | `genexus_apply_pattern` | active | Pattern application for any installed pattern (registry discovered from `Packages\Patterns`), diagnose, and reapply on WorkWithPlus instances only (with no implicit WorkWithPlus fallback when `pattern` is omitted - headless reapply of any other pattern is refused as `PatternRouteUnsupported`), and WorkWithPlus action-group/form-action configuration |
 | `genexus_wwp` | active | Typed WorkWithPlus grid/form actions, tabs, nested controls, native table-type changes, grid attributes/variables, and native WebComponent-to-DropDownComponent replacement with preview, physical KB identity, parent/PatternInstance projection checks, concurrency checks, verification, and conditional rollback; an existing object without a WorkWithPlus instance returns `WWPInstanceNotFound` with `detectedPatterns` |
 | `genexus_security` | active | `Security -> audit_gam | scan_secrets | scan_native | audit_object` (native SDK scanner; in-memory single-object audit) |
+
 | `genexus_kb` | active | Multi-KB pool management, startup object, and environment switching |
 | `genexus_kb_version` | active | SDK `KBVersionHelper` model version tree and branch management; `changed_objects` provides a read-only Design-vs-frozen NEW/CHANGED inventory or stable `ChangedObjectsNotSupported` when the SDK surface is unavailable |
 | `genexus_gam` | active | SDK `IIntegratedSecurityService` GAM provisioning and deploy |
