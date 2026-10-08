@@ -1862,6 +1862,11 @@ namespace GxMcp.Worker.Services
                     );
                 }
 
+                if (part is global::Artech.Genexus.Common.Parts.EXOStructurePart)
+                    return Models.McpResponse.Err(code: "ExternalObjectTypedAuthoringRequired",
+                        message: "Generic part deserialization does not import External Object member collections.",
+                        hint: "Use genexus_authoring action=add_external_method and verify with genexus_read part=EXOStructure or an official XPZ export.", target: target);
+
                 // Issue #24 — skip the no-change short-circuit when a prior write to this
                 // part persisted empty. The in-memory Source still holds the content the
                 // SDK dropped, so it would falsely compare equal to the incoming code and

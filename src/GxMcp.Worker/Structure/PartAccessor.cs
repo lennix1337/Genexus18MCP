@@ -356,6 +356,11 @@ namespace GxMcp.Worker.Structure
 
         public static KBObjectPart GetPart(KBObject obj, string partName)
         {
+            // EO documentation is not its authored contract. Keep the generic
+            // Source alias on the typed structure for reads and Object Text.
+            if (obj is ExternalObject && Helpers.ExternalObjectContract.IsStructureAlias(partName))
+                return obj.Parts.OfType<EXOStructurePart>().FirstOrDefault();
+
             if (obj != null && string.Equals(partName, "DataViewIndexes", StringComparison.OrdinalIgnoreCase))
             {
                 try

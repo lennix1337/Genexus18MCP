@@ -395,7 +395,7 @@
             "type": "string"
           },
           "payload": {
-            "description": "add_external_method:{name,returnType?,p…",
+            "description": "add_external_method:{name,externalName?…",
             "type": "object"
           }
         },

@@ -325,6 +325,8 @@ namespace GxMcp.Worker.Services
                     message: "The requested XPZ import options could not be applied; no import was attempted. " + ex.Message,
                     hint: "Use the supported conflict/theme option values or omit them to use the safe defaults.");
             }
+            using (var diagnostics = new TransferDiagnostics(CommonServices.IsOutputAvailable ? CommonServices.Output : null))
+            {
             ImportFidelityPlan fidelityPlan;
             try
             {
@@ -335,23 +337,23 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Err(
                     code: "TransferImportVerificationUnavailable",
                     message: "The XPZ could not be inspected for WebForm preservation; no import was attempted. " + ex.Message,
-                    hint: "Retry after the XPZ is readable by the GeneXus SDK.");
+                    hint: "Retry after the XPZ is readable by the GeneXus SDK.",
+                    extra: ImportDiagnostics(diagnostics, imported: false));
             }
 
-            bool ok = svc.ImportFile(file, model, options);
+            bool ok;
+            try { ok = svc.ImportFile(file, model, options); }
+            catch (Exception ex)
+            {
+                diagnostics.Record("Error", ex.Message, ex.GetType().Name);
+                return McpResponse.Err(code: "TransferImportFailed", message: "The SDK import threw an exception.",
+                    hint: "Inspect SDK diagnostics and persisted objects before retrying; preview is not proof of import.",
+                    extra: ImportDiagnostics(diagnostics, imported: null));
+            }
 
             if (!ok)
             {
-                return McpResponse.Ok(
-                    code: "TransferImportDeclined",
-                    result: new JObject
-                    {
-                        ["success"] = false,
-                        ["file"] = file,
-                        ["source"] = "sdk:IKnowledgeManagerService.ImportFile",
-                        ["fidelityVerified"] = false,
-                        ["fidelity"] = new JObject { ["objectsChecked"] = 0 }
-                    });
+                return ImportDeclined(file, diagnostics);
             }
 
             var fidelity = VerifyImportedWebForms(fidelityPlan);
@@ -365,6 +367,7 @@ namespace GxMcp.Worker.Services
                     {
                         ["imported"] = true,
                         ["file"] = file,
+                        ["sdkDiagnostics"] = diagnostics.Messages,
                         ["fidelityVerified"] = false,
                         ["fidelity"] = fidelity.Result
                     });
@@ -377,9 +380,38 @@ namespace GxMcp.Worker.Services
                     ["success"] = true,
                     ["file"] = file,
                     ["source"] = "sdk:IKnowledgeManagerService.ImportFile",
+                    ["sdkDiagnostics"] = diagnostics.Messages,
                     ["fidelityVerified"] = true,
                     ["fidelity"] = fidelity.Result
                 });
+            }
+        }
+
+        internal static string ImportDeclined(string file, TransferDiagnostics diagnostics)
+        {
+            return McpResponse.Err(
+                    code: "TransferImportDeclined",
+                    message: "GeneXus ImportFile returned false; import was not confirmed.",
+                    hint: "Inspect sdkDiagnostics; an empty list means the SDK supplied no output diagnostic. Verify persisted objects before retrying.",
+                    extra: new JObject
+                    {
+                        ["success"] = false,
+                        ["file"] = file,
+                        ["source"] = "sdk:IKnowledgeManagerService.ImportFile",
+                        ["imported"] = false,
+                        ["sdkDiagnostics"] = diagnostics.Messages,
+                        ["diagnosticsAvailable"] = diagnostics.Available,
+                        ["diagnosticsTruncated"] = diagnostics.Truncated,
+                        ["fidelityVerified"] = false,
+                        ["fidelity"] = new JObject { ["objectsChecked"] = 0 }
+                    });
+        }
+
+        private static JObject ImportDiagnostics(TransferDiagnostics diagnostics, bool? imported)
+        {
+            return new JObject { ["imported"] = imported, ["success"] = false,
+                ["sdkDiagnostics"] = diagnostics.Messages, ["diagnosticsAvailable"] = diagnostics.Available,
+                ["diagnosticsTruncated"] = diagnostics.Truncated };
         }
 
         private ImportFidelityPlan CaptureImportFidelity(IKnowledgeManagerService svc, KBModel model,
@@ -714,6 +746,8 @@ namespace GxMcp.Worker.Services
             try { o.AutomaticBackup = false; } catch { }
             try { o.RollBackOnError = true; } catch { }
             try { o.AutomaticRollbackOnCancel = true; } catch { }
+            o.OutputLevel = System.Diagnostics.TraceLevel.Verbose;
+            o.ShowPropertiesErrors = true;
 
             string classConflicts = args?["classConflicts"]?.ToString();
             if (!string.IsNullOrWhiteSpace(classConflicts))

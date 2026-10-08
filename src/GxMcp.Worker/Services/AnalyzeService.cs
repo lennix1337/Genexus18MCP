@@ -1361,6 +1361,13 @@ namespace GxMcp.Worker.Services
                 if (includeAll || requested.Contains("structure"))
                 {
                     capture.Capture("structure", slot => {
+                        if (obj is Artech.Genexus.Common.Objects.ExternalObject)
+                        {
+                            var externalPart = obj.Parts.OfType<Artech.Genexus.Common.Parts.EXOStructurePart>().First();
+                            var contract = ExternalObjectContract.Read(externalPart);
+                            slot["externalMethods"] = contract["externalMethods"];
+                            slot["externalStructureVersion"] = ExternalObjectContract.Version(contract);
+                        }
                         // issue #25 follow-up (P1): cap each part source so a default
                         // inspect (no `include` filter) can't dump tens of KB of
                         // Rules+Conditions+Events unpaginated. Full source is available

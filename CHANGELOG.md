@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+- External Object method authoring applies native GeneXus types, dimensions, parameter directions and external names; previews, duplicate protection, snapshots and independent post-save verification preserve existing members. Reads and Object Text projections include the full method contract.
+- XPZ import captures SDK output diagnostics and returns an error when ImportFile declines; previews remain separate from persisted-state evidence.
+
 <!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
      subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
 

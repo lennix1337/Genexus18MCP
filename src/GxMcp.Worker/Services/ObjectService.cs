@@ -4292,6 +4292,17 @@ namespace GxMcp.Worker.Services
 
             result["parts"] = parts;
 
+            if (obj is ExternalObject)
+            {
+                var externalPart = obj.Parts.OfType<EXOStructurePart>().FirstOrDefault();
+                if (externalPart != null)
+                {
+                    var contract = ExternalObjectContract.Read(externalPart);
+                    result["externalMethods"] = contract["externalMethods"];
+                    result["externalStructureVersion"] = ExternalObjectContract.Version(contract);
+                }
+            }
+
             // Signature
             try
             {
@@ -5251,6 +5262,19 @@ namespace GxMcp.Worker.Services
 
                 JObject result = new JObject();
                 result["part"] = partName;
+
+                if (obj is ExternalObject && (part is EXOStructurePart
+                    || partName.Equals("Structure", StringComparison.OrdinalIgnoreCase)
+                    || partName.Equals("Source", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var externalPart = obj.Parts.OfType<EXOStructurePart>().First();
+                    var contract = ExternalObjectContract.Read(externalPart);
+                    ProcessSourceContent(obj, contract.ToString(), offset, limit, result, client);
+                    result["externalMethods"] = contract["externalMethods"].DeepClone();
+                    result["versionToken"] = ExternalObjectContract.Version(contract);
+                    result["patchable"] = false;
+                    return result.ToString();
+                }
 
                 // issue #26 (Humberto DSO case): reading the generic "Source" of a Design
                 // System returns BOTH parts — tokens block then styles block — so the whole

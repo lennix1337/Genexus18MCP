@@ -27,10 +27,81 @@ namespace GxMcp.Worker.Services.Structure
             return null;
         }
 
-        // payload = { name, returnType?, parameters?:[{name, type?, inout?:"in"|"out"|"inout"}] }
+        // Typed contract, duplicate checks and an independent read after saving.
         public string AddExternalMethod(string objName, string payload)
         {
-            return AddExternalMember(objName, payload, isMethod: true);
+            ExternalObjectMethod added = null;
+            EXOStructurePart exo = null;
+            KBObject obj = null;
+            JObject before = null;
+            bool saveAttempted = false;
+            try
+            {
+                var json = string.IsNullOrWhiteSpace(payload) ? new JObject() : JObject.Parse(payload);
+                ExternalObjectContract.ValidatePayload(json);
+                obj = _objectService.FindObjectFresh(objName, "ExternalObject");
+                if (obj == null) return HealingService.FormatNotFoundError(objName, _objectService.GetKbService().GetIndexCache().GetIndex());
+                if (!(obj is ExternalObject)) return Models.McpResponse.Err(code: "NotAnExternalObject", message: "Target is not an External Object.", target: objName);
+                exo = FindPart<EXOStructurePart>(obj);
+                if (exo == null) return Models.McpResponse.Err(code: "StructurePartNotFound", message: "External Object has no structure part.", target: objName);
+                before = ExternalObjectContract.Read(exo);
+                string version = ExternalObjectContract.Version(before);
+                if (json["expectedVersion"] != null && json["expectedVersion"].ToString() != version)
+                    return Models.McpResponse.Err(code: "VersionConflict", message: "External Object structure changed; read it again before adding a method.", target: objName);
+                var candidate = ExternalObjectContract.BuildMethod(exo, json);
+                var requested = ExternalObjectContract.DescribeMethod(candidate);
+                var matches = exo.ExternalMethods.Where(m => string.Equals(m.Name, candidate.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (matches.Count > 0)
+                {
+                    if (matches.Count != 1 || !ExternalObjectContract.SameSignature(ExternalObjectContract.DescribeMethod(matches[0]), requested))
+                        return Models.McpResponse.Err(code: "ExternalMethodConflict", message: "A method with this name already exists with a different contract. Nothing was changed.", target: objName);
+                    return Models.McpResponse.Ok(target: objName, code: "ExternalMethodAlreadyExists", result: new JObject {
+                        ["changed"] = false, ["persisted"] = true, ["method"] = ExternalObjectContract.DescribeMethod(matches[0]), ["versionToken"] = version });
+                }
+                if (json["dryRun"]?.Value<bool>() == true)
+                    return Models.McpResponse.Ok(target: objName, code: "ExternalMethodPreview", result: new JObject {
+                        ["dryRun"] = true, ["persisted"] = false, ["method"] = requested, ["preservedMethods"] = exo.ExternalMethods.Count, ["versionToken"] = version });
+                // Store the full native projection; generic EXOStructure XML omits its collections.
+                string snapshotDir = System.IO.Path.Combine(_objectService.GetKbService().GetKbPath(), ".gx", "snapshots", "external-methods");
+                System.IO.Directory.CreateDirectory(snapshotDir);
+                string snapshot = System.IO.Path.Combine(snapshotDir, obj.Guid.ToString("N") + "-" + Guid.NewGuid().ToString("N") + ".json");
+                System.IO.File.WriteAllText(snapshot, before.ToString(), new System.Text.UTF8Encoding(false));
+                added = candidate;
+                exo.ExternalMethods.Add(added);
+                var expected = (JObject)before.DeepClone();
+                ((JArray)expected["externalMethods"]).Add(ExternalObjectContract.DescribeMethod(added));
+                saveAttempted = true;
+                obj.EnsureSave();
+                var persisted = _objectService.FindObjectFresh(obj.Guid.ToString("D"), "ExternalObject");
+                var actual = ExternalObjectContract.Read(FindPart<EXOStructurePart>(persisted));
+                if (!JToken.DeepEquals(expected, actual)) throw new InvalidOperationException("Persisted External Object contract differs from the requested contract or an existing member changed.");
+                WriteService.NotePerTargetWrite(objName);
+                _objectService.MarkReadCacheDirty(persisted, "EXOStructure");
+                return Models.McpResponse.Ok(target: objName, code: "ExternalMethodAdded", result: new JObject {
+                    ["object"] = obj.Name, ["member"] = added.Name, ["count"] = exo.ExternalMethods.Count,
+                    ["persisted"] = true, ["verified"] = true, ["snapshot"] = snapshot,
+                    ["method"] = actual["externalMethods"].Last, ["versionToken"] = ExternalObjectContract.Version(actual) });
+            }
+            catch (Exception ex)
+            {
+                bool restored = false;
+                string rollbackError = null;
+                if (added != null && exo != null)
+                {
+                    try
+                    {
+                        exo.ExternalMethods.Remove(added);
+                        if (saveAttempted) obj.EnsureSave();
+                        var reloaded = _objectService.FindObjectFresh(obj.Guid.ToString("D"), "ExternalObject");
+                        restored = JToken.DeepEquals(before, ExternalObjectContract.Read(FindPart<EXOStructurePart>(reloaded)));
+                    }
+                    catch (Exception rollback) { rollbackError = rollback.Message; }
+                    _objectService.MarkReadCacheDirty(obj, "EXOStructure");
+                }
+                return Models.McpResponse.Err(code: ex is ArgumentException || ex is Newtonsoft.Json.JsonException ? "InvalidPayload" : "ExternalMemberAddFailed",
+                    message: ex.Message, target: objName, extra: new JObject {
+                        ["saveAttempted"] = saveAttempted, ["rollbackVerified"] = restored, ["rollbackError"] = rollbackError });
+            }
         }
 
         // payload = { name, type? }
