@@ -382,7 +382,7 @@ namespace GxMcp.Gateway
                 "Read or write the structure/data-model of GeneXus objects.\n\n" +
                 "## Actions\n" +
                 "- `get_visual` — returns logical hierarchy of Transaction levels/attributes or SDT structure. Use `type` (e.g. `Transaction`) to disambiguate name collisions.\n" +
-                "- `update_visual` — replace complete logical structure of a Transaction or SDT. Atomic snapshot, verification, and rollback on divergence. A Transaction attribute item carries `showInDefaultForms` (boolean: the row's \"Show in Default Forms\"); `get_visual` reports it and `update_visual` changes it only when it differs.\n" +
+                "- `update_visual` — replace a Transaction structure, or update an SDT with `payload.mode=replace|add`. For SDTs, `expectedVersion` is required, replace previews all omitted-member removals and requires `allowRemoval=true` to apply them, while add preserves existing SDK items. Saves are re-read and verified; failures trigger rollback from the matching native revision. A Transaction attribute item carries `showInDefaultForms` (boolean: the row's \"Show in Default Forms\"); `get_visual` reports it and `update_visual` changes it only when it differs.\n" +
                 "- `move_attribute` — reorder an attribute within a Transaction level using `before`, `after`, or `position`. Nested levels supported via `levelPath`.\n" +
                 "- `remove_attribute` — remove an attribute from a Transaction level by name.\n" +
                 "- `get_indexes` / `create_index` / `drop_index` — inspect and manage indexes on physical tables or transactions.\n" +
@@ -416,10 +416,10 @@ namespace GxMcp.Gateway
                 "# genexus_versioning\n\n" +
                 "KB version history, git integration, and rollback umbrella.\n\n" +
                 "## Actions\n" +
-                "- `history_list` — list SDK versions plus KB-scoped edit snapshots; legacy shared `.history` files are visible but marked non-restorable. Pass `part` (or legacy alias `partName`) to scope a part.\n" +
-                "- `history_get` — retrieve source of a specific historic `versionId` and requested part; unsupported parts are rejected explicitly.\n" +
+                "- `history_list` — list SDK versions plus KB-scoped edit snapshots; legacy shared `.history` files are visible but marked non-restorable. Omit `part` to list SDK revisions; passing it lists snapshots of that part.\n" +
+                "- `history_get` — retrieve source of a specific historic `versionId` and requested part. `part=SDTStructure` returns the typed structure of an SDT revision.\n" +
                 "- `history_save` — explicitly snapshot the current part under the active KB's isolated snapshot root.\n" +
-                "- `history_restore` — restore a prior KB-scoped snapshot or the explicit SDK `versionId`; pass `discard: true` for IDE 'Discard changes' parity. Legacy shared snapshots are reported but never selected automatically.\n" +
+                "- `history_restore` — restore a prior KB-scoped snapshot or explicit SDK `versionId`. For `part=SDTStructure`, supply `versionId`, `expectedVersion` from `get_visual`, and preview with `dryRun=true`; the native revision is copied and verified after save. Pass `discard: true` for IDE 'Discard changes' parity. Legacy shared snapshots are never selected automatically.\n" +
                 "- `undo` — revert the last N edits performed via MCP.\n" +
                 "- `time_travel` — recover object bytes from past git commits (`at: '<sha/ISO>'`).\n" +
                 "- `blame` — git blame annotations for object parts or files.\n" +

@@ -109,6 +109,7 @@ The table below is the machine-checkable action contract for every umbrella tool
 | `genexus_browser` | `smoke`, `a11y`, `wcag`, `capture`, `cross`, `preview` | — |
 | `genexus_db` | `drift_check`, `drift_report`, `optimize_analyze`, `optimize_suggest`, `optimize_report`, `sql_ddl`, `sql_navigation`, `records_query`, `types_list`, `types_describe`, `types_validate`, `reorg_impact`, `reorg_preview` | `sample_data`, `records_insert`, `records_update`, `translations_import` |
 | `genexus_versioning` | `history_list`, `history_get`, `time_travel`, `blame`, `diff`, `diff_generated` | `history_save`, `history_restore`, `undo` |
+
 | `genexus_io` | `asset_find`, `asset_read`, `read_blob`, `ocr`, `validate_kb_text_files`, `validate_text_in_memory`, `list_text_files`, `text_mirror_status` | `asset_write`, `export_part`, `import_part`, `export_kb_to_text`, `import_text_to_kb`, `text_mirror_start`, `text_mirror_stop`, `text_mirror_catchup`, `text_mirror_set_references`, `delete_kb_objects`, `export_unified`, `screenshot_publish` |
 | `genexus_variable` | — | `add`, `delete`, `modify` (add/modify accept `dimensions=1|2` with positive `dimensionSizes`; reads expose the persisted fixed-size metadata) |
 | `genexus_telemetry` | `executions`, `watch_event`, `friction_tail`, `learning_report`, `logs`, `profile_analyze`, `profile_hotspots`, `profile_correlate` | `friction_append` |
@@ -118,6 +119,8 @@ The table below is the machine-checkable action contract for every umbrella tool
 | `genexus_deploy` | `list_targets` | `deploy` |
 | `genexus_generator_reference` | `list`, `dry_run_add`, `dry_run_remove` | `add`, `remove` |
 | `genexus_wwp` | `list`, `settings_templates`, `settings_read`, `list_tabs`, `tab_schema` | `add_action`, `add_user_action`, `update_action`, `move_action`, `remove_action`, `add_tab`, `move_tab`, `remove_tab`, `set_table_type`, `add_grid_attribute`, `move_grid_column`, `add_grid_variable`, `add_grid`, `replace_web_component_with_user_action`, `settings_edit` |
+
+For SDTs, `genexus_structure update_visual` accepts `payload.mode=add|replace` and requires `expectedVersion`; replacement previews omitted-member removals and requires `allowRemoval=true` to apply them. `genexus_versioning history_get` reads a revision's `SDTStructure`, and `history_restore` previews or restores it with `versionId`, `expectedVersion`, native rollback, and post-save verification.
 
 Real-KB validation gate: `genexus_structure action=get_visual` with a homonymous
 target must be exercised against a KB that contains the relevant Transaction/Table

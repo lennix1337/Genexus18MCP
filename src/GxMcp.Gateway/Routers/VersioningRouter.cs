@@ -39,7 +39,8 @@ namespace GxMcp.Gateway.Routers
                         versionId = RouterArgs.Int(args, "versionId"),
                         snapshot = RouterArgs.Str(args, "snapshot"),
                         discard = RouterArgs.Bool(args, "discard"),
-                        dryRun = RouterArgs.Bool(args, "dryRun")
+                        dryRun = RouterArgs.Bool(args, "dryRun"),
+                        expectedVersion = RouterArgs.Str(args, "expectedVersion")
                     };
 
                 case "undo":

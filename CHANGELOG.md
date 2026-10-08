@@ -19,6 +19,8 @@
 
 - `genexus_edit` and `genexus_delete_object` no longer wait behind whole-KB scans launched by the Worker's automatic warmup. SDK commands queued behind another long operation now receive `WorkerBusy` when their bounded wait expires. A Variables edit preview reports the resolved object, version and proposed content without saving. Full edits honor `expectedVersion` even when the Gateway also sends an empty `baseVersion`. GeneXus CopyModel write locks return `KbWriteLocked` with persisted-state evidence instead of a generic transaction failure.
 
+- SDT `update_visual` now previews every member omitted by replacement, requires explicit removal confirmation, and supports `mode=add` while preserving existing members. SDT revision history can read and restore `SDTStructure` with an optimistic version check, preview, native rollback source, and post-save verification.
+
 ### Internal
 
 - The all-tools schema budget rose from 86,500 to 86,700 bytes for the property recovery and concurrency fields; the published profile measures about 86,503 bytes.

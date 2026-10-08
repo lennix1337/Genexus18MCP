@@ -200,7 +200,8 @@ namespace GxMcp.Gateway.Tests
                 ["versionId"] = 42,
                 ["snapshot"] = "latest",
                 ["discard"] = true,
-                ["dryRun"] = true
+                ["dryRun"] = true,
+                ["expectedVersion"] = "synthetic-version"
             };
 
             foreach (var routed in new object?[]
@@ -217,6 +218,7 @@ namespace GxMcp.Gateway.Tests
                 Assert.Equal("latest", (string?)json["snapshot"]);
                 Assert.True((bool?)json["discard"]);
                 Assert.True((bool?)json["dryRun"]);
+                Assert.Equal("synthetic-version", (string?)json["expectedVersion"]);
             }
         }
 

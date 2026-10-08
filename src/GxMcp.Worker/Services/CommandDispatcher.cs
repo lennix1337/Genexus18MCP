@@ -2729,7 +2729,8 @@ namespace GxMcp.Worker.Services
                 // Item 21 (friction 2026-05-22): dryRun=true returns the
                 // would-be diff without writing.
                 bool historyDryRun = args?["dryRun"]?.ToObject<bool?>() ?? false;
-                return _historyService.Execute(target, action, verId, partName, snapshotToken, discard, historyDryRun);
+                return _historyService.Execute(target, action, verId, partName, snapshotToken, discard, historyDryRun,
+                    args?["expectedVersion"]?.ToString());
             }
                     // Item 16 — genexus_undo last=N
         }

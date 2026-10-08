@@ -59,7 +59,15 @@ namespace GxMcp.Worker.Services
                 // the Transaction path below can't express any of that.
                 if (obj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase))
                 {
+                    obj = _objectService.FindObjectFreshByIdentity(obj);
+                    if (obj == null) return Models.McpResponse.Err(code: "FreshReadUnavailable",
+                        message: "A fresh SDT read could not be confirmed; no update was attempted.",
+                        target: targetName, extra: new JObject { ["persisted"] = false });
                     string sdtVersion = WriteService.ComputeVersionToken(obj);
+                    if (string.IsNullOrWhiteSpace(expectedVersion))
+                        return Models.McpResponse.Err(code: "ExpectedVersionRequired",
+                            message: "An SDT structure update requires expectedVersion from get_visual.",
+                            target: targetName, extra: new JObject { ["persisted"] = false, ["currentVersion"] = sdtVersion });
                     if (!string.IsNullOrWhiteSpace(expectedVersion)
                         && !string.Equals(expectedVersion, sdtVersion, StringComparison.Ordinal))
                         return Models.McpResponse.Err(code: "VersionConflict",
@@ -68,17 +76,29 @@ namespace GxMcp.Worker.Services
                                 ["currentVersion"] = sdtVersion, ["persisted"] = false });
                     if (dryRun)
                     {
-                        JObject currentSdt = null;
-                        try { currentSdt = JObject.Parse(_sdtService.GetSDTStructure(targetName)); } catch { }
-                        JArray beforeChildren = currentSdt?["children"] as JArray ?? new JArray();
-                        bool beforeIsColl = currentSdt?["isCollection"]?.ToObject<bool>() ?? false;
-
-                        JObject reqObj = null;
-                        try { reqObj = string.IsNullOrWhiteSpace(payload) ? new JObject() : JObject.Parse(payload); } catch { }
-                        JArray reqChildren = reqObj?["children"] as JArray ?? new JArray();
+                        JObject currentSdt = _sdtService.ReadStructure(obj);
+                        JArray beforeChildren = (JArray)currentSdt["children"];
+                        bool beforeIsColl = currentSdt["isCollection"]?.ToObject<bool>() ?? false;
+                        JObject reqObj;
+                        try { reqObj = JObject.Parse(payload); }
+                        catch (Exception ex) { return Models.McpResponse.Err(code: "InvalidStructurePayload", message: ex.Message, target: targetName); }
+                        var reqChildren = reqObj["children"] as JArray;
+                        string mode = reqObj["mode"]?.ToString() ?? "replace";
+                        if (mode != "replace" && mode != "add")
+                            return Models.McpResponse.Err(code: "InvalidStructureMode", message: "mode must be add or replace.", target: targetName);
+                        if (mode == "add" && (reqObj["isCollection"] != null || reqObj["collectionItemName"] != null))
+                            return Models.McpResponse.Err(code: "InvalidStructurePayload",
+                                message: "mode=add only accepts children; root metadata must be changed with mode=replace.", target: targetName);
+                        JArray projected;
+                        try { projected = SdtStructurePlan.Project(beforeChildren, reqChildren, mode == "add"); }
+                        catch (ArgumentException ex) { return Models.McpResponse.Err(code: "InvalidStructurePayload", message: ex.Message, target: targetName); }
                         bool? reqIsColl = reqObj?["isCollection"]?.ToObject<bool>();
 
-                        JArray sdtDiff = CompareRequestedStructure(reqChildren, beforeChildren, "children");
+                        JArray sdtDiff = SdtStructurePlan.Diff(beforeChildren, projected);
+                        foreach (string key in new[] { "isCollection", "collectionItemName" })
+                            if (reqObj[key] != null && !JToken.DeepEquals(currentSdt[key], reqObj[key]))
+                                sdtDiff.Add(new JObject { ["path"] = key, ["change"] = "changed",
+                                    ["before"] = currentSdt[key]?.DeepClone(), ["after"] = reqObj[key].DeepClone() });
                         bool mutationDetected = sdtDiff.Count > 0 || (reqIsColl.HasValue && reqIsColl.Value != beforeIsColl);
 
                         return Models.McpResponse.Ok(target: targetName, code: "DryRun", result: new JObject
@@ -90,11 +110,12 @@ namespace GxMcp.Worker.Services
                             ["versionToken"] = sdtVersion,
                             ["before"] = beforeChildren,
                             ["requested"] = reqObj,
+                            ["projected"] = projected,
                             ["diff"] = sdtDiff,
                             ["implicitLifecycleActions"] = new JArray()
                         });
                     }
-                    return _sdtService.UpdateSDTStructure(targetName, payload);
+                    return _sdtService.UpdateSDTStructure(targetName, payload, expectedVersion);
                 }
 
                 var trn = obj as Transaction;

@@ -12,11 +12,13 @@ namespace GxMcp.Worker.Services
     {
         private readonly ObjectService _objectService;
         private readonly WriteService _writeService;
+        private readonly SDTService _sdtService;
 
         public HistoryService(ObjectService objectService, WriteService writeService)
         {
             _objectService = objectService;
             _writeService = writeService;
+            _sdtService = new SDTService(objectService);
         }
 
         internal static string ResolveHistoryRoot(string kbPath)
@@ -187,7 +189,7 @@ namespace GxMcp.Worker.Services
         /// </summary>
         public string Execute(string target, string action, int versionId = 0,
                               string partName = null, string snapshotToken = null,
-                              bool discard = false, bool dryRun = false)
+                              bool discard = false, bool dryRun = false, string expectedVersion = null)
         {
             try
             {
@@ -206,7 +208,7 @@ namespace GxMcp.Worker.Services
                         // never fall through to the local snapshot store (or the old
                         // shared .history directory) when supplied.
                         if (versionId > 0)
-                            return RestoreVersion(target, partName, versionId, dryRun, discard);
+                            return RestoreVersion(target, partName, versionId, dryRun, discard, expectedVersion);
                         // Item 21 (friction 2026-05-22): dryRun=true returns the diff
                         // (current vs snapshot) without writing through SDK.
                         if (dryRun)
@@ -486,6 +488,25 @@ namespace GxMcp.Worker.Services
             if (obj == null) return RevisionObjectNotFound(target);
 
             string requestedPart = NormalizePartName(partName);
+            if (string.Equals(requestedPart, "SDTStructure", StringComparison.OrdinalIgnoreCase))
+            {
+                obj = _objectService.FindObjectFreshByIdentity(obj);
+                if (obj == null) return Models.McpResponse.Err(code: "FreshReadUnavailable",
+                    message: "A fresh SDT read could not be confirmed.", target: target);
+                var revision = obj.GetVersions().Cast<global::Artech.Architecture.Common.Objects.KBObject>()
+                    .FirstOrDefault(v => v.VersionId == versionId);
+                if (revision == null) return Models.McpResponse.Err(code: "VersionNotFound",
+                    message: "The requested revision is unavailable.", target: target);
+                try
+                {
+                    return Models.McpResponse.Ok(target: target, code: "VersionStructureRead", result: new JObject
+                    {
+                        ["part"] = "SDTStructure", ["versionId"] = versionId,
+                        ["structure"] = _sdtService.ReadStructure(revision, false)
+                    });
+                }
+                catch (Exception ex) { return Models.McpResponse.Err(code: "VersionPartUnavailable", message: ex.Message, target: target); }
+            }
             if (!TryGetVersionPartContent(obj, versionId, requestedPart, out string content, out string errorCode, out string reason))
             {
                 return Models.McpResponse.Err(
@@ -571,7 +592,7 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private string RestoreVersion(string target, string partName, int versionId, bool dryRun, bool discard)
+        private string RestoreVersion(string target, string partName, int versionId, bool dryRun, bool discard, string expectedVersion)
         {
             var obj = _objectService.FindObject(target);
             if (obj == null)
@@ -589,6 +610,17 @@ namespace GxMcp.Worker.Services
             }
 
             string requestedPart = NormalizePartName(partName);
+            if (string.Equals(requestedPart, "SDTStructure", StringComparison.OrdinalIgnoreCase))
+            {
+                obj = _objectService.FindObjectFreshByIdentity(obj);
+                if (obj == null) return Models.McpResponse.Err(code: "FreshReadUnavailable",
+                    message: "A fresh SDT read could not be confirmed; no restore was attempted.", target: target);
+                var revision = obj.GetVersions().Cast<global::Artech.Architecture.Common.Objects.KBObject>()
+                    .FirstOrDefault(v => v.VersionId == versionId);
+                if (revision == null) return Models.McpResponse.Err(code: "VersionNotFound",
+                    message: "The requested revision is unavailable.", target: target);
+                return _sdtService.RestoreRevision(obj, revision, versionId, expectedVersion, dryRun);
+            }
             if (!TryGetVersionPartContent(obj, versionId, requestedPart, out string content, out string errorCode, out string reason))
             {
                 return Models.McpResponse.Err(

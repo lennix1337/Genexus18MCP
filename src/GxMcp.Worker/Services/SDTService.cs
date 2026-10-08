@@ -22,9 +22,22 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                var obj = _objectService.FindObject(sdtName);
-                if (obj == null) return HealingService.FormatNotFoundError(sdtName, _objectService.GetKbService().GetIndexCache().GetIndex());
+                var seed = _objectService.FindObject(sdtName, "SDT");
+                if (seed == null) return HealingService.FormatNotFoundError(sdtName, _objectService.GetKbService().GetIndexCache().GetIndex());
+                var obj = _objectService.FindObjectFreshByIdentity(seed);
+                if (obj == null) return Models.McpResponse.Err(code: "FreshReadUnavailable",
+                    message: "A fresh SDT read could not be confirmed.", target: sdtName);
+                return ReadStructure(obj).ToString();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("SDTService Error: " + ex.Message);
+                return Models.McpResponse.Err(code: "StructureReadFailed", message: ex.Message, target: sdtName);
+            }
+        }
 
+        internal JObject ReadStructure(KBObject obj, bool includeVersionToken = true)
+        {
                 if (obj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase))
                 {
                     dynamic sdt = obj;
@@ -36,6 +49,7 @@ namespace GxMcp.Worker.Services
                     dynamic structure = FindStructurePart(sdt);
                     dynamic root = null;
                     try { root = structure?.Root; } catch { }
+                    if (root == null) throw new InvalidOperationException("The SDT structure root could not be read.");
 
                     // issue #47: the top-level "Collection" flag lives on the structure ROOT level,
                     // not on the SDT KBObject (sdt.IsCollection reads false there), which made a
@@ -56,24 +70,15 @@ namespace GxMcp.Worker.Services
                     Artech.Architecture.Common.Objects.KBModel model = null;
                     try { model = obj.Model; } catch { }
 
-                    if (root != null)
+                    foreach (dynamic child in root.Items)
                     {
-                        foreach (dynamic child in root.Items)
-                        {
-                            children.Add(MapLevelToResult(child, model));
-                        }
+                        children.Add(MapLevelToResult(child, model));
                     }
                     result["children"] = children;
-                    return result.ToString();
+                    if (includeVersionToken) result["versionToken"] = WriteService.ComputeVersionToken(obj);
+                    return result;
                 }
-
-                return "{\"status\":\"Error\",\"message\": \"Object is not an SDT\"}";
-            }
-            catch (Exception ex)
-            {
-                Logger.Error("SDTService Error: " + ex.Message);
-                return "{\"status\":\"Error\",\"message\": \"" + ex.Message + "\"}";
-            }
+                throw new ArgumentException("Object is not an SDT.", nameof(obj));
         }
 
         // issue #52: author an SDT's structure through genexus_structure action=update_visual.
@@ -85,13 +90,17 @@ namespace GxMcp.Worker.Services
         //       { name, type:"<OtherSdt>", isCollection? },             // SDT-reference member
         //       { name, isLevel:true, children:[ ... ] }                // nested level
         //   ] }
-        // Members not present in children are removed (declarative sync, matching the Transaction path).
-        public string UpdateSDTStructure(string sdtName, string payload)
+        // Replacement removes omitted members; mode=add only inserts new members.
+        public string UpdateSDTStructure(string sdtName, string payload, string expectedVersion)
         {
             try
             {
-                var obj = _objectService.FindObject(sdtName);
-                if (obj == null) return HealingService.FormatNotFoundError(sdtName, _objectService.GetKbService().GetIndexCache().GetIndex());
+                var seed = _objectService.FindObject(sdtName, "SDT");
+                if (seed == null) return HealingService.FormatNotFoundError(sdtName, _objectService.GetKbService().GetIndexCache().GetIndex());
+                var obj = _objectService.FindObjectFreshByIdentity(seed);
+                if (obj == null) return Models.McpResponse.Err(code: "FreshReadUnavailable",
+                    message: "A fresh SDT read could not be confirmed; no write was attempted.", target: sdtName,
+                    extra: new JObject { ["persisted"] = false });
                 if (!obj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase))
                     return Models.McpResponse.Err(code: "NotAnSDT", message: "Object is not an SDT.", target: sdtName);
 
@@ -107,45 +116,123 @@ namespace GxMcp.Worker.Services
                         hint: "e.g. {\"isCollection\":true,\"collectionItemName\":\"FooItem\",\"children\":[{\"name\":\"Bar\",\"type\":\"VarChar\",\"length\":100},{\"name\":\"Kind\",\"basedOnDomain\":\"MyDomain\"}]}",
                         target: sdtName);
 
-                dynamic structure = FindStructurePart((dynamic)obj);
-                dynamic root = null;
-                try { root = structure?.Root; } catch { }
-                if (structure == null || root == null)
-                    return Models.McpResponse.Err(code: "StructureUpdateFailed", message: "SDT structure part/root not found.", target: sdtName);
+                if (string.IsNullOrWhiteSpace(expectedVersion))
+                    return Models.McpResponse.Err(code: "ExpectedVersionRequired",
+                        message: "An SDT structure write requires expectedVersion from get_visual.", target: sdtName,
+                        extra: new JObject { ["persisted"] = false });
+                string mode = json["mode"]?.ToString() ?? "replace";
+                if (mode != "add" && mode != "replace")
+                    return Models.McpResponse.Err(code: "InvalidStructureMode", message: "mode must be add or replace.", target: sdtName);
+                bool add = mode == "add";
+                if (add && (json["isCollection"] != null || json["collectionItemName"] != null))
+                    return Models.McpResponse.Err(code: "InvalidStructurePayload",
+                        message: "mode=add only accepts children; root metadata must be changed with mode=replace.", target: sdtName);
+                JObject before = ReadStructure(obj);
+                JArray beforeChildren = (JArray)before["children"];
+                JArray projected;
+                try { projected = SdtStructurePlan.Project(beforeChildren, children, add); }
+                catch (ArgumentException ex) { return Models.McpResponse.Err(code: "InvalidStructurePayload", message: ex.Message, target: sdtName); }
+                JArray proposedDiff = SdtStructurePlan.Diff(beforeChildren, projected);
+                if (!add && proposedDiff.Any(x => x["change"]?.ToString() == "removed")
+                    && json["allowRemoval"]?.ToObject<bool>() != true)
+                    return Models.McpResponse.Err(code: "RemovalRequiresConfirmation",
+                        message: "Replacement omits existing SDT members. Pass allowRemoval=true only after reviewing the dryRun removals.",
+                        target: sdtName, extra: new JObject { ["persisted"] = false, ["diff"] = proposedDiff });
 
-                Artech.Architecture.Common.Objects.KBModel model = null;
-                try { model = obj.Model; } catch { }
+                string versionBefore = WriteService.ComputeVersionToken(obj);
+                if (!string.Equals(expectedVersion, versionBefore, StringComparison.Ordinal))
+                    return Models.McpResponse.Err(code: "VersionConflict", message: "The SDT changed after expectedVersion was captured.",
+                        target: sdtName, extra: new JObject { ["persisted"] = false, ["currentVersion"] = versionBefore });
 
+                ObjectMoveSnapshot snapshot;
+                try { snapshot = ObjectMoveSnapshot.Capture(obj); }
+                catch (Exception ex) { return Models.McpResponse.Err(code: "SnapshotFailed", message: ex.Message,
+                    target: sdtName, extra: new JObject { ["persisted"] = false }); }
+                KBObject beforeRevision = FindMatchingRevision(obj, before);
+                if (beforeRevision == null) return Models.McpResponse.Err(code: "RollbackRevisionUnavailable",
+                    message: "No native GeneXus revision matches the current SDT; the write was refused.",
+                    target: sdtName, extra: new JObject { ["persisted"] = false });
+
+                Exception writeFailure = null;
+                bool writeStarted = false;
+                bool saveStarted = false;
+                bool committed = false;
+                int applied = 0;
+                bool isCollection = false;
                 using (var sdkTrans = obj.Model.KB.BeginTransaction())
                 {
                     try
                     {
+                        var locked = obj.Model.Objects.Get(obj.Guid) ?? obj;
+                        if (!string.Equals(WriteService.ComputeVersionToken(locked), versionBefore, StringComparison.Ordinal))
+                            throw new InvalidOperationException("VersionConflict: the SDT changed before save.");
+                        dynamic structure = FindStructurePart((dynamic)locked);
+                        dynamic root = null;
+                        try { root = structure?.Root; } catch { }
+                        if (structure == null || root == null) throw new InvalidOperationException("SDT structure part/root not found.");
+                        Artech.Architecture.Common.Objects.KBModel model = locked.Model;
+                        writeStarted = true;
                         if (json["isCollection"] != null) { try { root.IsCollection = json["isCollection"].ToObject<bool>(); } catch { } }
                         string cin = json["collectionItemName"]?.ToString();
                         if (!string.IsNullOrEmpty(cin)) { try { root.CollectionItemName = cin; } catch { } }
 
-                        int applied = SyncSdtJsonNodes(root, children, model);
+                        applied = SyncSdtJsonNodes(root, children, model, !add);
 
                         GxMcp.Worker.Parsers.SdtDslParser.MarkPartDirty((object)structure, sdtName);
-                        obj.Save();
+                        saveStarted = true;
+                        locked.Save();
+                        JObject staged = ReadStructure(locked);
+                        if (!MatchesPlan(beforeChildren, children, (JArray)staged["children"], add)
+                            || !MatchesMetadata(before, json, staged))
+                            throw new InvalidOperationException("The saved SDT structure did not match the requested plan.");
+                        if (!snapshot.CompareParts(locked, "SDTStructure").Equal)
+                            throw new InvalidOperationException("The SDT save changed another object part.");
+                        try { isCollection = (bool)root.IsCollection; } catch { }
                         sdkTrans.Commit();
-
-                        _objectService.GetKbService().GetIndexCache().UpdateEntry(obj);
-
-                        bool isColl = false; try { isColl = (bool)root.IsCollection; } catch { }
-                        return Models.McpResponse.Ok(target: sdtName, code: "StructureUpdated",
-                            result: new JObject { ["membersApplied"] = applied, ["isCollection"] = isColl });
+                        committed = true;
+                        WriteService.NotePerTargetWrite(sdtName);
                     }
                     catch (Exception ex)
                     {
-                        try { sdkTrans.Rollback(); } catch { }
-                        return Models.McpResponse.Err(
-                            code: "StructureUpdateFailed",
-                            message: ex.InnerException?.Message ?? ex.Message,
-                            hint: "Check the payload children for malformed items or an unresolved basedOnDomain/type name.",
-                            target: sdtName);
+                        if (!committed) try { sdkTrans.Rollback(); } catch { }
+                        writeFailure = ex;
                     }
                 }
+                if (writeFailure != null)
+                    return ReconcileFailedWrite(obj, beforeRevision, snapshot, before,
+                        writeFailure, writeStarted, saveStarted, committed);
+
+                KBObject persistedObj = null;
+                JObject persisted = null;
+                try
+                {
+                    persistedObj = _objectService.FindObjectFreshByIdentity(obj);
+                    if (persistedObj != null) persisted = ReadStructure(persistedObj);
+                }
+                catch (Exception ex) { Logger.Warn("SDT post-save read failed: " + ex.Message); }
+                bool verified = persisted != null
+                    && MatchesPlan(beforeChildren, children, (JArray)persisted["children"], add)
+                    && MatchesMetadata(before, json, persisted)
+                    && snapshot.CompareParts(persistedObj, "SDTStructure").Equal;
+                if (!verified)
+                {
+                    bool rolledBack = RestoreFromRevision(obj, beforeRevision, snapshot, before);
+                    return Models.McpResponse.Err(code: persisted == null ? "FreshReadUnavailable" : "StructureUpdateNotPersisted",
+                        message: rolledBack ? "The post-save SDT could not be verified; the prior revision was restored and verified."
+                            : "The post-save SDT could not be verified and rollback could not be confirmed. Stop writing this object.",
+                        hint: "Read get_visual again through a fresh SDK instance before another write.",
+                        target: sdtName, extra: new JObject { ["persisted"] = rolledBack ? (JToken)new JValue(false)
+                                : persisted == null ? JValue.CreateNull() : new JValue(true), ["persistedVerified"] = false,
+                            ["beforeVersion"] = versionBefore, ["versionToken"] = persisted?["versionToken"],
+                            ["persistedStructure"] = persisted, ["rollback"] = rolledBack ? "verified" : "unverified" });
+                }
+                try { _objectService.GetKbService().GetIndexCache().UpdateEntry(persistedObj); }
+                catch (Exception ex) { Logger.Warn("SDT index refresh failed after verified save: " + ex.Message); }
+                return Models.McpResponse.Ok(target: sdtName, code: "StructureUpdated",
+                    result: new JObject { ["membersApplied"] = applied, ["isCollection"] = isCollection,
+                        ["persisted"] = true, ["persistedVerified"] = true,
+                        ["beforeVersion"] = versionBefore, ["versionToken"] = persisted["versionToken"],
+                        ["diff"] = proposedDiff, ["implicitLifecycleActions"] = new JArray() });
             }
             catch (Exception ex)
             {
@@ -153,14 +240,266 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private string ReconcileFailedWrite(KBObject seed, KBObject revision, ObjectMoveSnapshot snapshot,
+            JObject before, Exception failure, bool writeStarted, bool saveStarted, bool committed,
+            string errorCode = "StructureUpdateFailed")
+        {
+            string target = seed.Name;
+            if (!writeStarted)
+                return Models.McpResponse.Err(code: failure?.Message?.StartsWith("VersionConflict:", StringComparison.Ordinal) == true
+                        ? "VersionConflict" : errorCode,
+                    message: failure?.InnerException?.Message ?? failure?.Message ?? "SDT update failed before mutation.",
+                    target: target, extra: new JObject { ["persisted"] = false });
+
+            KBObject fresh = null;
+            JObject persisted = null;
+            try
+            {
+                fresh = _objectService.FindObjectFreshByIdentity(seed);
+                if (fresh != null) persisted = ReadStructure(fresh);
+            }
+            catch (Exception ex) { Logger.Warn("SDT failure reconciliation read failed: " + ex.Message); }
+            bool unchanged = persisted != null && SameStructure(before, persisted)
+                && snapshot.CompareParts(fresh, "SDTStructure").Equal;
+            bool rolledBack = false;
+            if (!unchanged && (saveStarted || committed))
+                rolledBack = RestoreFromRevision(seed, revision, snapshot, before);
+            return Models.McpResponse.Err(code: errorCode,
+                message: failure?.InnerException?.Message ?? failure?.Message ?? "SDT update failed.",
+                hint: unchanged || rolledBack ? "The prior SDT structure was verified after the failure."
+                    : "The persisted state could not be reconciled. Read get_visual before another write.",
+                target: target, extra: new JObject
+                {
+                    ["persisted"] = unchanged || rolledBack ? (JToken)new JValue(false)
+                        : persisted == null ? JValue.CreateNull() : new JValue(true),
+                    ["persistedStructure"] = persisted,
+                    ["rollback"] = unchanged ? "transaction-verified" : rolledBack ? "verified" : "unverified",
+                    ["implicitLifecycleActions"] = new JArray()
+                });
+        }
+
+        private bool RestoreFromRevision(KBObject seed, KBObject revision, ObjectMoveSnapshot snapshot, JObject expected)
+        {
+            try
+            {
+                using (var tx = seed.Model.KB.BeginTransaction())
+                {
+                    bool committed = false;
+                    try
+                    {
+                        var current = seed.Model.Objects.Get(seed.Guid) ?? seed;
+                        CopyStructure(revision, current);
+                        snapshot.RestoreParts(current, "SDTStructure");
+                        current.Save();
+                        if (!SameStructure(expected, ReadStructure(current))
+                            || !snapshot.CompareParts(current, "SDTStructure").Equal)
+                            throw new InvalidOperationException("The staged SDT rollback did not restore the prior state.");
+                        tx.Commit();
+                        committed = true;
+                    }
+                    finally { if (!committed) try { tx.Rollback(); } catch { } }
+                }
+                var restored = _objectService.FindObjectFreshByIdentity(seed);
+                return restored != null && SameStructure(expected, ReadStructure(restored))
+                    && snapshot.CompareParts(restored, "SDTStructure").Equal;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("SDT rollback failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        internal KBObject FindMatchingRevision(KBObject obj, JObject expected)
+        {
+            try
+            {
+                foreach (KBObject revision in obj.GetVersions())
+                    if (!ReferenceEquals(revision, obj) && revision.VersionId == obj.VersionId
+                        && SameStructure(expected, ReadStructure(revision, false)))
+                        return revision;
+            }
+            catch (Exception ex) { Logger.Warn("SDT rollback revision lookup failed: " + ex.Message); }
+            return null;
+        }
+
+        private static void CopyStructure(KBObject source, KBObject destination)
+        {
+            if (ReferenceEquals(source, destination))
+                throw new InvalidOperationException("The source revision is not detached from the current SDT.");
+            dynamic srcPart = ObjectService.FindSdtStructurePartOf(source);
+            dynamic dstPart = ObjectService.FindSdtStructurePartOf(destination);
+            if (srcPart == null || dstPart == null || srcPart.Root == null || dstPart.Root == null)
+                throw new InvalidOperationException("SDTStructure is unavailable on source or destination.");
+            try { dstPart.Root.IsCollection = srcPart.Root.IsCollection; } catch { }
+            try { dstPart.Root.CollectionItemName = srcPart.Root.CollectionItemName; } catch { }
+            ObjectService.ClearSdtItems(dstPart.Root);
+            ObjectService.CopySdtItems(srcPart.Root, dstPart.Root, destination.Model);
+            GxMcp.Worker.Parsers.SdtDslParser.MarkPartDirty((object)dstPart, destination.Name);
+        }
+
+        internal static bool MatchesPlan(JArray before, JArray requested, JArray persisted, bool add)
+        {
+            if (persisted == null || persisted.Count != (add ? (before?.Count ?? 0) + requested.Count : requested.Count))
+                return false;
+            if (add)
+            {
+                for (int i = 0; i < before.Count; i++)
+                    if (!JToken.DeepEquals(before[i], persisted[i])) return false;
+            }
+            int offset = add ? before.Count : 0;
+            for (int i = 0; i < requested.Count; i++)
+            {
+                var wanted = requested[i] as JObject;
+                var actual = persisted[i + offset] as JObject;
+                if (wanted == null || actual == null
+                    || !string.Equals(wanted["name"]?.ToString(), actual["name"]?.ToString(), StringComparison.OrdinalIgnoreCase))
+                    return false;
+                foreach (string key in new[] { "basedOnDomain", "basedOnAttribute", "referencedType", "length", "decimals", "isCollection", "isLevel" })
+                    if (wanted[key] != null && !string.Equals(wanted[key].ToString(), actual[key]?.ToString(), StringComparison.OrdinalIgnoreCase))
+                        return false;
+                string type = wanted["type"]?.ToString();
+                if (type?.StartsWith("Attribute:", StringComparison.OrdinalIgnoreCase) == true
+                    && !string.Equals(type.Substring("Attribute:".Length).Trim(), actual["basedOnAttribute"]?.ToString(),
+                        StringComparison.OrdinalIgnoreCase)) return false;
+                if (!string.IsNullOrWhiteSpace(type) && !type.StartsWith("Attribute", StringComparison.OrdinalIgnoreCase)
+                    && !type.Equals("GX_SDT", StringComparison.OrdinalIgnoreCase) && !type.Equals("Compound", StringComparison.OrdinalIgnoreCase))
+                {
+                    string actualType = LooksLikePrimitiveType(type) ? actual["type"]?.ToString() : actual["referencedType"]?.ToString();
+                    string expectedType = type.Split('(')[0].Trim();
+                    if (!string.Equals(expectedType, actualType, StringComparison.OrdinalIgnoreCase)) return false;
+                }
+                if (wanted["children"] is JArray nested && !MatchesPlan(new JArray(), nested, actual["children"] as JArray, false))
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool MatchesMetadata(JObject before, JObject requested, JObject actual)
+        {
+            bool collection = (requested["isCollection"] ?? before["isCollection"])?.ToObject<bool>() ?? false;
+            return JToken.DeepEquals(requested["isCollection"] ?? before["isCollection"], actual["isCollection"])
+                && string.Equals(collection ? (requested["collectionItemName"] ?? before["collectionItemName"])?.ToString() : null,
+                    actual["collectionItemName"]?.ToString(), StringComparison.Ordinal);
+        }
+
+        internal string RestoreRevision(KBObject current, KBObject revision, int versionId, string expectedVersion, bool dryRun)
+        {
+            string target = current.Name;
+            if (ReferenceEquals(current, revision))
+                return Models.McpResponse.Err(code: "VersionPartUnavailable",
+                    message: "The selected revision is not detached from the current SDT.", target: target);
+            if (string.IsNullOrWhiteSpace(expectedVersion))
+                return Models.McpResponse.Err(code: "ExpectedVersionRequired",
+                    message: "SDTStructure restoration requires expectedVersion from get_visual.", target: target,
+                    extra: new JObject { ["persisted"] = false });
+            string versionBefore = WriteService.ComputeVersionToken(current);
+            if (!string.Equals(expectedVersion, versionBefore, StringComparison.Ordinal))
+                return Models.McpResponse.Err(code: "VersionConflict", message: "The SDT changed after expectedVersion was captured.",
+                    target: target, extra: new JObject { ["persisted"] = false, ["currentVersion"] = versionBefore });
+            JObject before, desired;
+            try { before = ReadStructure(current); desired = ReadStructure(revision, false); }
+            catch (Exception ex) { return Models.McpResponse.Err(code: "VersionPartUnavailable", message: ex.Message, target: target); }
+            var desiredChildren = desired["children"] as JArray;
+            if (desiredChildren == null || desiredChildren.Count == 0)
+                return Models.McpResponse.Err(code: "VersionPartUnavailable",
+                    message: "The selected SDT revision has no readable structure; restoration was refused.", target: target);
+            var beforeChildren = (JArray)before["children"];
+            var diff = SdtStructurePlan.Diff(beforeChildren, desiredChildren);
+            foreach (string key in new[] { "isCollection", "collectionItemName" })
+                if (!JToken.DeepEquals(before[key], desired[key]))
+                    diff.Add(new JObject { ["path"] = key, ["change"] = "changed",
+                        ["before"] = before[key]?.DeepClone(), ["after"] = desired[key]?.DeepClone() });
+            if (dryRun)
+                return Models.McpResponse.Ok(target: target, code: "DryRun", result: new JObject
+                {
+                    ["part"] = "SDTStructure", ["versionId"] = versionId, ["dryRun"] = true,
+                    ["persisted"] = false, ["versionToken"] = versionBefore,
+                    ["beforeCount"] = beforeChildren.Count, ["restoredCount"] = desiredChildren.Count,
+                    ["diff"] = diff, ["implicitLifecycleActions"] = new JArray()
+                });
+
+            ObjectMoveSnapshot snapshot;
+            try { snapshot = ObjectMoveSnapshot.Capture(current); }
+            catch (Exception ex) { return Models.McpResponse.Err(code: "SnapshotFailed", message: ex.Message,
+                target: target, extra: new JObject { ["persisted"] = false }); }
+            KBObject beforeRevision = FindMatchingRevision(current, before);
+            if (beforeRevision == null) return Models.McpResponse.Err(code: "RollbackRevisionUnavailable",
+                message: "No native GeneXus revision matches the current SDT; the restore was refused.",
+                target: target, extra: new JObject { ["persisted"] = false });
+
+            bool committed = false;
+            bool writeStarted = false;
+            bool saveStarted = false;
+            try
+            {
+                using (var tx = current.Model.KB.BeginTransaction())
+                {
+                    try
+                    {
+                        var locked = current.Model.Objects.Get(current.Guid) ?? current;
+                        if (!string.Equals(WriteService.ComputeVersionToken(locked), versionBefore, StringComparison.Ordinal))
+                            throw new InvalidOperationException("VersionConflict: the SDT changed before restoration.");
+                        writeStarted = true;
+                        CopyStructure(revision, locked);
+                        saveStarted = true;
+                        locked.Save();
+                        if (!SameStructure(desired, ReadStructure(locked)))
+                            throw new InvalidOperationException("The staged SDT does not match the selected revision.");
+                        if (!snapshot.CompareParts(locked, "SDTStructure").Equal)
+                            throw new InvalidOperationException("Restoration changed another object part.");
+                        tx.Commit();
+                        committed = true;
+                    }
+                    finally { if (!committed) try { tx.Rollback(); } catch { } }
+                }
+                var persisted = _objectService.FindObjectFreshByIdentity(current);
+                JObject persistedStructure = persisted == null ? null : ReadStructure(persisted);
+                if (persistedStructure == null || !SameStructure(desired, persistedStructure)
+                    || !snapshot.CompareParts(persisted, "SDTStructure").Equal)
+                {
+                    bool rolledBack = RestoreFromRevision(current, beforeRevision, snapshot, before);
+                    return Models.McpResponse.Err(code: persistedStructure == null ? "FreshReadUnavailable" : "RevisionRestoreNotPersisted",
+                        message: rolledBack ? "Restoration could not be verified; the prior state was restored and verified."
+                            : "Restoration could not be verified; rollback could not be confirmed. Stop writing this object.",
+                        hint: "Read get_visual again through a fresh SDK instance before another write.",
+                        target: target, extra: new JObject { ["persisted"] = rolledBack ? (JToken)new JValue(false)
+                                : persistedStructure == null ? JValue.CreateNull() : new JValue(true),
+                            ["rollbackVerified"] = rolledBack, ["persistedStructure"] = persistedStructure });
+                }
+                try { _objectService.GetKbService().GetIndexCache().UpdateEntry(persisted); }
+                catch (Exception ex) { Logger.Warn("SDT index refresh failed after verified restore: " + ex.Message); }
+                WriteService.NotePerTargetWrite(target);
+                return Models.McpResponse.Ok(target: target, code: "RevisionStructureRestored", result: new JObject
+                {
+                    ["part"] = "SDTStructure", ["versionId"] = versionId, ["persisted"] = true,
+                    ["persistedVerified"] = true, ["restoredCount"] = desiredChildren.Count,
+                    ["versionToken"] = persistedStructure["versionToken"], ["diff"] = diff,
+                    ["implicitLifecycleActions"] = new JArray()
+                });
+            }
+            catch (Exception ex)
+            {
+                return ReconcileFailedWrite(current, beforeRevision, snapshot, before,
+                    ex, writeStarted, saveStarted, committed, "RevisionRestoreFailed");
+            }
+        }
+
+        private static bool SameStructure(JObject expected, JObject actual)
+        {
+            return JToken.DeepEquals(expected?["children"], actual?["children"])
+                && JToken.DeepEquals(expected?["isCollection"], actual?["isCollection"])
+                && string.Equals(expected?["collectionItemName"]?.ToString(), actual?["collectionItemName"]?.ToString(), StringComparison.Ordinal);
+        }
+
         // Declaratively sync an SDT structure node's children from a JSON array. Adds/keeps members
         // named in the payload, removes the rest, recurses into nested levels. Handles primitive,
         // Domain-based (basedOnDomain) and SDT-reference (type names an SDT) members.
-        private int SyncSdtJsonNodes(dynamic node, JArray children, Artech.Architecture.Common.Objects.KBModel model)
+        private int SyncSdtJsonNodes(dynamic node, JArray children, Artech.Architecture.Common.Objects.KBModel model, bool removeMissing)
         {
             int applied = 0;
             dynamic items;
-            try { items = node.Items; } catch { return 0; }
+            try { items = node.Items; } catch (Exception ex) { throw new InvalidOperationException("SDT Items are unavailable.", ex); }
 
             var wanted = new System.Collections.Generic.HashSet<string>(
                 children.Select(c => c["name"]?.ToString() ?? string.Empty), StringComparer.OrdinalIgnoreCase);
@@ -170,9 +509,9 @@ namespace GxMcp.Worker.Services
             {
                 string cn = (string)c.Name;
                 existing[cn] = c;
-                if (!wanted.Contains(cn)) toRemove.Add(c);
+                if (removeMissing && !wanted.Contains(cn)) toRemove.Add(c);
             }
-            foreach (dynamic d in toRemove) { try { items.Remove(d); } catch { } }
+            foreach (dynamic d in toRemove) items.Remove(d);
 
             Type nodeType = ((object)node).GetType();
             Type eDBTypeT = nodeType.Assembly.GetType("Artech.Genexus.Common.eDBType");
@@ -182,9 +521,9 @@ namespace GxMcp.Worker.Services
             foreach (var tok in children)
             {
                 var child = tok as JObject;
-                if (child == null) continue;
+                if (child == null) throw new ArgumentException("Every SDT child must be an object.");
                 string name = child["name"]?.ToString();
-                if (string.IsNullOrWhiteSpace(name)) continue;
+                if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Every SDT child needs a name.");
 
                 bool isLevel = child["isLevel"]?.ToObject<bool>() ?? (child["children"] is JArray);
                 bool isColl = child["isCollection"]?.ToObject<bool>() ?? false;
@@ -220,14 +559,14 @@ namespace GxMcp.Worker.Services
                 {
                     if (target == null)
                     {
-                        if (addLevel == null) continue;
+                        if (addLevel == null) throw new MissingMethodException("SDT AddLevel is unavailable.");
                         try { target = addLevel.Invoke((object)node, new object[] { name }); }
-                        catch (Exception ex) { Logger.Error("[SDT WRITE] AddLevel('" + name + "') failed: " + (ex.InnerException?.Message ?? ex.Message)); continue; }
+                        catch (Exception ex) { throw new InvalidOperationException("AddLevel failed for '" + name + "'.", ex); }
                     }
-                    if (target == null) continue;
+                    if (target == null) throw new InvalidOperationException("AddLevel returned no member for '" + name + "'.");
                     try { target.IsCollection = isColl; } catch { }
                     var grand = child["children"] as JArray ?? new JArray();
-                    applied += 1 + SyncSdtJsonNodes(target, grand, model);
+                    applied += 1 + SyncSdtJsonNodes(target, grand, model, removeMissing);
                     continue;
                 }
 
@@ -254,7 +593,7 @@ namespace GxMcp.Worker.Services
 
                 if (target == null)
                 {
-                    if (addItem == null || eDBTypeT == null) continue;
+                    if (addItem == null || eDBTypeT == null) throw new MissingMethodException("SDT AddItem is unavailable.");
                     object baseType;
                     if (attributeObj != null) { try { baseType = ((dynamic)attributeObj).Type; } catch { baseType = Enum.Parse(eDBTypeT, "VARCHAR"); } }
                     else if (domainObj != null) { try { baseType = ((dynamic)domainObj).DataType; } catch { baseType = Enum.Parse(eDBTypeT, "VARCHAR"); } }
@@ -262,9 +601,9 @@ namespace GxMcp.Worker.Services
                     else if (GxMcp.Worker.Helpers.VariableInjector.TryParseDbType(typeStr, out var pt)) baseType = pt;
                     else baseType = Enum.Parse(eDBTypeT, "VARCHAR");
                     try { target = addItem.Invoke((object)node, new object[] { name, baseType }); }
-                    catch (Exception ex) { Logger.Error("[SDT WRITE] AddItem('" + name + "') failed: " + (ex.InnerException?.Message ?? ex.Message)); continue; }
+                    catch (Exception ex) { throw new InvalidOperationException("AddItem failed for '" + name + "'.", ex); }
                 }
-                if (target == null) continue;
+                if (target == null) throw new InvalidOperationException("AddItem returned no member for '" + name + "'.");
 
                 try { target.IsCollection = isColl; } catch { }
                 if (attributeObj != null)
@@ -351,12 +690,11 @@ namespace GxMcp.Worker.Services
         private JObject MapLevelToResult(dynamic level, Artech.Architecture.Common.Objects.KBModel model = null)
         {
             var res = new JObject();
-            try { res["name"] = (string)level.Name; } catch { res["name"] = "?"; }
-
-            bool isLeaf = true;
-            try { isLeaf = level.IsLeafItem; } catch { }
-
-            try { res["isCollection"] = (bool)level.IsCollection; } catch { res["isCollection"] = false; }
+            string memberName = (string)level.Name;
+            if (string.IsNullOrWhiteSpace(memberName)) throw new InvalidOperationException("An SDT member has no readable name.");
+            res["name"] = memberName;
+            bool isLeaf = (bool)level.IsLeafItem;
+            res["isCollection"] = (bool)level.IsCollection;
 
             if (!isLeaf)
             {
@@ -367,15 +705,15 @@ namespace GxMcp.Worker.Services
                     {
                         children.Add(MapLevelToResult(child, model));
                     }
-                } catch { }
+                } catch (Exception ex) { throw new InvalidOperationException("Nested SDT members could not be read.", ex); }
                 res["children"] = children;
                 res["type"] = "Compound";
             }
             else
             {
                 res["isLevel"] = false;
-                string typeStr = "Unknown";
-                try { typeStr = level.Type.ToString(); } catch { }
+                string typeStr = level.Type.ToString();
+                if (string.IsNullOrWhiteSpace(typeStr)) throw new InvalidOperationException("An SDT member has no readable type.");
                 res["type"] = typeStr;
                 // issue #109: surface basedOnAttribute if member is based on an Attribute.
                 try

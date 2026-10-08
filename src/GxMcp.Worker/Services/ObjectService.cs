@@ -1559,7 +1559,7 @@ namespace GxMcp.Worker.Services
         private static readonly Guid SDT_STRUCTURE_PART_GUID = Guid.Parse("8597371d-1941-4c12-9c17-48df9911e2f3");
 
         // Locate an SDT's structure part (SDTStructurePart) by GUID / descriptor / class name.
-        private static KBObjectPart FindSdtStructurePartOf(KBObject sdt)
+        internal static KBObjectPart FindSdtStructurePartOf(KBObject sdt)
         {
             if (sdt == null) return null;
             foreach (KBObjectPart p in sdt.Parts)
@@ -1840,7 +1840,7 @@ namespace GxMcp.Worker.Services
         }
 
         // Remove every item currently under an SDT structure node (used to drop the create-time seed).
-        private static void ClearSdtItems(dynamic node)
+        internal static void ClearSdtItems(dynamic node)
         {
             try
             {
@@ -1855,7 +1855,7 @@ namespace GxMcp.Worker.Services
         // preserving type, length/decimals, the per-item collection flag, the Domain link
         // (DomainBasedOn) and SDT-reference (GX_SDT) so Domain-based / SDT-typed members survive
         // the clone instead of collapsing to their base primitive type. Returns items copied.
-        private static int CopySdtItems(dynamic srcNode, dynamic tgtNode, Artech.Architecture.Common.Objects.KBModel model)
+        internal static int CopySdtItems(dynamic srcNode, dynamic tgtNode, Artech.Architecture.Common.Objects.KBModel model)
         {
             int n = 0;
             Type tgtNodeType = ((object)tgtNode).GetType();
