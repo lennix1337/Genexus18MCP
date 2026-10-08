@@ -6,6 +6,30 @@ namespace GxMcp.Gateway.Tests
     public sealed class PropertiesRouterBatchTests
     {
         [Fact]
+        public void PropertiesRecoveryAndSafeSet_ForwardTypedArguments()
+        {
+            var router = new GxMcp.Gateway.Routers.PropertiesRouter();
+            var read = JObject.FromObject(router.ConvertToolCall("genexus_properties", new JObject
+            {
+                ["action"] = "get", ["name"] = "SamplePanel", ["type"] = "WebPanel",
+                ["propertyNames"] = new JArray("MainProgram", "MasterPage", "IntegratedSecurityLevel"),
+                ["reconcileTimedOutWrite"] = true
+            })!);
+            Assert.True(read["reconcileTimedOutWrite"]?.Value<bool>());
+            Assert.Equal(3, ((JArray)read["propertyNames"]!).Count);
+
+            var write = JObject.FromObject(router.ConvertToolCall("genexus_properties", new JObject
+            {
+                ["action"] = "set", ["name"] = "SamplePanel", ["type"] = "WebPanel",
+                ["properties"] = new JObject { ["MasterPage"] = "" },
+                ["expectedVersion"] = "v2", ["dryRun"] = true
+            })!);
+            Assert.Equal("v2", write["expectedVersion"]?.ToString());
+            Assert.True(write["dryRun"]?.Value<bool>());
+            Assert.True(write["rollbackOnFailure"]?.Value<bool>());
+        }
+
+        [Fact]
         public void PropertiesGet_ForwardsBatchTargetsThroughWorkerEnvelope()
         {
             var request = new JObject

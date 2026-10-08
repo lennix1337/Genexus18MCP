@@ -2847,8 +2847,29 @@ namespace GxMcp.Worker.Services
                         target,
                         propsObj,
                         args?["control"]?.ToString(),
-                        propType);
-                    return _saveSpecifyOrchestrator.MaybeValidateAfterWrite(propResp, target, args);
+                        propType,
+                        args?["expectedVersion"]?.ToString(),
+                        args?["dryRun"]?.ToObject<bool?>() ?? false,
+                        args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true);
+                    return args?["dryRun"]?.ToObject<bool?>() == true
+                        ? propResp : _saveSpecifyOrchestrator.MaybeValidateAfterWrite(propResp, target, args);
+                }
+
+                if (args?["dryRun"]?.ToObject<bool?>() == true
+                    || !string.IsNullOrWhiteSpace(args?["expectedVersion"]?.ToString()))
+                {
+                    string propertyName = args?["propertyName"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(propertyName))
+                        return Models.McpResponse.Err(code: "MissingPropertyName", target: target,
+                            message: "propertyName is required for a single-property write.");
+                    var safeSingle = _propertyService.SetProperties(target,
+                        new JObject { [propertyName] = args?["value"]?.ToString() ?? string.Empty },
+                        args?["control"]?.ToString(), propType,
+                        args?["expectedVersion"]?.ToString(),
+                        args?["dryRun"]?.ToObject<bool?>() ?? false,
+                        args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true);
+                    return args?["dryRun"]?.ToObject<bool?>() == true
+                        ? safeSingle : _saveSpecifyOrchestrator.MaybeValidateAfterWrite(safeSingle, target, args);
                 }
 
                 var singleResp = _propertyService.SetProperty(
@@ -2893,7 +2914,8 @@ namespace GxMcp.Worker.Services
                 propName,
                 propNames,
                 projection,
-                query);
+                query,
+                args?["reconcileTimedOutWrite"]?.ToObject<bool?>() ?? false);
         }
 
         private string Handle_Asset(JObject request, string method, string action, string target, string payload, JObject args)

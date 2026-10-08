@@ -147,5 +147,26 @@ namespace GxMcp.Worker.Tests
 
             Assert.StartsWith("InvalidPropertyValue", PropertyService.ValidatePropertyWrite(container, "Count", "abc"));
         }
+
+        [Fact]
+        public void SelectedRecoveryRead_UsesTypedValuesAndOnlyRequestedProperties()
+        {
+            var container = new FakeContainer();
+            container.Properties.Add(new FakeProperty { Name = "IsMain", Value = true,
+                Definition = new FakeDefinition { Type = typeof(bool) } });
+            container.Properties.Add(new FakeProperty { Name = "MasterPage", Value = new FakeReference("SampleMasterPage"),
+                Definition = new FakeDefinition { Type = typeof(WebPanelReference) } });
+            container.Properties.Add(new FakeProperty { Name = "Unrelated", Value = "private" });
+
+            var result = PropertyService.SerializeSelectedProperties(container, null,
+                new[] { "MainProgram", "MasterPage" }, webPanel: true);
+            var properties = (Newtonsoft.Json.Linq.JArray)result["properties"];
+
+            Assert.Equal(2, properties.Count);
+            Assert.Equal("MainProgram", properties[0]["name"]?.ToString());
+            Assert.Equal("IsMain", properties[0]["nativeName"]?.ToString());
+            Assert.Equal("True", properties[0]["value"]?.ToString());
+            Assert.Equal("SampleMasterPage", properties[1]["value"]?.ToString());
+        }
     }
 }

@@ -163,10 +163,10 @@ namespace GxMcp.Gateway
         public void RequireRead(
             string? kbAlias, string? target, string? part, string? operationId,
             string? targetGuid, string? targetEntityKey, string? targetType,
-            string? targetPath, string? expectedVersion)
+            string? targetPath, string? expectedVersion, IEnumerable<string>? propertyNames = null)
         {
             RequireReadCore(_defaultOwner, kbAlias, target, part, operationId,
-                targetGuid, targetEntityKey, targetType, targetPath, expectedVersion);
+                targetGuid, targetEntityKey, targetType, targetPath, expectedVersion, propertyNames);
         }
 
         internal void RequireRead(OperationalStateKey owner, string target, string? part, string? operationId)
@@ -187,7 +187,7 @@ namespace GxMcp.Gateway
         private void RequireReadCore(
             OperationalStateKey? owner, string? kbAlias, string? target, string? part, string? operationId,
             string? targetGuid, string? targetEntityKey, string? targetType,
-            string? targetPath, string? expectedVersion)
+            string? targetPath, string? expectedVersion, IEnumerable<string>? propertyNames = null)
         {
             if (string.IsNullOrWhiteSpace(kbAlias) || string.IsNullOrWhiteSpace(target)) return;
             var requirement = new RecoveryRequirement
@@ -202,6 +202,8 @@ namespace GxMcp.Gateway
                 TargetType = Normalize(targetType) ?? string.Empty,
                 TargetPath = Normalize(targetPath) ?? string.Empty,
                 ExpectedVersion = Normalize(expectedVersion) ?? string.Empty,
+                PropertyNames = propertyNames?.Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Select(name => name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? Array.Empty<string>(),
                 RequiredAtUtc = DateTime.UtcNow
             };
             lock (_journalLock)
@@ -414,6 +416,8 @@ namespace GxMcp.Gateway
                     : "A previous write timed out or was cancelled, so its persisted state is unknown.",
                 ["hint"] = kbLevel
                     ? "Reconcile the manifest/KB state before retrying. No single object/part read can clear this fence."
+                    : string.Equals(requirement.Part, "Properties", StringComparison.OrdinalIgnoreCase)
+                    ? "Read the persisted property values with genexus_properties action=get, reconcileTimedOutWrite=true, then retry with its versionToken. Older fences without property names require an unfiltered full properties read."
                     : "Call genexus_read for the target and part with limit=0. A successful complete read clears this recovery fence; then retry from the returned versionToken.",
                 ["retryable"] = false,
                 ["reconciliationRequired"] = true
@@ -424,8 +428,18 @@ namespace GxMcp.Gateway
                 {
                     new JObject
                     {
-                        ["tool"] = "genexus_read",
-                        ["args"] = new JObject
+                        ["tool"] = string.Equals(requirement.Part, "Properties", StringComparison.OrdinalIgnoreCase)
+                            ? "genexus_properties" : "genexus_read",
+                        ["args"] = string.Equals(requirement.Part, "Properties", StringComparison.OrdinalIgnoreCase)
+                            ? new JObject
+                            {
+                                ["action"] = "get",
+                                ["name"] = requirement.Target,
+                                ["type"] = string.IsNullOrWhiteSpace(requirement.TargetType) ? null : requirement.TargetType,
+                                ["propertyNames"] = new JArray(requirement.PropertyNames ?? Array.Empty<string>()),
+                                ["reconcileTimedOutWrite"] = true
+                            }
+                            : new JObject
                         {
                             ["name"] = requirement.Target,
                             ["guid"] = string.IsNullOrWhiteSpace(requirement.TargetGuid) ? null : requirement.TargetGuid,
@@ -867,6 +881,7 @@ namespace GxMcp.Gateway
         public string TargetType { get; set; } = string.Empty;
         public string TargetPath { get; set; } = string.Empty;
         public string ExpectedVersion { get; set; } = string.Empty;
+        public string[] PropertyNames { get; set; } = Array.Empty<string>();
         public DateTime RequiredAtUtc { get; set; }
     }
 }

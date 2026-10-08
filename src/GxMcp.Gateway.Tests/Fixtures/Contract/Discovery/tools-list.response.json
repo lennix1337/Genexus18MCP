@@ -3518,7 +3518,7 @@
             "type": "string"
           },
           "baseVersion": {
-            "description": "move: opaque optimistic concurrency…",
+            "description": "set/move: opaque optimistic concurrency…",
             "type": "string"
           },
           "control": {
@@ -3538,8 +3538,12 @@
             "type": "string"
           },
           "dryRun": {
-            "description": "move: preview from/to and preserved…",
+            "description": "set/move: preview without persisting.",
             "type": "boolean"
+          },
+          "expectedVersion": {
+            "description": "set: versionToken from an authoritative…",
+            "type": "string"
           },
           "folder": {
             "description": "move: destination alias with Folder…",
@@ -3584,8 +3588,12 @@
             "description": "get: substring or * wildcard filter for…",
             "type": "string"
           },
+          "reconcileTimedOutWrite": {
+            "description": "get: fresh typed read; clear timeout…",
+            "type": "boolean"
+          },
           "rollbackOnFailure": {
-            "description": "move: attempt compensating snapshot…",
+            "description": "set: required true; restore and verify…",
             "type": "boolean"
           },
           "targetModule": {

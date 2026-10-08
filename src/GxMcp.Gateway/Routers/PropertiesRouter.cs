@@ -33,10 +33,12 @@ namespace GxMcp.Gateway.Routers
                     properties = args?["properties"] as JObject,
                     control = args?["control"]?.ToString(),
                     type = args?["type"]?.ToString(),
+                    expectedVersion = args?["expectedVersion"]?.ToString() ?? args?["baseVersion"]?.ToString(),
+                    dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
                     // issue #60 — validationMode="specify" runs the inline Specify pass after
                     // the property write; rollbackOnFailure restores on spec errors.
                     validationMode = args?["validationMode"]?.ToString(),
-                    rollbackOnFailure = args?["rollbackOnFailure"]?.ToObject<bool?>() ?? false
+                    rollbackOnFailure = args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true
                 };
             }
 
@@ -90,7 +92,8 @@ namespace GxMcp.Gateway.Routers
                 propertyNames = propNamesToken,
                 properties = args?["properties"],
                 projection = args?["projection"]?.ToString(),
-                query = args?["query"]?.ToString()
+                query = args?["query"]?.ToString(),
+                reconcileTimedOutWrite = args?["reconcileTimedOutWrite"]?.ToObject<bool?>() ?? false
             };
         }
     }

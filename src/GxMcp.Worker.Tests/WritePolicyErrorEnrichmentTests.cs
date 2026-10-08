@@ -11,6 +11,15 @@ namespace GxMcp.Worker.Tests
     public class WritePolicyErrorEnrichmentTests
     {
         [Theory]
+        [InlineData("Saving não é permitido neste momento. User has a bloqueio CopyModel.", true)]
+        [InlineData("SDK save rejected: CopyModel", true)]
+        [InlineData("src0059: syntax error", false)]
+        public void CopyModelWriteLock_IsIdentified(string message, bool expected)
+        {
+            Assert.Equal(expected, WritePolicy.IsCopyModelWriteLock(message));
+        }
+
+        [Theory]
         [InlineData("Erro")]
         [InlineData("erro")]
         [InlineData(" Error ")]

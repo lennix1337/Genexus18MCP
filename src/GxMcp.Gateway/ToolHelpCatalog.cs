@@ -584,7 +584,8 @@ namespace GxMcp.Gateway
                 "- `get` — read current property values and version information. Filter with `propertyName` (name, comma-separated list, or * wildcard), `propertyNames[]`, `query` (search filter), or `projection` (minimal, standard, full; default full). `targets: [{name, type?}]` reads up to 100 objects in input order; each result has its own status/error.\n" +
                 "- `set` — assign one or more named properties and verify the saved values.\n" +
                 "- `move` — move an object to another module or folder.\n\n" +
-                "`get` is read-only. `set` and `move` mutate the KB; use the version token when a concurrent IDE edit must not be overwritten.\n",
+                "After a timed-out `set`, call `get` with `reconcileTimedOutWrite: true` and all affected `propertyNames`. It reads persisted values by native identity, returns `versionToken`, and clears the write fence only after confirming every affected property. On a WebPanel, `MainProgram` reads and writes the SDK's `IsMain` property; the read reports `nativeName`. If neither property is exposed, the response explains the limitation and leaves the fence in place.\n\n" +
+                "`set` accepts `dryRun`, `expectedVersion`, and `rollbackOnFailure: true`; batch writes save once, verify every property and preserve the complete object snapshot on failure. No lifecycle operation or test runs implicitly.\n",
 
             ["genexus_authoring"] =
                 "# genexus_authoring\n\n" +

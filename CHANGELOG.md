@@ -15,7 +15,13 @@
 
 ### Fixed
 
+- `genexus_properties action=get,reconcileTimedOutWrite=true` now performs an authoritative typed read of persisted values and clears a matching timeout fence only when every affected property and a version token are present. On WebPanels, `MainProgram` maps explicitly to the native `IsMain` property. Property writes support `dryRun`, `expectedVersion`, independent post-save verification and complete-object rollback on failure; WebPanel reference properties work in batches. No lifecycle operation runs implicitly.
+
+- `genexus_edit` and `genexus_delete_object` no longer wait behind whole-KB scans launched by the Worker's automatic warmup. SDK commands queued behind another long operation now receive `WorkerBusy` when their bounded wait expires. A Variables edit preview reports the resolved object, version and proposed content without saving. Full edits honor `expectedVersion` even when the Gateway also sends an empty `baseVersion`. GeneXus CopyModel write locks return `KbWriteLocked` with persisted-state evidence instead of a generic transaction failure.
+
 ### Internal
+
+- The all-tools schema budget rose from 86,500 to 86,700 bytes for the property recovery and concurrency fields; the published profile measures about 86,503 bytes.
 
 ## v3.12.0 - 2026-10-06
 

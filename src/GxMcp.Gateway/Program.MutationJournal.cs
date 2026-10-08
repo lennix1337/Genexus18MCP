@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Gateway
@@ -47,6 +48,30 @@ namespace GxMcp.Gateway
                 && (payload["offset"]?.Value<int>() ?? 0) == 0
                 && (IsFullObjectMutationRecoveryRead(payload)
                     || payload["versionToken"] != null);
+
+        internal static bool IsCompletePropertiesRecoveryRead(
+            JObject payload, RecoveryRequirement? requirement, JObject? args)
+        {
+            if (requirement == null || !string.Equals(requirement.Part, "Properties", StringComparison.OrdinalIgnoreCase)
+                || args?["control"] != null
+                || !string.Equals(payload["status"]?.ToString(), "ok", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(payload["code"]?.ToString(), "PropertiesRead", StringComparison.OrdinalIgnoreCase)
+                || !HasNoRecoveryTruncation(payload)
+                || payload["result"] is not JObject result
+                || result["authoritativeRead"]?.Value<bool>() != true
+                || string.IsNullOrWhiteSpace(result["versionToken"]?.ToString())
+                || result["values"] is not JObject values
+                || result["missingProperties"] is JArray missing && missing.Count > 0)
+                return false;
+
+            string[] required = requirement.PropertyNames ?? Array.Empty<string>();
+            if (required.Length == 0)
+                return args?["propertyName"] == null
+                    && (args?["propertyNames"] == null || args["propertyNames"] is JArray names && names.Count == 0)
+                    && args?["query"] == null && args?["projection"] == null;
+            return required.All(name => values.Properties().Any(value =>
+                string.Equals(value.Name, name, StringComparison.OrdinalIgnoreCase)));
+        }
 
         internal static bool IsTerminalPersistedReread(JToken? result)
         {

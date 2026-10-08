@@ -209,6 +209,7 @@ namespace GxMcp.Gateway
             "genexus_data_view:update",
             "genexus_data_view:delete",
             "genexus_properties:move",
+            "genexus_properties:set",
             "genexus_lifecycle:build",
             "genexus_lifecycle:build_all",
             "genexus_lifecycle:rebuild",

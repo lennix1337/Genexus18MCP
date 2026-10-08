@@ -42,6 +42,10 @@ namespace GxMcp.Worker.Services
                    partName.Equals("Code", StringComparison.OrdinalIgnoreCase);
         }
 
+        public static bool IsCopyModelWriteLock(string message) =>
+            !string.IsNullOrWhiteSpace(message)
+            && message.IndexOf("CopyModel", StringComparison.OrdinalIgnoreCase) >= 0;
+
         public static string BuildFailureDetails(string primaryMessage, JArray issues)
         {
             var details = new List<string>();

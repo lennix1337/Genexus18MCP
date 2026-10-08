@@ -595,6 +595,14 @@ namespace GxMcp.Worker
                 // MAIN DISPATCHER LOOP
                 while (!CommandQueue.IsCompleted || CommandQueue.Count > 0)
                 {
+                    // The SDK thread may be stuck inside a long operation. Expire queued
+                    // commands here so their callers receive WorkerBusy on time even when
+                    // the SDK cannot dequeue them.
+                    var scheduler = GxMcp.Worker.Services.StaScheduler.Instance;
+                    if (scheduler.QueuedCount > 0)
+                        foreach (var expired in scheduler.ExpireTimedOut(DateTime.UtcNow))
+                            SendWorkerBusy(null, expired.RawLine,
+                                (DateTime.UtcNow - expired.EnqueuedAtUtc).TotalMilliseconds);
                     if (CommandQueue.TryTake(out string line, 100))
                     {
                         // P3 perf: parseia o comando UMA vez aqui e propaga o JObject pelo

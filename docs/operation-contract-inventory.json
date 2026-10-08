@@ -837,7 +837,7 @@
             "dependents",
             "collections"
           ],
-          "previewSupported": false
+          "previewSupported": true
         },
         {
           "action": "move",

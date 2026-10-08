@@ -116,11 +116,22 @@ namespace GxMcp.Gateway
                         kbAlias, recoveryTarget.Target, recoveryTarget.Part, recoveryOperationId,
                         toolArgs?["guid"]?.ToString(), toolArgs?["entityKey"]?.ToString(),
                         toolArgs?["type"]?.ToString(), toolArgs?["path"]?.ToString(),
-                        toolArgs?["baseVersion"]?.ToString() ?? toolArgs?["expectedVersion"]?.ToString());
+                        toolArgs?["baseVersion"]?.ToString() ?? toolArgs?["expectedVersion"]?.ToString(),
+                        string.Equals(toolName, "genexus_properties", StringComparison.OrdinalIgnoreCase)
+                            ? (toolArgs?["properties"] as JObject)?.Properties().Select(p => p.Name)
+                                ?? new[] { toolArgs?["propertyName"]?.ToString() ?? string.Empty }
+                            : null);
                 }
             }
 
             timeoutPayload["reReadRequired"] = true;
+            if (timeoutPayload["error"] is JObject timeoutError)
+            {
+                timeoutError["retryable"] = false;
+                timeoutError["reconciliationRequired"] = true;
+                if (string.Equals(toolName, "genexus_properties", StringComparison.OrdinalIgnoreCase))
+                    timeoutError["hint"] = "Do not repeat the write. After the Worker finishes, call genexus_properties action=get with reconcileTimedOutWrite=true and all affected propertyNames.";
+            }
             if (targets.Any(target => MutationRecoveryRegistry.IsKbLevelRecoveryTarget(
                 target.Target, target.Part)))
                 timeoutPayload["recoveryScope"] = "kb";
@@ -228,6 +239,11 @@ namespace GxMcp.Gateway
             // part being read the token is honoured-but-overridden and a full
             // authoritative read is forced instead.
             bool requireAuthoritativeRead = false;
+            bool propertiesRecoveryRead = string.Equals(tName, "genexus_properties", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(lcAction, "get", StringComparison.OrdinalIgnoreCase)
+                && tArgs?["reconcileTimedOutWrite"]?.ToObject<bool?>() == true;
+            if (string.Equals(tName, "genexus_read", StringComparison.OrdinalIgnoreCase) || propertiesRecoveryRead)
+                _mutationRecovery.RefreshIfChanged();
             if (string.Equals(tName, "genexus_read", StringComparison.OrdinalIgnoreCase))
             {
                 // READ PATH: conditional. The journal is shared with other Gateways,
@@ -236,7 +252,6 @@ namespace GxMcp.Gateway
                 // must not pay an exclusive cross-process lock, a full re-parse and a
                 // directory glob on every call. The mutating branch above keeps the
                 // unconditional Refresh(); the two are deliberately different.
-                _mutationRecovery.RefreshIfChanged();
                 bool ReadCoversPart(string part)
                 {
                     if (tArgs?["part"] is { } partToken && partToken.Type != JTokenType.Null)
@@ -255,6 +270,12 @@ namespace GxMcp.Gateway
                 requireAuthoritativeRead = recoveryReads.Count > 0;
                 // A cached response cannot reconcile an uncertain persisted write.
                 isLiveTool |= !_mutationRecovery.IsHealthy || _mutationRecovery.Count > 0;
+            }
+            else if (propertiesRecoveryRead)
+            {
+                recoveryReads.AddRange(_mutationRecovery.FindForRead(kbScope, tArgs, "Properties")
+                    .Select(observed => (observed.Target, observed.Part, (RecoveryRequirement?)observed)));
+                isLiveTool = true;
             }
 
             // Scope the semantic cache by the resolved KB: the same tool+args
@@ -650,6 +671,25 @@ namespace GxMcp.Gateway
                         {
                             foreach (var recoveryTarget in recoveryReads)
                                 _mutationRecovery.ConfirmRead(kbScope, recoveryTarget.Target, recoveryTarget.Part, recoveryTarget.Observed);
+                        }
+                    }
+                    if (!isErr && propertiesRecoveryRead && finalResult is JObject propertyPayload)
+                    {
+                        bool cleared = false;
+                        foreach (var recoveryTarget in recoveryReads)
+                        {
+                            if (IsCompletePropertiesRecoveryRead(propertyPayload, recoveryTarget.Observed, tArgs))
+                                cleared |= _mutationRecovery.ConfirmRead(kbScope, recoveryTarget.Target,
+                                    recoveryTarget.Part, recoveryTarget.Observed);
+                        }
+                        propertyPayload["recoveryFenceCleared"] = cleared;
+                        if (propertyPayload["result"] is JObject propertyResult)
+                        {
+                            propertyResult["recoveryFenceCleared"] = cleared;
+                            if (propertyResult["values"] != null)
+                                propertyPayload["values"] = propertyResult["values"]!.DeepClone();
+                            if (propertyResult["versionToken"] != null)
+                                propertyPayload["versionToken"] = propertyResult["versionToken"]!.DeepClone();
                         }
                     }
 

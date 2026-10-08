@@ -137,16 +137,26 @@ namespace GxMcp.Worker.Services
             string propertyName = null,
             IEnumerable<string> propertyNames = null,
             string projection = null,
-            string query = null)
+            string query = null,
+            bool reconcileTimedOutWrite = false)
         {
             try
             {
                 var obj = _objectService.FindObject(target, typeFilter);
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
 
+                if (reconcileTimedOutWrite)
+                {
+                    obj = _objectService.FindObjectFreshByIdentity(obj);
+                    if (obj == null)
+                        return Models.McpResponse.Err(code: "FreshReadUnavailable",
+                            message: "The persisted object could not be read independently; the timeout recovery fence remains in place.",
+                            target: target);
+                }
+
                 string ck = CacheKey(obj, controlName);
                 JObject fullPropsResult = null;
-                lock (_propertyCacheLock)
+                if (!reconcileTimedOutWrite) lock (_propertyCacheLock)
                 {
                     if (_propertyCache.TryGetValue(ck, out var hit) && hit.expiresAt > DateTime.UtcNow)
                         fullPropsResult = (JObject)hit.propsResult.DeepClone();
@@ -161,7 +171,52 @@ namespace GxMcp.Worker.Services
                         if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
                     }
 
-                    fullPropsResult = SerializeProperties(container, obj.Model);
+                    var selectedRecoveryNames = reconcileTimedOutWrite
+                        ? (propertyNames ?? Enumerable.Empty<string>())
+                            .Concat((propertyName ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                            .Select(name => name.Trim())
+                            .Where(name => name.Length > 0)
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToArray()
+                        : Array.Empty<string>();
+                    fullPropsResult = selectedRecoveryNames.Length > 0
+                        ? SerializeSelectedProperties(container, obj.Model, selectedRecoveryNames,
+                            string.IsNullOrEmpty(controlName) && IsWebPanel(obj))
+                        : SerializeProperties(container, obj.Model);
+                    if (reconcileTimedOutWrite && string.IsNullOrEmpty(controlName)
+                        && IsWebPanel(obj)
+                        && !((JArray)fullPropsResult["properties"]).OfType<JObject>().Any(p =>
+                            string.Equals(p["name"]?.ToString(), "MainProgram", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        dynamic isMain = ResolvePropertyEntry(obj, "IsMain");
+                        if (isMain != null)
+                        {
+                            ((JArray)fullPropsResult["properties"]).Add(new JObject
+                            {
+                                ["name"] = "MainProgram", ["nativeName"] = "IsMain",
+                                ["value"] = RenderPropertyValue((object)isMain.Value, obj.Model),
+                                ["type"] = "System.Boolean", ["readOnly"] = false
+                            });
+                        }
+                        else
+                        {
+                            var mainProgram = obj.GetType().GetProperty("MainProgram");
+                            if (mainProgram != null && mainProgram.CanRead)
+                            {
+                                try
+                                {
+                                    ((JArray)fullPropsResult["properties"]).Add(new JObject
+                                    {
+                                        ["name"] = "MainProgram",
+                                        ["value"] = RenderPropertyValue(mainProgram.GetValue(obj, null), obj.Model),
+                                        ["type"] = mainProgram.PropertyType.FullName,
+                                        ["readOnly"] = !mainProgram.CanWrite
+                                    });
+                                }
+                                catch { }
+                            }
+                        }
+                    }
                     if (string.IsNullOrEmpty(controlName))
                     {
                         var reportContainer = ResolveReportPropertyContainer(obj, ReportLayoutHelper.TextModeProperty, null);
@@ -173,7 +228,7 @@ namespace GxMcp.Worker.Services
                                 ["type"] = "System.Boolean", ["readOnly"] = false
                             });
                     }
-                    lock (_propertyCacheLock)
+                    if (!reconcileTimedOutWrite) lock (_propertyCacheLock)
                     {
                         _propertyCache[ck] = (DateTime.UtcNow.AddSeconds(PropertyCacheTtlSeconds), (JObject)fullPropsResult.DeepClone());
                     }
@@ -182,7 +237,7 @@ namespace GxMcp.Worker.Services
                 string versionToken = null;
                 try { versionToken = WriteService.ComputeVersionToken(obj); } catch { }
 
-                return ShapeGetPropertiesResult(
+                string shaped = ShapeGetPropertiesResult(
                     fullPropsResult,
                     target,
                     controlName,
@@ -191,6 +246,24 @@ namespace GxMcp.Worker.Services
                     projection,
                     versionToken,
                     query);
+                if (!reconcileTimedOutWrite) return shaped;
+                var authoritative = JObject.Parse(shaped);
+                if (authoritative["result"] is JObject result)
+                {
+                    result["authoritativeRead"] = true;
+                    if (result["missingProperties"] is JArray missing && missing.Any(p =>
+                        string.Equals(p?.ToString(), "MainProgram", StringComparison.OrdinalIgnoreCase)))
+                        result["unsupportedProperties"] = new JObject
+                        {
+                            ["MainProgram"] = "The GeneXus SDK exposes neither MainProgram nor its WebPanel IsMain property-bag entry nor a readable typed member. Its persisted value cannot be confirmed."
+                        };
+                }
+                else if (authoritative["error"] is JObject error
+                    && string.Equals(error["code"]?.ToString(), "PropertyNotFound", StringComparison.OrdinalIgnoreCase)
+                    && (propertyNames ?? Enumerable.Empty<string>()).Concat(new[] { propertyName })
+                        .Any(name => string.Equals(name?.Trim(), "MainProgram", StringComparison.OrdinalIgnoreCase)))
+                    error["hint"] = "The GeneXus SDK exposes neither MainProgram nor its WebPanel IsMain property-bag entry nor a readable typed member; its persisted value cannot be confirmed.";
+                return authoritative.ToString(Newtonsoft.Json.Formatting.None);
             }
             catch (Exception ex)
             {
@@ -929,15 +1002,27 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        public string SetProperties(string target, JObject properties, string controlName = null, string typeFilter = null)
+        public string SetProperties(string target, JObject properties, string controlName = null, string typeFilter = null,
+            string expectedVersion = null, bool dryRun = false, bool rollbackOnFailure = true)
         {
             try
             {
                 if (properties == null || properties.Count == 0)
                     return Models.McpResponse.Ok(target: target, code: "WriteNoChange", result: new JObject { ["details"] = "No properties provided." });
+                if (!rollbackOnFailure)
+                    return Models.McpResponse.Err(code: "RollbackRequired", target: target,
+                        message: "Property writes require rollbackOnFailure=true to protect the complete object.");
 
                 var obj = _objectService.FindObject(target, typeFilter);
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
+
+                if (!string.IsNullOrWhiteSpace(expectedVersion))
+                {
+                    obj = _objectService.FindObjectFreshByIdentity(obj);
+                    if (obj == null)
+                        return Models.McpResponse.Err(code: "FreshReadUnavailable", target: target,
+                            message: "The current persisted version could not be read; no property write was attempted.");
+                }
 
                 dynamic container = obj;
                 if (!string.IsNullOrEmpty(controlName))
@@ -947,14 +1032,96 @@ namespace GxMcp.Worker.Services
                 }
 
                 var beforeValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                string beforeVersion = WriteService.ComputeVersionToken(obj);
+                if (!string.IsNullOrWhiteSpace(expectedVersion)
+                    && !string.Equals(expectedVersion, beforeVersion, StringComparison.Ordinal))
+                    return Models.McpResponse.Err(code: "VersionConflict", target: target,
+                        message: "The object changed after the property read; no write was attempted.",
+                        extra: new JObject { ["expectedVersion"] = expectedVersion, ["currentVersion"] = beforeVersion });
+
+                var references = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                var nativeNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var p in properties.Properties())
+                {
+                    string propName = p.Name;
+                    string nativeName = NativeWebPanelPropertyName(obj, controlName, propName);
+                    nativeNames[propName] = nativeName;
+                    string val = p.Value?.ToString() ?? string.Empty;
+                    if (string.IsNullOrEmpty(controlName) && IsObjectPlacementProperty(propName))
+                        return Models.McpResponse.Err(code: "InvalidPropertyBatch", target: target,
+                            message: $"'{propName}' is an object move; use action=move.");
+                    if (string.IsNullOrEmpty(controlName) && string.Equals(propName, "Name", StringComparison.OrdinalIgnoreCase))
+                        return Models.McpResponse.Err(code: "InvalidPropertyBatch", target: target,
+                            message: "Name cannot be changed by a property batch.");
+                    if (IsNonScalarProperty(propName) || string.Equals(propName, "OutputSDT", StringComparison.OrdinalIgnoreCase))
+                        return Models.McpResponse.Err(code: "InvalidPropertyBatch", target: target,
+                            message: $"'{propName}' cannot be changed by a scalar property batch.");
+                    object propertyContainer = ResolveReportPropertyContainer(obj, nativeName, controlName) ?? container;
+                    string validation = ReportLayoutHelper.IsTextModeProperty(nativeName)
+                        ? ValidateReportTextMode(val) : ValidatePropertyWrite((dynamic)propertyContainer, nativeName, val);
+                    if (validation != null)
+                        return Models.McpResponse.Err(code: "InvalidPropertyValue", target: target, message: validation);
+                    if (IsWebPanelReferenceType(GetPropertyTargetType((dynamic)propertyContainer, nativeName)))
+                    {
+                        if (string.IsNullOrWhiteSpace(val))
+                            references[propName] = global::Artech.Genexus.Common.CustomTypes.WebPanelReference.NoneRef;
+                        else
+                        {
+                            var referenced = _objectService.FindObject(val.Trim(), "MasterPage")
+                                ?? _objectService.FindObject(val.Trim(), "WebPanel");
+                            if (referenced == null)
+                                return Models.McpResponse.Err(code: "ReferencedObjectNotFound", target: target,
+                                    message: $"No MasterPage or WebPanel named '{val}' was found.");
+                            references[propName] = new global::Artech.Genexus.Common.CustomTypes.WebPanelReference(referenced.Key);
+                        }
+                    }
+                    beforeValues[propName] = TryReadPropertyString((dynamic)propertyContainer, nativeName, obj.Model) ?? string.Empty;
+                }
+
+                ObjectMoveSnapshot snapshot;
+                try { snapshot = ObjectMoveSnapshot.Capture(obj); }
+                catch (Exception ex)
+                {
+                    return Models.McpResponse.Err(code: "PropertySnapshotFailed", target: target,
+                        message: "Could not capture the complete object before editing: " + ex.Message);
+                }
+                if (dryRun)
+                    return Models.McpResponse.Ok(target: target, code: "DryRun", result: new JObject
+                    {
+                        ["before"] = JObject.FromObject(beforeValues),
+                        ["requested"] = properties.DeepClone(),
+                        ["versionToken"] = beforeVersion,
+                        ["preservedParts"] = snapshot.PreservedParts,
+                        ["persisted"] = false,
+                        ["implicitOperations"] = new JArray()
+                    });
                 using (var trans = obj.Model.KB.BeginTransaction())
                 {
                     bool committed = false;
                     try
                     {
+                        var transactionObject = _objectService.FindObjectFreshByIdentity(obj);
+                        if (transactionObject == null)
+                            return Models.McpResponse.Err(code: "FreshReadUnavailable", target: target,
+                                message: "The object could not be refreshed inside the property transaction; no write was committed.");
+                        obj = transactionObject;
+                        if (!string.IsNullOrEmpty(controlName))
+                        {
+                            container = FindControl(obj, controlName);
+                            if (container == null)
+                                return Models.McpResponse.Err(code: "ControlNotFound", target: target,
+                                    message: "The control disappeared before the property transaction; no write was committed.");
+                        }
+                        else container = obj;
+                        string transactionVersion = WriteService.ComputeVersionToken(obj);
+                        if (!string.Equals(beforeVersion, transactionVersion, StringComparison.Ordinal))
+                            return Models.McpResponse.Err(code: "VersionConflict", target: target,
+                                message: "The object changed before the property transaction; no write was committed.",
+                                extra: new JObject { ["expectedVersion"] = expectedVersion ?? beforeVersion, ["currentVersion"] = transactionVersion });
                         foreach (var p in properties.Properties())
                         {
                             string propName = p.Name;
+                            string nativeName = nativeNames[propName];
                             string val = p.Value?.ToString();
 
                             if (string.IsNullOrEmpty(controlName) && IsObjectPlacementProperty(propName))
@@ -967,23 +1134,23 @@ namespace GxMcp.Worker.Services
                                 && string.Equals(propName?.Trim(), "OutputSDT", StringComparison.OrdinalIgnoreCase))
                                 throw new InvalidOperationException("'OutputSDT' uses a typed Data Provider API and cannot be combined with a scalar property batch; use action=set with propertyName=OutputSDT.");
 
-                            if (IsWebPanelReferenceType(GetPropertyTargetType(container, propName)))
-                                throw new InvalidOperationException($"'{propName}' is an object reference; set it with action=set and propertyName={propName}, not in a property batch.");
-
-                            object reportContainer = ResolveReportPropertyContainer(obj, propName, controlName);
+                            object reportContainer = ResolveReportPropertyContainer(obj, nativeName, controlName);
                             dynamic propertyContainer = reportContainer ?? container;
-                            string propertyValidation = reportContainer != null ? ValidateReportTextMode(val) : ValidatePropertyWrite(propertyContainer, propName, val);
+                            string propertyValidation = reportContainer != null ? ValidateReportTextMode(val) : ValidatePropertyWrite(propertyContainer, nativeName, val);
                             if (propertyValidation != null)
                                 throw new InvalidOperationException(propertyValidation);
 
-                            string before = TryReadPropertyString(propertyContainer, propName, obj.Model);
+                            string before = TryReadPropertyString(propertyContainer, nativeName, obj.Model);
                             if (before != null) beforeValues[propName] = before;
 
-                            ApplyPropertyValue(propertyContainer, propName, val, controlName, obj);
-                            if (ReportLayoutHelper.IsTextModeProperty(propName) && string.IsNullOrEmpty(controlName))
+                            if (references.TryGetValue(propName, out object reference))
+                                propertyContainer.SetPropertyValue(nativeName, reference);
+                            else
+                                ApplyPropertyValue(propertyContainer, nativeName, val, controlName, obj);
+                            if (ReportLayoutHelper.IsTextModeProperty(nativeName) && string.IsNullOrEmpty(controlName))
                                 ReportLayoutHelper.MarkLayoutDirty(GxMcp.Worker.Structure.PartAccessor.GetPart(obj, "Layout"));
 
-                            string after = TryReadPropertyString(propertyContainer, propName, obj.Model);
+                            string after = TryReadPropertyString(propertyContainer, nativeName, obj.Model);
                             if (!string.IsNullOrEmpty(val) && !string.IsNullOrEmpty(before) && string.IsNullOrEmpty(after))
                             {
                                 throw new PropertyWipeException(propName, before);
@@ -1014,19 +1181,30 @@ namespace GxMcp.Worker.Services
                     string propName = p.Name;
                     string requested = p.Value?.ToString() ?? string.Empty;
                     beforeValues.TryGetValue(propName, out string before);
-                    string verification = VerifyPropertyPersisted(target, propName, requested, controlName, typeFilter, before, obj);
-                    if (verification == null) continue;
+                    string verification = VerifyPropertyPersisted(target, nativeNames[propName], requested,
+                        controlName, typeFilter, before, obj);
+                    if (verification == null)
+                        return RollbackPropertySnapshot(target, obj, snapshot,
+                            "The saved property could not be independently read back.");
 
                     var verificationEnvelope = JObject.Parse(verification);
                     if (string.Equals(verificationEnvelope["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase))
-                        return verification;
+                        return RollbackPropertySnapshot(target, obj, snapshot,
+                            verificationEnvelope["error"]?["message"]?.ToString() ?? "Property verification failed.");
 
                     var diff = verificationEnvelope["result"] as JObject;
-                    if (diff == null || diff["persistedVerified"]?.ToObject<bool>() != true) continue;
+                    if (diff == null || diff["persistedVerified"]?.ToObject<bool>() != true)
+                        return RollbackPropertySnapshot(target, obj, snapshot,
+                            "The saved property could not be confirmed.");
                     verifiedBefore[propName] = diff["before"]?.ToString() ?? string.Empty;
                     verifiedRequested[propName] = diff["requested"]?.ToString() ?? requested;
                     verifiedPersisted[propName] = diff["persisted"]?.ToString() ?? string.Empty;
                 }
+
+                var fresh = _objectService.FindObjectFreshByIdentity(obj);
+                if (fresh == null || !snapshot.CompareParts(fresh).Equal)
+                    return RollbackPropertySnapshot(target, obj, snapshot,
+                        "The property save changed an unrelated object part or the parts could not be verified.");
 
                 var result = new JObject { ["properties"] = properties };
                 if (verifiedPersisted.Count == properties.Count)
@@ -1036,6 +1214,9 @@ namespace GxMcp.Worker.Services
                     result["persisted"] = verifiedPersisted;
                     result["persistedVerified"] = true;
                 }
+                result["versionToken"] = WriteService.ComputeVersionToken(fresh);
+                result["preservedParts"] = snapshot.PreservedParts;
+                result["implicitOperations"] = new JArray();
                 return Models.McpResponse.Ok(target: target, code: "PropertiesApplied", result: result);
             }
             catch (PropertyWipeException pwe)
@@ -1048,6 +1229,44 @@ namespace GxMcp.Worker.Services
             catch (Exception ex)
             {
                 return "{\"status\":\"Error\",\"message\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
+        }
+
+        private string RollbackPropertySnapshot(string target, KBObject written, ObjectMoveSnapshot snapshot, string reason)
+        {
+            try
+            {
+                var current = _objectService.FindObjectFreshByIdentity(written);
+                if (current == null || !string.Equals(WriteService.ComputeVersionToken(current),
+                    WriteService.ComputeVersionToken(written), StringComparison.Ordinal))
+                    return Models.McpResponse.Err(code: "PropertyRollbackUnsafe", target: target,
+                        message: reason + " The persisted version could not be tied to this write; automatic rollback was refused.");
+                using (var tx = written.Model.KB.BeginTransaction())
+                {
+                    bool committed = false;
+                    try
+                    {
+                        snapshot.RestoreObject(current);
+                        current.Dirty = true;
+                        current.Save();
+                        snapshot.RestoreParts(current);
+                        tx.Commit();
+                        committed = true;
+                    }
+                    finally { if (!committed) try { tx.Rollback(); } catch { } }
+                }
+                var restored = _objectService.FindObjectFreshByIdentity(current);
+                bool verified = restored != null && snapshot.Compare(restored).Equal;
+                return Models.McpResponse.Err(code: "PropertyVerificationFailed", target: target,
+                    message: reason + (verified ? " The complete object snapshot was restored and verified."
+                        : " Snapshot restoration could not be verified; inspect the object before writing again."),
+                    extra: new JObject { ["rollbackAttempted"] = true, ["rollbackVerified"] = verified });
+            }
+            catch (Exception ex)
+            {
+                return Models.McpResponse.Err(code: "PropertyRollbackFailed", target: target,
+                    message: reason + " Snapshot restoration failed: " + ex.Message,
+                    extra: new JObject { ["rollbackAttempted"] = true, ["rollbackVerified"] = false });
             }
         }
 
@@ -1159,9 +1378,7 @@ namespace GxMcp.Worker.Services
             try
             {
                 bool reportProperty = ReportLayoutHelper.IsTextModeProperty(propName) && string.IsNullOrEmpty(controlName);
-                var fresh = reportProperty
-                    ? _objectService.FindObjectFreshByIdentity(original)
-                    : _objectService.FindObject(target, typeFilter);
+                var fresh = _objectService.FindObjectFreshByIdentity(original);
                 if (fresh == null) return reportProperty ? ReportPropertyVerificationUnavailable(target) : null;
                 if (reportProperty && (original == null || fresh.Guid != original.Guid))
                     return ReportPropertyVerificationUnavailable(target);
@@ -1343,6 +1560,16 @@ namespace GxMcp.Worker.Services
 
             return null;
         }
+
+        private static bool IsWebPanel(KBObject obj)
+            => string.Equals(obj?.TypeDescriptor?.Name, "WebPanel", StringComparison.OrdinalIgnoreCase);
+
+        private static string NativeWebPanelPropertyName(KBObject obj, string controlName, string requestedName)
+            => string.IsNullOrEmpty(controlName) && IsWebPanel(obj)
+                && string.Equals(requestedName, "MainProgram", StringComparison.OrdinalIgnoreCase)
+                && ResolvePropertyEntry(obj, "MainProgram") == null
+                && ResolvePropertyEntry(obj, "IsMain") != null
+                    ? "IsMain" : requestedName;
 
         private static string TryReadPropertyString(dynamic container, string propName, KBModel model = null)
         {
@@ -2034,6 +2261,41 @@ namespace GxMcp.Worker.Services
                 }
             } catch {}
             return null;
+        }
+
+        internal static JObject SerializeSelectedProperties(dynamic container, KBModel model,
+            IEnumerable<string> names, bool webPanel = false)
+        {
+            var props = new JArray();
+            foreach (string name in names)
+            {
+                dynamic entry = ResolvePropertyEntry(container, name);
+                bool alias = entry == null && webPanel
+                    && string.Equals(name, "MainProgram", StringComparison.OrdinalIgnoreCase);
+                if (alias) entry = ResolvePropertyEntry(container, "IsMain");
+                if (entry == null) continue;
+                try
+                {
+                    var item = new JObject
+                    {
+                        ["name"] = alias ? "MainProgram" : entry.Name.ToString(),
+                        ["value"] = RenderPropertyValue((object)entry.Value, model)
+                    };
+                    if (alias) item["nativeName"] = "IsMain";
+                    try
+                    {
+                        if (entry.Definition != null)
+                        {
+                            item["type"] = entry.Definition.Type.ToString();
+                            item["readOnly"] = entry.Definition.ReadOnly;
+                        }
+                    }
+                    catch { }
+                    props.Add(item);
+                }
+                catch (Exception ex) { Logger.Debug($"Recovery property '{name}' could not be read: {ex.Message}"); }
+            }
+            return new JObject { ["properties"] = props };
         }
 
         internal static JObject SerializeProperties(dynamic container, KBModel model = null)

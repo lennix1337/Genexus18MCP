@@ -47,6 +47,21 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void NormalizeFacadeArgs_NullBaseVersion_DoesNotHideExpectedVersion()
+        {
+            var normalized = WriteService.NormalizeFacadeArgs(new JObject
+            {
+                ["part"] = "Variables",
+                ["content"] = "&Value : Numeric(4)",
+                ["dryRun"] = true,
+                ["baseVersion"] = JValue.CreateNull(),
+                ["expectedVersion"] = "current-part-token"
+            });
+
+            Assert.Equal("current-part-token", normalized.BaseVersion);
+        }
+
+        [Fact]
         public void ComputeVersionToken_Null_ReturnsNull()
         {
             Assert.Null(WriteService.ComputeVersionToken(null));

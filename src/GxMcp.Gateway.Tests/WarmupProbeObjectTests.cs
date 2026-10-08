@@ -224,7 +224,7 @@ namespace GxMcp.Gateway.Tests
         {
             var commands = Program.BuildWarmupCommands("AddDeviceGroups");
 
-            Assert.Equal(6, commands.Count);
+            Assert.Equal(4, commands.Count);
 
             // 1. Structure read
             var (t1, c1) = commands[0];
@@ -260,24 +260,9 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("AddDeviceGroups", c4["target"]?.ToString());
             Assert.Equal("mcp", c4["client"]?.ToString());
 
-            // 5. Callers (routes to Analyze/FindCallerSites)
-            var (t5, c5) = commands[4];
-            Assert.Equal("genexus_analyze", t5);
-            Assert.Equal("Analyze", c5["module"]?.ToString());
-            Assert.Equal("FindCallerSites", c5["action"]?.ToString());
-            Assert.Equal("AddDeviceGroups", c5["target"]?.ToString());
-            Assert.Equal("mcp", c5["client"]?.ToString());
-
-            // 6. Source search (routes to Search/SearchSource). The first Source search
-            // builds the worker's KB-wide source-scan cache (~2.7s cold); warming it keeps
-            // that cost out of the agent's first search.
-            var (t6, c6) = commands[5];
-            Assert.Equal("genexus_search_source", t6);
-            Assert.Equal("Search", c6["module"]?.ToString());
-            Assert.Equal("SearchSource", c6["action"]?.ToString());
-            Assert.Equal("AddDeviceGroups", c6["pattern"]?.ToString());
-            Assert.Equal(1, c6["maxResults"]?.ToObject<int>());
-            Assert.Equal("mcp", c6["client"]?.ToString());
+            Assert.DoesNotContain(commands, entry =>
+                entry.command["action"]?.ToString() == "FindCallerSites"
+                || entry.toolName == "genexus_search_source");
         }
     }
 }

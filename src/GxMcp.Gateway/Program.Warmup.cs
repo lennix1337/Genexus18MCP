@@ -743,7 +743,7 @@ namespace GxMcp.Gateway
 
         // First-touch penalty warmer. Measured ([TOOL-LATENCY], scratch gateway vs real KB):
         // the FIRST call of each STA-heavy tool after a worker cold start pays a one-time
-        // JIT/SDK-deserialization cost (inspect: up to 3.8s; analyze linter/callers: 0.6s+)
+        // JIT/SDK-deserialization cost (inspect: up to 3.8s; linter: 0.6s+)
         // while every subsequent call returns in single-digit ms. Exercising those paths
         // here — in the background, right after pre-spawn/index bootstrap — moves that cost
         // out of the agent's turn entirely. Every sub-call is best-effort and individually
@@ -760,27 +760,9 @@ namespace GxMcp.Gateway
                 ("genexus_read",    new JObject { ["name"] = probeObjectName, ["part"] = "Source" }),
                 ("genexus_inspect", new JObject { ["name"] = probeObjectName }),
                 ("genexus_analyze", new JObject { ["mode"] = "linter", ["target"] = probeObjectName }),
-                ("genexus_analyze", new JObject { ["mode"] = "callers", ["target"] = probeObjectName }),
-                // The first Source search builds the worker's KB-wide source-scan cache on
-                // the STA thread: measured 2.7s cold against ~1ms for every later search,
-                // and the cost is pattern-independent (a zero-match pattern paid the same
-                // 2.7s, so it is the scan and not the match). Every other SDK-heavy first
-                // touch is warmed here for exactly this reason; a search was the one left
-                // paying its cost inside the agent's turn. maxResults=1 keeps the warm
-                // reply tiny — the scan is what we are paying for, not the result set.
-                // Issue #340: this supplied the probe object's NAME as a text `pattern`.
-                // maxResults=1 caps the reply, not the work: when the name does not occur
-                // in any stored source the search is a whole-catalog no-match scan, which
-                // is the same KB-wide scan the entry above exists to pay for, now twice
-                // and against a pattern that cannot match. Scoping to the probe object
-                // keeps the one scan that is actually wanted - the trigram/index
-                // materialization for a real object - and drops the no-match one.
-                ("genexus_search_source", new JObject
-                {
-                    ["pattern"] = probeObjectName,
-                    ["objectName"] = probeObjectName,
-                    ["maxResults"] = 1
-                }),
+                // Callers and source search can scan the entire KB on the SDK's single
+                // thread. On large KBs they blocked edits behind warmup for minutes.
+                // Pay their first-touch cost only when explicitly requested.
             })
             {
                 var converted = McpRouter.ConvertToolCall(new JObject
