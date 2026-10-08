@@ -11,6 +11,8 @@
 
 ### Added
 
+- **WorkWithPlus variable grids.** `genexus_wwp action=add_grid` now accepts ordered, typed variable columns without an SDT collection. Set `gridName`, `containerName` and `columns` to create a grid loaded by the panel's own events, including editable columns. [#442](https://github.com/lennix1337/Genexus18MCP/issues/442).
+
 ### Changed
 
 ### Fixed
@@ -20,6 +22,8 @@
 - `genexus_edit` and `genexus_delete_object` no longer wait behind whole-KB scans launched by the Worker's automatic warmup. SDK commands queued behind another long operation now receive `WorkerBusy` when their bounded wait expires. A Variables edit preview reports the resolved object, version and proposed content without saving. Full edits honor `expectedVersion` even when the Gateway also sends an empty `baseVersion`. GeneXus CopyModel write locks return `KbWriteLocked` with persisted-state evidence instead of a generic transaction failure.
 
 - SDT `update_visual` now previews every member omitted by replacement, requires explicit removal confirmation, and supports `mode=add` while preserving existing members. SDT revision history can read and restore `SDTStructure` with an optimistic version check, preview, native rollback source, and post-save verification.
+
+- **WorkWithPlus buttons on Empty WebPanels.** `add_user_action` now creates a missing `TableActions` under the unique `TableMain`, preserving existing content and deriving the button event from its name. Explicit missing containers and ambiguous parents remain errors. [#441](https://github.com/lennix1337/Genexus18MCP/issues/441).
 
 ### Internal
 

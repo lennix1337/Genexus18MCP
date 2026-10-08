@@ -472,7 +472,8 @@ namespace GxMcp.Gateway.Routers
                 // issue #58 — genexus_wwp: WorkWithPlus Action Group / grid-action
                 // editing over the host's PatternInstance XML. Worker's
                 // WwpActionService.Run switches on args.action (list|add_action|
-                // add_user_action|update_action|move_action|remove_action); dryRun supported.
+                // add_user_action (including Empty's action bar), add_grid (SDT or variables),
+                // update_action|move_action|remove_action); every selector is forwarded intact.
                 case "genexus_wwp":
                     return new
                     {

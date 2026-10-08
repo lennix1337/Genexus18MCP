@@ -5032,9 +5032,9 @@
             "type": "string"
           },
           "columns": {
-            "description": "add_grid: SDT items shown, in order; a…",
+            "description": "add_grid: SDT items as strings or…",
             "items": {
-              "description": "An SDT item name, or {item,…"
+              "description": "SDT item or variable-column object."
             },
             "type": "array"
           },
@@ -5082,6 +5082,10 @@
           },
           "fromGroup": {
             "description": "move_action: source group (optional;…",
+            "type": "string"
+          },
+          "gridName": {
+            "description": "add_grid without collection/sdt:…",
             "type": "string"
           },
           "gridPath": {

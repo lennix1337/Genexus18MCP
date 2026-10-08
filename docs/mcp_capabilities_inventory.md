@@ -122,6 +122,8 @@ The table below is the machine-checkable action contract for every umbrella tool
 
 For SDTs, `genexus_structure update_visual` accepts `payload.mode=add|replace` and requires `expectedVersion`; replacement previews omitted-member removals and requires `allowRemoval=true` to apply them. `genexus_versioning history_get` reads a revision's `SDTStructure`, and `history_restore` previews or restores it with `versionId`, `expectedVersion`, native rollback, and post-save verification.
 
+`genexus_wwp add_grid` supports both SDT collections and basic-typed variable grids without a collection. Variable columns use `{variable, basicType, length, decimals, description, readOnly}`; `gridName` defaults to `Grid`. `add_user_action` creates a missing `TableActions` under exactly one `TableMain`, including Empty-template WebPanels. Both operations retain dry-run, optimistic version, native snapshots, independent reread, projection and rollback guards; neither runs KB lifecycle operations.
+
 Real-KB validation gate: `genexus_structure action=get_visual` with a homonymous
 target must be exercised against a KB that contains the relevant Transaction/Table
 or WebPanel collision, using `type=Transaction` (or the other intended type). The

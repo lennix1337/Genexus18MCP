@@ -72,10 +72,10 @@ namespace GxMcp.Worker.Services
                 KBObject lockedTarget = _objects.FindObject(target) ?? requestedObject;
                 string currentXml = _patterns.ReadPatternPartXml(lockedTarget, "PatternInstance", PatternRegistry.WorkWithPlusPatternId,
                     out KBObject currentInstance, out _);
-                // The resolved object is discarded here, as in the other four partials -
-                // this one was capturing it into a named local it never read.
-                _patterns.BuildPatternPartEnvelope(lockedTarget, "PatternInstance", currentXml, PatternRegistry.WorkWithPlusPatternId,
-                    out _, out KBObjectPart currentPart);
+                if (currentInstance == null || string.IsNullOrWhiteSpace(currentXml))
+                    return BuildWwpInstanceNotResolvable(target);
+                _patterns.BuildPatternPartEnvelope(currentInstance, "PatternInstance", currentXml, PatternRegistry.WorkWithPlusPatternId,
+                    out currentInstance, out KBObjectPart currentPart);
                 if (currentInstance == null || currentPart == null || string.IsNullOrWhiteSpace(currentXml))
                     return BuildWwpInstanceNotResolvable(target);
 
@@ -239,7 +239,7 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private static JObject ApplyNativeFormUserAction(KBObjectPart part, JObject args, KBObject callObject = null)
+        internal static JObject ApplyNativeFormUserAction(object part, JObject args, KBObject callObject = null)
         {
             object root = GetProperty(part, "RootElement");
             if (root == null) return FormActionError("WwpNativeRootUnavailable", "PatternInstance RootElement is unavailable.");
@@ -252,6 +252,19 @@ namespace GxMcp.Worker.Services
             string caption = args?["caption"]?.ToString() ?? args?["description"]?.ToString();
 
             JObject containerError = ResolveNativeContainer(root, containerName, out object container);
+            object newContainerParent = null;
+            if (containerError?["code"]?.ToString() == "FormActionContainerNotFound"
+                && containerName.Equals("TableActions", StringComparison.OrdinalIgnoreCase))
+            {
+                containerError = ResolveNativeContainer(root, "TableMain", out newContainerParent);
+                if (containerError == null && IsNativeTable(newContainerParent))
+                {
+                    container = CreateNativeChild(newContainerParent, "table");
+                    SetNativeAttribute(container, "name", "TableActions");
+                    SetNativeAttribute(container, "type", "Responsive");
+                }
+                else return containerError ?? FormActionError("FormActionContainerNotFound", "Creating TableActions requires a TableMain table.");
+            }
             if (containerError != null) return containerError;
             if (NativeChildren(container).Any(child =>
                 NativeType(child).Equals("userAction", StringComparison.OrdinalIgnoreCase)
@@ -266,7 +279,12 @@ namespace GxMcp.Worker.Services
 
             MethodInfo executeUpdate = part.GetType().GetMethod("ExecuteUpdate",
                 BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(string), typeof(Action) }, null);
-            Action mutation = () => ExecuteElementCommand(container, created, "AddElementCommand", null);
+            Action mutation = () =>
+            {
+                ExecuteElementCommand(container, created, "AddElementCommand", null);
+                if (newContainerParent != null)
+                    ExecuteElementCommand(newContainerParent, container, "AddElementCommand", null);
+            };
             if (executeUpdate != null)
                 executeUpdate.Invoke(part, new object[] { "genexus_wwp add_user_action", mutation });
             else

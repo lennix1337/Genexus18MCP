@@ -742,6 +742,15 @@ namespace GxMcp.Worker.Services
                 };
 
             XElement container = matchingContainers.SingleOrDefault();
+            if (container == null && containerName.Equals("TableActions", StringComparison.OrdinalIgnoreCase))
+            {
+                List<XElement> parents = FindFormContainers(document, "TableMain").Where(e => Is(e, "table")).ToList();
+                if (parents.Count != 1)
+                    return Error("FormActionContainerNotFound", "Creating TableActions requires exactly one TableMain table; pass an existing containerName instead.");
+                container = new XElement(parents[0].Name.Namespace + "table",
+                    new XAttribute("name", "TableActions"), new XAttribute("type", "Responsive"));
+                parents[0].Add(container);
+            }
             if (container == null)
             {
                 var available = new JArray();

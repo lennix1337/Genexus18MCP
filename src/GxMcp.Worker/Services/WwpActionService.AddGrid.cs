@@ -24,6 +24,7 @@ namespace GxMcp.Worker.Services
         {
             internal string Item;
             internal string Description;
+            internal XElement Variable;
         }
 
         /// <summary>Columns are item names or {item, description}; at least one, no repeated item.</summary>
@@ -35,7 +36,7 @@ namespace GxMcp.Worker.Services
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (JToken entry in array)
             {
-                string item = entry.Type == JTokenType.String ? entry.Value<string>() : entry["item"]?.ToString();
+                string item = entry.Type == JTokenType.String ? entry.Value<string>() : (entry as JObject)?["item"]?.ToString();
                 string description = entry is JObject obj ? obj["description"]?.ToString() : null;
                 if (string.IsNullOrWhiteSpace(item) || !Regex.IsMatch(item.Trim(), "^[A-Za-z_][A-Za-z0-9_]*$"))
                     return Error("InvalidGridColumn", "Every column needs an SDT item name.");
@@ -51,6 +52,8 @@ namespace GxMcp.Worker.Services
         {
             columns = new List<GridColumn>();
             collection = args?["collection"]?.ToString()?.Trim();
+            if (IsVariableGrid(args))
+                return ValidateVariableGridArgs(args, out columns);
             if (string.IsNullOrEmpty(collection) || !Regex.IsMatch(collection, "^&[A-Za-z_][A-Za-z0-9_]*$"))
                 return Error("InvalidGridCollection", "collection must be an SDT collection variable such as &Lines.");
             if (string.IsNullOrWhiteSpace(args["sdt"]?.ToString()))
@@ -74,6 +77,7 @@ namespace GxMcp.Worker.Services
         {
             JObject invalid = ValidateAddGridArgs(args, out string collection, out List<GridColumn> columns);
             if (invalid != null) return invalid;
+            if (IsVariableGrid(args)) return ApplyVariableGridXml(document, args, columns);
             string reference = args["_sdtReference"]?.ToString();
             if (string.IsNullOrWhiteSpace(reference)) return Error("GridSdtUnresolved", "sdt '" + args["sdt"] + "' was not resolved to an SDT.");
             if (args["_sdtItems"] is JArray known && known.Count > 0)
@@ -280,12 +284,17 @@ namespace GxMcp.Worker.Services
             JObject invalid = ValidateAddGridArgs(args, out string collection, out List<GridColumn> columns);
             if (invalid != null)
                 return McpResponse.Err(code: invalid["code"].ToString(), message: invalid["error"].ToString(), target: target);
-            KBObject sdt = _objects.FindObject(args["sdt"].ToString().Trim(), "SDT");
-            if (sdt == null || !string.Equals(sdt.TypeDescriptor?.Name, "SDT", StringComparison.OrdinalIgnoreCase))
-                return McpResponse.Err(code: "GridSdtNotFound", message: "sdt '" + args["sdt"] + "' is not an SDT in this KB.", target: target);
-            string reference = GxObjectReference(sdt);
-            args["_sdtReference"] = reference;
-            args["_sdtItems"] = new JArray(SdtItemNames(sdt));
+            KBObject sdt = null;
+            string reference = null;
+            if (!IsVariableGrid(args))
+            {
+                sdt = _objects.FindObject(args["sdt"].ToString().Trim(), "SDT");
+                if (sdt == null || !string.Equals(sdt.TypeDescriptor?.Name, "SDT", StringComparison.OrdinalIgnoreCase))
+                    return McpResponse.Err(code: "GridSdtNotFound", message: "sdt '" + args["sdt"] + "' is not an SDT in this KB.", target: target);
+                reference = GxObjectReference(sdt);
+                args["_sdtReference"] = reference;
+                args["_sdtItems"] = new JArray(SdtItemNames(sdt));
+            }
 
             XDocument beforeDocument = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
             XDocument previewDocument = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
@@ -298,7 +307,7 @@ namespace GxMcp.Worker.Services
             bool dryRun = args["dryRun"]?.ToObject<bool?>() == true;
             bool rollbackOnFailure = args["rollbackOnFailure"]?.ToObject<bool?>() ?? true;
             bool deleteAction = WantsDeleteAction(args);
-            JObject diff = new JObject { ["before"] = Project(beforeDocument), ["after"] = Project(previewDocument), ["grid"] = ProjectGridOver(previewDocument, collection) };
+            JObject diff = new JObject { ["before"] = Project(beforeDocument), ["after"] = Project(previewDocument), ["grid"] = ProjectAddedGrid(previewDocument, args, collection) };
 
             if (dryRun)
                 return McpResponse.Ok(target: target, code: "DryRun", result: new JObject
@@ -319,8 +328,10 @@ namespace GxMcp.Worker.Services
                 KBObject lockedTarget = _objects.FindObject(target) ?? requestedObject;
                 string currentXml = _patterns.ReadPatternPartXml(lockedTarget, "PatternInstance", PatternRegistry.WorkWithPlusPatternId,
                     out KBObject currentInstance, out _);
-                _patterns.BuildPatternPartEnvelope(lockedTarget, "PatternInstance", currentXml, PatternRegistry.WorkWithPlusPatternId,
-                    out _, out KBObjectPart currentPart);
+                if (currentInstance == null || string.IsNullOrWhiteSpace(currentXml))
+                    return BuildWwpInstanceNotResolvable(target);
+                _patterns.BuildPatternPartEnvelope(currentInstance, "PatternInstance", currentXml, PatternRegistry.WorkWithPlusPatternId,
+                    out currentInstance, out KBObjectPart currentPart);
                 if (currentInstance == null || currentPart == null || string.IsNullOrWhiteSpace(currentXml))
                     return BuildWwpInstanceNotResolvable(target);
 
@@ -350,7 +361,9 @@ namespace GxMcp.Worker.Services
                 bool persistenceStarted = false;
                 try
                 {
-                    JObject nativeMutation = ApplyNativeAddGrid(currentPart, args, sdt);
+                    JObject nativeMutation = IsVariableGrid(args)
+                        ? ApplyNativeVariableGrid(currentPart, args, columns)
+                        : ApplyNativeAddGrid(currentPart, args, sdt);
                     if (nativeMutation["error"] != null)
                         throw new WwpTabException(nativeMutation["code"]?.ToString() ?? "WwpNativeMutationRejected", nativeMutation["error"].ToString());
 
@@ -363,7 +376,9 @@ namespace GxMcp.Worker.Services
                         throw new WwpTabException("WwpGridNotPersisted", "The SDK save completed, but the PatternInstance could not be re-read.");
 
                     XDocument persistedDocument = XDocument.Parse(persistedXml, LoadOptions.PreserveWhitespace);
-                    JObject verification = VerifyAddGrid(persistedDocument, collection, reference, columns, deleteAction);
+                    JObject verification = IsVariableGrid(args)
+                        ? VerifyVariableGrid(persistedDocument, args, columns)
+                        : VerifyAddGrid(persistedDocument, collection, reference, columns, deleteAction);
                     if (verification["confirmed"]?.ToObject<bool?>() != true)
                         throw new WwpTabException("WwpGridNotPersisted", verification["error"]?.ToString() ?? "The requested grid was not confirmed after re-read.");
 
@@ -386,7 +401,8 @@ namespace GxMcp.Worker.Services
                         ["collection"] = collection,
                         ["columns"] = new JArray(columns.Select(c => c.Item)),
                         ["deleteAction"] = deleteAction,
-                        ["diff"] = new JObject { ["before"] = Project(lockedBefore), ["after"] = Project(persistedDocument), ["grid"] = ProjectGridOver(persistedDocument, collection) },
+                        ["gridName"] = IsVariableGrid(args) ? VariableGridName(args) : null,
+                        ["diff"] = new JObject { ["before"] = Project(lockedBefore), ["after"] = Project(persistedDocument), ["grid"] = ProjectAddedGrid(persistedDocument, args, collection) },
                         ["versionToken"] = WriteService.ComputeContentVersionToken(persistedInstance ?? currentInstance, persistedXml),
                         ["persisted"] = true,
                         ["saved"] = true,

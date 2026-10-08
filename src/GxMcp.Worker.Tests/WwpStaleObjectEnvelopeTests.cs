@@ -209,7 +209,8 @@ namespace GxMcp.Worker.Tests
 
                 Assert.True(SourceAssert.Count(source, "_patterns.ReadPatternPartXml(lockedTarget, \"PatternInstance\"") == 1, file + ": read site");
                 Assert.True(SourceAssert.Count(source, "lock (WriteService.AcquirePerTargetLock(target))") == 1, file + ": lock");
-                Assert.True(SourceAssert.Count(source, "return BuildWwpInstanceNotResolvable(target);") == 1, file + ": unresolvable refusal");
+                int expectedRefusals = file == "WwpActionService.FormActions.cs" ? 2 : 1;
+                Assert.True(SourceAssert.Count(source, "return BuildWwpInstanceNotResolvable(target);") == expectedRefusals, file + ": unresolvable refusal");
             }
 
             Assert.Contains("It is deliberately NOT single-sourced.", Read("WwpActionService.Grid.cs"));
@@ -217,9 +218,8 @@ namespace GxMcp.Worker.Tests
         }
 
         /// <summary>
-        /// The form-action path was the one place capturing the resolved object into a
-        /// local it never read. Asserted so it does not creep back with the next edit
-        /// that copies the block from a sibling.
+        /// A resolved owner must be used, rather than captured into an unused local.
+        /// Form actions retain it so the part lookup and Save use the same instance.
         /// </summary>
         [Fact]
         public void NoPathCapturesAResolvedObjectItDoesNotRead()
@@ -235,8 +235,25 @@ namespace GxMcp.Worker.Tests
             {
                 string source = SourceAssert.NormaliseNewlines(RepoSource.WithoutComments(Read(file)));
                 Assert.True(source.IndexOf("resolvedCurrentObject", StringComparison.Ordinal) < 0, file + ": unused local is back");
-                Assert.True(SourceAssert.Count(source, "out _, out KBObjectPart currentPart)") == 1, file + ": envelope call shape");
+                string ownerOutput = file == "WwpActionService.FormActions.cs"
+                    ? "out currentInstance, out KBObjectPart currentPart)" : "out _, out KBObjectPart currentPart)";
+                Assert.True(SourceAssert.Count(source, ownerOutput) == 1, file + ": envelope owner");
             }
+        }
+
+        [Theory]
+        [InlineData("WwpActionService.FormActions.cs", "private string RunFormUserActionOperation(")]
+        [InlineData("WwpActionService.AddGrid.cs", "private string RunAddGridOperation(")]
+        public void PartLookupAndSaveRetainTheSameResolvedOwner(string file, string method)
+        {
+            string source = SourceAssert.NormaliseNewlines(RepoSource.WithoutComments(Read(file)));
+            string body = SourceAssert.MethodBody(source, method);
+            int read = body.IndexOf("_patterns.ReadPatternPartXml(lockedTarget,", StringComparison.Ordinal);
+            int guard = body.IndexOf("if (currentInstance == null || string.IsNullOrWhiteSpace(currentXml))", StringComparison.Ordinal);
+            int lookup = body.IndexOf("_patterns.BuildPatternPartEnvelope(currentInstance,", StringComparison.Ordinal);
+            Assert.True(read >= 0 && guard > read && lookup > guard, file + ": resolved owner must be guarded before part lookup");
+            Assert.Contains("out currentInstance, out KBObjectPart currentPart)", body);
+            Assert.Contains("SaveNativePattern(currentInstance, currentPart)", body);
         }
 
         private static string Read(string file)
