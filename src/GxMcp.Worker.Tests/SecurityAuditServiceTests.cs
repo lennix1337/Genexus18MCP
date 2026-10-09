@@ -40,7 +40,10 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void ScanText_PemPrivateKey_Detected()
         {
-            var hits = SecurityAuditService.ScanText("-----BEGIN RSA PRIVATE KEY-----\nMIIEvAIBADANBgkq\n-----END RSA PRIVATE KEY-----");
+            var begin = "-----BEGIN " + "RSA " + "PRI" + "VATE KEY-----";
+            var end = "-----END " + "RSA " + "PRI" + "VATE KEY-----";
+            var pem = string.Join("\n", begin, "MIIEvAIBADANBgkq", end);
+            var hits = SecurityAuditService.ScanText(pem);
             Assert.Contains(hits, h => h.code == "PemBlock");
         }
 
