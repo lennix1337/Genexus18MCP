@@ -64,7 +64,7 @@ API Key File
 ~~~
 File ApiKeyFile.txt
 {
-	sk-51a8bX7nPqv9ZbS4rTmJ2LgDkEfYx1zQ9wVrR0tTnF1A7Fhj
+	REDACTED_API_KEY
 
 	#Properties
 		Description = "Service API Key"
@@ -78,7 +78,7 @@ JSON Configuration File
 File AppSettingsFile.json
 {
 	{
-		"apiKey": "sk-51a8bX7nPqv9ZbS4rTmJ2LgDkEfYx1zQ9wVrR0tTnF1A7Fhj",
+		"apiKey": "REDACTED_API_KEY",
 		"baseUrl": "https://api.example.com/v1/",
 		"timeout": 30,
 		"retries": 3,
@@ -101,7 +101,7 @@ File AppSettingsFile.xml
 {
 	<?xml version="1.0" encoding="UTF-8"?>
 	<Settings description="Configuration file">
-		<ApiKey>sk-51a8bX7nPqv9ZbS4rTmJ2LgDkEfYx1zQ9wVrR0tTnF1A7Fhj</ApiKey>
+		<ApiKey>REDACTED_API_KEY</ApiKey>
 		<BaseUrl>https://api.example.com/v1/</BaseUrl>
 		<Timeout>30</Timeout>
 		<Retries>3</Retries>
