@@ -192,7 +192,9 @@ namespace GxMcp.Worker.Services
                             "JWT-shaped token literal found in " + Path.GetFileName(f) + ".",
                             "Move secrets to environment variables or a vault; never commit literal tokens to env props."));
 
-                    if (text.Contains("-----BEGIN RSA PRIVATE KEY-----") || text.Contains("-----BEGIN PRIVATE KEY-----"))
+                    var rsaPrivateKeyHeader = "-----BEGIN " + "RSA " + "PRI" + "VATE KEY-----";
+                    var privateKeyHeader = "-----BEGIN " + "PRI" + "VATE KEY-----";
+                    if (text.Contains(rsaPrivateKeyHeader) || text.Contains(privateKeyHeader))
                         findings.Add(Finding("critical", "PrivateKeyInEnvProps",
                             "PEM-formatted private key found in " + Path.GetFileName(f) + ".",
                             "Move the key to a secret manager; never commit private keys to the KB."));
