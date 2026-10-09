@@ -31,6 +31,10 @@ jobs:
           trust_repository_policy: false
           online: false
 
+      - name: Print detailed scanner report
+        if: always()
+        run: cat "${{ runner.temp }}/hol-plugin-scan.json"
+
       - name: Upload detailed scanner report
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
