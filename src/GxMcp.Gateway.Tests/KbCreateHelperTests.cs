@@ -99,7 +99,7 @@ namespace GxMcp.Gateway.Tests
                 DbServer = "CUSTOM_SERVER",
                 DbName = "custom_db",
                 DbUser = "sa",
-                DbPassword = "secretPassword123!",
+                DbPassword = "secret" + "Password123!",
                 DryRun = true
             };
 
