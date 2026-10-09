@@ -54,6 +54,7 @@ switch ($Action) {
             $process = Start-Process pwsh -WindowStyle Hidden -PassThru -ArgumentList @(
                 '-NoProfile', '-File', "`"$PSCommandPath`"", 'Run', '-Name', $Name,
                 '-WorkingDirectory', "`"$WorkingDirectory`"", '-GateDirectory', "`"$GateDirectory`"")
+            Write-Status @{ status = 'running'; pid = $process.Id; startedUtc = [DateTime]::UtcNow.ToString('o'); command = $Command }
         } catch {
             $failedAt = [DateTime]::UtcNow.ToString('o')
             Write-Status @{ status = 'failed'; exitCode = 1; pid = 0; startedUtc = $failedAt; endedUtc = $failedAt; command = $Command }

@@ -7,6 +7,29 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Internal
+
+## v3.13.0 - 2026-10-09
+
+
+### Tracked issues
+
+- [#441](https://github.com/lennix1337/Genexus18MCP/issues/441) — [Feature] WorkWithPlus on WebPanel: no way to add buttons (userAction / actionGroup / table) to an Empty-template instance
+- [#442](https://github.com/lennix1337/Genexus18MCP/issues/442) — [Feature] WorkWithPlus on WebPanel: no way to add a variable grid (add_grid needs an SDT collection; grid leaf rejected)
+- [#447](https://github.com/lennix1337/Genexus18MCP/issues/447) — [Integridade] Escrita textual de Variables reprocessa declarações fora do delta solicitado
+- [#448](https://github.com/lennix1337/Genexus18MCP/issues/448) — [Integridade] Recibos de Variables podem confundir confirmação textual com ausência de mutação ou restauração integral
+- [#449](https://github.com/lennix1337/Genexus18MCP/issues/449) — [Integridade] genexus_edit com parts[] perde dryRun no encaminhamento para BatchEdit
+
+
+<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+     subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
+
+### Added
+
 - An opt-in IDE bridge inspects and edits already-active K2B WebPanel Designers through the native GeneXus document path, with explicit KB/pipe selection, preview and version checks. It does not activate inactive Designers or convert legacy HWs. Thanks to @ip-chb ([#313](https://github.com/lennix1337/Genexus18MCP/issues/313), [#320](https://github.com/lennix1337/Genexus18MCP/pull/320)).
 
 - **WorkWithPlus variable grids.** `genexus_wwp action=add_grid` now accepts ordered, typed variable columns without an SDT collection. Set `gridName`, `containerName` and `columns` to create a grid loaded by the panel's own events, including editable columns. [#442](https://github.com/lennix1337/Genexus18MCP/issues/442). Thanks to @davidagostini ([#445](https://github.com/lennix1337/Genexus18MCP/pull/445)).

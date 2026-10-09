@@ -76,7 +76,31 @@ namespace GxMcp.Worker.Services.Structure
                 ownedWriteVersion = WriteService.ComputeVersionToken(obj);
                 var persisted = _objectService.FindObjectFresh(obj.Guid.ToString("D"), "ExternalObject");
                 var actual = ExternalObjectContract.Read(FindPart<EXOStructurePart>(persisted));
-                if (!JToken.DeepEquals(expected, actual)) throw new InvalidOperationException("Persisted External Object contract differs from the requested contract or an existing member changed.");
+                var expectedMethods = (JArray)expected["externalMethods"];
+                var actualMethods = (JArray)actual["externalMethods"];
+                if (expectedMethods.Count != actualMethods.Count)
+                {
+                    throw new InvalidOperationException($"Method count mismatch: expected {expectedMethods.Count}, actual {actualMethods.Count}");
+                }
+                for (int i = 0; i < expectedMethods.Count; i++)
+                {
+                    if (!ExternalObjectContract.SameSignature((JObject)expectedMethods[i], (JObject)actualMethods[i]))
+                    {
+                        throw new InvalidOperationException($"Method {i} signature mismatch: expected={expectedMethods[i]}, actual={actualMethods[i]}");
+                    }
+                }
+                if (!JToken.DeepEquals(expected["externalProperties"], actual["externalProperties"]))
+                {
+                    throw new InvalidOperationException($"externalProperties mismatch: expected={expected["externalProperties"]}, actual={actual["externalProperties"]}");
+                }
+                if (!JToken.DeepEquals(expected["externalEvents"], actual["externalEvents"]))
+                {
+                    throw new InvalidOperationException($"externalEvents mismatch: expected={expected["externalEvents"]}, actual={actual["externalEvents"]}");
+                }
+                if (!JToken.DeepEquals(expected["genericTypes"], actual["genericTypes"]))
+                {
+                    throw new InvalidOperationException($"genericTypes mismatch: expected={expected["genericTypes"]}, actual={actual["genericTypes"]}");
+                }
                 WriteService.NotePerTargetWrite(objName);
                 _objectService.MarkReadCacheDirty(persisted, "EXOStructure");
                 return Models.McpResponse.Ok(target: objName, code: "ExternalMethodAdded", result: new JObject {

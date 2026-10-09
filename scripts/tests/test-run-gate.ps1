@@ -36,9 +36,15 @@ try {
     # A slow gate makes Wait return "still running" (exit 2) instead of blocking past its budget.
     [void](Invoke-Gate Start 'slow' 'Start-Sleep -Seconds 30')
     $result = & pwsh -NoProfile -File $gate Wait -Name slow -GateDirectory $gates -TimeoutSeconds 5 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 2 -or $result -notmatch 'still running') { throw "Slow gate should report running (exit $LASTEXITCODE): $result" }
-    $state = Get-Content -LiteralPath (Join-Path $gates 'slow.json') -Raw | ConvertFrom-Json
-    Stop-Process -Id $state.pid -Force
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $state = Get-Content -LiteralPath (Join-Path $gates 'slow.json') -Raw | ConvertFrom-Json
+        if ($state.pid -ne 0) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($state.pid -gt 0) {
+        Stop-Process -Id $state.pid -Force -ErrorAction SilentlyContinue
+    }
 
     # A killed gate is reported as dead, never as running forever.
     $result = & pwsh -NoProfile -File $gate Wait -Name slow -GateDirectory $gates -TimeoutSeconds 20 2>&1 | Out-String

@@ -43,6 +43,7 @@ public sealed class LiveMutationIntegrityTests : IClassFixture<LiveGatewayHarnes
             JObject initial = await Call("genexus_properties", new JObject { ["action"] = "get", ["name"] = name, ["reconcileTimedOutWrite"] = true });
             JObject before = initial["result"] as JObject ?? initial;
             string version = before["versionToken"]!.ToString();
+            await Task.Delay(1100);
             var properties = new JObject { ["Description"] = "Synthetic property write", ["MainProgram"] = "True" };
             JObject preview = await Call("genexus_properties", new JObject { ["action"] = "set", ["name"] = name, ["properties"] = properties, ["expectedVersion"] = version, ["dryRun"] = true });
             Assert.False(preview["result"]?["persisted"]?.Value<bool>() ?? true);

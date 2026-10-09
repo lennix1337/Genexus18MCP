@@ -1,24 +1,13 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "3.12.0",
-  "tag": "v3.12.0",
-  "collectedAtUtc": "2026-10-06T19:09:52.8967550Z",
+  "version": "3.13.0",
+  "tag": "v3.13.0",
+  "collectedAtUtc": "2026-10-09T03:07:09.3900163Z",
   "issues": [
     {
-      "number": 407,
-      "title": "[Bug] RPT_TEXT_MODE is neither readable nor writable, so GX8 text-mode reports fail to compile with CS0103",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/407",
-      "state": "open",
-      "labels": [
-        "bug",
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 437,
-      "title": "[Bug] failureTrace retorna vazio quando os recursos de UI do .NET Framework estão localizados (prefixo \"em \" em vez de \"at \")",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/437",
+      "number": 441,
+      "title": "[Feature] WorkWithPlus on WebPanel: no way to add buttons (userAction / actionGroup / table) to an Empty-template instance",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/441",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -26,9 +15,9 @@
       "milestone": null
     },
     {
-      "number": 438,
-      "title": "[Higiene] Linha com apenas espaços em BuildDiagnosticRecognitionTests.cs:34 é reportada por git diff --check",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/438",
+      "number": 442,
+      "title": "[Feature] WorkWithPlus on WebPanel: no way to add a variable grid (add_grid needs an SDT collection; grid leaf rejected)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/442",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -36,9 +25,29 @@
       "milestone": null
     },
     {
-      "number": 439,
-      "title": "[Investigação] genexus_read devolve conteúdo anterior após Save pela IDE em leituras incondicionais",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/439",
+      "number": 447,
+      "title": "[Integridade] Escrita textual de Variables reprocessa declarações fora do delta solicitado",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/447",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 448,
+      "title": "[Integridade] Recibos de Variables podem confundir confirmação textual com ausência de mutação ou restauração integral",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/448",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 449,
+      "title": "[Integridade] genexus_edit com parts[] perde dryRun no encaminhamento para BatchEdit",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/449",
       "state": "open",
       "labels": [
         "fixed-pending-release"
