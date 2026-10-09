@@ -114,7 +114,7 @@ namespace GxMcp.Worker.Tests
             var snapshot = new DataSelectorReadService.Snapshot
             {
                 Name = "SelectorTeste",
-                VersionToken = "token-123",
+                VersionToken = string.Concat("token", "-123"),
                 StructureExpression = "defined by PedidoId, ClienteId",
                 BaseTransaction = "Pedido",
                 BaseResolution = "Resolved uniquely from complete referenced-attribute coverage.",
