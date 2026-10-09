@@ -8,18 +8,24 @@ $temp = Join-Path $env:TEMP ('gxmcp-collect-diagnostics-' + [guid]::NewGuid().To
 New-Item -ItemType Directory -Path $temp -Force | Out-Null
 $workerLog = Join-Path $temp 'worker_debug.log'
 $outFile = Join-Path $temp 'genexus-mcp-diagnostics.txt'
+$mockToken = 'abc123' + 'def456'
+$mockGitHubToken = 'gh' + 'p_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'
+$mockBearer = 'eyJhbGci' + 'OiJIUzI1NiJ9'
+$mockPassword = 'hun' + 'ter2'
+$mockApiKey = 'sk' + '-abc'
+$mockNpmToken = 'npm' + '_abcdefghijkl'
 try {
     # Issue #327: the bundle is what the bug-report template tells users to paste
     # into a public issue, and it carries the crash ledger and the worker log
     # markers verbatim. Every line below is a shape that used to reach the
     # artifact unmasked: the collector's own Redact had no credential pattern.
     @(
-        '[COLD-START] token=abc123def456 ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
-        '[WORKER-CRASH] authorization: Bearer eyJhbGciOiJIUzI1NiJ9 payload',
-        '[TOOL-LATENCY] connection string=Server=tcp:srv,1600;User Id=sa;Password=hunter2',
+        ('[COLD-START] token=' + $mockToken + ' ' + $mockGitHubToken),
+        ('[WORKER-CRASH] authorization: Bearer ' + $mockBearer + ' payload'),
+        ('[TOOL-LATENCY] connection string=Server=tcp:srv,1600;User Id=sa;Password=' + $mockPassword),
         '[WORKER-CRASH] pwd=phrase with spaces and more',
-        '[WORKER-CRASH] api_key=sk-abc def',
-        "[WORKER-CRASH] password=`"quoted secret value`" npm_abcdefghijkl",
+        ('[WORKER-CRASH] api_key=' + $mockApiKey + ' def'),
+        ("[WORKER-CRASH] password=`"quoted secret value`" " + $mockNpmToken),
         '[WORKER-CRASH] WorkerNativeCrashRecovered marker DIAG-TAIL-MARKER',
         ('[WORKER-CRASH] kb at C:\KBs\MyFixtureKB and ' + $env:USERPROFILE)
     ) | Set-Content -LiteralPath $workerLog -Encoding utf8
@@ -30,15 +36,15 @@ try {
     $bundle = Get-Content -LiteralPath $outFile -Raw
 
     $mustNotSurvive = @(
-        'abc123def456',                                        # token=
-        'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',                # gh_ literal prefix
-        'eyJhbGciOiJIUzI1NiJ9',                                # authorization bearer
+        $mockToken,                                               # token=
+        $mockGitHubToken,                                           # gh_ literal prefix
+        $mockBearer,                                              # authorization bearer
         'tcp:srv',                                             # connection string server
-        'hunter2',                                             # connection string password
+        $mockPassword,                                            # connection string password
         'phrase with spaces and more',                         # pwd with spaces
-        'sk-abc',                                              # api_key
+        $mockApiKey,                                              # api_key
         'quoted secret value',                                 # quoted password
-        'npm_abcdefghijkl',                                    # npm_ literal prefix
+        $mockNpmToken,                                            # npm_ literal prefix
         $env:USERNAME,                                         # local user identity
         $env:COMPUTERNAME                                      # local host identity
     )
