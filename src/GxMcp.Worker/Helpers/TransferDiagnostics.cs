@@ -12,6 +12,13 @@ namespace GxMcp.Worker.Helpers
         internal bool Available => service != null;
         internal bool Truncated { get; private set; }
 
+        internal static TransferDiagnostics ForSdk()
+        {
+            var availability = typeof(CommonServices).GetProperty("IsOutputAvailable");
+            bool unavailable = availability?.GetValue(null) is bool value && !value;
+            return new TransferDiagnostics(unavailable ? null : CommonServices.Output);
+        }
+
         internal TransferDiagnostics(IOutputService service)
         {
             this.service = service;

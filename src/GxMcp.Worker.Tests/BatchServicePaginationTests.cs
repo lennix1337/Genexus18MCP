@@ -163,7 +163,7 @@ namespace GxMcp.Worker.Tests
 
             // Three producers - empty list, transactional path, per-change path -
             // and one envelope, so a client reading any of them sees the same shape.
-            Assert.Equal(1, SourceAssert.Count(source, "private static string BatchEditCompleted(string target, int count, JArray results, System.Diagnostics.Stopwatch sw)"));
+            Assert.Equal(1, SourceAssert.Count(source, "private static string BatchEditCompleted(string target, int count, JArray results, System.Diagnostics.Stopwatch sw, bool dryRun = false)"));
             Assert.Equal(3, SourceAssert.Count(source, "return BatchEditCompleted("));
             Assert.Equal(1, SourceAssert.Count(source, @"[""count""] = count,"));
 

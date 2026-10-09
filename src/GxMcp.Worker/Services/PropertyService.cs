@@ -1159,6 +1159,7 @@ namespace GxMcp.Worker.Services
 
                         try { if (container != obj) container.Dirty = true; } catch { }
                         obj.EnsureSave();
+                        WriteService.StampObjectRevisionDates(obj, obj.Model);
                         trans.Commit();
                         committed = true;
                         WriteService.NotePerTargetWrite(target);

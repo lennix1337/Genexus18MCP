@@ -290,6 +290,14 @@ namespace GxMcp.Worker.Services
 
                 foreach (JObject item in request.Targets)
                 {
+                    if (VariablesTextReceipt.Applies(item["part"]?.ToString()))
+                    {
+                        var previewArgs = (JObject)item.DeepClone();
+                        previewArgs["dryRun"] = true;
+                        string preview = _writer?.WriteObject(item["target"]?.ToString() ?? item["name"]?.ToString(), previewArgs);
+                        if (preview == null || !IsSuccessResponse(preview))
+                            return MutationResult.Error("VariablesPreflightFailed", "A Variables target failed preflight; no target was written.");
+                    }
                     string targetName = item["target"]?.ToString() ?? item["name"]?.ToString();
                     string itemContent = item["content"]?.ToString() ?? item["source"]?.ToString();
                     string itemPart = item["part"]?.ToString() ?? "Source";
@@ -525,13 +533,24 @@ namespace GxMcp.Worker.Services
                     applied.Reverse();
                     foreach (var record in applied)
                     {
-                        rollbackAttempts++;
                         var targetRollback = new JObject
                         {
                             ["target"] = record.Target,
                             ["part"] = record.Part,
                             ["attempted"] = true
                         };
+                        if (VariablesTextReceipt.Applies(record.Part))
+                        {
+                            rollbackIndeterminate = true;
+                            targetRollback["attempted"] = false;
+                            targetRollback["outcome"] = "text_snapshot_restore_refused";
+                            targetRollback["verified"] = false;
+                            targetRollback["verificationScope"] = "variables-dsl";
+                            targetRollback["reason"] = "Text snapshots cannot certify metadata or an atomic conditional restore; no recovery write was attempted.";
+                            rollbackTargets.Add(targetRollback);
+                            continue;
+                        }
+                        rollbackAttempts++;
                         try
                         {
                             var rollbackArgs = new JObject
@@ -601,13 +620,16 @@ namespace GxMcp.Worker.Services
             var successResult = new JObject
             {
                 ["totalObjects"] = applied.Count,
-                ["outcome"] = applied.All(item => item.Verified) ? "confirmed" : "saved_unverified",
+                ["outcome"] = !applied.All(item => item.Verified) ? "saved_unverified"
+                    : applied.Any(item => VariablesTextReceipt.Applies(item.Part)) ? "text_confirmed_metadata_unverified" : "confirmed",
                 ["targets"] = new JArray(applied.Select(item => new JObject
                 {
                     ["target"] = item.Target,
                     ["part"] = item.Part,
                     ["saved"] = item.Saved,
-                    ["verified"] = item.Verified
+                    ["verified"] = item.Verified && !VariablesTextReceipt.Applies(item.Part),
+                    ["textVerified"] = item.Verified,
+                    ["verificationScope"] = VariablesTextReceipt.Applies(item.Part) ? "variables-dsl" : "part-text"
                 }))
             };
 

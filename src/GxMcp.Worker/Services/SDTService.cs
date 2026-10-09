@@ -157,6 +157,7 @@ namespace GxMcp.Worker.Services
                 bool writeStarted = false;
                 bool saveStarted = false;
                 bool committed = false;
+                string ownedWriteVersion = null;
                 int applied = 0;
                 bool isCollection = false;
                 using (var sdkTrans = obj.Model.KB.BeginTransaction())
@@ -181,6 +182,7 @@ namespace GxMcp.Worker.Services
                         GxMcp.Worker.Parsers.SdtDslParser.MarkPartDirty((object)structure, sdtName);
                         saveStarted = true;
                         locked.Save();
+                        ownedWriteVersion = WriteService.ComputeVersionToken(locked);
                         JObject staged = ReadStructure(locked);
                         if (!MatchesPlan(beforeChildren, children, (JArray)staged["children"], add)
                             || !MatchesMetadata(before, json, staged))
@@ -200,7 +202,7 @@ namespace GxMcp.Worker.Services
                 }
                 if (writeFailure != null)
                     return ReconcileFailedWrite(obj, beforeRevision, snapshot, before,
-                        writeFailure, writeStarted, saveStarted, committed);
+                        writeFailure, writeStarted, saveStarted, committed, ownedWriteVersion);
 
                 KBObject persistedObj = null;
                 JObject persisted = null;
@@ -216,7 +218,7 @@ namespace GxMcp.Worker.Services
                     && snapshot.CompareParts(persistedObj, "SDTStructure").Equal;
                 if (!verified)
                 {
-                    bool rolledBack = RestoreFromRevision(obj, beforeRevision, snapshot, before);
+                    bool rolledBack = RestoreFromRevision(obj, beforeRevision, snapshot, before, ownedWriteVersion);
                     return Models.McpResponse.Err(code: persisted == null ? "FreshReadUnavailable" : "StructureUpdateNotPersisted",
                         message: rolledBack ? "The post-save SDT could not be verified; the prior revision was restored and verified."
                             : "The post-save SDT could not be verified and rollback could not be confirmed. Stop writing this object.",
@@ -242,7 +244,7 @@ namespace GxMcp.Worker.Services
 
         private string ReconcileFailedWrite(KBObject seed, KBObject revision, ObjectMoveSnapshot snapshot,
             JObject before, Exception failure, bool writeStarted, bool saveStarted, bool committed,
-            string errorCode = "StructureUpdateFailed")
+            string ownedWriteVersion, string errorCode = "StructureUpdateFailed")
         {
             string target = seed.Name;
             if (!writeStarted)
@@ -263,7 +265,7 @@ namespace GxMcp.Worker.Services
                 && snapshot.CompareParts(fresh, "SDTStructure").Equal;
             bool rolledBack = false;
             if (!unchanged && (saveStarted || committed))
-                rolledBack = RestoreFromRevision(seed, revision, snapshot, before);
+                rolledBack = RestoreFromRevision(seed, revision, snapshot, before, ownedWriteVersion);
             return Models.McpResponse.Err(code: errorCode,
                 message: failure?.InnerException?.Message ?? failure?.Message ?? "SDT update failed.",
                 hint: unchanged || rolledBack ? "The prior SDT structure was verified after the failure."
@@ -278,7 +280,7 @@ namespace GxMcp.Worker.Services
                 });
         }
 
-        private bool RestoreFromRevision(KBObject seed, KBObject revision, ObjectMoveSnapshot snapshot, JObject expected)
+        private bool RestoreFromRevision(KBObject seed, KBObject revision, ObjectMoveSnapshot snapshot, JObject expected, string ownedWriteVersion)
         {
             try
             {
@@ -287,7 +289,10 @@ namespace GxMcp.Worker.Services
                     bool committed = false;
                     try
                     {
-                        var current = seed.Model.Objects.Get(seed.Guid) ?? seed;
+                        var current = _objectService.FindObjectFreshByIdentity(seed);
+                        if (current == null || string.IsNullOrWhiteSpace(ownedWriteVersion)
+                            || !string.Equals(ownedWriteVersion, WriteService.ComputeVersionToken(current), StringComparison.Ordinal))
+                            throw new InvalidOperationException("SDT rollback refused: the current persisted version cannot be attributed to this write.");
                         CopyStructure(revision, current);
                         snapshot.RestoreParts(current, "SDTStructure");
                         current.Save();
@@ -431,6 +436,7 @@ namespace GxMcp.Worker.Services
             bool committed = false;
             bool writeStarted = false;
             bool saveStarted = false;
+            string ownedWriteVersion = null;
             try
             {
                 using (var tx = current.Model.KB.BeginTransaction())
@@ -444,6 +450,7 @@ namespace GxMcp.Worker.Services
                         CopyStructure(revision, locked);
                         saveStarted = true;
                         locked.Save();
+                        ownedWriteVersion = WriteService.ComputeVersionToken(locked);
                         if (!SameStructure(desired, ReadStructure(locked)))
                             throw new InvalidOperationException("The staged SDT does not match the selected revision.");
                         if (!snapshot.CompareParts(locked, "SDTStructure").Equal)
@@ -458,7 +465,7 @@ namespace GxMcp.Worker.Services
                 if (persistedStructure == null || !SameStructure(desired, persistedStructure)
                     || !snapshot.CompareParts(persisted, "SDTStructure").Equal)
                 {
-                    bool rolledBack = RestoreFromRevision(current, beforeRevision, snapshot, before);
+                    bool rolledBack = RestoreFromRevision(current, beforeRevision, snapshot, before, ownedWriteVersion);
                     return Models.McpResponse.Err(code: persistedStructure == null ? "FreshReadUnavailable" : "RevisionRestoreNotPersisted",
                         message: rolledBack ? "Restoration could not be verified; the prior state was restored and verified."
                             : "Restoration could not be verified; rollback could not be confirmed. Stop writing this object.",
@@ -481,7 +488,7 @@ namespace GxMcp.Worker.Services
             catch (Exception ex)
             {
                 return ReconcileFailedWrite(current, beforeRevision, snapshot, before,
-                    ex, writeStarted, saveStarted, committed, "RevisionRestoreFailed");
+                    ex, writeStarted, saveStarted, committed, ownedWriteVersion, "RevisionRestoreFailed");
             }
         }
 

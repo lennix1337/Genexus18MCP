@@ -149,8 +149,20 @@ namespace GxMcp.Worker.Helpers
         internal static string ReadDirection(string nativeAccess, ParameterInOut fallback) =>
             (string.IsNullOrWhiteSpace(nativeAccess) ? fallback : ParseDirection(nativeAccess)).ToString().ToLowerInvariant();
 
+        internal static JArray ReadGenericTypes(object part, out bool available)
+        {
+            var property = part.GetType().GetProperty("ExternalGenericTypes");
+            available = property != null;
+            var result = new JArray();
+            if (!available) return result;
+            foreach (object item in (System.Collections.IEnumerable)property.GetValue(part))
+                result.Add((string)((dynamic)item).SerializeToXml());
+            return result;
+        }
+
         internal static JObject Read(EXOStructurePart part)
         {
+            var genericTypes = ReadGenericTypes(part, out bool genericTypesAvailable);
             return new JObject
             {
                 ["propertiesXml"] = part.SerializeToXml(),
@@ -159,7 +171,8 @@ namespace GxMcp.Worker.Helpers
                 ["externalEvents"] = new JArray(part.ExternalEvents.Select(e => new JObject {
                     ["propertiesXml"] = e.SerializeToXml(),
                     ["parameters"] = new JArray(e.Parameters.Select(p => DescribeItem(p, "ExoParamExternalName"))) })),
-                ["genericTypes"] = new JArray(part.ExternalGenericTypes.Select(t => t.SerializeToXml()))
+                ["genericTypes"] = genericTypes,
+                ["genericTypesAvailable"] = genericTypesAvailable
             };
         }
 

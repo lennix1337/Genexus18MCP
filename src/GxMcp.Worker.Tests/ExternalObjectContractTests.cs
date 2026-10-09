@@ -59,6 +59,21 @@ namespace GxMcp.Worker.Tests
         public void InvalidContractIsRejectedBeforeSdkMutation(string input) =>
             Assert.Throws<ArgumentException>(() => ExternalObjectContract.ValidatePayload(JObject.Parse(input)));
 
+        public sealed class OldStructure { }
+        public sealed class GenericItem { public string SerializeToXml() => "<GenericType name='T'/>"; }
+        public sealed class NewStructure { public GenericItem[] ExternalGenericTypes { get; } = new[] { new GenericItem() }; }
+
+        [Fact]
+        public void GenericTypesExposeAvailabilityAcrossSdkMajors()
+        {
+            Assert.Empty(ExternalObjectContract.ReadGenericTypes(new OldStructure(), out bool oldAvailable));
+            Assert.False(oldAvailable);
+            var types = ExternalObjectContract.ReadGenericTypes(new NewStructure(), out bool newAvailable);
+            Assert.True(newAvailable);
+            Assert.Single(types);
+            Assert.Equal("<GenericType name='T'/>", types[0].ToString());
+        }
+
         [Fact]
         public void LegacyPayloadAndExternalTypeMappingRemainAccepted()
         {

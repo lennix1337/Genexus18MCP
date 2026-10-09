@@ -349,6 +349,7 @@ namespace GxMcp.Worker.Services
                 }
             }
 
+            if (VariablesTextReceipt.Applies(partName)) VariablesTextReceipt.Limit(parsed);
             return parsed.ToString(Newtonsoft.Json.Formatting.None);
         }
 
@@ -544,6 +545,17 @@ namespace GxMcp.Worker.Services
             if (!string.Equals(status, "error", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
                 return responseJson;
+
+            if (VariablesTextReceipt.Applies(partName))
+            {
+                response["rollback"] = new JObject
+                {
+                    ["requested"] = true, ["attempted"] = false, ["verified"] = false, ["rolledBack"] = false,
+                    ["atomic"] = false, ["error"] = "A textual Variables snapshot cannot restore SDK metadata or authorize a concurrent-safe restore. No recovery write was attempted."
+                };
+                VariablesTextReceipt.Limit(response);
+                return response.ToString(Newtonsoft.Json.Formatting.None);
+            }
 
             bool visualPart = WebFormXmlHelper.IsVisualPart(partName);
             if (IsPostSaveVerificationIndeterminate(response.ToString(Newtonsoft.Json.Formatting.None)))

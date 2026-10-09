@@ -2,34 +2,38 @@
 
 ## Unreleased
 
-### Fixed
-- External Object method authoring applies native GeneXus types, dimensions, parameter directions and external names; previews, duplicate protection, snapshots and independent post-save verification preserve existing members. Reads and Object Text projections include the full method contract.
-- XPZ import captures SDK output diagnostics and returns an error when ImportFile declines; previews remain separate from persisted-state evidence.
-
 <!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
      subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
 
 ### Added
 
-- An opt-in IDE bridge inspects and edits already-active K2B WebPanel Designers through the native GeneXus document path, with explicit KB/pipe selection, preview and version checks. It does not activate inactive Designers or convert legacy HWs ([#313](https://github.com/lennix1337/Genexus18MCP/issues/313), PR #320).
+- An opt-in IDE bridge inspects and edits already-active K2B WebPanel Designers through the native GeneXus document path, with explicit KB/pipe selection, preview and version checks. It does not activate inactive Designers or convert legacy HWs. Thanks to @ip-chb ([#313](https://github.com/lennix1337/Genexus18MCP/issues/313), [#320](https://github.com/lennix1337/Genexus18MCP/pull/320)).
 
-- **WorkWithPlus variable grids.** `genexus_wwp action=add_grid` now accepts ordered, typed variable columns without an SDT collection. Set `gridName`, `containerName` and `columns` to create a grid loaded by the panel's own events, including editable columns. [#442](https://github.com/lennix1337/Genexus18MCP/issues/442).
+- **WorkWithPlus variable grids.** `genexus_wwp action=add_grid` now accepts ordered, typed variable columns without an SDT collection. Set `gridName`, `containerName` and `columns` to create a grid loaded by the panel's own events, including editable columns. [#442](https://github.com/lennix1337/Genexus18MCP/issues/442). Thanks to @davidagostini ([#445](https://github.com/lennix1337/Genexus18MCP/pull/445)).
 
 ### Changed
 
+- Automatic Variables recovery no longer replayed text-only snapshots that cannot certify SDK metadata or an atomic conditional restore. Receipts now distinguished DSL confirmation from metadata verification and retained write/snapshot evidence when persisted text was unchanged. Typed `genexus_variable` operations and Source/Rules auto-declaration remained available ([#448](https://github.com/lennix1337/Genexus18MCP/issues/448); [verification and recovery limits](docs/variables-text-integrity.md)).
+
 ### Fixed
 
-- `genexus_properties action=get,reconcileTimedOutWrite=true` now performs an authoritative typed read of persisted values and clears a matching timeout fence only when every affected property and a version token are present. On WebPanels, `MainProgram` maps explicitly to the native `IsMain` property. Property writes support `dryRun`, `expectedVersion`, independent post-save verification and complete-object rollback on failure; WebPanel reference properties work in batches. No lifecycle operation runs implicitly.
+- Multipart `genexus_edit dryRun=true` reached the dispatcher and every full/patch item; item overrides could not enter the direct transaction or save path ([#449](https://github.com/lennix1337/Genexus18MCP/issues/449)).
+- Textual Variables writes validated all declarations and referenced types before mutation, skipped setters/binders on unchanged declarations, and skipped Save for identical DSL. Multipart and target batches preflighted Variables before another item was written ([#447](https://github.com/lennix1337/Genexus18MCP/issues/447)).
+- External Object method authoring applied native types, dimensions, parameter directions and external names, with previews, duplicate protection and independent post-save comparison. Reads exposed the full method contract. XPZ import captured SDK diagnostics and returned an error when ImportFile declined. Thanks to @davidagostini ([#446](https://github.com/lennix1337/Genexus18MCP/pull/446)).
+- SDT and External Object failure recovery required an independent current owner and the version recorded after this operation's Save. Missing or changed ownership evidence refused recovery instead of re-saving a stale owner over concurrent edits.
+- External Object reads and XPZ diagnostics no longer required SDK members absent from GeneXus 16. Generic-type reads exposed native availability rather than treating an unavailable SDK collection as confirmed empty.
 
-- `genexus_edit` and `genexus_delete_object` no longer wait behind whole-KB scans launched by the Worker's automatic warmup. SDK commands queued behind another long operation now receive `WorkerBusy` when their bounded wait expires. A Variables edit preview reports the resolved object, version and proposed content without saving. Full edits honor `expectedVersion` even when the Gateway also sends an empty `baseVersion`. GeneXus CopyModel write locks return `KbWriteLocked` with persisted-state evidence instead of a generic transaction failure.
+- `genexus_properties action=get,reconcileTimedOutWrite=true` now performs an authoritative typed read of persisted values and clears a matching timeout fence only when every affected property and a version token are present. On WebPanels, `MainProgram` maps explicitly to the native `IsMain` property. Property writes support `dryRun`, `expectedVersion`, independent post-save verification and complete-object rollback on failure; WebPanel reference properties work in batches. No lifecycle operation runs implicitly. Thanks to @davidagostini ([#443](https://github.com/lennix1337/Genexus18MCP/pull/443)).
 
-- SDT `update_visual` now previews every member omitted by replacement, requires explicit removal confirmation, and supports `mode=add` while preserving existing members. SDT revision history can read and restore `SDTStructure` with an optimistic version check, preview, native rollback source, and post-save verification.
+- `genexus_edit` and `genexus_delete_object` no longer wait behind whole-KB scans launched by the Worker's automatic warmup. SDK commands queued behind another long operation now receive `WorkerBusy` when their bounded wait expires. A Variables edit preview reports the resolved object, version and proposed content without saving. Full edits honor `expectedVersion` even when the Gateway also sends an empty `baseVersion`. GeneXus CopyModel write locks return `KbWriteLocked` with persisted-state evidence instead of a generic transaction failure. Thanks to @davidagostini ([#443](https://github.com/lennix1337/Genexus18MCP/pull/443)).
 
-- **WorkWithPlus buttons on Empty WebPanels.** `add_user_action` now creates a missing `TableActions` under the unique `TableMain`, preserving existing content and deriving the button event from its name. Explicit missing containers and ambiguous parents remain errors. [#441](https://github.com/lennix1337/Genexus18MCP/issues/441).
+- SDT `update_visual` now previews every member omitted by replacement, requires explicit removal confirmation, and supports `mode=add` while preserving existing members. SDT revision history can read and restore `SDTStructure` with an optimistic version check, preview, native rollback source, and post-save verification. Thanks to @davidagostini ([#444](https://github.com/lennix1337/Genexus18MCP/pull/444)).
+
+- **WorkWithPlus buttons on Empty WebPanels.** `add_user_action` now creates a missing `TableActions` under the unique `TableMain`, preserving existing content and deriving the button event from its name. Explicit missing containers and ambiguous parents remain errors. [#441](https://github.com/lennix1337/Genexus18MCP/issues/441). Thanks to @davidagostini ([#445](https://github.com/lennix1337/Genexus18MCP/pull/445)).
 
 ### Internal
 
-- The all-tools schema budget rose from 86,500 to 86,700 bytes for the property recovery and concurrency fields; the published profile measures about 86,503 bytes.
+- The combined PR #320 and #443–446 contract adds the opt-in K2B Designer tool and typed property, SDT, WorkWithPlus and External Object fields. The intentionally expanded schema budgets are 37,000 approximate tokens, 89,000 all-profile bytes and 62,500 authoring-profile bytes (measured 36,759 / 88,148 / 61,238 respectively), retaining existing guidance rather than removing older contracts to fit the former limits.
 
 ## v3.12.0 - 2026-10-06
 

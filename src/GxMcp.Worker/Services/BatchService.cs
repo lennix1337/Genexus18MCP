@@ -35,20 +35,23 @@ namespace GxMcp.Worker.Services
         /// two read the stopwatch - the kind of difference that looks deliberate and
         /// is not, because no stopwatch has run at that point.
         /// </summary>
-        private static string BatchEditCompleted(string target, int count, JArray results, System.Diagnostics.Stopwatch sw)
+        private static string BatchEditCompleted(string target, int count, JArray results, System.Diagnostics.Stopwatch sw, bool dryRun = false)
         {
-            return McpResponse.Ok(
-                target: target,
-                code: "BatchEditCompleted",
-                result: new JObject
-                {
-                    ["count"] = count,
-                    ["results"] = results,
-                    ["duration"] = sw.ElapsedMilliseconds
-                });
+            var result = new JObject
+            {
+                ["count"] = count,
+                ["results"] = results,
+                ["duration"] = sw.ElapsedMilliseconds
+            };
+            if (dryRun)
+            {
+                result["dryRun"] = true;
+                result["savePathExercised"] = false;
+            }
+            return McpResponse.Ok(target: target, code: "BatchEditCompleted", result: result);
         }
 
-        public string BatchEdit(string target, JArray changes)
+        public string BatchEdit(string target, JArray changes, bool dryRun = false)
         {
             try
             {
@@ -57,14 +60,28 @@ namespace GxMcp.Worker.Services
                 var results = new JArray();
 
                 if (changes == null || changes.Count == 0)
-                    return BatchEditCompleted(target, 0, results, sw);
+                    return BatchEditCompleted(target, 0, results, sw, dryRun);
 
-                bool allDirect = true;
-                foreach (var c in changes)
+                // Variables must validate as a complete request before another part can be saved.
+                foreach (var change in changes)
                 {
-                    string mode = c["mode"]?.ToString();
-                    bool dryRun = c["dryRun"]?.ToObject<bool?>() ?? false;
-                    if (mode == "patch" || dryRun) { allDirect = false; break; }
+                    string part = change["part"]?.ToString() ?? "Source";
+                    if (!VariablesTextReceipt.Applies(part)) continue;
+                    string preview = change["mode"]?.ToString() == "patch"
+                        ? _patchService.ApplyPatch(target, part, change["operation"]?.ToString() ?? "Replace",
+                            change["content"]?.ToString(), change["context"]?.ToString(),
+                            change["expectedCount"]?.ToObject<int?>() ?? 1, dryRun: true,
+                            replaceAll: change["replaceAll"]?.ToObject<bool?>() ?? false)
+                        : _writeService.WriteObject(target, part, change["content"]?.ToString(), dryRun: true);
+                    if (JObject.Parse(preview)["status"]?.ToString() == "error") return preview;
+                }
+
+                bool allDirect = !dryRun;
+                foreach (var change in changes)
+                {
+                    string mode = change["mode"]?.ToString();
+                    bool itemDryRun = dryRun || (change["dryRun"]?.ToObject<bool?>() ?? false);
+                    if (mode == "patch" || itemDryRun || VariablesTextReceipt.Applies(change["part"]?.ToString())) { allDirect = false; break; }
                 }
 
                 if (allDirect && changes.Count > 1)
@@ -123,7 +140,7 @@ namespace GxMcp.Worker.Services
                                 if (!ok) { try { trans.Rollback(); } catch { } }
                             }
                         }
-                        return BatchEditCompleted(target, count, results, sw);
+                        return BatchEditCompleted(target, count, results, sw, dryRun);
                     }
                 }
 
@@ -135,17 +152,17 @@ namespace GxMcp.Worker.Services
                     string context = change["context"]?.ToString();
                     string operation = change["operation"]?.ToString() ?? "Replace";
                     int expectedCount = change["expectedCount"]?.ToObject<int?>() ?? 1;
-                    bool dryRun = change["dryRun"]?.ToObject<bool?>() ?? false;
+                    bool itemDryRun = dryRun || (change["dryRun"]?.ToObject<bool?>() ?? false);
                     bool replaceAll = change["replaceAll"]?.ToObject<bool?>() ?? false;
 
                     string result;
                     if (mode == "patch")
                     {
-                        result = _patchService.ApplyPatch(target, part, operation, content, context, expectedCount, null, dryRun, verifyRollback: false, returnPostState: true, verbose: false, replaceAll: replaceAll);
+                        result = _patchService.ApplyPatch(target, part, operation, content, context, expectedCount, null, itemDryRun, verifyRollback: false, returnPostState: true, verbose: false, replaceAll: replaceAll);
                     }
                     else
                     {
-                        result = _writeService.WriteObject(target, part, content);
+                        result = _writeService.WriteObject(target, part, content, dryRun: itemDryRun);
                     }
                     
                     try {
@@ -156,7 +173,7 @@ namespace GxMcp.Worker.Services
                     count++;
                 }
 
-                return BatchEditCompleted(target, count, results, sw);
+                return BatchEditCompleted(target, count, results, sw, dryRun);
             }
             catch (Exception ex)
             {

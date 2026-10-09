@@ -1478,7 +1478,7 @@ namespace GxMcp.Worker.Services
                 args?["part"]?.ToString() ?? "Source",
                 args?["parts"] as JArray,
                 args?["refresh"]?.ToObject<bool?>() ?? false);
-            if (action == "BatchEdit") return _batchService.BatchEdit(target, args?["changes"] as JArray);
+            if (action == "BatchEdit") return _batchService.BatchEdit(target, args?["changes"] as JArray, args?["dryRun"]?.ToObject<bool?>() ?? false);
             if (action == "MultiEdit")
             {
                 var items = args?["items"] as JArray;

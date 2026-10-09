@@ -697,6 +697,11 @@ namespace GxMcp.Worker.Services
 
                 if (dryRun)
                 {
+                    if (VariablesTextReceipt.Applies(partName))
+                    {
+                        string validation = _writeService.WriteObject(target, partName, updatedSource, typeFilter, dryRun: true);
+                        if (JObject.Parse(validation)["status"]?.ToString() == "error") return validation;
+                    }
                     string dryRunResult = BuildPatchResult("Applied", partName, normalizedOperation, expectedCount, matchCount, "Dry-run succeeded. Write skipped.");
                     try
                     {
@@ -1089,7 +1094,8 @@ namespace GxMcp.Worker.Services
                                     persistedMatches,
                                     rollbackOnFailure,
                                     rollbackBaseVersion)
-                                && originalSource != null)
+                                && originalSource != null
+                                && !VariablesTextReceipt.Applies(partName))
                             {
                                 string rollbackResult = _writeService.WriteObject(
                                     target,
@@ -1145,7 +1151,9 @@ namespace GxMcp.Worker.Services
                                 // path and surface the missing fence instead of guessing.
                                 PatchPersistenceReceipt.MarkRollbackNotAttempted(
                                     writePayload,
-                                    "Rollback was not attempted because the post-save version token was unavailable.");
+                                    VariablesTextReceipt.Applies(partName)
+                                        ? "Textual Variables recovery cannot verify SDK metadata or an atomic conditional restore; no recovery write was attempted."
+                                        : "Rollback was not attempted because the post-save version token was unavailable.");
                             }
                         }
                     }
@@ -1236,6 +1244,7 @@ namespace GxMcp.Worker.Services
                         verbose,
                         persistedAfter: confirmedPersistedSource);
 
+                if (VariablesTextReceipt.Applies(partName)) VariablesTextReceipt.Limit(resultObj);
                 if (finalSuccess)
                 {
                     string finalCode2 = resultObj["code"]?.ToString() ?? "Applied";

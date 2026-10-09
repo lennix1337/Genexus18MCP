@@ -40,6 +40,12 @@ namespace GxMcp.Worker.Services
             for (int i = plan.Count - 1; i >= 0; i--)
             {
                 var item = plan[i];
+                if (VariablesTextReceipt.Applies(item.Part))
+                {
+                    rollbackResults.Add(new JObject { ["target"] = item.Name, ["itemStatus"] = "Error",
+                        ["message"] = "Textual Variables snapshots cannot certify metadata or an atomic conditional restore; no recovery write was attempted." });
+                    continue;
+                }
                 string priorContent = snapshotReader?.Invoke(item.SnapshotPath);
                 if (priorContent == null)
                 {
@@ -91,6 +97,15 @@ namespace GxMcp.Worker.Services
                         tool: "genexus_edit",
                         args: new JObject { ["name"] = "<target>", ["part"] = "Source", ["content"] = "<code>" },
                         why: "Use genexus_edit for single-object writes; genexus_bulk_edit for multi-object batches.")));
+
+            foreach (var item in items.OfType<JObject>())
+            {
+                string part = item["part"]?.ToString() ?? "Source";
+                if (!VariablesTextReceipt.Applies(part)) continue;
+                string preview = WriteObject(item["name"]?.ToString(), part, item["content"]?.ToString(),
+                    item["type"]?.ToString(), dryRun: true);
+                if (JObject.Parse(preview)["status"]?.ToString() == "error") return preview;
+            }
 
             bool stopOnError = args?["stopOnError"]?.ToObject<bool?>() ?? true;
             bool dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false;

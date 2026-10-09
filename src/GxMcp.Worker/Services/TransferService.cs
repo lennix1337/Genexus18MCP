@@ -325,7 +325,7 @@ namespace GxMcp.Worker.Services
                     message: "The requested XPZ import options could not be applied; no import was attempted. " + ex.Message,
                     hint: "Use the supported conflict/theme option values or omit them to use the safe defaults.");
             }
-            using (var diagnostics = new TransferDiagnostics(CommonServices.IsOutputAvailable ? CommonServices.Output : null))
+            using (var diagnostics = TransferDiagnostics.ForSdk())
             {
             ImportFidelityPlan fidelityPlan;
             try

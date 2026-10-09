@@ -1611,6 +1611,18 @@ namespace GxMcp.Worker.Services
                         rollbackOnFailure: rollbackOnFailure);
                 }
 
+                if (VariablesTextReceipt.Applies(partName)
+                    && GxMcp.Worker.Structure.PartAccessor.GetPart(obj, partName) is global::Artech.Genexus.Common.Parts.VariablesPart validationVariables)
+                {
+                    try { VariableInjector.ValidateVariablesText(validationVariables, decodedCode); }
+                    catch (ArgumentException ex)
+                    {
+                        return Models.McpResponse.Err(code: "VariablesDeclarationInvalid", message: ex.Message,
+                            target: target, extra: new JObject { ["savePathExercised"] = false,
+                                ["validationScope"] = "variables-dsl-types", ["persisted"] = false });
+                    }
+                }
+
                 if (dryRun)
                 {
                     var requestedPart = GxMcp.Worker.Structure.PartAccessor.GetPart(obj, partName);
@@ -1668,6 +1680,9 @@ namespace GxMcp.Worker.Services
                     if (partName.Equals("Variables", StringComparison.OrdinalIgnoreCase)
                         && requestedPart is global::Artech.Genexus.Common.Parts.VariablesPart variablesPart)
                     {
+                        preview["validationScope"] = "variables-dsl-types";
+                        preview["details"] = "Variables declarations and type references were validated; SDK save and metadata verification were not exercised.";
+                        preview["verified"] = new JArray("inputReceived", "partExists", "variablesDsl", "typeReferences");
                         string before = VariableInjector.GetVariablesAsText(variablesPart);
                         preview["proposedChanges"] = new JObject
                         {
@@ -1904,6 +1919,14 @@ namespace GxMcp.Worker.Services
                         target: target,
                         code: "WriteNoChange",
                         result: new JObject { ["details"] = "No change" });
+                }
+
+                if (part is global::Artech.Genexus.Common.Parts.VariablesPart unchangedVariables)
+                {
+                    if (VariablesDeclarationSetEquals(VariableInjector.GetVariablesAsText(unchangedVariables), decodedCode))
+                        return Models.McpResponse.Ok(target: target, code: "WriteNoChange",
+                            result: new JObject { ["details"] = "Variables DSL is unchanged; no setters or Save were executed.",
+                                ["savePathExercised"] = false, ["verificationScope"] = "variables-dsl", ["metadataVerified"] = false });
                 }
 
                 // Nirvana v19.4: Auto-Healing (Pre-save validation)

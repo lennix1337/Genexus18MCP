@@ -35,6 +35,7 @@ namespace GxMcp.Worker.Services.Structure
             KBObject obj = null;
             JObject before = null;
             bool saveAttempted = false;
+            string ownedWriteVersion = null;
             try
             {
                 var json = string.IsNullOrWhiteSpace(payload) ? new JObject() : JObject.Parse(payload);
@@ -72,6 +73,7 @@ namespace GxMcp.Worker.Services.Structure
                 ((JArray)expected["externalMethods"]).Add(ExternalObjectContract.DescribeMethod(added));
                 saveAttempted = true;
                 obj.EnsureSave();
+                ownedWriteVersion = WriteService.ComputeVersionToken(obj);
                 var persisted = _objectService.FindObjectFresh(obj.Guid.ToString("D"), "ExternalObject");
                 var actual = ExternalObjectContract.Read(FindPart<EXOStructurePart>(persisted));
                 if (!JToken.DeepEquals(expected, actual)) throw new InvalidOperationException("Persisted External Object contract differs from the requested contract or an existing member changed.");
@@ -90,8 +92,11 @@ namespace GxMcp.Worker.Services.Structure
                 {
                     try
                     {
-                        exo.ExternalMethods.Remove(added);
-                        if (saveAttempted) obj.EnsureSave();
+                        if (saveAttempted)
+                        {
+                            RemoveOwnedExternalMethod(obj, added, ownedWriteVersion);
+                        }
+                        else exo.ExternalMethods.Remove(added);
                         var reloaded = _objectService.FindObjectFresh(obj.Guid.ToString("D"), "ExternalObject");
                         restored = JToken.DeepEquals(before, ExternalObjectContract.Read(FindPart<EXOStructurePart>(reloaded)));
                     }
@@ -101,6 +106,24 @@ namespace GxMcp.Worker.Services.Structure
                 return Models.McpResponse.Err(code: ex is ArgumentException || ex is Newtonsoft.Json.JsonException ? "InvalidPayload" : "ExternalMemberAddFailed",
                     message: ex.Message, target: objName, extra: new JObject {
                         ["saveAttempted"] = saveAttempted, ["rollbackVerified"] = restored, ["rollbackError"] = rollbackError });
+            }
+        }
+
+        private void RemoveOwnedExternalMethod(KBObject owner, ExternalObjectMethod added, string ownedWriteVersion)
+        {
+            using (var transaction = owner.Model.KB.BeginTransaction())
+            {
+                var current = _objectService.FindObjectFreshByIdentity(owner);
+                if (current == null || string.IsNullOrWhiteSpace(ownedWriteVersion)
+                    || !string.Equals(ownedWriteVersion, WriteService.ComputeVersionToken(current), StringComparison.Ordinal))
+                    throw new InvalidOperationException("External Object rollback refused: the current persisted version cannot be attributed to this write.");
+                var currentPart = FindPart<EXOStructurePart>(current);
+                var owned = currentPart?.ExternalMethods.SingleOrDefault(m => string.Equals(m.Name, added.Name, StringComparison.OrdinalIgnoreCase));
+                if (owned == null || !ExternalObjectContract.SameSignature(ExternalObjectContract.DescribeMethod(owned), ExternalObjectContract.DescribeMethod(added)))
+                    throw new InvalidOperationException("External Object rollback refused: the added member changed or cannot be identified.");
+                currentPart.ExternalMethods.Remove(owned);
+                current.EnsureSave();
+                transaction.Commit();
             }
         }
 

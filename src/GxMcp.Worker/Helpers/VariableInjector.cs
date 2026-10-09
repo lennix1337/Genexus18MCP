@@ -565,25 +565,49 @@ namespace GxMcp.Worker.Helpers
             return string.Format("{0}({1}{2})", v.Type, v.Length, v.Decimals > 0 ? "," + v.Decimals : "");
         }
 
+        internal static List<VariableDeclaration> ValidateVariablesText(VariablesPart part, string text)
+        {
+            if (text == null) throw new ArgumentException("Variables content is required; use an explicit empty string to remove declarations.");
+            var declarations = VariableDeclarationSet.ParseAll(text);
+            foreach (var declaration in declarations)
+            {
+                string type = declaration.TypeName;
+                bool resolved;
+                if (TryParseAttributeReference(type, out string attribute))
+                    resolved = FindAttribute(part.Model, attribute) != null;
+                else if (TryParseDbType(type, out var dbType))
+                    resolved = Enum.IsDefined(typeof(global::Artech.Genexus.Common.eDBType), dbType);
+                else
+                {
+                    var target = ResolveDomain(part.Model, type, part.KBObject?.Module) ?? ResolveTypeObject(part.Model, type);
+                    resolved = target is Domain || target?.TypeDescriptor?.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase) == true
+                        || (target is Transaction transaction && transaction.IsBusinessComponent)
+                        || IsGenexusDataType(part.Model, type) || IsBuiltinUserDefinedType(type);
+                }
+                if (!resolved) throw new ArgumentException("Variable type '" + type + "' could not be resolved; no Variables were changed.");
+            }
+            return declarations;
+        }
+
         public static void SetVariablesFromText(VariablesPart part, string text)
         {
-            var lines = text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-            var seenVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Validate the complete request before any setter, collection insertion or removal.
+            var declarations = ValidateVariablesText(part, text);
+            var current = VariableDeclarationSet.ParseAll(GetVariablesAsText(part))
+                .ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+            var seenVars = new HashSet<string>(declarations.Select(d => d.Name), StringComparer.OrdinalIgnoreCase);
 
-            foreach (var line in lines)
+            foreach (var declaration in declarations)
             {
-                // Format: &Name : Type(Length,Decimals) [Collection]
-                // issue #281: allow ':' in the type token so "Attribute:<name>"
-                // round-trips instead of being truncated to "Attribute".
-                if (VariableDeclarationParser.TryParse(line, out var declaration))
-                {
                     string name = declaration.Name;
                     string typeStr = declaration.TypeName;
                     int length = declaration.Length;
                     int decimals = declaration.Decimals;
                     bool isCollection = declaration.IsCollection;
 
-                    seenVars.Add(name);
+                    if (current.TryGetValue(name, out var existing)
+                        && VariableDeclarationSet.AreEquivalent(existing, declaration))
+                        continue;
 
                     var v = part.Variables.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
                     if (v == null)
@@ -686,7 +710,6 @@ namespace GxMcp.Worker.Helpers
                     {
                         throw new InvalidOperationException("Variable '" + name + "' dimensions could not be cleared: " + clearDimensionFailure);
                     }
-                }
             }
 
             // Remove variables not in the text, except standard variables
