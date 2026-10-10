@@ -28,7 +28,7 @@ namespace GxMcp.Gateway
             new[]
             {
                 new Fragment("Start every session with genexus_whoami (KB context, version, health, next steps).", "genexus_whoami"),
-                new Fragment("No KB selected: genexus_kb action=list, then action=select (session only).", "genexus_kb")
+                new Fragment("No KB open: genexus_kb action=open path=<KB root> (starts its Worker). Already open or declared: action=list, then action=select (session only).", "genexus_kb")
             },
             new[]
             {
@@ -38,7 +38,7 @@ namespace GxMcp.Gateway
             },
             new[]
             {
-                new Fragment("Read: genexus_read without part returns the complete object plus a versionToken for safe writes.", "genexus_read"),
+                new Fragment("Read: genexus_read without part returns the complete object in one call. Before a version-checked edit, read the part you will change (part=Source, Rules, ...) and pass its versionToken as baseVersion.", "genexus_read"),
                 new Fragment("Compact snapshot: genexus_inspect.", "genexus_inspect")
             },
             new[]
