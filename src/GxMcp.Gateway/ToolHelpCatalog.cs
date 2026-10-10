@@ -17,6 +17,26 @@ namespace GxMcp.Gateway
 
         private static readonly Dictionary<string, string> _helpTexts = new(System.StringComparer.OrdinalIgnoreCase)
         {
+            ["genexus_wire"] =
+                "# genexus_wire\n\n" +
+                "High-performance native Rust architectural discovery, call graph, and impact engine (sub-10ms).\n" +
+                "Call this FIRST before reading large objects or modifying the KB.\n\n" +
+                "## Actions\n" +
+                "- `pack_task` (default): Complete orientation bundle for a task description (ranked symbols, callers, signatures, variables) bounded under token_budget (default 1200).\n" +
+                "- `for`: Intent-based ranking of GeneXus symbols for a natural language task.\n" +
+                "- `callers`: 1-hop and transitive callers of a symbol.\n" +
+                "- `impact`: Blast radius calculation and downstream dependencies of an object or attribute.\n" +
+                "- `slice`: Intra-object data-flow definition-use chain for a variable (e.g. `ProcName:VarName`).\n" +
+                "- `safe_delete`: Verifies if a symbol can be deleted without breaking callers or schemas.\n" +
+                "- `index`: Pre-indexes source files for instant subsequent queries.\n" +
+                "- `doctor`: Diagnostic check of the gxwire binary, index cache, and CPU threads.\n\n" +
+                "## Formats\n" +
+                "- `xml` (default): Compact, token-efficient XML structured specifically for LLMs.\n" +
+                "- `json`: Standard JSON payload.\n\n" +
+                "## Performance\n" +
+                "- Zero-allocation lexing and CSR compressed graph traversal in sub-10ms.\n" +
+                "- Independent of the GeneXus STA thread / worker pool.\n",
+
             ["genexus_compare"] =
                 "# genexus_compare\n\n" +
                 "Read-only comparison of objectA and objectB. The SDK remains authoritative for equal and differences (SDK part descriptor names); mode=properties is unchanged.\n\n" +

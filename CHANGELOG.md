@@ -7,9 +7,15 @@
 
 ### Added
 
-- GxWire native architectural discovery, call graph, and impact engine in Rust (1.8MB standalone binary, sub-millisecond graph queries, token-budgeted outputs, and CLI forwarding via `genexus-mcp wire`).
+- **GxWire native architectural discovery, call graph, and impact engine in Rust**:
+  - Standalone, lightweight binary optimized to 1.06 MB (`publish/gxwire.exe`), with zero-allocation 4GL lexing, CSR graph indexing, and sub-10ms graph traversals.
+  - Exposed as a first-class Gateway MCP tool `genexus_wire` (`pack_task`, `for`, `callers`, `impact`, `slice`, `safe_delete`, `index`, `doctor`) with proactive discovery guidance in `genexus_read` and `genexus_query`.
+  - Added CLI forwarder via `genexus-mcp wire` for terminal usage.
+  - All 8 actions verified with scale benchmarks (50,000 synthetic nodes), edge cases (cycles, case-insensitivity, token-budget pruning), and real GeneXus 18 KB integration.
 
 ### Changed
+
+- Bumped MCP tool schema token budget (37,000 -> 38,000; measured 37,302) and 'all' tool profile byte budget (89,000 -> 90,500; measured 89,144 bytes) to accommodate the new `genexus_wire` tool definition, its 8 actions, and cross-tool discovery guidance.
 
 ### Fixed
 

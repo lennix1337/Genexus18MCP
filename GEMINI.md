@@ -16,6 +16,7 @@ This repository is MCP-first. The official transport is MCP over stdio or HTTP a
 
 ## Recommended tool usage
 
+- `genexus_wire` (**MANDATORY FIRST STEP**): native Rust architectural discovery and call graph engine (sub-10ms). Run `action=pack_task` or `for` BEFORE reading large objects or editing KB code to orient on any task, rank affected symbols, and calculate blast radius under a strict token budget. Actions: `pack_task` (default), `for`, `callers`, `impact`, `slice`, `safe_delete`, `index`, `doctor`.
 - `genexus_query`: find objects, references, signatures, and dependency entry points. Supports optional `typeFilter` and `domainFilter` for server-side narrowing.
 - `genexus_read`: read object parts with pagination. Pass singular `name` for one object or `targets[]` for coordinated multi-object reads (mutually exclusive). For MCP clients, keep reads paginated; the server intentionally returns a source-first first page when no explicit `offset`/`limit` is provided. For XML metadata parts such as `Layout`, `WebForm`, and `PatternInstance`, the gateway applies a larger metadata budget to avoid truncating the editable XML.
 - `genexus_edit`: apply focused edits to a part or replace content through the MCP write path. Three modes:

@@ -91,6 +91,9 @@ namespace GxMcp.Gateway
         private static readonly Dictionary<string, ActionContract> ActionContracts =
             new Dictionary<string, ActionContract>(StringComparer.OrdinalIgnoreCase)
             {
+                ["genexus_wire"] = Contract(
+                    readOnly: new[] { "pack_task", "for", "callers", "impact", "slice", "safe_delete", "index", "doctor" },
+                    mutating: Array.Empty<string>()),
                 ["genexus_connection_recover"] = Contract(
                     readOnly: new[] { "journal_status" },
                     mutating: new[] { "recover", "journal_repair" }),

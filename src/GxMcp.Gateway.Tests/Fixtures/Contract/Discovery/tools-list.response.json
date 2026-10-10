@@ -4912,6 +4912,66 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Full guidance: genexus://kb/tool-help/genexus_wire",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "pack_task",
+            "description": "Architectural discovery action to run.",
+            "enum": [
+              "pack_task",
+              "for",
+              "callers",
+              "impact",
+              "slice",
+              "safe_delete",
+              "index",
+              "doctor"
+            ],
+            "type": "string"
+          },
+          "dir": {
+            "description": "Explicit KB directory path override.",
+            "type": "string"
+          },
+          "format": {
+            "default": "xml",
+            "description": "Output format: xml (compact structured…",
+            "enum": [
+              "xml",
+              "json"
+            ],
+            "type": "string"
+          },
+          "kb": {
+            "description": "KB alias or directory path (defaults to…",
+            "type": "string"
+          },
+          "target": {
+            "description": "Symbol name (e.g. 'CustomerProc' or…",
+            "type": "string"
+          },
+          "task": {
+            "description": "Intent / task description in natural…",
+            "type": "string"
+          },
+          "token_budget": {
+            "description": "Maximum token budget cap (default 1200).",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "genexus_wire"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
         "readOnlyHint": false
       },
       "description": "Full guidance: genexus://kb/tool-help/genexus_worker_pool",

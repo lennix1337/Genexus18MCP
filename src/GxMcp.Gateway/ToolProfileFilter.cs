@@ -10,6 +10,7 @@ namespace GxMcp.Gateway
         private static readonly HashSet<string> CoreTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "genexus_whoami",
+            "genexus_wire",
             "genexus_query",
             "genexus_list_objects",
             "genexus_read",

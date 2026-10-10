@@ -234,7 +234,8 @@ namespace GxMcp.Gateway.Tests
             //   arguments that clients cannot validate. Measured ~35685 tokens; ~315 headroom.
             // PRs #320/#443-#446 add an opt-in K2B tool and typed concurrency/SDT/WWP/EXO contracts.
             // Combined schema measures ~36759 tokens; existing guidance remains available.
-            Assert.True(approxTokens < 37000, $"tool_definitions.json is ~{approxTokens} tokens; budget 37000.");
+            // PR #459 introduces GxWire native architectural discovery tool (genexus_wire). Measured ~37302 tokens.
+            Assert.True(approxTokens < 38000, $"tool_definitions.json is ~{approxTokens} tokens; budget 38000.");
         }
 
         [Theory]
@@ -252,7 +253,8 @@ namespace GxMcp.Gateway.Tests
         // genexus_security audit_object). Measured 86107 bytes.
         // 86500 -> 86700 for property timeout reconciliation and optimistic set fields.
         // Combined K2B/SDT/WWP/EXO/property contracts: all=88148, authoring=61238 bytes.
-        [InlineData("all", 89000)]
+        // 89000 -> 90500 for PR #459 (genexus_wire first-class tool definition across all actions). Measured 89144 bytes.
+        [InlineData("all", 90500)]
         [InlineData("core", 25000)]
         [InlineData("standard", 60000)]
         [InlineData("authoring", 62500)]

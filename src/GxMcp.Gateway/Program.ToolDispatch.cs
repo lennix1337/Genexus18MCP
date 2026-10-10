@@ -1024,6 +1024,13 @@ namespace GxMcp.Gateway
                 return BuildToolResultContent(doctor, false, tName, tArgs);
             }
 
+            if (string.Equals(tName, "genexus_wire", StringComparison.OrdinalIgnoreCase))
+            {
+                JObject wireResult = await ExecuteGxwireToolAsync(tArgs, sessionId, sessionContextEnabled);
+                bool isErr = wireResult["error"] != null || string.Equals(wireResult["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase);
+                return BuildToolResultContent(wireResult, isErr, tName, tArgs);
+            }
+
             if (string.Equals(tName, "genexus_recipe", StringComparison.OrdinalIgnoreCase))
             {
                 string? action = tArgs?["action"]?.ToString()?.ToLowerInvariant();
@@ -1096,6 +1103,258 @@ namespace GxMcp.Gateway
                 }
 
                 return BuildToolResultContent(payload, isErr, tName, tArgs);
+            }
+
+            return null;
+        }
+
+        internal static Task<JObject> ExecuteGxwireToolAsyncForTest(JObject? tArgs) =>
+            ExecuteGxwireToolAsync(tArgs, "test-session", false);
+
+        internal static async Task<JObject> ExecuteGxwireToolAsync(
+            JObject? tArgs,
+            string sessionId,
+            bool sessionContextEnabled)
+        {
+            string? exePath = LocateGxwireExecutable();
+            if (string.IsNullOrEmpty(exePath))
+            {
+                return new JObject
+                {
+                    ["status"] = "error",
+                    ["error"] = "GxwireNotFound",
+                    ["message"] = "gxwire.exe binary not found. Build gxwire via 'cargo build --release' or run build.ps1 to generate publish/gxwire.exe."
+                };
+            }
+
+            string action = tArgs?["action"]?.ToString()?.Trim() ?? "pack_task";
+            string format = tArgs?["format"]?.ToString()?.Trim() ?? "xml";
+            int budget = tArgs?["token_budget"]?.ToObject<int?>() ?? 1200;
+
+            string? kbDir = null;
+            if (tArgs?["dir"] != null && !string.IsNullOrWhiteSpace(tArgs["dir"]?.ToString()))
+            {
+                kbDir = tArgs["dir"]?.ToString();
+            }
+            else if (tArgs?["kb"] != null && !string.IsNullOrWhiteSpace(tArgs["kb"]?.ToString()))
+            {
+                kbDir = ResolveKbPath(tArgs["kb"]!.ToString()!);
+            }
+            else if (_currentKb.Value != null && !string.IsNullOrWhiteSpace(_currentKb.Value.Path))
+            {
+                kbDir = _currentKb.Value.Path;
+            }
+            else if (!string.IsNullOrWhiteSpace(_activeConfig?.Environment?.KBPath))
+            {
+                kbDir = _activeConfig.Environment.KBPath;
+            }
+
+            if (!string.Equals(action, "doctor", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(kbDir) || !Directory.Exists(kbDir))
+                {
+                    return new JObject
+                    {
+                        ["status"] = "error",
+                        ["error"] = "KB_CONTEXT_REQUIRED",
+                        ["message"] = "No Knowledge Base path resolved or directory does not exist. Open a KB with genexus_kb or specify 'kb'/'dir'."
+                    };
+                }
+            }
+
+            var argsBuilder = new StringBuilder();
+
+            switch (action.ToLowerInvariant())
+            {
+                case "doctor":
+                    argsBuilder.Append("--doctor");
+                    if (!string.IsNullOrWhiteSpace(kbDir))
+                    {
+                        argsBuilder.Append($" --dir \"{kbDir}\"");
+                    }
+                    break;
+
+                case "index":
+                    argsBuilder.Append($"--index --dir \"{kbDir}\"");
+                    break;
+
+                case "callers":
+                    string target = tArgs?["target"]?.ToString() ?? tArgs?["symbol"]?.ToString() ?? tArgs?["name"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(target))
+                    {
+                        return new JObject { ["status"] = "error", ["error"] = "TargetRequired", ["message"] = "Action 'callers' requires 'target'." };
+                    }
+                    argsBuilder.Append($"--callers \"{target}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    break;
+
+                case "impact":
+                    string impactTarget = tArgs?["target"]?.ToString() ?? tArgs?["symbol"]?.ToString() ?? tArgs?["name"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(impactTarget))
+                    {
+                        return new JObject { ["status"] = "error", ["error"] = "TargetRequired", ["message"] = "Action 'impact' requires 'target'." };
+                    }
+                    argsBuilder.Append($"--impact \"{impactTarget}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    break;
+
+                case "for":
+                    string forTask = tArgs?["task"]?.ToString() ?? tArgs?["query"]?.ToString() ?? tArgs?["target"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(forTask))
+                    {
+                        return new JObject { ["status"] = "error", ["error"] = "TaskRequired", ["message"] = "Action 'for' requires 'task'." };
+                    }
+                    argsBuilder.Append($"--for \"{forTask}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    break;
+
+                case "pack_task":
+                case "pack-task":
+                    string packTask = tArgs?["task"]?.ToString() ?? tArgs?["query"]?.ToString() ?? tArgs?["target"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(packTask))
+                    {
+                        return new JObject { ["status"] = "error", ["error"] = "TaskRequired", ["message"] = "Action 'pack_task' requires 'task'." };
+                    }
+                    argsBuilder.Append($"--pack-task \"{packTask}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    break;
+
+                case "slice":
+                    string sliceTarget = tArgs?["target"]?.ToString() ?? tArgs?["symbol"]?.ToString() ?? tArgs?["name"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(sliceTarget))
+                    {
+                        return new JObject { ["status"] = "error", ["error"] = "TargetRequired", ["message"] = "Action 'slice' requires 'target' (e.g. 'ProcName:VarName')." };
+                    }
+                    argsBuilder.Append($"--slice \"{sliceTarget}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    break;
+
+                case "safe_delete":
+                case "safe-delete":
+                    string delTarget = tArgs?["target"]?.ToString() ?? tArgs?["symbol"]?.ToString() ?? tArgs?["name"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(delTarget))
+                    {
+                        return new JObject { ["status"] = "error", ["error"] = "TargetRequired", ["message"] = "Action 'safe_delete' requires 'target'." };
+                    }
+                    argsBuilder.Append($"--safe-delete \"{delTarget}\" --dir \"{kbDir}\" --format {format}");
+                    break;
+
+                default:
+                    return new JObject
+                    {
+                        ["status"] = "error",
+                        ["error"] = $"Unknown action '{action}'.",
+                        ["hint"] = "Supported: pack_task, for, callers, impact, slice, safe_delete, index, doctor."
+                    };
+            }
+
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = exePath,
+                    Arguments = argsBuilder.ToString(),
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
+                };
+
+                using var proc = Process.Start(psi);
+                if (proc == null)
+                {
+                    return new JObject
+                    {
+                        ["status"] = "error",
+                        ["error"] = "ProcessStartFailed",
+                        ["message"] = "Failed to spawn gxwire process."
+                    };
+                }
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                string stdout = await proc.StandardOutput.ReadToEndAsync(cts.Token);
+                string stderr = await proc.StandardError.ReadToEndAsync(cts.Token);
+                await proc.WaitForExitAsync(cts.Token);
+
+                if (proc.ExitCode != 0)
+                {
+                    return new JObject
+                    {
+                        ["status"] = "error",
+                        ["error"] = "GxwireExecutionFailed",
+                        ["exitCode"] = proc.ExitCode,
+                        ["stderr"] = stderr.Trim(),
+                        ["stdout"] = stdout.Trim()
+                    };
+                }
+
+                string trimmedStdout = stdout.Trim();
+                if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var parsedJson = JToken.Parse(trimmedStdout);
+                        return new JObject
+                        {
+                            ["status"] = "ok",
+                            ["action"] = action,
+                            ["engine"] = "gxwire",
+                            ["data"] = parsedJson
+                        };
+                    }
+                    catch
+                    {
+                        // Fallback if raw text wasn't JSON
+                    }
+                }
+
+                return new JObject
+                {
+                    ["status"] = "ok",
+                    ["action"] = action,
+                    ["engine"] = "gxwire",
+                    ["format"] = format,
+                    ["output"] = trimmedStdout
+                };
+            }
+            catch (Exception ex)
+            {
+                return new JObject
+                {
+                    ["status"] = "error",
+                    ["error"] = "GxwireException",
+                    ["message"] = ex.Message
+                };
+            }
+        }
+
+        private static string? LocateGxwireExecutable()
+        {
+            string appDir = AppContext.BaseDirectory;
+            string candidate = Path.Combine(appDir, "gxwire.exe");
+            if (File.Exists(candidate)) return candidate;
+
+            string candidatePublish = Path.GetFullPath(Path.Combine(appDir, "..", "..", "..", "..", "..", "publish", "gxwire.exe"));
+            if (File.Exists(candidatePublish)) return candidatePublish;
+
+            string candidateRust = Path.GetFullPath(Path.Combine(appDir, "..", "..", "..", "..", "..", "src", "gxwire", "target", "release", "gxwire.exe"));
+            if (File.Exists(candidateRust)) return candidateRust;
+
+            string candidateCwd = Path.Combine(Directory.GetCurrentDirectory(), "publish", "gxwire.exe");
+            if (File.Exists(candidateCwd)) return candidateCwd;
+
+            string candidateCwdRust = Path.Combine(Directory.GetCurrentDirectory(), "src", "gxwire", "target", "release", "gxwire.exe");
+            if (File.Exists(candidateCwdRust)) return candidateCwdRust;
+
+            string? pathEnv = Environment.GetEnvironmentVariable("PATH");
+            if (!string.IsNullOrEmpty(pathEnv))
+            {
+                foreach (string p in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    try
+                    {
+                        string onPath = Path.Combine(p, "gxwire.exe");
+                        if (File.Exists(onPath)) return onPath;
+                    }
+                    catch { }
+                }
             }
 
             return null;

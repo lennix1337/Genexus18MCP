@@ -4,8 +4,8 @@
     "src/GxMcp.Gateway/tool_definitions.json",
     "src/GxMcp.Gateway/OperationClassifier.cs"
   ],
-  "toolCount": 58,
-  "actionCount": 289,
+  "toolCount": 59,
+  "actionCount": 297,
   "tools": [
     {
       "tool": "genexus_k2b_designer",
@@ -177,6 +177,94 @@
       "actions": [
         {
           "action": null,
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        }
+      ],
+      "inputExamples": 0,
+      "outputSchema": false
+    },
+    {
+      "tool": "genexus_wire",
+      "router": "OperationsRouter",
+      "actions": [
+        {
+          "action": "pack_task",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "for",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "callers",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "impact",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "slice",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "safe_delete",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "index",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "doctor",
           "kind": "readOnly",
           "effects": "kb.read",
           "execution": "worker",
