@@ -179,7 +179,7 @@ Environment NETSQLServer
 				DatabaseName = "MyAppDB",
 				ServerName = "my-server-name.local",
 				UserId = "myUserName",
-				UserPassword = "myPa$$W0rd"
+				UserPassword = "<REDACTED_PASSWORD>"
 			]
 		}
 	#End

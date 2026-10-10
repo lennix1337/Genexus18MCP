@@ -1,0 +1,3 @@
+[scanner]
+# Upstream minified Mermaid dependency; encoded/minified vendor text causes secret-pattern false positives.
+ignore_paths = ["src/nexus-ide/resources/mermaid.min.js"]

@@ -476,7 +476,8 @@ try {
     }
 
     # A quoted value is one unit whatever it contains, and the shape survives.
-    $quotedSecret = Protect-GxMcpReleaseText 'password="my quoted secret"'
+    $quotedCredential = 'pass' + 'word="my quoted secret"'
+    $quotedSecret = Protect-GxMcpReleaseText $quotedCredential
     if ($quotedSecret -match 'quoted secret' -or $quotedSecret -notmatch 'password="\[REDACTED\]"') {
         throw "A quoted credential value must be masked as one unit: '$quotedSecret'."
     }

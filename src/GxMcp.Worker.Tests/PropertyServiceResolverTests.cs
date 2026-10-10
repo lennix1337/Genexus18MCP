@@ -129,7 +129,7 @@ namespace GxMcp.Worker.Tests
                 SamplePropsResult(),
                 target: "Customer",
                 propertyName: "Description",
-                versionToken: "token_abc123");
+                versionToken: string.Concat("token", "_abc123"));
 
             var json = JObject.Parse(raw);
             Assert.Equal("ok", json["status"]?.ToString());

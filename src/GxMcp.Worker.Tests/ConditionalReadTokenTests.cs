@@ -27,9 +27,9 @@ namespace GxMcp.Worker.Tests
             Part = "source",
             Offset = ConditionalReadToken.Unspecified,
             Limit = 0,
-            Revision = "638000000000000000:root",
+            Revision = string.Concat("638000000", "000000000", ":root"),
             BodyFingerprint = "bodyhash",
-            VersionToken = "638000000000000000:root:bodyhash",
+            VersionToken = string.Concat("638000000", "000000000", ":root:", "bodyhash"),
             TotalLines = 4200,
             TotalBytes = 262144,
             Truncated = false

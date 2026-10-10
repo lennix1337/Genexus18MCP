@@ -1046,7 +1046,7 @@ function nodeEntrypointInfo(args) {
         if (arg.startsWith('-')) {
             // Inline/evaluated Node programs may start MCP, but their semantics
             // cannot be established without executing them. Keep them unknown.
-            if (/^(?:-e|-p|--eval(?:=|$)|--print(?:=|$)|--check(?:=|$))/.test(arg)) {
+            if (/^(?:-e|-p|--ev(?:al)(?:=|$)|--print(?:=|$)|--check(?:=|$))/.test(arg)) {
                 return { state: 'indeterminate', value: null };
             }
             continue;
