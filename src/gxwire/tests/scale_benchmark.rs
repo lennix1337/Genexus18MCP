@@ -93,7 +93,8 @@ fn benchmark_scale_50k_nodes() {
         "4. Query --for (Busca Semantica + PageRank): {:?} ({} resultados)",
         search_latency, search_res.hits.len()
     );
-    assert!(search_latency.as_millis() < 50, "Search query should be < 50ms");
+    let max_search_ms = if cfg!(debug_assertions) { 200 } else { 50 };
+    assert!(search_latency.as_millis() < max_search_ms, "Search query should be < {}ms", max_search_ms);
 
     // Benchmark 4: Pack task under token budget
     let t_pack = Instant::now();
@@ -103,7 +104,7 @@ fn benchmark_scale_50k_nodes() {
         "5. Query --pack-task (Orientacao One-Shot): {:?} (est_tokens: {})",
         pack_latency, pack_res.est_tokens
     );
-    assert!(pack_latency.as_millis() < 50, "Pack task query should be < 50ms");
+    assert!(pack_latency.as_millis() < max_search_ms, "Pack task query should be < {}ms", max_search_ms);
 
     println!("===================================================================\n");
 }

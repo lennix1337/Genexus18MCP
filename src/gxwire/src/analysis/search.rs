@@ -20,36 +20,55 @@ pub struct SearchResult {
     pub total: usize,
 }
 
+#[inline]
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let needle_bytes = needle.as_bytes();
+    let n_len = needle_bytes.len();
+    if n_len == 0 {
+        return true;
+    }
+    let h_bytes = haystack.as_bytes();
+    if h_bytes.len() < n_len {
+        return false;
+    }
+    h_bytes.windows(n_len).any(|window| window.eq_ignore_ascii_case(needle_bytes))
+}
+
+#[inline]
+fn equals_case_insensitive(a: &str, b: &str) -> bool {
+    a.as_bytes().eq_ignore_ascii_case(b.as_bytes())
+}
+
 pub fn search_for_task(graph: &CsrGraph, query: &str, limit: usize) -> SearchResult {
-    let query_lower = query.to_ascii_lowercase();
-    let terms: Vec<&str> = query_lower.split_whitespace().collect();
+    let query_trimmed = query.trim();
+    let terms: Vec<&str> = query_trimmed.split_whitespace().collect();
 
     let mut scored_nodes = Vec::new();
 
     for node in &graph.nodes {
-        let name_lower = node.name.to_ascii_lowercase();
-        let desc_lower = node.description.as_deref().unwrap_or("").to_ascii_lowercase();
-        let module_lower = node.module.as_deref().unwrap_or("").to_ascii_lowercase();
-
         let mut score = 0.0f32;
 
-        // Exact match bonus
-        if name_lower == query_lower {
+        // Exact & substring match
+        if equals_case_insensitive(&node.name, query_trimmed) {
             score += 100.0;
-        } else if name_lower.contains(&query_lower) {
+        } else if contains_case_insensitive(&node.name, query_trimmed) {
             score += 40.0;
         }
 
         // Term-based matching
         for term in &terms {
-            if name_lower.contains(term) {
+            if contains_case_insensitive(&node.name, term) {
                 score += 15.0;
             }
-            if desc_lower.contains(term) {
-                score += 5.0;
+            if let Some(ref desc) = node.description {
+                if contains_case_insensitive(desc, term) {
+                    score += 5.0;
+                }
             }
-            if module_lower.contains(term) {
-                score += 3.0;
+            if let Some(ref module) = node.module {
+                if contains_case_insensitive(module, term) {
+                    score += 3.0;
+                }
             }
         }
 
