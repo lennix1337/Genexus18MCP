@@ -170,6 +170,15 @@ Both pins survive Worker and Gateway restarts because they live in the
 environment that launches the Worker, which is why they are the right place for
 a long-lived safety rail on a shared KB.
 
+## Human-in-the-loop elicitation
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_ELICITATION` | `auto` asks the human (through MCP `elicitation/create`) to pick a KB when a call has no KB context, and to approve irreversible calls made without `confirm=true`; `strict` also asks when the agent passed `confirm=true`; `off` disables elicitation. Only clients that declare the `elicitation` capability over stdio are asked. | `auto` |
+| `GXMCP_ELICITATION_TIMEOUT_SECONDS` | Seconds to wait for the human's answer. An unanswered confirmation is refused; an unanswered KB picker returns the original error. | `300` |
+
+See [Human-in-the-loop elicitation](elicitation.md).
+
 ## Build path (`genexus_edit_and_build` / `genexus_run_object`)
 
 | Variable | Purpose | Default |

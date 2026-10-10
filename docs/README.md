@@ -16,6 +16,7 @@ also read [`AGENTS.md`](../AGENTS.md).
 - [SDK compatibility](sdk-compatibility.md) — how the Worker binds to each GeneXus major.
 - [Environment variables](environment_variables.md) — every runtime variable read by the Gateway and Worker.
 - [Pinning the write destination](write-destination-pin.md) — fixing the target KB across restarts.
+- [Human-in-the-loop elicitation](elicitation.md) — client-side KB picker and human approval for irreversible calls.
 - [Migração para MCP 3.0](migration-3.0.md) — the 3.0 migration contract.
 - [Nexus-IDE sharing guide](SHARING_GUIDE.md) — installing the VS Code extension and pointing clients at it.
 
