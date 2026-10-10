@@ -952,6 +952,7 @@ namespace GxMcp.Gateway
                 Log("[Gateway] Entering Stdio Loop...");
                 _stdioActive = true;
                 var reader = Console.In;
+                using var stdioElicitation = ElicitationBroker.RegisterSender("stdio", TryWriteStdout);
 
                 // #3: replay the request that triggered a promotion (see RunMcpProxyAsync).
                 // It already parsed as JSON in the proxy, so process it through the normal
