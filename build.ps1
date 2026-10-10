@@ -263,6 +263,27 @@ dotnet GxMcp.Gateway.dll
 '@
 Set-Content -Path "$publishDir\start_mcp.bat" -Value $batContent -Encoding Ascii
 
+# 6.05 Build and bundle GxWire (Rust engine)
+$gxwireDir = Join-Path $root "src\gxwire"
+if (Test-Path (Join-Path $gxwireDir "Cargo.toml")) {
+    $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
+    if ($cargoCmd) {
+        Write-Host "   > Building GxWire (Rust release)..."
+        Push-Location $gxwireDir
+        try {
+            & cargo build --release
+            if ($LASTEXITCODE -eq 0 -and (Test-Path "target\release\gxwire.exe")) {
+                Copy-Item "target\release\gxwire.exe" -Destination "$publishDir\gxwire.exe" -Force
+                Write-Host "   > Deployed gxwire.exe to publish." -ForegroundColor Green
+            } else {
+                Write-Host "   > Warning: GxWire build failed with exit code $LASTEXITCODE" -ForegroundColor Yellow
+            }
+        } finally {
+            Pop-Location
+        }
+    }
+}
+
 # 6.1 Slim the publish output: drop debug symbols (.pdb - not shipped) and any
 # transient runtime logs/cache a dev run may have written into the dir.
 Get-ChildItem -Path $publishDir -Recurse -Include *.pdb,*.log,*.prev.log,*panic*.log -ErrorAction SilentlyContinue |

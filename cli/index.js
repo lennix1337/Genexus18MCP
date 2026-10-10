@@ -1,6 +1,8 @@
 const { spawn } = require('child_process');
+const fs = require('fs');
 const {
     getGatewayExePath,
+    getGxwireExePath,
     applyLauncherConfigOrExit,
     isPathLikelyAppLockerBlocked
 } = require('./lib/config');
@@ -67,7 +69,7 @@ const GLOBAL_DEFAULTS = {
 // Single source of truth for command routing: cli/run.js imports both sets so the
 // AXI-vs-passthrough decision (stdout vs stderr for unhandled errors) cannot drift
 // from the parser again — issue #207 was caused by two hand-synced copies.
-const KNOWN_COMMANDS = new Set(['status', 'doctor', 'tools', 'config', 'init', 'setup', 'whoami', 'uninstall', 'kb', 'clients', 'help', 'home', 'axi', 'llm', 'layout', 'update', 'version']);
+const KNOWN_COMMANDS = new Set(['status', 'doctor', 'tools', 'config', 'init', 'setup', 'whoami', 'uninstall', 'kb', 'clients', 'help', 'home', 'axi', 'llm', 'layout', 'update', 'version', 'wire']);
 
 // Version query aliases. `-v` deliberately is NOT an alias of `--help`/`-h`: those
 // return immediately, while the version aliases are command tokens so that remaining
@@ -151,6 +153,11 @@ function parseArgs(argv) {
     if (result.command === 'layout' && (tokens[0] === 'status' || tokens[0] === 'run' || tokens[0] === 'inspect')) {
         result.subcommand = tokens[0];
         tokens.shift();
+    }
+
+    if (result.command === 'wire') {
+        result.passthroughArgs = tokens;
+        return result;
     }
 
     for (let i = 0; i < tokens.length; i += 1) {
@@ -718,6 +725,25 @@ async function main(argv) {
         case 'update':
             result = await handleUpdate(parsed.options, ctx);
             break;
+        case 'wire': {
+            const gxwireExe = getGxwireExePath();
+            if (!fs.existsSync(gxwireExe)) {
+                console.error(`[genexus-mcp] gxwire binary not found at: ${gxwireExe}`);
+                return EXIT_CODES.ERROR;
+            }
+            const wireArgs = argv.slice(1);
+            const child = spawn(gxwireExe, wireArgs, {
+                stdio: 'inherit',
+                windowsHide: true
+            });
+            return new Promise((resolve) => {
+                child.on('close', (code) => resolve(code ?? 0));
+                child.on('error', (err) => {
+                    console.error(`[genexus-mcp] Failed to launch gxwire: ${err.message}`);
+                    resolve(EXIT_CODES.ERROR);
+                });
+            });
+        }
         default:
             writeStructured(
                 process.stdout,

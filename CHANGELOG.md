@@ -7,6 +7,8 @@
 
 ### Added
 
+- GxWire native architectural discovery, call graph, and impact engine in Rust (1.8MB standalone binary, sub-millisecond graph queries, token-budgeted outputs, and CLI forwarding via `genexus-mcp wire`).
+
 ### Changed
 
 ### Fixed
