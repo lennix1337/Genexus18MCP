@@ -9,6 +9,7 @@
 > **¿Hablás español?** → [Guía de inicio en español](docs/GETTING_STARTED.es.md)
 > **Fala português?** → [Guia de início em português](docs/GETTING_STARTED.pt-br.md)
 > **Stuck?** → [Troubleshooting guide](TROUBLESHOOTING.md)
+> **All docs** → [Documentation index](docs/README.md)
 
 ---
 
@@ -429,7 +430,7 @@ Still stuck? [Open an issue](https://github.com/lennix1337/Genexus18MCP/issues) 
 
 ## Tool Surface
 
-The worker exposes **50 tools** to the MCP router, grouped by capability below. Most are umbrellas with an `action` (e.g. `genexus_db action=sql_ddl`); the detailed schemas live in [`src/GxMcp.Gateway/tool_definitions.json`](src/GxMcp.Gateway/tool_definitions.json).
+The worker exposes **50 tools** to the MCP router, grouped by capability below. Most are umbrellas with an `action` (e.g. `genexus_db action=sql_ddl`); the detailed schemas live in [`src/GxMcp.Gateway/tool_definitions.json`](src/GxMcp.Gateway/tool_definitions.json). Feature guides such as the [K2B Designer bridge](docs/k2b-ide-bridge.md), [WorkWithPlus on Empty WebPanels](docs/wwp-empty-webpanel.md), [textual Variables edits](docs/variables-text-integrity.md) and [External Object methods](docs/external-object-method-authoring.md) are listed in the [documentation index](docs/README.md).
 
 **Orientation & health**
 - `genexus_whoami` — KB context, version, worker/index/database health, self-update check, next-step hints

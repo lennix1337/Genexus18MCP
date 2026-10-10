@@ -7,6 +7,8 @@
 
 ### Added
 
+- `docs/README.md` indexes every document under `docs/` by area and is linked from the README and `AGENTS.md`, so feature guides such as the K2B Designer bridge and WorkWithPlus on Empty WebPanels are discoverable without reading the changelog. A CLI docs test fails when a new document is not listed or an index link is broken ([#450](https://github.com/lennix1337/Genexus18MCP/issues/450)).
+
 ### Changed
 
 ### Fixed
