@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Gateway
@@ -209,14 +210,86 @@ namespace GxMcp.Gateway
                 }
 
                 var compacted = (JObject)definition.DeepClone();
-                string? name = compacted["name"]?.ToString();
-                compacted["description"] = string.IsNullOrWhiteSpace(name)
-                    ? "Full tool guidance is available from the tool-help resource."
-                    : $"Full guidance: genexus://kb/tool-help/{name}";
+                compacted["description"] = BuildCompactToolDescription(
+                    compacted["name"]?.ToString(),
+                    compacted["description"]?.ToString());
                 if (compacted["inputSchema"] is JToken schema) CompactSchema(schema);
                 result.Add(compacted);
             }
             return result;
+        }
+
+        /// <summary>
+        /// Upper bound, in characters, of the purpose summary published in
+        /// <c>tools/list</c>. Clients choose a tool from this text alone, so it has
+        /// to say what the tool is for; the complete description stays one
+        /// <c>resources/read</c> away in the tool-help resource.
+        /// </summary>
+        internal const int MaxToolSummaryLength = 200;
+
+        private static readonly Regex ToolHelpPointerSentence = new Regex(
+            @"\bSee genexus://kb/tool-help/\S+?(?:\.(?=\s|$)|(?=\s|$))(?:\s+for [^.]*\.)?",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        private static readonly string[] Abbreviations = { "e.g.", "i.e.", "etc.", "vs.", "approx." };
+
+        internal static string BuildCompactToolDescription(string? name, string? description)
+        {
+            string pointer = string.IsNullOrWhiteSpace(name)
+                ? "Full tool guidance is available from the tool-help resource."
+                : $"Full guidance: genexus://kb/tool-help/{name}";
+            string summary = BuildToolSummary(description);
+            return summary.Length == 0 ? pointer : summary + " " + pointer;
+        }
+
+        internal static string BuildToolSummary(string? description)
+        {
+            if (string.IsNullOrWhiteSpace(description)) return string.Empty;
+
+            string withoutPointer = ToolHelpPointerSentence.Replace(description, " ");
+            string text = string.Join(" ", withoutPointer.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            if (text.Length <= MaxToolSummaryLength) return text;
+
+            int sentenceEnd = LastSentenceEnd(text, MaxToolSummaryLength);
+            if (sentenceEnd >= MaxToolSummaryLength * 3 / 5) return text.Substring(0, sentenceEnd + 1);
+
+            int end = text.LastIndexOf(' ', MaxToolSummaryLength - 1);
+            if (end <= 0) end = MaxToolSummaryLength - 1;
+            return text.Substring(0, end).TrimEnd(' ', ',', ';', ':', '(', '|', '-', '\u2014', '+') + "\u2026";
+        }
+
+        private static int LastSentenceEnd(string text, int limit)
+        {
+            int last = -1;
+            int depth = 0;
+            int max = Math.Min(limit, text.Length);
+            for (int i = 0; i < max; i++)
+            {
+                char c = text[i];
+                if (c == '(' || c == '[') depth++;
+                else if ((c == ')' || c == ']') && depth > 0) depth--;
+                else if ((c == '.' || c == '!' || c == '?')
+                    && depth == 0
+                    && (i + 1 == text.Length || text[i + 1] == ' ')
+                    && !EndsWithAbbreviation(text, i))
+                {
+                    last = i;
+                }
+            }
+            return last;
+        }
+
+        private static bool EndsWithAbbreviation(string text, int periodIndex)
+        {
+            int start = text.LastIndexOf(' ', periodIndex) + 1;
+            string word = text.Substring(start, periodIndex - start + 1).TrimStart('(', '[');
+            return Abbreviations.Any(a => string.Equals(word, a, StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static bool IsToolExposed(string? profile, string toolName)
+        {
+            var allowlist = GetAllowlist(profile);
+            return allowlist == null || allowlist.Contains(toolName);
         }
 
         private static void CompactSchema(JToken token)
