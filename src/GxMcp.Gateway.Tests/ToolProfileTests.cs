@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
@@ -201,7 +203,7 @@ namespace GxMcp.Gateway.Tests
 
             var filtered = ToolProfileFilter.Filter(tools, "all");
 
-            Assert.Equal("Full guidance: genexus://kb/tool-help/genexus_example", filtered[0]!["description"]!.ToString());
+            Assert.Equal(longDescription + " Full guidance: genexus://kb/tool-help/genexus_example", filtered[0]!["description"]!.ToString());
             Assert.Null(filtered[0]!["inputSchema"]!["examples"]);
             Assert.True(filtered[0]!["inputSchema"]!["properties"]!["field"]!["description"]!.ToString().Length <= 40);
             Assert.Equal(longDescription, tools[0]!["description"]!.ToString());
@@ -211,6 +213,70 @@ namespace GxMcp.Gateway.Tests
             string help = ToolHelpCatalog.Get("genexus_example", (JObject)tool.DeepClone())!;
             Assert.Contains(longDescription, help);
             Assert.Contains("\"examples\"", help);
+        }
+
+        [Fact]
+        public void ToolSummary_KeepsWholeSentencesThatFitTheBudget()
+        {
+            string first = "Read object code and metadata.";
+            string second = "Omitting part returns the complete object in one call, tailored to the object type, with a version token for writes.";
+            string third = new string('x', 300);
+
+            string summary = ToolProfileFilter.BuildToolSummary(first + " " + second + " " + third);
+
+            Assert.Equal(first + " " + second, summary);
+        }
+
+        [Fact]
+        public void ToolSummary_DoesNotSplitOnAbbreviationsOrInsideParentheses()
+        {
+            string description = "Apply a pattern (e.g. WorkWithPlus. Or another) to a parent object so the IDE behaviour is mirrored exactly. "
+                + string.Join(" ", Enumerable.Repeat("filler", 60));
+
+            string summary = ToolProfileFilter.BuildToolSummary(description);
+
+            Assert.StartsWith("Apply a pattern (e.g. WorkWithPlus. Or another) to a parent object so the IDE behaviour is mirrored exactly.", summary);
+            Assert.True(summary.Length <= ToolProfileFilter.MaxToolSummaryLength + 1);
+        }
+
+        [Fact]
+        public void ToolSummary_TruncatesAtAWordBoundaryWhenNoSentenceFits()
+        {
+            string description = "Creation. " + string.Join(" ", Enumerable.Repeat("action=object|popup|template", 20));
+
+            string summary = ToolProfileFilter.BuildToolSummary(description);
+
+            Assert.EndsWith("\u2026", summary);
+            Assert.StartsWith("Creation. action=object|popup|template", summary);
+            Assert.True(summary.Length <= ToolProfileFilter.MaxToolSummaryLength + 1);
+            Assert.DoesNotContain("  ", summary);
+        }
+
+        [Fact]
+        public void ToolSummary_DropsTheInlineToolHelpPointerBecauseTheSuffixCarriesIt()
+        {
+            string description = "Search objects in active KB. See genexus://kb/tool-help/genexus_query. Requires a Ready index.";
+
+            Assert.Equal(
+                "Search objects in active KB. Requires a Ready index. Full guidance: genexus://kb/tool-help/genexus_query",
+                ToolProfileFilter.BuildCompactToolDescription("genexus_query", description));
+        }
+
+        [Fact]
+        public void PublishedToolDescriptionsSayWhatEachToolIsFor()
+        {
+            var tools = JArray.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "tool_definitions.json")));
+
+            foreach (JObject tool in ToolProfileFilter.Filter(tools, "all").OfType<JObject>())
+            {
+                string name = tool["name"]!.ToString();
+                string description = tool["description"]!.ToString();
+                string pointer = " Full guidance: genexus://kb/tool-help/" + name;
+                Assert.EndsWith(pointer, description);
+                string summary = description.Substring(0, description.Length - pointer.Length);
+                Assert.True(summary.Length >= 20, $"{name} publishes no purpose summary: '{description}'.");
+                Assert.True(summary.Length <= ToolProfileFilter.MaxToolSummaryLength + 1, $"{name} summary is {summary.Length} chars.");
+            }
         }
 
         [Fact]

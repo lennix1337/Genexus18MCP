@@ -406,6 +406,7 @@ namespace GxMcp.Gateway
                     ["name"] = "genexus-mcp-server",
                     ["version"] = ServerVersion
                 },
+                ["instructions"] = ServerInstructions.ForActiveProfile(),
                 ["_meta"] = new JObject
                 {
                     ["schemaVersion"] = McpAxiSchemaVersion,
@@ -439,7 +440,7 @@ namespace GxMcp.Gateway
                         ["version"] = ServerVersion
                     }
                 },
-                ["instructions"] = "Use genexus_whoami first, then discover and operate on the active GeneXus Knowledge Base with the narrowest read or write tool that fits.",
+                ["instructions"] = ServerInstructions.ForActiveProfile(),
                 ["profiles"] = new JArray("exploration", "safe-edit", "ui", "build", "versioning", "deploy"),
                 ["ttlMs"] = PublicResourceTtlMs,
                 ["cacheScope"] = "public"
