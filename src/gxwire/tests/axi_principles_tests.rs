@@ -85,7 +85,7 @@ fn test_principle_3_content_truncation_and_full_escape_hatch() {
     let graph = create_sample_kb_graph();
 
     // pack_task with small budget vs full
-    let packed_budget = pack_task_ext(&graph, "pedido faturamento", 80, false);
+    let _packed_budget = pack_task_ext(&graph, "pedido faturamento", 80, false);
     let packed_full = pack_task_ext(&graph, "pedido faturamento", 80, true);
 
     assert_eq!(packed_full.truncated, false);

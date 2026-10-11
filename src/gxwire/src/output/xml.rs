@@ -1,4 +1,4 @@
-use crate::analysis::{CallersResult, ImpactResult, PackTaskResult, SearchResult, SliceResult};
+use crate::analysis::{CallersResult, ImpactResult, PackTaskResult, PathResult, SearchResult, SliceResult};
 use crate::model::{DoctorResult, SafeDeleteResult, StatusResult};
 
 pub fn format_status_xml(res: &StatusResult) -> String {
@@ -314,3 +314,29 @@ pub fn format_slice_xml(res: &SliceResult) -> String {
     out.push_str("</slice>");
     out
 }
+
+pub fn format_path_xml(res: &PathResult) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        r#"<path schema="{schema}" from="{from}" to="{to}" found="{found}" hops="{hops}" empty="{empty}">"#,
+        schema = res.schema,
+        from = res.from,
+        to = res.to,
+        found = res.found,
+        hops = res.hops_count,
+        empty = res.empty
+    ));
+    for h in &res.hops {
+        out.push_str(&format!(
+            r#"<hop from="{from}" to="{to}" kind="{kind}" line="{line}" />"#,
+            from = h.from,
+            to = h.to,
+            kind = h.kind,
+            line = h.line
+        ));
+    }
+    out.push_str(&format!("<next>{}</next>", res.next));
+    out.push_str("</path>");
+    out
+}
+

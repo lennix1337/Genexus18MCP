@@ -17,7 +17,8 @@ publish.zip.sha256
 BenchmarkDotNet.Artifacts/
 .history/
 batch_buffer/
-cache/
+/cache/
+!src/gxwire/src/cache/
 .gx_mirror/
 .tmp/
 .test-bin/

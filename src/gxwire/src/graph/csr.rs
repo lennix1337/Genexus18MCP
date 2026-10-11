@@ -175,6 +175,59 @@ impl CsrGraph {
         result
     }
 
+    /// Shortest path BFS between two nodes in forward direction (callees traversal).
+    /// Returns a list of (from_id, to_id, EdgeKind, line_number).
+    pub fn shortest_path(&self, from_id: u32, to_id: u32) -> Option<Vec<(u32, u32, EdgeKind, u32)>> {
+        if from_id == to_id {
+            return Some(Vec::new());
+        }
+        let node_count = self.nodes.len();
+        if from_id as usize >= node_count || to_id as usize >= node_count {
+            return None;
+        }
+
+        let mut visited = vec![false; node_count];
+        let mut queue = std::collections::VecDeque::new();
+        // map: child_node -> (parent_node, EdgeKind, line)
+        let mut parent: HashMap<u32, (u32, EdgeKind, u32)> = HashMap::new();
+
+        visited[from_id as usize] = true;
+        queue.push_back(from_id);
+
+        let mut found = false;
+        while let Some(curr) = queue.pop_front() {
+            if curr == to_id {
+                found = true;
+                break;
+            }
+
+            for (callee_id, kind, line) in self.get_callees(curr) {
+                if !visited[callee_id as usize] {
+                    visited[callee_id as usize] = true;
+                    parent.insert(callee_id, (curr, kind, line));
+                    queue.push_back(callee_id);
+                }
+            }
+        }
+
+        if !found {
+            return None;
+        }
+
+        let mut path = Vec::new();
+        let mut curr = to_id;
+        while curr != from_id {
+            if let Some((p, kind, line)) = parent.get(&curr) {
+                path.push((*p, curr, kind.clone(), *line));
+                curr = *p;
+            } else {
+                break;
+            }
+        }
+        path.reverse();
+        Some(path)
+    }
+
     /// Compute PageRank with power iteration
     pub fn compute_pagerank(&mut self, iterations: usize, damping: f32) {
         let n = self.nodes.len();

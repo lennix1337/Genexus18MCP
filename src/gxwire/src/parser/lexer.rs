@@ -42,6 +42,14 @@ static RE_ASSIGN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*([&]?[a-zA-Z0-9_#]+)\s*=").unwrap()
 });
 
+static RE_ASSIGN_READ: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*&[a-zA-Z0-9_#]+\s*=\s*([a-zA-Z0-9_#]+)").unwrap()
+});
+
+static RE_WHERE_ATTR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bwhere\s+([a-zA-Z0-9_#]+)").unwrap()
+});
+
 static RE_FOR_EACH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bfor\s+each\b").unwrap()
 });
@@ -61,6 +69,16 @@ static RE_END_NEW: LazyLock<Regex> = LazyLock::new(|| {
 static RE_DELETE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bdelete\b").unwrap()
 });
+
+fn is_gx_keyword(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "true" | "false" | "null" | "serverdate" | "systime" | "nullvalue"
+            | "val" | "trim" | "str" | "round" | "udp" | "call" | "new"
+            | "not" | "empty" | "none" | "y" | "n"
+    )
+}
 
 #[derive(Debug, Clone)]
 pub struct ParsedSymbolRef {
@@ -243,6 +261,34 @@ pub fn parse_genexus_source(source: &str) -> ParseResult {
             }
         }
 
+        // Attribute reads (&Var = Attr)
+        if let Some(caps) = RE_ASSIGN_READ.captures(line) {
+            if let Some(rhs) = caps.get(1) {
+                let rhs_str = rhs.as_str();
+                if !rhs_str.starts_with('&') && !is_gx_keyword(rhs_str) {
+                    result.references.push(ParsedSymbolRef {
+                        target_name: rhs_str.to_string(),
+                        kind: EdgeKind::ReadsAttr,
+                        line: line_num,
+                    });
+                }
+            }
+        }
+
+        // Where clause attribute reads (Where Attr = ...)
+        if let Some(caps) = RE_WHERE_ATTR.captures(line) {
+            if let Some(target) = caps.get(1) {
+                let attr = target.as_str();
+                if !attr.starts_with('&') && !is_gx_keyword(attr) {
+                    result.references.push(ParsedSymbolRef {
+                        target_name: attr.to_string(),
+                        kind: EdgeKind::ReadsAttr,
+                        line: line_num,
+                    });
+                }
+            }
+        }
+
         if in_for_each && RE_DELETE.is_match(line) {
             result.references.push(ParsedSymbolRef {
                 target_name: "CURRENT_TABLE".to_string(),
@@ -284,5 +330,6 @@ mod tests {
         assert!(res.references.iter().any(|r| r.target_name == "PCalculaSaldo" && r.kind == EdgeKind::Calls(CallMode::Udp)));
         assert!(res.references.iter().any(|r| r.target_name == "CliSaldo" && r.kind == EdgeKind::WritesAttr(WriteMode::ForEachUpdate)));
         assert!(res.references.iter().any(|r| r.target_name == "CliUltUpdate" && r.kind == EdgeKind::WritesAttr(WriteMode::ForEachUpdate)));
+        assert!(res.references.iter().any(|r| r.target_name == "CliCod" && r.kind == EdgeKind::ReadsAttr));
     }
 }

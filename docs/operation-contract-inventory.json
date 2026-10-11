@@ -5,7 +5,7 @@
     "src/GxMcp.Gateway/OperationClassifier.cs"
   ],
   "toolCount": 59,
-  "actionCount": 298,
+  "actionCount": 299,
   "tools": [
     {
       "tool": "genexus_k2b_designer",
@@ -235,6 +235,16 @@
         },
         {
           "action": "impact",
+          "kind": "readOnly",
+          "effects": "kb.read",
+          "execution": "worker",
+          "retry": "safe",
+          "cache": "semantic",
+          "invalidation": [],
+          "previewSupported": false
+        },
+        {
+          "action": "path",
           "kind": "readOnly",
           "effects": "kb.read",
           "execution": "worker",

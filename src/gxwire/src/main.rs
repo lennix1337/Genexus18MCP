@@ -40,6 +40,18 @@ struct Args {
     #[arg(long)]
     pack_task: Option<String>,
 
+    /// Trace call or dependency path from symbol to symbol (e.g. --from A --to B or --path A:B)
+    #[arg(long)]
+    path: Option<String>,
+
+    /// Source symbol for path tracing
+    #[arg(long)]
+    from: Option<String>,
+
+    /// Target symbol for path tracing
+    #[arg(long)]
+    to: Option<String>,
+
     /// Evaluate if a symbol can be safely deleted without breaking callers or schemas
     #[arg(long)]
     safe_delete: Option<String>,
@@ -52,7 +64,7 @@ struct Args {
     #[arg(long)]
     doctor: bool,
 
-    /// Output format: xml, json, toon
+    /// Output format: xml, json, toon, mermaid
     #[arg(long, default_value = "xml")]
     format: String,
 
@@ -142,7 +154,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(target) = args.callers {
         if let Some(res) = analysis::analyze_callers_ext(&g, &target, 4, args.full) {
-            if args.format == "json" {
+            if args.format == "mermaid" {
+                print!("{}", output::format_callers_mermaid(&res));
+            } else if args.format == "json" {
                 println!("{}", serde_json::to_string_pretty(&res)?);
             } else if args.format == "toon" {
                 print!("{}", output::format_callers_toon(&res));
@@ -163,7 +177,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(target) = args.impact {
         if let Some(res) = analysis::analyze_impact_ext(&g, &target, args.full) {
-            if args.format == "json" {
+            if args.format == "mermaid" {
+                print!("{}", output::format_impact_mermaid(&res));
+            } else if args.format == "json" {
                 println!("{}", serde_json::to_string_pretty(&res)?);
             } else if args.format == "toon" {
                 print!("{}", output::format_impact_toon(&res));
@@ -177,6 +193,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &target,
                 "Symbol not found in graph",
                 &format!("gxwire --for \"{}\" to find similar symbols", target),
+            );
+        }
+        return Ok(());
+    }
+
+    let path_endpoints = if let (Some(f), Some(t)) = (args.from.as_ref(), args.to.as_ref()) {
+        Some((f.clone(), t.clone()))
+    } else if let Some(ref p_str) = args.path {
+        let parts: Vec<&str> = if p_str.contains("->") {
+            p_str.split("->").collect()
+        } else {
+            p_str.split(':').collect()
+        };
+        if parts.len() >= 2 {
+            Some((parts[0].trim().to_string(), parts[1].trim().to_string()))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some((from_sym, to_sym)) = path_endpoints {
+        if let Some(res) = analysis::analyze_path_ext(&g, &from_sym, &to_sym, args.full) {
+            if args.format == "mermaid" {
+                print!("{}", output::format_path_mermaid(&res));
+            } else if args.format == "json" {
+                println!("{}", serde_json::to_string_pretty(&res)?);
+            } else if args.format == "toon" {
+                print!("{}", output::format_path_toon(&res));
+            } else {
+                println!("{}", output::format_path_xml(&res));
+            }
+        } else {
+            emit_error(
+                &args.format,
+                "SymbolNotFound",
+                &format!("{} -> {}", from_sym, to_sym),
+                "One or both symbols not found in graph",
+                &format!("gxwire --for \"{}\" or gxwire --for \"{}\" to find exact symbol names", from_sym, to_sym),
             );
         }
         return Ok(());
@@ -197,7 +253,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(task) = args.pack_task {
         let budget = if args.full { usize::MAX } else { args.token_budget };
         let res = analysis::pack_task_ext(&g, &task, budget, args.full);
-        if args.format == "json" {
+        if args.format == "mermaid" {
+            print!("{}", output::format_pack_task_mermaid(&res));
+        } else if args.format == "json" {
             println!("{}", serde_json::to_string_pretty(&res)?);
         } else if args.format == "toon" {
             print!("{}", output::format_pack_task_toon(&res));
@@ -276,7 +334,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Principle #8: Content First (0 args defaults to live KB graph status)
     let cache_path = cache::get_cache_path(&root);
     let status_res = analysis::compute_status(&g, &root, &cache_path);
-    if args.format == "json" {
+    if args.format == "mermaid" {
+        print!("{}", output::format_status_mermaid(&status_res));
+    } else if args.format == "json" {
         println!("{}", serde_json::to_string_pretty(&status_res)?);
     } else if args.format == "toon" {
         print!("{}", output::format_status_toon(&status_res));

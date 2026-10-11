@@ -257,7 +257,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("all", 90500)]
         [InlineData("core", 25000)]
         [InlineData("standard", 60000)]
-        [InlineData("authoring", 62500)]
+        [InlineData("authoring", 63000)]
         [InlineData("devops", 50000)]
         [InlineData("ui", 50000)]
         [InlineData("db", 40000)]

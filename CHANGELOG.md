@@ -8,7 +8,12 @@
 ### Added
 
 - **GxWire native architectural discovery, call graph, and impact engine in Rust**:
-  - Standalone, lightweight binary optimized to 1.09 MB (`publish/gxwire.exe`), with zero-allocation 4GL lexing, CSR graph indexing, and sub-10ms graph traversals.
+  - Standalone, lightweight binary optimized to 1.12 MB (`publish/gxwire.exe`), with zero-allocation 4GL lexing, CSR graph indexing, and sub-10ms graph traversals.
+  - Shortest-path BFS call and dependency tracing (`action=path` / `--path` / `--from` and `--to`) traversing CSR forward callees and reconstructing hops with line numbers.
+  - GeneXus Domain Synonym Dictionary for natural language task search (`action=for` / `--for`), expanding Portuguese and GeneXus abbreviations (`fat`, `ped`, `cli`, `forn`, `nf`, `tit`, `rec`, `pag`, `prc`, `trn`, `wp`, `prod`, `est`, `ven`, `com`, `cta`, `mov`, `imp`, `bco`, `usu`, `val`, `calc`, `ger`, `int`).
+  - Complete data dependency extraction with `ReadsAttr` for `Where Attr = &Var` and assignments `&Var = Attr`, plus expanded file extension coverage (`.prc`, `.trn`, `.wp`, `.sdp`, `.xml` with root-tag entity detection).
+  - Incremental cache freshness tracking file modified timestamps (`mtime`) with millisecond precision in `.gxwire_cache.bin` to automatically detect edits and rebuild cache without manual intervention.
+  - Native Mermaid visualizer (`--format mermaid`) producing render-ready `graph LR` / `graph TD` diagrams for paths, callers, impact, and hubs for Markdown artifacts.
   - 100% compliance with the 10 AXI (Agent eXperience Interface) Design Principles:
     - Native TOON (Tabular Object-Oriented Notation) format (`--format toon`) yielding ~40% token savings over JSON.
     - Content-First default (`gxwire` with 0 args or `action=status` immediately returns live KB status and PageRank architectural hubs without help prompts).
@@ -16,14 +21,14 @@
     - Pre-computed aggregates (`can_delete`, `blast_radius`, `est_tokens`, `points_count`).
     - Definitive empty states (`empty="true"` and `empty: true`) eliminating LLM query re-try loops.
     - Contextual next-step disclosure on all outputs guiding subsequent actions.
-    - Idempotent and non-blocking execution with structured errors in XML, JSON, and TOON.
-  - Exposed as a first-class Gateway MCP tool `genexus_wire` (`pack_task`, `status`, `for`, `callers`, `impact`, `slice`, `safe_delete`, `index`, `doctor`) with proactive discovery guidance in `genexus_read` and `genexus_query`.
+    - Idempotent and non-blocking execution with structured errors in XML, JSON, TOON, and Mermaid.
+  - Exposed as a first-class Gateway MCP tool `genexus_wire` (`pack_task`, `status`, `for`, `callers`, `impact`, `path`, `slice`, `safe_delete`, `index`, `doctor`) with proactive discovery guidance in `genexus_read` and `genexus_query`.
   - Added CLI forwarder via `genexus-mcp wire` for terminal usage.
-  - 18 comprehensive tests covering scale benchmarks (50,000 synthetic nodes), edge cases (cycles, case-insensitivity, token-budget pruning), AXI principles, and real GeneXus 18 KB integration.
+  - 24 comprehensive tests covering scale benchmarks (50,000 synthetic nodes), edge cases (cycles, case-insensitivity, token-budget pruning), AXI principles, shortest-path BFS, domain synonyms, data dependency extraction, incremental mtime freshness, and real GeneXus 18 KB integration.
 
 ### Changed
 
-- Bumped MCP tool schema token budget (37,000 -> 38,000; measured 37,302) and 'all' tool profile byte budget (89,000 -> 90,500; measured 89,144 bytes) to accommodate the new `genexus_wire` tool definition, its 8 actions, and cross-tool discovery guidance.
+- Bumped MCP tool schema token budget (37,000 -> 38,000; measured 37,302), 'all' tool profile byte budget (89,000 -> 90,500; measured 89,144 bytes), and 'authoring' tool profile byte budget (62,500 -> 63,000; measured 62,520 bytes) to accommodate the new `genexus_wire` tool definition, its 10 actions, and cross-tool discovery guidance.
 
 ### Fixed
 

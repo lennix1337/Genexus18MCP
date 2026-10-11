@@ -1,4 +1,4 @@
-use crate::analysis::{CallersResult, ImpactResult, PackTaskResult, SearchResult, SliceResult};
+use crate::analysis::{CallersResult, ImpactResult, PackTaskResult, PathResult, SearchResult, SliceResult};
 use crate::model::{DoctorResult, SafeDeleteResult, StatusResult};
 
 pub fn escape_toon_scalar(val: &str) -> String {
@@ -446,3 +446,48 @@ pub fn format_error_toon(code: &str, target: &str, message: &str, next: &str) ->
     out.push_str(&format!("next: {}\n", escape_toon_scalar(next)));
     out
 }
+
+pub fn format_path_toon(res: &PathResult) -> String {
+    let mut out = String::new();
+    out.push_str("empty: ");
+    out.push_str(&res.empty.to_string());
+    out.push('\n');
+    out.push_str("est_tokens: ");
+    out.push_str(&res.est_tokens.to_string());
+    out.push('\n');
+    out.push_str("found: ");
+    out.push_str(&res.found.to_string());
+    out.push('\n');
+    out.push_str("from: ");
+    out.push_str(&escape_toon_scalar(&res.from));
+    out.push('\n');
+    out.push_str("hops_count: ");
+    out.push_str(&res.hops_count.to_string());
+    out.push('\n');
+    out.push_str("next: ");
+    out.push_str(&escape_toon_scalar(&res.next));
+    out.push('\n');
+    out.push_str("schema: ");
+    out.push_str(&escape_toon_scalar(&res.schema));
+    out.push('\n');
+    out.push_str("to: ");
+    out.push_str(&escape_toon_scalar(&res.to));
+    out.push('\n');
+
+    if res.hops.is_empty() {
+        out.push_str("hops: []\n");
+    } else {
+        out.push_str(&format!("hops:\n  [{}]{{from,kind,line,to}}:\n", res.hops.len()));
+        for h in &res.hops {
+            out.push_str(&format!(
+                "    {},{},{},{}\n",
+                escape_toon_scalar(&h.from),
+                escape_toon_scalar(&h.kind),
+                h.line,
+                escape_toon_scalar(&h.to)
+            ));
+        }
+    }
+    out
+}
+

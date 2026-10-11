@@ -4927,6 +4927,7 @@
               "for",
               "callers",
               "impact",
+              "path",
               "slice",
               "safe_delete",
               "index",
@@ -4940,12 +4941,17 @@
           },
           "format": {
             "default": "xml",
-            "description": "Output format: xml (compact structured…",
+            "description": "Output format: toon (~40% savings,…",
             "enum": [
               "xml",
               "json",
-              "toon"
+              "toon",
+              "mermaid"
             ],
+            "type": "string"
+          },
+          "from": {
+            "description": "Source symbol name for path action…",
             "type": "string"
           },
           "full": {
@@ -4963,6 +4969,10 @@
           },
           "task": {
             "description": "Intent / task description in natural…",
+            "type": "string"
+          },
+          "to": {
+            "description": "Target symbol name for path action…",
             "type": "string"
           },
           "token_budget": {

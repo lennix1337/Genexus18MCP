@@ -46,6 +46,51 @@ fn equals_case_insensitive(a: &str, b: &str) -> bool {
     a.as_bytes().eq_ignore_ascii_case(b.as_bytes())
 }
 
+static GX_SYNONYM_GROUPS: &[&[&str]] = &[
+    &["fat", "fatura", "faturamento", "faturar", "invoice", "billing", "invoicing"],
+    &["ped", "pedido", "pedidos", "order", "orders"],
+    &["cli", "cliente", "clientes", "customer", "client"],
+    &["forn", "fornecedor", "fornecedores", "supplier", "vendor"],
+    &["nf", "nfe", "notafiscal", "danfe", "fiscal"],
+    &["tit", "titulo", "titulos", "receivable", "payable", "bill"],
+    &["rec", "receber", "contasareceber", "receipt"],
+    &["pag", "pagar", "contasapagar", "payment"],
+    &["prc", "proc", "procedimento", "procedure"],
+    &["trn", "trans", "transacao", "transaction"],
+    &["wp", "webpanel", "painel", "panel"],
+    &["prod", "produto", "produtos", "item", "product"],
+    &["est", "estoque", "stock", "inventory"],
+    &["ven", "venda", "vendas", "sale", "sales"],
+    &["com", "compra", "compras", "purchase"],
+    &["cta", "conta", "contas", "contabil", "account"],
+    &["rel", "relatorio", "relatorios", "report"],
+    &["mov", "movimento", "movimentacao", "movement", "ledger"],
+    &["imp", "imposto", "impostos", "tax", "tributo"],
+    &["bco", "banco", "bancos", "bank"],
+    &["usu", "usuario", "usuarios", "user", "login"],
+    &["val", "validar", "validacao", "validate"],
+    &["calc", "calcular", "calculo", "calculate"],
+    &["ger", "gerar", "geracao", "generate"],
+    &["int", "integracao", "integrar", "integration"],
+];
+
+fn expand_synonyms(terms: &[&str]) -> Vec<&'static str> {
+    let mut expanded = Vec::new();
+    for term in terms {
+        let term_lower = term.to_ascii_lowercase();
+        for group in GX_SYNONYM_GROUPS {
+            if group.iter().any(|syn| syn.eq_ignore_ascii_case(&term_lower) || term_lower.starts_with(syn)) {
+                for syn in *group {
+                    if !syn.eq_ignore_ascii_case(&term_lower) && !expanded.contains(syn) {
+                        expanded.push(*syn);
+                    }
+                }
+            }
+        }
+    }
+    expanded
+}
+
 #[allow(dead_code)]
 pub fn search_for_task(graph: &CsrGraph, query: &str, limit: usize) -> SearchResult {
     search_for_task_ext(graph, query, limit, false)
@@ -54,6 +99,7 @@ pub fn search_for_task(graph: &CsrGraph, query: &str, limit: usize) -> SearchRes
 pub fn search_for_task_ext(graph: &CsrGraph, query: &str, limit: usize, full: bool) -> SearchResult {
     let query_trimmed = query.trim();
     let terms: Vec<&str> = query_trimmed.split_whitespace().collect();
+    let synonyms = expand_synonyms(&terms);
 
     let mut scored_nodes = Vec::new();
 
@@ -81,6 +127,22 @@ pub fn search_for_task_ext(graph: &CsrGraph, query: &str, limit: usize, full: bo
                 if contains_case_insensitive(module, term) {
                     score += 3.0;
                 }
+            }
+        }
+
+        // Domain synonym matching
+        for syn in &synonyms {
+            if contains_case_insensitive(&node.name, syn) {
+                score += 25.0;
+            }
+            let node_lower = node.name.to_ascii_lowercase();
+            if node_lower.starts_with(&format!("p{}", syn))
+                || node_lower.starts_with(&format!("trn{}", syn))
+                || node_lower.starts_with(&format!("t{}", syn))
+                || node_lower.starts_with(&format!("wp{}", syn))
+                || node_lower.starts_with(&format!("w{}", syn))
+            {
+                score += 35.0;
             }
         }
 
@@ -125,7 +187,7 @@ pub fn search_for_task_ext(graph: &CsrGraph, query: &str, limit: usize, full: bo
     let next = if empty {
         "gxwire --doctor or check query spelling".to_string()
     } else {
-        format!("gxwire --pack-task \"{}\" or gxwire --callers {}", hits[0].name, hits[0].name)
+        format!("gxwire --path {} --to <Target> or gxwire --callers {} or gxwire --pack-task \"{}\"", hits[0].name, hits[0].name, hits[0].name)
     };
 
     SearchResult {

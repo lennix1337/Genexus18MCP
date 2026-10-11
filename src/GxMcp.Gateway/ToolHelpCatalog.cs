@@ -24,9 +24,10 @@ namespace GxMcp.Gateway
                 "## Actions\n" +
                 "- `pack_task` (default): Complete orientation bundle for a task description (ranked symbols, callers, signatures, variables) bounded under token_budget (default 1200).\n" +
                 "- `status`: Live KB graph status, node/edge counts, and top PageRank-central architectural hubs (content first).\n" +
-                "- `for`: Intent-based ranking of GeneXus symbols for a natural language task.\n" +
+                "- `for`: Intent-based ranking of GeneXus symbols for a natural language task with domain synonym expansion (e.g. fat->faturamento, ped->pedido, cli->cliente).\n" +
                 "- `callers`: 1-hop and transitive callers of a symbol.\n" +
                 "- `impact`: Blast radius calculation and downstream dependencies of an object or attribute.\n" +
+                "- `path`: Shortest call and data dependency chain between two symbols (requires `from` and `to`).\n" +
                 "- `slice`: Intra-object data-flow definition-use chain for a variable (e.g. `ProcName:VarName`).\n" +
                 "- `safe_delete`: Verifies if a symbol can be deleted without breaking callers or schemas.\n" +
                 "- `index`: Pre-indexes source files for instant subsequent queries.\n" +
@@ -34,11 +35,13 @@ namespace GxMcp.Gateway
                 "## Formats\n" +
                 "- `xml` (default): Compact, token-efficient XML structured specifically for LLMs.\n" +
                 "- `toon`: Tabular Object-Oriented Notation (~40% token savings over JSON, structured tables with clean schema).\n" +
+                "- `mermaid`: Generates ready-to-render Mermaid diagram (graph LR / graph TD) for markdown artifacts.\n" +
                 "- `json`: Standard JSON payload.\n\n" +
                 "## Flags\n" +
                 "- `full`: Set to true to bypass token budget clipping and output exhaustive graph results.\n\n" +
                 "## Performance\n" +
                 "- Zero-allocation lexing and CSR compressed graph traversal in sub-10ms.\n" +
+                "- Incremental cache freshness: automatically checks file mtimes and selectively rebuilds on changes.\n" +
                 "- Independent of the GeneXus STA thread / worker pool.\n",
 
             ["genexus_compare"] =

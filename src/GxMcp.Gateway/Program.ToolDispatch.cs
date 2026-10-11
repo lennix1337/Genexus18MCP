@@ -1244,12 +1244,24 @@ namespace GxMcp.Gateway
                     argsBuilder.Append($"--safe-delete \"{delTarget}\" --dir \"{kbDir}\" --format {format}");
                     break;
 
+                case "path":
+                case "trace":
+                    string fromSym = tArgs?["from"]?.ToString() ?? tArgs?["source"]?.ToString() ?? tArgs?["origin"]?.ToString() ?? string.Empty;
+                    string toSym = tArgs?["to"]?.ToString() ?? tArgs?["target"]?.ToString() ?? tArgs?["destination"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(fromSym) || string.IsNullOrWhiteSpace(toSym))
+                    {
+                        return new JObject { ["status"] = "error", ["error"] = "PathEndpointsRequired", ["message"] = "Action 'path' requires 'from' and 'to' parameters." };
+                    }
+                    argsBuilder.Append($"--from \"{fromSym}\" --to \"{toSym}\" --dir \"{kbDir}\" --format {format}");
+                    if (full) argsBuilder.Append(" --full");
+                    break;
+
                 default:
                     return new JObject
                     {
                         ["status"] = "error",
                         ["error"] = $"Unknown action '{action}'.",
-                        ["hint"] = "Supported: pack_task, status, for, callers, impact, slice, safe_delete, index, doctor."
+                        ["hint"] = "Supported: pack_task, status, for, callers, impact, path, slice, safe_delete, index, doctor."
                     };
             }
 

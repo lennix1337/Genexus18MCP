@@ -32,6 +32,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("for")]
         [InlineData("callers")]
         [InlineData("impact")]
+        [InlineData("path")]
         [InlineData("slice")]
         [InlineData("safe_delete")]
         [InlineData("index")]
@@ -143,6 +144,90 @@ namespace GxMcp.Gateway.Tests
                 var result = await Program.ExecuteGxwireToolAsyncForTest(args);
                 Assert.Equal("error", result["status"]?.ToString());
                 Assert.Equal("TaskRequired", result["error"]?.ToString());
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public async Task Gxwire_MissingPathEndpoints_ReturnsPathEndpointsRequiredError()
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                var args = new JObject
+                {
+                    ["action"] = "path",
+                    ["dir"] = tempDir
+                };
+                var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                Assert.Equal("error", result["status"]?.ToString());
+                Assert.Equal("PathEndpointsRequired", result["error"]?.ToString());
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public async Task Gxwire_Path_WithValidEndpoints_ReturnsShortestPath()
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tempDir, "PInvoice.txt"), "Call(PProcessTax)\n");
+                File.WriteAllText(Path.Combine(tempDir, "PProcessTax.txt"), "CustomerBalance = 100\n");
+
+                var args = new JObject
+                {
+                    ["action"] = "path",
+                    ["from"] = "PInvoice",
+                    ["to"] = "CustomerBalance",
+                    ["format"] = "toon",
+                    ["dir"] = tempDir
+                };
+                var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                Assert.Equal("ok", result["status"]?.ToString());
+                string output = result["output"]?.ToString() ?? string.Empty;
+                Assert.Contains("found: true", output);
+                Assert.Contains("hops_count: 2", output);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public async Task Gxwire_Path_MermaidFormat_ReturnsMermaidDiagram()
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tempDir, "PInvoice.txt"), "Call(PProcessTax)\n");
+                File.WriteAllText(Path.Combine(tempDir, "PProcessTax.txt"), "CustomerBalance = 100\n");
+
+                var args = new JObject
+                {
+                    ["action"] = "path",
+                    ["from"] = "PInvoice",
+                    ["to"] = "CustomerBalance",
+                    ["format"] = "mermaid",
+                    ["dir"] = tempDir
+                };
+                var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                Assert.Equal("ok", result["status"]?.ToString());
+                string output = result["output"]?.ToString() ?? string.Empty;
+                Assert.Contains("```mermaid", output);
+                Assert.Contains("graph LR", output);
+                Assert.Contains("PInvoice", output);
+                Assert.Contains("PProcessTax", output);
             }
             finally
             {
