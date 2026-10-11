@@ -4923,6 +4923,7 @@
             "description": "Architectural discovery action to run.",
             "enum": [
               "pack_task",
+              "status",
               "for",
               "callers",
               "impact",
@@ -4942,9 +4943,15 @@
             "description": "Output format: xml (compact structured…",
             "enum": [
               "xml",
-              "json"
+              "json",
+              "toon"
             ],
             "type": "string"
+          },
+          "full": {
+            "default": false,
+            "description": "Bypass token budget clipping and output…",
+            "type": "boolean"
           },
           "kb": {
             "description": "KB alias or directory path (defaults to…",

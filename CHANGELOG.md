@@ -8,10 +8,18 @@
 ### Added
 
 - **GxWire native architectural discovery, call graph, and impact engine in Rust**:
-  - Standalone, lightweight binary optimized to 1.06 MB (`publish/gxwire.exe`), with zero-allocation 4GL lexing, CSR graph indexing, and sub-10ms graph traversals.
-  - Exposed as a first-class Gateway MCP tool `genexus_wire` (`pack_task`, `for`, `callers`, `impact`, `slice`, `safe_delete`, `index`, `doctor`) with proactive discovery guidance in `genexus_read` and `genexus_query`.
+  - Standalone, lightweight binary optimized to 1.09 MB (`publish/gxwire.exe`), with zero-allocation 4GL lexing, CSR graph indexing, and sub-10ms graph traversals.
+  - 100% compliance with the 10 AXI (Agent eXperience Interface) Design Principles:
+    - Native TOON (Tabular Object-Oriented Notation) format (`--format toon`) yielding ~40% token savings over JSON.
+    - Content-First default (`gxwire` with 0 args or `action=status` immediately returns live KB status and PageRank architectural hubs without help prompts).
+    - Content truncation with size hints and a `--full` escape hatch to bypass token budget clipping.
+    - Pre-computed aggregates (`can_delete`, `blast_radius`, `est_tokens`, `points_count`).
+    - Definitive empty states (`empty="true"` and `empty: true`) eliminating LLM query re-try loops.
+    - Contextual next-step disclosure on all outputs guiding subsequent actions.
+    - Idempotent and non-blocking execution with structured errors in XML, JSON, and TOON.
+  - Exposed as a first-class Gateway MCP tool `genexus_wire` (`pack_task`, `status`, `for`, `callers`, `impact`, `slice`, `safe_delete`, `index`, `doctor`) with proactive discovery guidance in `genexus_read` and `genexus_query`.
   - Added CLI forwarder via `genexus-mcp wire` for terminal usage.
-  - All 8 actions verified with scale benchmarks (50,000 synthetic nodes), edge cases (cycles, case-insensitivity, token-budget pruning), and real GeneXus 18 KB integration.
+  - 18 comprehensive tests covering scale benchmarks (50,000 synthetic nodes), edge cases (cycles, case-insensitivity, token-budget pruning), AXI principles, and real GeneXus 18 KB integration.
 
 ### Changed
 

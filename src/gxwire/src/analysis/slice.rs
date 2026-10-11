@@ -9,11 +9,15 @@ pub struct SlicePoint {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SliceResult {
+    pub schema: String,
     pub object: String,
     pub variable: String,
     pub definitions_count: usize,
     pub uses_count: usize,
+    pub points_count: usize,
+    pub empty: bool,
     pub points: Vec<SlicePoint>,
+    pub next: String,
 }
 
 pub fn analyze_slice(object_name: &str, var_name: &str, source_code: &str) -> SliceResult {
@@ -57,11 +61,19 @@ pub fn analyze_slice(object_name: &str, var_name: &str, source_code: &str) -> Sl
         }
     }
 
+    let points_count = points.len();
+    let empty = points_count == 0;
+    let next = format!("genexus_read {} or genexus_edit {}", object_name, object_name);
+
     SliceResult {
+        schema: "gxwire.slice/v1".to_string(),
         object: object_name.to_string(),
         variable: var_name.to_string(),
         definitions_count: defs,
         uses_count: uses,
+        points_count,
+        empty,
         points,
+        next,
     }
 }

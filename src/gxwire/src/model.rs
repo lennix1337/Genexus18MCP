@@ -150,3 +150,46 @@ pub struct RawEdge {
     pub kind: EdgeKind,
     pub line: u32,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubItem {
+    pub name: String,
+    pub kind: String,
+    pub refs: usize,
+    pub pagerank: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusResult {
+    pub schema: String,
+    pub root: String,
+    pub cache_exists: bool,
+    pub cache_path: String,
+    pub nodes_count: usize,
+    pub edges_count: usize,
+    pub empty: bool,
+    pub hubs: Vec<HubItem>,
+    pub next: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoctorResult {
+    pub schema: String,
+    pub version: String,
+    pub root: String,
+    pub cache_exists: bool,
+    pub cache_path: String,
+    pub status: String,
+    pub next: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafeDeleteResult {
+    pub schema: String,
+    pub symbol: String,
+    pub can_delete: bool,
+    pub blast_radius: usize,
+    pub callers_count: usize,
+    pub empty: bool,
+    pub next: String,
+}

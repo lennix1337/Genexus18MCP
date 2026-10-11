@@ -15,9 +15,16 @@ pub struct SearchHit {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
+    pub schema: String,
     pub query: String,
     pub hits: Vec<SearchHit>,
     pub total: usize,
+    pub count: usize,
+    pub empty: bool,
+    pub truncated: bool,
+    pub omitted: usize,
+    pub est_tokens: usize,
+    pub next: String,
 }
 
 #[inline]
@@ -39,7 +46,12 @@ fn equals_case_insensitive(a: &str, b: &str) -> bool {
     a.as_bytes().eq_ignore_ascii_case(b.as_bytes())
 }
 
+#[allow(dead_code)]
 pub fn search_for_task(graph: &CsrGraph, query: &str, limit: usize) -> SearchResult {
+    search_for_task_ext(graph, query, limit, false)
+}
+
+pub fn search_for_task_ext(graph: &CsrGraph, query: &str, limit: usize, full: bool) -> SearchResult {
     let query_trimmed = query.trim();
     let terms: Vec<&str> = query_trimmed.split_whitespace().collect();
 
@@ -85,9 +97,10 @@ pub fn search_for_task(graph: &CsrGraph, query: &str, limit: usize) -> SearchRes
     scored_nodes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let total = scored_nodes.len();
+    let take_count = if full { total } else { limit };
     let hits: Vec<SearchHit> = scored_nodes
         .into_iter()
-        .take(limit)
+        .take(take_count)
         .enumerate()
         .map(|(idx, (node, score, callers_count))| SearchHit {
             name: node.name.clone(),
@@ -101,9 +114,30 @@ pub fn search_for_task(graph: &CsrGraph, query: &str, limit: usize) -> SearchRes
         })
         .collect();
 
+    let count = hits.len();
+    let empty = count == 0;
+    let (truncated, omitted) = if !full && total > count {
+        (true, total - count)
+    } else {
+        (false, 0)
+    };
+    let est_tokens = 50 + count * 25;
+    let next = if empty {
+        "gxwire --doctor or check query spelling".to_string()
+    } else {
+        format!("gxwire --pack-task \"{}\" or gxwire --callers {}", hits[0].name, hits[0].name)
+    };
+
     SearchResult {
+        schema: "gxwire.for/v1".to_string(),
         query: query.to_string(),
         hits,
         total,
+        count,
+        empty,
+        truncated,
+        omitted,
+        est_tokens,
+        next,
     }
 }

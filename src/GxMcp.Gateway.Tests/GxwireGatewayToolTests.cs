@@ -28,6 +28,7 @@ namespace GxMcp.Gateway.Tests
 
         [Theory]
         [InlineData("pack_task")]
+        [InlineData("status")]
         [InlineData("for")]
         [InlineData("callers")]
         [InlineData("impact")]
@@ -56,6 +57,53 @@ namespace GxMcp.Gateway.Tests
             string output = result["output"]?.ToString() ?? string.Empty;
             Assert.Contains("<doctor", output);
             Assert.Contains("status=\"ready\"", output);
+        }
+
+        [Fact]
+        public async Task Gxwire_Doctor_ToonFormat_ReturnsStructuredToon()
+        {
+            var args = new JObject
+            {
+                ["action"] = "doctor",
+                ["format"] = "toon"
+            };
+            var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+
+            Assert.NotNull(result);
+            Assert.Equal("ok", result["status"]?.ToString());
+            Assert.Equal("gxwire", result["engine"]?.ToString());
+            Assert.Equal("toon", result["format"]?.ToString());
+            string output = result["output"]?.ToString() ?? string.Empty;
+            Assert.Contains("schema: gxwire.doctor/v1", output);
+            Assert.Contains("status: ready", output);
+            Assert.Contains("version: 0.1.0", output);
+        }
+
+        [Fact]
+        public async Task Gxwire_Status_ContentFirst_ReturnsStatusXml()
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                var args = new JObject
+                {
+                    ["action"] = "status",
+                    ["dir"] = tempDir
+                };
+                var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+
+                Assert.NotNull(result);
+                Assert.Equal("ok", result["status"]?.ToString());
+                Assert.Equal("gxwire", result["engine"]?.ToString());
+                string output = result["output"]?.ToString() ?? string.Empty;
+                Assert.Contains("<status schema=\"gxwire.status/v1\"", output);
+                Assert.Contains("empty=\"true\"", output);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
         }
 
         [Fact]

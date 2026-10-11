@@ -16,6 +16,10 @@ use std::path::PathBuf;
     long_about = "GxWire is an ultrafast, token-budgeted static analysis and graph engine for GeneXus Knowledge Bases."
 )]
 struct Args {
+    /// Show live Knowledge Base status & architectural hubs (content-first default)
+    #[arg(long)]
+    status: bool,
+
     /// Query 1-hop and transitive callers of a symbol
     #[arg(long)]
     callers: Option<String>,
@@ -48,7 +52,7 @@ struct Args {
     #[arg(long)]
     doctor: bool,
 
-    /// Output format: xml, json
+    /// Output format: xml, json, toon
     #[arg(long, default_value = "xml")]
     format: String,
 
@@ -56,9 +60,32 @@ struct Args {
     #[arg(long, default_value_t = 1200)]
     token_budget: usize,
 
+    /// Bypass token budget clipping and output full untruncated graph/results
+    #[arg(long)]
+    full: bool,
+
     /// Target directory to inspect
     #[arg(long, default_value = ".")]
     dir: PathBuf,
+}
+
+fn emit_error(format: &str, code: &str, target: &str, message: &str, next: &str) {
+    if format == "json" {
+        let err_obj = serde_json::json!({
+            "error": {
+                "code": code,
+                "target": target,
+                "message": message
+            },
+            "next": next
+        });
+        eprintln!("{}", serde_json::to_string_pretty(&err_obj).unwrap_or_default());
+    } else if format == "toon" {
+        eprint!("{}", output::format_error_toon(code, target, message, next));
+    } else {
+        eprintln!("{}", output::format_error_xml(code, target, message, next));
+    }
+    std::process::exit(1);
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -68,12 +95,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.doctor {
         let cache_path = cache::get_cache_path(&root);
         let exists = cache_path.exists();
-        println!(
-            "<doctor version=\"0.1.0\" root=\"{}\" cache_exists=\"{}\" cache_path=\"{}\" status=\"ready\" />",
-            root.display(),
-            exists,
-            cache_path.display()
-        );
+        let doc_res = model::DoctorResult {
+            schema: "gxwire.doctor/v1".to_string(),
+            version: "0.1.0".to_string(),
+            root: root.display().to_string(),
+            cache_exists: exists,
+            cache_path: cache_path.display().to_string(),
+            status: "ready".to_string(),
+            next: if exists {
+                "gxwire --for \"<task>\" or gxwire --pack-task \"<task>\"".to_string()
+            } else {
+                format!("gxwire --index \"{}\" to build fast cache", root.display())
+            },
+        };
+        if args.format == "json" {
+            println!("{}", serde_json::to_string_pretty(&doc_res)?);
+        } else if args.format == "toon" {
+            print!("{}", output::format_doctor_toon(&doc_res));
+        } else {
+            println!("{}", output::format_doctor_xml(&doc_res));
+        }
         return Ok(());
     }
 
@@ -100,37 +141,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(target) = args.callers {
-        if let Some(res) = analysis::analyze_callers(&g, &target, 4) {
+        if let Some(res) = analysis::analyze_callers_ext(&g, &target, 4, args.full) {
             if args.format == "json" {
                 println!("{}", serde_json::to_string_pretty(&res)?);
+            } else if args.format == "toon" {
+                print!("{}", output::format_callers_toon(&res));
             } else {
                 println!("{}", output::format_callers_xml(&res));
             }
         } else {
-            eprintln!("<error code=\"SymbolNotFound\" target=\"{}\" />", target);
-            std::process::exit(1);
+            emit_error(
+                &args.format,
+                "SymbolNotFound",
+                &target,
+                "Symbol not found in graph",
+                &format!("gxwire --for \"{}\" to find similar symbols", target),
+            );
         }
         return Ok(());
     }
 
     if let Some(target) = args.impact {
-        if let Some(res) = analysis::analyze_impact(&g, &target) {
+        if let Some(res) = analysis::analyze_impact_ext(&g, &target, args.full) {
             if args.format == "json" {
                 println!("{}", serde_json::to_string_pretty(&res)?);
+            } else if args.format == "toon" {
+                print!("{}", output::format_impact_toon(&res));
             } else {
                 println!("{}", output::format_impact_xml(&res));
             }
         } else {
-            eprintln!("<error code=\"SymbolNotFound\" target=\"{}\" />", target);
-            std::process::exit(1);
+            emit_error(
+                &args.format,
+                "SymbolNotFound",
+                &target,
+                "Symbol not found in graph",
+                &format!("gxwire --for \"{}\" to find similar symbols", target),
+            );
         }
         return Ok(());
     }
 
     if let Some(task) = args.for_task {
-        let res = analysis::search_for_task(&g, &task, 15);
+        let res = analysis::search_for_task_ext(&g, &task, 15, args.full);
         if args.format == "json" {
             println!("{}", serde_json::to_string_pretty(&res)?);
+        } else if args.format == "toon" {
+            print!("{}", output::format_search_toon(&res));
         } else {
             println!("{}", output::format_search_xml(&res));
         }
@@ -138,9 +195,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(task) = args.pack_task {
-        let res = analysis::pack_task(&g, &task, args.token_budget);
+        let budget = if args.full { usize::MAX } else { args.token_budget };
+        let res = analysis::pack_task_ext(&g, &task, budget, args.full);
         if args.format == "json" {
             println!("{}", serde_json::to_string_pretty(&res)?);
+        } else if args.format == "toon" {
+            print!("{}", output::format_pack_task_toon(&res));
         } else {
             println!("{}", output::format_pack_task_xml(&res));
         }
@@ -161,33 +221,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let res = analysis::analyze_slice(obj_name, var_name, &content);
             if args.format == "json" {
                 println!("{}", serde_json::to_string_pretty(&res)?);
+            } else if args.format == "toon" {
+                print!("{}", output::format_slice_toon(&res));
             } else {
                 println!("{}", output::format_slice_xml(&res));
             }
         } else {
-            eprintln!("<error code=\"SymbolNotFound\" target=\"{}\" />", obj_name);
-            std::process::exit(1);
+            emit_error(
+                &args.format,
+                "SymbolNotFound",
+                obj_name,
+                "Object not found in graph",
+                &format!("gxwire --for \"{}\" to find similar symbols", obj_name),
+            );
         }
         return Ok(());
     }
 
     if let Some(target) = args.safe_delete {
-        if let Some(res) = analysis::analyze_impact(&g, &target) {
-            let can_delete = res.blast_radius == 0;
-            println!(
-                r#"<safe-delete symbol="{}" can_delete="{}" blast_radius="{}" callers="{}" />"#,
-                target,
+        if let Some(res) = analysis::analyze_impact_ext(&g, &target, args.full) {
+            let can_delete = res.blast_radius == 0 && res.callers.is_empty() && res.writers.is_empty();
+            let safe_del = model::SafeDeleteResult {
+                schema: "gxwire.safe_delete/v1".to_string(),
+                symbol: target.clone(),
                 can_delete,
-                res.blast_radius,
-                res.callers.len()
-            );
+                blast_radius: res.blast_radius,
+                callers_count: res.callers.len(),
+                empty: res.blast_radius == 0,
+                next: if can_delete {
+                    format!("genexus_edit {} or genexus_delete {}", target, target)
+                } else {
+                    format!("gxwire --impact {} to inspect blockers", target)
+                },
+            };
+            if args.format == "json" {
+                println!("{}", serde_json::to_string_pretty(&safe_del)?);
+            } else if args.format == "toon" {
+                print!("{}", output::format_safe_delete_toon(&safe_del));
+            } else {
+                println!("{}", output::format_safe_delete_xml(&safe_del));
+            }
         } else {
-            eprintln!("<error code=\"SymbolNotFound\" target=\"{}\" />", target);
-            std::process::exit(1);
+            emit_error(
+                &args.format,
+                "SymbolNotFound",
+                &target,
+                "Symbol not found in graph",
+                &format!("gxwire --for \"{}\" to find similar symbols", target),
+            );
         }
         return Ok(());
     }
 
-    eprintln!("[gxwire] No command provided. Run `gxwire --help` for available options.");
+    // Principle #8: Content First (0 args defaults to live KB graph status)
+    let cache_path = cache::get_cache_path(&root);
+    let status_res = analysis::compute_status(&g, &root, &cache_path);
+    if args.format == "json" {
+        println!("{}", serde_json::to_string_pretty(&status_res)?);
+    } else if args.format == "toon" {
+        print!("{}", output::format_status_toon(&status_res));
+    } else {
+        println!("{}", output::format_status_xml(&status_res));
+    }
+
     Ok(())
 }

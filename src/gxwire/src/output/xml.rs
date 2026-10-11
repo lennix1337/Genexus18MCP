@@ -1,19 +1,92 @@
 use crate::analysis::{CallersResult, ImpactResult, PackTaskResult, SearchResult, SliceResult};
+use crate::model::{DoctorResult, SafeDeleteResult, StatusResult};
+
+pub fn format_status_xml(res: &StatusResult) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        r#"<status schema="{schema}" root="{root}" cache_exists="{exists}" nodes="{nodes}" edges="{edges}" empty="{empty}">"#,
+        schema = res.schema,
+        root = res.root,
+        exists = res.cache_exists,
+        nodes = res.nodes_count,
+        edges = res.edges_count,
+        empty = res.empty
+    ));
+
+    if !res.hubs.is_empty() {
+        out.push_str(&format!(r#"<hubs count="{}">"#, res.hubs.len()));
+        for h in &res.hubs {
+            out.push_str(&format!(
+                r#"<h n="{name}" t="{kind}" refs="{refs}" pr="{pr:.2}" />"#,
+                name = h.name,
+                kind = h.kind,
+                refs = h.refs,
+                pr = h.pagerank
+            ));
+        }
+        out.push_str("</hubs>");
+    }
+
+    out.push_str(&format!("<next>{}</next>", res.next));
+    out.push_str("</status>");
+    out
+}
+
+pub fn format_doctor_xml(res: &DoctorResult) -> String {
+    format!(
+        r#"<doctor schema="{schema}" version="{version}" root="{root}" cache_exists="{exists}" cache_path="{path}" status="{status}"><next>{next}</next></doctor>"#,
+        schema = res.schema,
+        version = res.version,
+        root = res.root,
+        exists = res.cache_exists,
+        path = res.cache_path,
+        status = res.status,
+        next = res.next
+    )
+}
+
+pub fn format_safe_delete_xml(res: &SafeDeleteResult) -> String {
+    format!(
+        r#"<safe-delete schema="{schema}" symbol="{symbol}" can_delete="{can_del}" blast_radius="{blast}" callers="{callers}" empty="{empty}"><next>{next}</next></safe-delete>"#,
+        schema = res.schema,
+        symbol = res.symbol,
+        can_del = res.can_delete,
+        blast = res.blast_radius,
+        callers = res.callers_count,
+        empty = res.empty,
+        next = res.next
+    )
+}
+
+pub fn format_error_xml(code: &str, target: &str, message: &str, next: &str) -> String {
+    format!(
+        r#"<error code="{code}" target="{target}" message="{message}"><next>{next}</next></error>"#,
+        code = code,
+        target = target,
+        message = message,
+        next = next
+    )
+}
 
 pub fn format_callers_xml(res: &CallersResult) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "<!-- gxwire callers schema=gxwire.callers/v1: 1-hop CALLERS of {target} (count={count}, transitive={trans_count}) -->\n",
+        "<!-- gxwire callers schema={schema}: 1-hop CALLERS of {target} (count={count}, transitive={trans_count}) -->\n",
+        schema = res.schema,
         target = res.target,
         count = res.count,
         trans_count = res.transitive_count
     ));
     out.push_str(&format!(
-        r#"<callers schema="gxwire.callers/v1" of="{target}" type="{kind}" count="{count}" transitive="{trans_count}">"#,
+        r#"<callers schema="{schema}" of="{target}" type="{kind}" count="{count}" transitive="{trans_count}" empty="{empty}" truncated="{trunc}" omitted="{omitted}">"#,
+        schema = res.schema,
         target = res.target,
         kind = res.target_kind,
         count = res.count,
-        trans_count = res.transitive_count
+        trans_count = res.transitive_count,
+        empty = res.empty,
+        trunc = res.truncated,
+        omitted = res.omitted
     ));
 
     for c in &res.callers {
@@ -39,21 +112,25 @@ pub fn format_callers_xml(res: &CallersResult) -> String {
         out.push_str(r#"</transitive>"#);
     }
 
+    out.push_str(&format!("<next>{}</next>", res.next));
     out.push_str("</callers>");
     out
 }
 
 pub fn format_impact_xml(res: &ImpactResult) -> String {
     let mut out = String::new();
-    let est_tokens = 60 + res.writers.len() * 12 + res.readers.len() * 10 + res.formulas.len() * 15 + res.callers.len() * 10;
-
     out.push_str(&format!(
-        r#"<impact schema="gxwire.impact/v1" of="{target}" type="{kind}" blast="{blast}" reorg_risk="{risk}" est_tokens="{tokens}">"#,
+        r#"<impact schema="{schema}" of="{target}" type="{kind}" blast="{blast}" reorg_risk="{risk}" can_delete="{can_del}" est_tokens="{tokens}" empty="{empty}" truncated="{trunc}" omitted="{omitted}">"#,
+        schema = res.schema,
         target = res.target,
         kind = res.target_kind,
         blast = res.blast_radius,
         risk = res.reorg_risk,
-        tokens = est_tokens
+        can_del = res.can_delete,
+        tokens = res.est_tokens,
+        empty = res.empty,
+        trunc = res.truncated,
+        omitted = res.omitted
     ));
 
     if !res.writers.is_empty() {
@@ -117,21 +194,23 @@ pub fn format_impact_xml(res: &ImpactResult) -> String {
         out.push_str("</tests>");
     }
 
-    out.push_str(&format!(r#"<next>--slice={target}:VAR</next>"#, target = res.target));
+    out.push_str(&format!("<next>{}</next>", res.next));
     out.push_str("</impact>");
     out
 }
 
 pub fn format_search_xml(res: &SearchResult) -> String {
     let mut out = String::new();
-    let est_tokens = 50 + res.hits.len() * 25;
-
     out.push_str(&format!(
-        r#"<ctx task="{query}" schema="gxwire.for/v1" count="{count}" total="{total}" est_tokens="{tokens}">"#,
+        r#"<ctx task="{query}" schema="{schema}" count="{count}" total="{total}" est_tokens="{tokens}" empty="{empty}" truncated="{trunc}" omitted="{omitted}">"#,
         query = res.query,
-        count = res.hits.len(),
+        schema = res.schema,
+        count = res.count,
         total = res.total,
-        tokens = est_tokens
+        tokens = res.est_tokens,
+        empty = res.empty,
+        trunc = res.truncated,
+        omitted = res.omitted
     ));
 
     out.push_str("<sigs>");
@@ -155,6 +234,7 @@ pub fn format_search_xml(res: &SearchResult) -> String {
         ));
     }
     out.push_str("</sigs>");
+    out.push_str(&format!("<next>{}</next>", res.next));
     out.push_str("</ctx>");
     out
 }
@@ -162,10 +242,14 @@ pub fn format_search_xml(res: &SearchResult) -> String {
 pub fn format_pack_task_xml(res: &PackTaskResult) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        r#"<pack task="{task}" budget="{budget}" est_tokens="{tokens}" schema="gxwire.pack/v1">"#,
+        r#"<pack task="{task}" budget="{budget}" est_tokens="{tokens}" schema="{schema}" empty="{empty}" truncated="{trunc}" omitted="{omitted}">"#,
         task = res.task,
         budget = res.budget,
-        tokens = res.est_tokens
+        tokens = res.est_tokens,
+        schema = res.schema,
+        empty = res.empty,
+        trunc = res.truncated,
+        omitted = res.omitted
     ));
 
     out.push_str("<anchors>");
@@ -199,6 +283,7 @@ pub fn format_pack_task_xml(res: &PackTaskResult) -> String {
         out.push_str(&format!(r#"<tests>{}</tests>"#, res.related_tests.join(",")));
     }
 
+    out.push_str(&format!("<next>{}</next>", res.next));
     out.push_str("</pack>");
     out
 }
@@ -206,11 +291,14 @@ pub fn format_pack_task_xml(res: &PackTaskResult) -> String {
 pub fn format_slice_xml(res: &SliceResult) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        r#"<slice obj="{obj}" var="{var}" defs="{defs}" uses="{uses}">"#,
+        r#"<slice schema="{schema}" obj="{obj}" var="{var}" defs="{defs}" uses="{uses}" points="{points}" empty="{empty}">"#,
+        schema = res.schema,
         obj = res.object,
         var = res.variable,
         defs = res.definitions_count,
-        uses = res.uses_count
+        uses = res.uses_count,
+        points = res.points_count,
+        empty = res.empty
     ));
 
     for p in &res.points {
@@ -222,6 +310,7 @@ pub fn format_slice_xml(res: &SliceResult) -> String {
         ));
     }
 
+    out.push_str(&format!("<next>{}</next>", res.next));
     out.push_str("</slice>");
     out
 }

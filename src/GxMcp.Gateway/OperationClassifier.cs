@@ -92,7 +92,7 @@ namespace GxMcp.Gateway
             new Dictionary<string, ActionContract>(StringComparer.OrdinalIgnoreCase)
             {
                 ["genexus_wire"] = Contract(
-                    readOnly: new[] { "pack_task", "for", "callers", "impact", "slice", "safe_delete", "index", "doctor" },
+                    readOnly: new[] { "pack_task", "status", "for", "callers", "impact", "slice", "safe_delete", "index", "doctor" },
                     mutating: Array.Empty<string>()),
                 ["genexus_connection_recover"] = Contract(
                     readOnly: new[] { "journal_status" },

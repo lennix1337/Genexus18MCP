@@ -23,6 +23,7 @@ namespace GxMcp.Gateway
                 "Call this FIRST before reading large objects or modifying the KB.\n\n" +
                 "## Actions\n" +
                 "- `pack_task` (default): Complete orientation bundle for a task description (ranked symbols, callers, signatures, variables) bounded under token_budget (default 1200).\n" +
+                "- `status`: Live KB graph status, node/edge counts, and top PageRank-central architectural hubs (content first).\n" +
                 "- `for`: Intent-based ranking of GeneXus symbols for a natural language task.\n" +
                 "- `callers`: 1-hop and transitive callers of a symbol.\n" +
                 "- `impact`: Blast radius calculation and downstream dependencies of an object or attribute.\n" +
@@ -32,7 +33,10 @@ namespace GxMcp.Gateway
                 "- `doctor`: Diagnostic check of the gxwire binary, index cache, and CPU threads.\n\n" +
                 "## Formats\n" +
                 "- `xml` (default): Compact, token-efficient XML structured specifically for LLMs.\n" +
+                "- `toon`: Tabular Object-Oriented Notation (~40% token savings over JSON, structured tables with clean schema).\n" +
                 "- `json`: Standard JSON payload.\n\n" +
+                "## Flags\n" +
+                "- `full`: Set to true to bypass token budget clipping and output exhaustive graph results.\n\n" +
                 "## Performance\n" +
                 "- Zero-allocation lexing and CSR compressed graph traversal in sub-10ms.\n" +
                 "- Independent of the GeneXus STA thread / worker pool.\n",

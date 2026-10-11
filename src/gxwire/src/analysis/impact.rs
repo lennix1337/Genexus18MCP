@@ -14,6 +14,7 @@ pub struct ImpactItem {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ImpactResult {
+    pub schema: String,
     pub target: String,
     pub target_kind: String,
     pub blast_radius: usize,
@@ -23,9 +24,20 @@ pub struct ImpactResult {
     pub formulas: Vec<ImpactItem>,
     pub callers: Vec<ImpactItem>,
     pub tests: Vec<String>,
+    pub can_delete: bool,
+    pub empty: bool,
+    pub truncated: bool,
+    pub omitted: usize,
+    pub est_tokens: usize,
+    pub next: String,
 }
 
+#[allow(dead_code)]
 pub fn analyze_impact(graph: &CsrGraph, target_name: &str) -> Option<ImpactResult> {
+    analyze_impact_ext(graph, target_name, false)
+}
+
+pub fn analyze_impact_ext(graph: &CsrGraph, target_name: &str, full: bool) -> Option<ImpactResult> {
     let target_node = graph.get_node_by_name(target_name)?;
     let target_id = target_node.id;
 
@@ -88,7 +100,7 @@ pub fn analyze_impact(graph: &CsrGraph, target_name: &str) -> Option<ImpactResul
         }
     }
 
-    let blast_radius = affected_nodes.len() - 1; // Exclude root
+    let blast_radius = affected_nodes.len().saturating_sub(1); // Exclude root
 
     // Determine reorg risk
     let reorg_risk = if target_node.kind == EntityKind::Attribute {
@@ -105,7 +117,26 @@ pub fn analyze_impact(graph: &CsrGraph, target_name: &str) -> Option<ImpactResul
         "none".to_string()
     };
 
+    let can_delete = blast_radius == 0 && callers.is_empty() && writers.is_empty();
+    let empty = blast_radius == 0 && writers.is_empty() && readers.is_empty() && formulas.is_empty() && callers.is_empty();
+    let est_tokens = 60 + writers.len() * 12 + readers.len() * 10 + formulas.len() * 15 + callers.len() * 10;
+
+    let (truncated, omitted) = if !full && callers.len() > 40 {
+        let omit = callers.len() - 40;
+        callers.truncate(40);
+        (true, omit)
+    } else {
+        (false, 0)
+    };
+
+    let next = if can_delete {
+        format!("gxwire --safe-delete {} or genexus_delete {}", target_node.name, target_node.name)
+    } else {
+        format!("gxwire --slice {}:VAR or gxwire --callers {}", target_node.name, target_node.name)
+    };
+
     Some(ImpactResult {
+        schema: "gxwire.impact/v1".to_string(),
         target: target_node.name.clone(),
         target_kind: target_node.kind.as_str().to_string(),
         blast_radius,
@@ -115,5 +146,11 @@ pub fn analyze_impact(graph: &CsrGraph, target_name: &str) -> Option<ImpactResul
         formulas,
         callers,
         tests,
+        can_delete,
+        empty,
+        truncated,
+        omitted,
+        est_tokens,
+        next,
     })
 }

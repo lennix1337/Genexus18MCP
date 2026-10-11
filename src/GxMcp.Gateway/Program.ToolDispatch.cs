@@ -1130,6 +1130,7 @@ namespace GxMcp.Gateway
             string action = tArgs?["action"]?.ToString()?.Trim() ?? "pack_task";
             string format = tArgs?["format"]?.ToString()?.Trim() ?? "xml";
             int budget = tArgs?["token_budget"]?.ToObject<int?>() ?? 1200;
+            bool full = tArgs?["full"]?.ToObject<bool?>() ?? false;
 
             string? kbDir = null;
             if (tArgs?["dir"] != null && !string.IsNullOrWhiteSpace(tArgs["dir"]?.ToString()))
@@ -1172,6 +1173,11 @@ namespace GxMcp.Gateway
                     {
                         argsBuilder.Append($" --dir \"{kbDir}\"");
                     }
+                    argsBuilder.Append($" --format {format}");
+                    break;
+
+                case "status":
+                    argsBuilder.Append($"--dir \"{kbDir}\" --format {format}");
                     break;
 
                 case "index":
@@ -1185,6 +1191,7 @@ namespace GxMcp.Gateway
                         return new JObject { ["status"] = "error", ["error"] = "TargetRequired", ["message"] = "Action 'callers' requires 'target'." };
                     }
                     argsBuilder.Append($"--callers \"{target}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    if (full) argsBuilder.Append(" --full");
                     break;
 
                 case "impact":
@@ -1194,6 +1201,7 @@ namespace GxMcp.Gateway
                         return new JObject { ["status"] = "error", ["error"] = "TargetRequired", ["message"] = "Action 'impact' requires 'target'." };
                     }
                     argsBuilder.Append($"--impact \"{impactTarget}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    if (full) argsBuilder.Append(" --full");
                     break;
 
                 case "for":
@@ -1203,6 +1211,7 @@ namespace GxMcp.Gateway
                         return new JObject { ["status"] = "error", ["error"] = "TaskRequired", ["message"] = "Action 'for' requires 'task'." };
                     }
                     argsBuilder.Append($"--for \"{forTask}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    if (full) argsBuilder.Append(" --full");
                     break;
 
                 case "pack_task":
@@ -1213,6 +1222,7 @@ namespace GxMcp.Gateway
                         return new JObject { ["status"] = "error", ["error"] = "TaskRequired", ["message"] = "Action 'pack_task' requires 'task'." };
                     }
                     argsBuilder.Append($"--pack-task \"{packTask}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    if (full) argsBuilder.Append(" --full");
                     break;
 
                 case "slice":
@@ -1239,7 +1249,7 @@ namespace GxMcp.Gateway
                     {
                         ["status"] = "error",
                         ["error"] = $"Unknown action '{action}'.",
-                        ["hint"] = "Supported: pack_task, for, callers, impact, slice, safe_delete, index, doctor."
+                        ["hint"] = "Supported: pack_task, status, for, callers, impact, slice, safe_delete, index, doctor."
                     };
             }
 
