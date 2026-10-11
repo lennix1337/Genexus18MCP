@@ -122,6 +122,14 @@ jobs:
         working-directory: src/nexus-ide
         run: npm test
 
+      - name: Build and test gxwire engine
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src/gxwire/Cargo.toml
+          cargo build --release --manifest-path src/gxwire/Cargo.toml
+          New-Item -ItemType Directory -Path publish -Force | Out-Null
+          Copy-Item src/gxwire/target/release/gxwire.exe -Destination publish/gxwire.exe -Force
+
       - name: Gateway and Worker coverage
         shell: pwsh
         run: |

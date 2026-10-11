@@ -45,6 +45,23 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 Remove-Item -LiteralPath $OutputRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 
+# Ensure gxwire binary is available in publish for gateway integration tests
+$publishDir = Join-Path $repoRoot "publish"
+$gxwirePublish = Join-Path $publishDir "gxwire.exe"
+$gxwireRelease = Join-Path $repoRoot "src\gxwire\target\release\gxwire.exe"
+if (-not (Test-Path -LiteralPath $gxwirePublish)) {
+    if (Test-Path -LiteralPath $gxwireRelease) {
+        New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+        Copy-Item -LiteralPath $gxwireRelease -Destination $gxwirePublish -Force
+    } elseif (Get-Command cargo -ErrorAction SilentlyContinue) {
+        cargo build --release --manifest-path (Join-Path $repoRoot "src\gxwire\Cargo.toml")
+        if (Test-Path -LiteralPath $gxwireRelease) {
+            New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+            Copy-Item -LiteralPath $gxwireRelease -Destination $gxwirePublish -Force
+        }
+    }
+}
+
 function Invoke-CoverageTest {
     param(
         [Parameter(Mandatory = $true)][string]$ProjectPath,

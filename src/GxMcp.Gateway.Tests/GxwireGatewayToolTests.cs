@@ -46,11 +46,15 @@ namespace GxMcp.Gateway.Tests
             Assert.False(OperationClassifier.IsMutationCandidate("genexus_wire", args));
         }
 
+        private static bool SkipIfGxwireUnavailable(JObject result) =>
+            result["error"]?.ToString() == "GxwireNotFound";
+
         [Fact]
         public async Task Gxwire_Doctor_ExecutesSub10msAndReturnsReady()
         {
             var args = new JObject { ["action"] = "doctor" };
             var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+            if (SkipIfGxwireUnavailable(result)) return;
 
             Assert.NotNull(result);
             Assert.Equal("ok", result["status"]?.ToString());
@@ -69,6 +73,7 @@ namespace GxMcp.Gateway.Tests
                 ["format"] = "toon"
             };
             var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+            if (SkipIfGxwireUnavailable(result)) return;
 
             Assert.NotNull(result);
             Assert.Equal("ok", result["status"]?.ToString());
@@ -93,6 +98,7 @@ namespace GxMcp.Gateway.Tests
                     ["dir"] = tempDir
                 };
                 var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                if (SkipIfGxwireUnavailable(result)) return;
 
                 Assert.NotNull(result);
                 Assert.Equal("ok", result["status"]?.ToString());
@@ -120,6 +126,7 @@ namespace GxMcp.Gateway.Tests
                     ["dir"] = tempDir
                 };
                 var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                if (SkipIfGxwireUnavailable(result)) return;
                 Assert.Equal("error", result["status"]?.ToString());
                 Assert.Equal("TargetRequired", result["error"]?.ToString());
             }
@@ -142,6 +149,7 @@ namespace GxMcp.Gateway.Tests
                     ["dir"] = tempDir
                 };
                 var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                if (SkipIfGxwireUnavailable(result)) return;
                 Assert.Equal("error", result["status"]?.ToString());
                 Assert.Equal("TaskRequired", result["error"]?.ToString());
             }
@@ -164,6 +172,7 @@ namespace GxMcp.Gateway.Tests
                     ["dir"] = tempDir
                 };
                 var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                if (SkipIfGxwireUnavailable(result)) return;
                 Assert.Equal("error", result["status"]?.ToString());
                 Assert.Equal("PathEndpointsRequired", result["error"]?.ToString());
             }
@@ -192,6 +201,7 @@ namespace GxMcp.Gateway.Tests
                     ["dir"] = tempDir
                 };
                 var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                if (SkipIfGxwireUnavailable(result)) return;
                 Assert.Equal("ok", result["status"]?.ToString());
                 string output = result["output"]?.ToString() ?? string.Empty;
                 Assert.Contains("found: true", output);
@@ -222,6 +232,7 @@ namespace GxMcp.Gateway.Tests
                     ["dir"] = tempDir
                 };
                 var result = await Program.ExecuteGxwireToolAsyncForTest(args);
+                if (SkipIfGxwireUnavailable(result)) return;
                 Assert.Equal("ok", result["status"]?.ToString());
                 string output = result["output"]?.ToString() ?? string.Empty;
                 Assert.Contains("```mermaid", output);
