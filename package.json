@@ -70,6 +70,6 @@
   "homepage": "https://github.com/lennix1337/Genexus18MCP#readme",
   "devDependencies": {
     "@eslint/js": "^9.39.5",
-    "eslint": "^9.39.5"
+    "eslint": "^10.12.0"
   }
 }
