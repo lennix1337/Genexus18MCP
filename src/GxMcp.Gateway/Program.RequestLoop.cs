@@ -31,7 +31,7 @@ namespace GxMcp.Gateway
             CancellationToken transportCancellation = default,
             bool taskScopeEnabled = true)
         {
-            return await ProcessMcpRequestCore(
+            return await ProcessMcpRequestWithElicitation(
                 request, sessionId, sessionContextEnabled, transportCancellation, taskScopeEnabled)
                 .ConfigureAwait(false);
         }

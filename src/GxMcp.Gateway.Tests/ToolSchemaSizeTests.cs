@@ -253,12 +253,17 @@ namespace GxMcp.Gateway.Tests
         // genexus_security audit_object). Measured 86107 bytes.
         // 86500 -> 86700 for property timeout reconciliation and optimistic set fields.
         // Combined K2B/SDT/WWP/EXO/property contracts: all=88148, authoring=61238 bytes.
-        // 89000 -> 90500 for PR #459 (genexus_wire first-class tool definition across all actions). Measured 89144 bytes.
-        [InlineData("all", 90500)]
-        [InlineData("core", 25000)]
-        [InlineData("standard", 60000)]
-        [InlineData("authoring", 63000)]
-        [InlineData("devops", 50000)]
+        // all 89000 -> 98500, core 25000 -> 25500, authoring 62500 -> 67500, devops
+        // 50000 -> 51000: each published tool description is a bounded purpose summary
+        // (ToolProfileFilter.MaxToolSummaryLength) instead of only the tool-help URI,
+        // because clients choose a tool from that text before reading any resource.
+        // With genexus_wire added to core/standard/authoring/devops/all and purpose summaries from origin/main:
+        // Measured all ~99400, core=26678, standard ~60500, authoring ~68000, devops=52066 bytes.
+        [InlineData("all", 100000)]
+        [InlineData("core", 27000)]
+        [InlineData("standard", 61000)]
+        [InlineData("authoring", 68500)]
+        [InlineData("devops", 52500)]
         [InlineData("ui", 50000)]
         [InlineData("db", 40000)]
         public void PublishedToolProfileStaysWithinItsByteBudget(string profile, int maxBytes)

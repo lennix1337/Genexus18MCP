@@ -74,3 +74,24 @@ test('the README release section describes the release flow that actually ships'
     // npm authentication is OIDC Trusted Publishing, so there is no token secret.
     assert.match(section, /OIDC Trusted Publishing/);
 });
+
+test('the docs index lists every top-level document and every link resolves', () => {
+    const docsDir = path.join(repoRoot, 'docs');
+    const index = read('docs/README.md');
+    const targets = new Set(
+        [...index.matchAll(/\]\(([^)#\s]+)(?:#[^)]*)?\)/g)]
+            .map((match) => match[1])
+            .filter((target) => !/^[a-z]+:/i.test(target))
+    );
+
+    const unlisted = fs.readdirSync(docsDir)
+        .filter((name) => name.endsWith('.md') && name !== 'README.md')
+        .filter((name) => !targets.has(name));
+    assert.deepEqual(unlisted, [], 'Add these documents to docs/README.md');
+
+    const broken = [...targets].filter((target) => !fs.existsSync(path.join(docsDir, target)));
+    assert.deepEqual(broken, [], 'docs/README.md links to missing files');
+
+    assert.match(read('README.md'), /\]\(docs\/README\.md\)/);
+    assert.match(read('AGENTS.md'), /\]\(docs\/README\.md\)/);
+});

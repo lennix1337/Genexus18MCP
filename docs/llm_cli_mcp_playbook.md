@@ -126,10 +126,15 @@ the profile(s) that expose it and the setting to change. Legacy alias names
 remain callable through compatibility rewrites but are not listed as tools.
 
 The public list omits examples and shortens long descriptions to stay within
-the enforced per-profile and per-tool byte budgets. Each tool description
-points to `genexus://kb/tool-help/<tool>`; read that resource when full
-constraints, rationale, or examples are needed. The original description and
-complete input schema remain available there.
+the enforced per-profile and per-tool byte budgets. Each tool description is a
+purpose summary of at most 200 characters (whole sentences when they fit)
+followed by a pointer to `genexus://kb/tool-help/<tool>`; read that resource
+when full constraints, rationale, or examples are needed. The original
+description and complete input schema remain available there.
+
+`initialize` and `server/discover` return `instructions`: a short
+intent-to-tool routing guide built from the active profile, so it only names
+tools the client can call.
 
 ### KB context, leases, and compatibility
 
