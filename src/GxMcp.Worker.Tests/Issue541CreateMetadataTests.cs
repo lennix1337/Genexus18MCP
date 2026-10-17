@@ -1,4 +1,5 @@
 using System;
+using GxMcp.TestSupport;
 using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
@@ -233,6 +234,24 @@ namespace GxMcp.Worker.Tests
             // No Length surface at all: no size is claimed.
             ObjectService.ApplySeedItemSize(new object(), 7, null, out len, out dec);
             Assert.Equal("NUMERIC", ObjectService.DescribeSeedItemType("NUMERIC", len, dec));
+        }
+
+        // Native proof on GX18 U16: the Attribute branch resolved basedOn with
+        // kb.DesignModel.Objects.GetByName(...)?.OfType<Domain>() on the dynamic KB handle.
+        // A LINQ extension cannot bind dynamically ('object' does not contain a definition
+        // for 'OfType'), so every existing Domain came back DomainNotFound — and, before the
+        // fail-closed seam, silently became NUMERIC(4). The lookup must go through the typed
+        // Domain.ResolveName wrapper the variable writers already use. Source guard: the
+        // project cannot instantiate a KnowledgeBase handle to exercise the lambda itself.
+        [Fact]
+        public void AttributeCreate_ResolvesBasedOnDomainThroughTheTypedSdkResolver()
+        {
+            string source = RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "ObjectService.cs");
+            string body = SourceAssert.MethodBody(source, "public KBObject CreateObjectInstance(");
+
+            Assert.Contains("ApplyAttributeCreatePlan(attrObj, attrPlan, domainName =>", body);
+            Assert.Contains("VariableInjector.ResolveDomain(kb.DesignModel, domainName)", body);
+            Assert.DoesNotContain(".OfType<Artech.Genexus.Common.Objects.Domain>()", body);
         }
     }
 }
