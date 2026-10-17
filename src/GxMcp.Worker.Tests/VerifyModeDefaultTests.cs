@@ -96,6 +96,22 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void Structure_ExplicitNormalized_LabelsTheGeneratedDescription_WhenTheKeywordWasMixedCase()
+        {
+            // GX18 U16 proof: a request spelled `Numeric(4)` comes back `NUMERIC(4) // "…"`.
+            // The keyword casing is the SDK's rendering, not a lost declaration, so the
+            // label (and its hint) must still be earned.
+            var response = new JObject { ["status"] = "ok", ["code"] = "WriteApplied", ["sdkSaveCompleted"] = true };
+            var receipt = WriteService.ApplyTextVerificationReceipt(
+                response, "McpTstR03", "Structure", Before, Before + "\nMcpTstR03A : Numeric(4)", Persisted, "v2", false, null, "normalized");
+
+            Assert.Equal("WriteNotPersisted", receipt["code"]);
+            Assert.Equal("sdk-generated-description", receipt["error"]["mismatchKind"]);
+            Assert.Equal("sdk-generated-description", receipt["mutation"]["diff"]["mismatchKind"]);
+            Assert.Contains("verifyMode=semantic", receipt["error"]["hint"].ToString());
+        }
+
+        [Fact]
         public void Structure_RealContentMismatch_IsNotLabelledAsGeneratedDescription()
         {
             var receipt = Receipt("normalized", actual: Before + "\nMcpTstR03A : NUMERIC(6) // \"Mcp Tst R03 A\"");

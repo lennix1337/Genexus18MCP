@@ -232,5 +232,20 @@ namespace GxMcp.Worker.Tests
                 "Structure", "McpTstR03A : NUMERIC(4) // \"Valor\"", persisted));
             Assert.False(TextPersistenceVerifier.OnlySdkGeneratedAttributeDescriptionDiffers("Source", requested, persisted));
         }
+
+        [Fact]
+        public void OnlyGeneratedDescriptionDiffers_IgnoresTheSdkTypeKeywordCasing()
+        {
+            // GX18 U16 proof: `add_attribute {type:"Numeric(4)"}` is persisted as
+            // `NUMERIC(4) // "Mcp Prova557 B"`. The keyword casing is the SDK's own
+            // rendering (identifiers and types are case-insensitive in GeneXus), so the
+            // description label must still be earned...
+            Assert.True(TextPersistenceVerifier.OnlySdkGeneratedAttributeDescriptionDiffers(
+                "Structure", "McpTstR03A : Numeric(4)", "McpTstR03A : NUMERIC(4) // \"Mcp Tst R03 A\""));
+            // ...while a casing-only rendering without the description is not about the
+            // description at all.
+            Assert.False(TextPersistenceVerifier.OnlySdkGeneratedAttributeDescriptionDiffers(
+                "Structure", "McpTstR03A : Numeric(4)", "McpTstR03A : NUMERIC(4)"));
+        }
     }
 }
