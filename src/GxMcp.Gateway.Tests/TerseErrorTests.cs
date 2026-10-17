@@ -101,6 +101,28 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("123", trimmed["versionToken"]!.ToString());
         }
 
+        // Issue #542 (GX18 U16 proof): the Structure writer's rollback evidence reached the
+        // Worker envelope but the terse projection dropped unappliedMembers,
+        // rollbackAttempted and rollbackError, so the caller saw rolledBack=true without
+        // knowing which member the SDK refused or why a revert could not be verified.
+        [Fact]
+        public void TrimErrorEnvelope_WriteNotPersisted_PreservesStructureRollbackEvidence()
+        {
+            var input = JObject.Parse(@"{
+                ""code"":""WriteNotPersisted"",""message"":""post-save mismatch"",
+                ""persistedVerified"":false,""rolledBack"":false,
+                ""unappliedMembers"":[""codigo : VARCHAR(40)""],
+                ""rollbackAttempted"":true,""rollbackError"":""Rollback write failed: cause""
+            }");
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            Assert.Equal(new[] { "codigo : VARCHAR(40)" }, trimmed["unappliedMembers"]!.ToObject<string[]>());
+            Assert.True(trimmed["rollbackAttempted"]!.ToObject<bool>());
+            Assert.Equal("Rollback write failed: cause", trimmed["rollbackError"]!.ToString());
+            Assert.False(trimmed["rolledBack"]!.ToObject<bool>());
+        }
+
         [Fact]
         public void TrimErrorEnvelope_PatchSafetyEvidencePreservesAttemptAndReadFailure()
         {

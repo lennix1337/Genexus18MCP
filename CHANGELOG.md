@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- `genexus_edit part=Structure mode=patch` receipts now carry the writer's verified-rollback evidence: `PatchService.ParseWriteResult` lifts `rollbackAttempted`, `rolledBack`, `rollbackError` and `unappliedMembers` from the canonical error envelope, so the receipt reports `rollback.source="write-service"` and the reverted members instead of calling the revert a normalization difference, and the Gateway terse error projection keeps `unappliedMembers`, `rollbackAttempted` and `rollbackError`. The writer's own `RollbackFullWriteFailure` attaches an atomic `rollback` object next to that flag on every refused Structure patch, so `IsWriterRollbackReported` no longer requires the object to be absent and `MarkWriterRollback` merges into it (keeping `atomic`, `saveRequired`, `reReadConfirmed`) instead of being skipped. Proven on a GeneXus 18 U16 test KB: `update_visual mode=replace` retypes an existing member (`VARCHAR(40)` to `Numeric(7)`, `persistedVerified: true`) while the DSL patch back is refused by the SDK and reverted with the restore verified by re-read ([#542](https://github.com/lennix1337/Genexus18MCP/issues/542)).
+
 ### Internal
 
 ## v3.16.0 - 2026-10-17

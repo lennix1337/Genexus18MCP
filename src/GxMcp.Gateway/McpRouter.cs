@@ -1978,6 +1978,9 @@ namespace GxMcp.Gateway
                 "persistedHash", "normalizedRequestedHash", "normalizedPersistedHash",
                 "persistedMatchCount", "oldContentPresent", "verification", "rollback",
                 "rolledBack", "versionToken", "persistedVerifyError", "mismatchKind", "replacementPresent",
+                // issue #542: Structure writer rollback evidence (which members the SDK
+                // refused, whether a revert was attempted, and why it could not be verified).
+                "unappliedMembers", "rollbackAttempted", "rollbackError",
                 "reReadConfirmed", "commentOnly", "commentStyle", "before", "after",
                 "matchedCount", "implicitOperations", "diagnosticContext",
                 // Patch safety evidence: retain the distinction between a save attempt
