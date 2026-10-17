@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- The `sdk-generated-description` label of a Structure write verified with an explicit `normalized`/`exact` now ignores the SDK's upper-casing of the type keyword: a request spelled `Numeric(4)` is persisted as `NUMERIC(4) // "..."` and the ordinal comparison never matched, so `mismatchKind` and its hint were missing; a casing-only difference without the description still earns no label. Proven on a GeneXus 18 U16 test KB: an omitted `verifyMode` returns `WriteApplied` with `postSaveVerification.mode: semantic`, an explicit `normalized` returns `WriteNotPersisted` with the attribute saved and rolled back ([#557](https://github.com/lennix1337/Genexus18MCP/issues/557)).
+
 ### Internal
 
 ## v3.16.0 - 2026-10-17

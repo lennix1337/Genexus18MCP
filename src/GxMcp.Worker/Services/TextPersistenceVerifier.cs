@@ -222,11 +222,16 @@ namespace GxMcp.Worker.Services
             if (!string.Equals(partName, "Structure", StringComparison.OrdinalIgnoreCase)) return false;
             string nr = Normalize(requested);
             string np = Normalize(persisted);
-            if (string.Equals(nr, np, StringComparison.Ordinal)) return false;
+            // GeneXus identifiers and type keywords are case-insensitive, and the SDK
+            // renders a requested `Numeric(4)` as `NUMERIC(4)` next to the derived
+            // description (GX18 U16 proof) — a rendering `semantic` already accepts. The
+            // label is about the description, so the keyword casing must neither hide it
+            // nor, on its own, earn it.
+            if (string.Equals(nr, np, StringComparison.OrdinalIgnoreCase)) return false;
             return string.Equals(
                 StripSdkGeneratedAttributeDescriptions(nr),
                 StripSdkGeneratedAttributeDescriptions(np),
-                StringComparison.Ordinal);
+                StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

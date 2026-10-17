@@ -101,6 +101,22 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("123", trimmed["versionToken"]!.ToString());
         }
 
+        // Issue #557 (GX18 U16 proof): the Worker labelled the explicit-normalized
+        // Structure mismatch with error.mismatchKind, but the terse projection dropped
+        // it, so the caller only saw the generic WriteNotPersisted.
+        [Fact]
+        public void TrimErrorEnvelope_WriteNotPersisted_PreservesMismatchKind()
+        {
+            var input = JObject.Parse(@"{
+                ""code"":""WriteNotPersisted"",""message"":""post-save mismatch"",
+                ""saved"":true,""verified"":false,""mismatchKind"":""sdk-generated-description""
+            }");
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            Assert.Equal("sdk-generated-description", trimmed["mismatchKind"]!.ToString());
+        }
+
         [Fact]
         public void TrimErrorEnvelope_PatchSafetyEvidencePreservesAttemptAndReadFailure()
         {
