@@ -67,6 +67,38 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("{", (string)jo["message"]);
         }
 
+        // Issue #542 (GX18 U16 proof): WriteService reports its verified Structure rollback
+        // as plain extras of the canonical error envelope (error.rollbackAttempted,
+        // error.rolledBack, error.rollbackError, error.unappliedMembers). ParseWriteResult
+        // lifted only a fixed list of evidence names, so IsWriterRollbackReported never saw
+        // the attempt and the patch receipt kept the generic "normalization difference"
+        // message without unappliedMembers or rollback.source.
+        [Fact]
+        public void Canonical_ErrorEnvelope_LiftsTheWriterRollbackEvidence()
+        {
+            var jo = Parse(new JObject
+            {
+                ["status"] = "error",
+                ["error"] = new JObject
+                {
+                    ["code"] = "WriteNotPersisted",
+                    ["message"] = "not applied",
+                    ["persistedVerified"] = false,
+                    ["persistedVerifyError"] = "Structure DSL was saved but the post-Save re-read did not contain: codigo : VARCHAR(40).",
+                    ["unappliedMembers"] = new JArray("codigo : VARCHAR(40)"),
+                    ["rollbackAttempted"] = true,
+                    ["rolledBack"] = true,
+                    ["rollbackError"] = "cause"
+                }
+            }.ToString());
+
+            Assert.True(jo["rollbackAttempted"]!.Value<bool>());
+            Assert.True(jo["rolledBack"]!.Value<bool>());
+            Assert.Equal("cause", (string)jo["rollbackError"]);
+            Assert.Equal(new[] { "codigo : VARCHAR(40)" }, ((JArray)jo["unappliedMembers"]!).ToObject<string[]>());
+            Assert.True(PatchService.IsWriterRollbackReported(jo));
+        }
+
         [Fact]
         public void PatchService_UnpacksWritePayloadResult_ToExposeDerivedObjectRegeneration()
         {

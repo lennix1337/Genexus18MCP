@@ -68,18 +68,56 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void IsWriterRollbackReported_RequiresPlainAttemptFlagWithoutRollbackObject()
+        public void IsWriterRollbackReported_RequiresThePlainAttemptFlag_EvenNextToTheWritersAtomicRollbackObject()
         {
             Assert.True(PatchService.IsWriterRollbackReported(new JObject { ["rollbackAttempted"] = true, ["rolledBack"] = true }));
             Assert.True(PatchService.IsWriterRollbackReported(new JObject { ["rollbackAttempted"] = true, ["rolledBack"] = false }));
             Assert.False(PatchService.IsWriterRollbackReported(new JObject { ["rollbackAttempted"] = false, ["rolledBack"] = false }));
             Assert.False(PatchService.IsWriterRollbackReported(new JObject { ["rolledBack"] = true }));
-            Assert.False(PatchService.IsWriterRollbackReported(new JObject
+            // GX18 U16 proof: on every refused Structure patch the writer's
+            // RollbackFullWriteFailure also attaches an atomic `rollback` object
+            // (attempted:false, rolledBack:true, atomic:true). The flag still wins.
+            Assert.True(PatchService.IsWriterRollbackReported(new JObject
             {
                 ["rollbackAttempted"] = true,
-                ["rollback"] = new JObject { ["rolledBack"] = true }
+                ["rollback"] = new JObject { ["attempted"] = false, ["rolledBack"] = true, ["atomic"] = true }
+            }));
+            Assert.False(PatchService.IsWriterRollbackReported(new JObject
+            {
+                ["rollback"] = new JObject { ["attempted"] = false, ["rolledBack"] = true, ["atomic"] = true }
             }));
             Assert.False(PatchService.IsWriterRollbackReported(null));
+        }
+
+        [Fact]
+        public void MarkWriterRollback_MergesIntoTheWritersAtomicRollbackObject()
+        {
+            var payload = new JObject
+            {
+                ["rollbackAttempted"] = true,
+                ["rolledBack"] = true,
+                ["unappliedMembers"] = new JArray("codigo : VARCHAR(40)"),
+                ["rollback"] = new JObject
+                {
+                    ["requested"] = true, ["attempted"] = false, ["rolledBack"] = true, ["verified"] = true,
+                    ["atomic"] = true, ["saveRequired"] = false, ["reReadConfirmed"] = true
+                }
+            };
+            PatchPersistenceReceipt.MarkNotPersisted(payload, saved: true, verifyError: null);
+
+            PatchPersistenceReceipt.MarkWriterRollback(payload, rolledBack: true, rollbackError: null, unappliedMembers: payload["unappliedMembers"] as JArray);
+
+            var rollback = (JObject)payload["rollback"];
+            Assert.Equal("write-service", rollback["source"]?.ToString());
+            Assert.True(rollback["attempted"]?.Value<bool>());
+            Assert.True(rollback["saveAttempted"]?.Value<bool>());
+            Assert.True(rollback["rolledBack"]?.Value<bool>());
+            // The writer's own evidence survives the merge.
+            Assert.True(rollback["atomic"]?.Value<bool>());
+            Assert.True(rollback["reReadConfirmed"]?.Value<bool>());
+            Assert.False(rollback["saveRequired"]?.Value<bool>());
+            Assert.Contains("reverted", payload["message"]?.ToString());
+            Assert.Equal("RolledBack", payload["commitState"]?.ToString());
         }
 
         [Fact]
