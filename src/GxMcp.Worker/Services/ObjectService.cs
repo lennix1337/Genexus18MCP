@@ -828,10 +828,14 @@ namespace GxMcp.Worker.Services
                 // (options["type"] is the object type). A requested field that does not land
                 // throws before the caller's Save() instead of persisting NUMERIC(4).
                 var attrPlan = AttributeCreatePlan.FromOptions(options);
+                // `kb` is a dynamic handle, so a LINQ extension (OfType<Domain>) on the
+                // result of Objects.GetByName binds at run time against 'object' and throws
+                // RuntimeBinderException — which the pre-#541 catch {} turned into the
+                // silent NUMERIC(4) and the fail-closed seam into DomainNotFound for every
+                // existing Domain (GX18 U16 proof). Resolve through the typed SDK API
+                // (Domain.ResolveName) the variable writers already use.
                 JObject attrMeta = ApplyAttributeCreatePlan(attrObj, attrPlan, domainName =>
-                    kb.DesignModel.Objects.GetByName(null, null, domainName)
-                        ?.OfType<Artech.Genexus.Common.Objects.Domain>()
-                        .FirstOrDefault());
+                    VariableInjector.ResolveDomain(kb.DesignModel, domainName));
                 if (attrMeta != null) typedMeta = new JObject { ["attribute"] = attrMeta };
             }
             else if (newObj is Artech.Genexus.Common.Objects.Transaction newTrn)

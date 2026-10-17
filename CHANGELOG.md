@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- `genexus_create type=Attribute basedOn=<Domain>` resolves the Domain through the typed SDK resolver (`Domain.ResolveName`). The previous `Objects.GetByName(...)?.OfType<Domain>()` on the dynamic KB handle threw a runtime binder error, so every existing Domain was reported as `DomainNotFound` (and, before the fail-closed seam, silently became `NUMERIC(4)`); proven on a GeneXus 18 U16 test KB together with `VarChar`/`Blob` attributes (`persistedVerified: true`) and the SDT seed `Numeric(7)` ([#541](https://github.com/lennix1337/Genexus18MCP/issues/541)).
+
 ### Internal
 
 ## v3.16.0 - 2026-10-17
