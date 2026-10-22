@@ -5234,6 +5234,7 @@
               "add_grid_variable",
               "add_grid",
               "set_combo_properties",
+              "regenerate_derived",
               "list_tabs",
               "tab_schema",
               "replace_web_component_with_user_action",
@@ -5417,6 +5418,10 @@
             "description": "Alias for baseVersion.",
             "type": "string"
           },
+          "expectedVersions": {
+            "description": "regenerate_derived: token per…",
+            "type": "object"
+          },
           "fromGroup": {
             "description": "move_action: source group (optional;…",
             "type": "string"
@@ -5525,6 +5530,14 @@
             "default": true,
             "description": "On a failed write or post-save…",
             "type": "boolean"
+          },
+          "scope": {
+            "description": "regenerate_derived: helpers (default)…",
+            "enum": [
+              "helpers",
+              "all"
+            ],
+            "type": "string"
           },
           "sdt": {
             "description": "add_grid: the SDT the collection is…",

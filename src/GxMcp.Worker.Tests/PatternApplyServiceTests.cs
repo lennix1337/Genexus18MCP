@@ -371,15 +371,17 @@ namespace GxMcp.Worker.Tests
             var conflict = ((JArray)obj["findings"]!).First(f =>f["reason"]?.ToString() == "overrideConflict");
             // Issue #352: the detail previously said "A first-apply will be a no-op;
             // use reapply=true" from a constant, independent of what the same response
-            // reported about the reapply route. WWP has its own supported reapply route
-            // that regenerates, so the remediation is still reapply here - but it is now
-            // derived from that capability instead of asserted unconditionally.
+            // reported about the reapply route. The remediation is now derived from the
+            // capability. For an existing WorkWithPlus instance the reapply route skips the
+            // engine and only re-projects the parent, so it is still the route that runs, but
+            // it is not claimed to rebuild the derived objects; regenerate_derived is.
             Assert.Contains("An existing PatternInstance for 'WorkWithPlus' was found", conflict["detail"]?.ToString());
-            Assert.Contains("A first-apply will be a no-op; use reapply=true", conflict["detail"]?.ToString());
+            Assert.Contains("Reapply through this build does not regenerate the derived objects", conflict["detail"]?.ToString());
             Assert.Equal("reapply", conflict["remediationRoute"]?.ToString());
             Assert.True((bool)conflict["reapplyRecommended"]);
-            Assert.True((bool)conflict["regeneratesDerivedObjects"]);
-            Assert.Contains("reapply=true to regenerate", conflict["remediation"]?.ToString());
+            Assert.False((bool)conflict["regeneratesDerivedObjects"]);
+            Assert.Contains("this does not regenerate the pattern's objects", conflict["remediation"]?.ToString());
+            Assert.Contains("genexus_wwp action=regenerate_derived", conflict["remediation"]?.ToString());
             Assert.Null(obj["routeCapabilities"]);
         }
 

@@ -350,6 +350,8 @@ namespace GxMcp.Worker.Services
                     return RunTabOperation(target, requestedObject, instance, instancePart, xml, operation, args);
                 if (IsComboPropertyOperation(operation))
                     return RunComboPropertyOperation(target, requestedObject, instance, instancePart, xml, args);
+                if (IsRegenerateDerivedOperation(operation))
+                    return RunRegenerateDerivedOperation(target, requestedObject, instance, instancePart, xml, args);
 
                 XDocument beforeDocument = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
                 JObject before = Project(beforeDocument);

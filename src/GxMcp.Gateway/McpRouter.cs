@@ -2010,7 +2010,10 @@ namespace GxMcp.Gateway
                 "fieldErrors",
                 // Optimistic-concurrency retry contract: a refused token is only useful if the
                 // caller can see the token that is current.
-                "currentVersion", "expectedVersion"
+                "currentVersion", "expectedVersion",
+                // genexus_wwp regenerate_derived: which objects were stale or missing a token, the
+                // paste-ready token map, and the evidence of the unit's rollback.
+                "staleObjects", "expectedVersions", "missing"
             };
             foreach (var k in diagnosticKeys)
             {
@@ -2056,6 +2059,19 @@ namespace GxMcp.Gateway
                     "requires", "visibleIf", "sdkName", "discardedOnSave", "requested", "matches", "available", "element",
                     "detail", "partialPersistence", "patternReReadConfirmed", "webFormProjectionConfirmed", "snapshot",
                     "rollbackPerformed", "versionTokenBefore", "lifecycleExecuted" })
+                {
+                    JToken? value = ResolveErrorField(error, key);
+                    if (value != null) trimmed[key] = value;
+                }
+            }
+            if (code?.ToString().StartsWith("WwpRegenerate", StringComparison.Ordinal) == true)
+            {
+                // genexus_wwp regenerate_derived failures: what the engine reported, which objects fell
+                // outside the requested scope, the contract that still disagrees, and whether the whole
+                // unit was restored and proved by a fresh re-read.
+                foreach (string key in new[] { "engine", "outOfScope", "diff", "contractConsistency", "snapshot",
+                    "rollback", "rollbackPerformed", "rollbackVerified", "partialPersistence", "persisted",
+                    "patternSha256Before", "patternSha256After", "lifecycleExecuted" })
                 {
                     JToken? value = ResolveErrorField(error, key);
                     if (value != null) trimmed[key] = value;

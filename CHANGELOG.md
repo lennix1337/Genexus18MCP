@@ -7,11 +7,17 @@
 
 ### Added
 
+- **`genexus_wwp action=regenerate_derived`** rebuilds, as one unit, the objects a WorkWithPlus instance derives (the `LoadDVCombo<Trn>` helper and the WW/DS/export family) together with the parent Transaction/WebPanel. After an edit changes how the instance calls a helper (combo `Parameters`, `ConditionsDynamicAttsOrVars`), the instance and the parent are saved but the helper is a separate KB object that keeps its old `parm` rule and Variables, so the parent calls a shape the helper does not have. `dryRun` lists the host, the parent and every derived object with a `versionToken` each, marks the `helpers`, evaluates the call contract of each helper against every caller (argument count, order, variable names and declared types, position by position; a call written as a function, `&x = Helper(...)`, passes one argument fewer because the last `out` parameter is its result; basic types agree by family, so a `VARCHAR(40)` receives a `LONGVARCHAR`, and `Attribute:`/`Domain:` references must name the same target) and returns a paste-ready `expectedVersions` map. A write needs that map and refuses with `StaleObject` (listing `staleObjects`) when any object moved; it writes every part to the snapshot store, rebuilds through `PatternEngine.ApplyPattern` in refresh mode (the instance's own objects, never the KB-wide global ones), re-reads everything freshly, and requires the PatternInstance unchanged, only helpers changed when `scope` is `helpers` (the default; `all` accepts any derived object) and no helper left disagreeing with a caller (`contractConsistency`). Any failure restores the unit from the captured text and reports `rollbackVerified` only when a fresh re-read matches. The engine needs the KB to have the WorkWithPlus Design System imported, like the IDE's Apply Pattern; otherwise its message is returned and nothing changes. It never runs Specify, Generate, Build or Reorg.
+
 ### Changed
 
 ### Fixed
 
+- **`genexus_apply_pattern reapply=true` on an existing WorkWithPlus instance** returned `PatternApplied` while only the parent was re-projected: the derived objects, such as the `LoadDVCombo<Trn>` helper, kept the contract they had before the instance changed. The response now carries `derivedObjectsRegenerated` (false for a reapply) with a note naming `regenerate_derived`, and `mode=diagnose` no longer says that reapply regenerates them.
+
 ### Internal
+
+- Schema budgets: byte budgets of the `all`, `authoring` and `ui` profiles rise to 103000, 71500 and 50300 for the `regenerate_derived` action value and its `scope` and `expectedVersions` inputs (measured 102844, 71300 and 50208 bytes). New unit tests cover the helper call contract and the comparison of derived-object captures.
 
 ## v4.0.1 - 2026-10-21
 

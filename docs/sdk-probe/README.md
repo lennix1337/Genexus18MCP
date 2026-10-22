@@ -21,6 +21,8 @@ read the markdown indices to find the right entry point.
 - **`wwp-projection-discovery.md`** — narrative of how we found the pattern
   projection lifecycle (`IPatternBuildProcess.UpdateParentObject`) and what
   actually wires PatternInstance → WebForm.
+- **`wwp-derived-regeneration.md`** — why `reapply` leaves the derived objects (the `LoadDVCombo<Trn>`
+  helper) on their old contract, what `PatternEngine.ApplyPattern` rebuilds, and the limits of what was run.
 
 ## How to refresh
 

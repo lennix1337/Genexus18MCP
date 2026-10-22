@@ -69,13 +69,16 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void WorkWithPlus_Reapply_Is_The_Regenerating_Route()
+        public void WorkWithPlus_Reapply_Is_Not_Claimed_To_Regenerate_Derived_Objects()
         {
             // WWP is excluded from the generic switch because it has its own supported
-            // apply route, so it reads its own constant. If this flips, the diagnose
-            // remediation flips with it rather than drifting.
-            Assert.True(PatternApplyService.PatternRouteCapabilities.WwpReapplyRegenerates);
-            Assert.True(PatternApplyService.PatternRouteCapabilities.IsRegeneratingReapply(Wwp()));
+            // apply route, so it reads its own constant. For an existing instance that route
+            // skips the engine and only re-projects the parent, so a derived helper keeps its
+            // old contract after a "PatternApplied" reapply. The rebuilding route is
+            // genexus_wwp action=regenerate_derived; if reapply ever runs the engine this must
+            // flip together with the evidence, and the diagnose remediation flips with it.
+            Assert.False(PatternApplyService.PatternRouteCapabilities.WwpReapplyRegenerates);
+            Assert.False(PatternApplyService.PatternRouteCapabilities.IsRegeneratingReapply(Wwp()));
         }
 
         [Fact]
@@ -98,10 +101,8 @@ namespace GxMcp.Worker.Tests
         /// the capability report cannot disagree about the same pattern, which is the
         /// contradiction #352 reported.
         /// </summary>
-        [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public void Diagnose_Remediate_Route_Must_Agree_With_The_Reported_Reapply_Capability(bool regenerates)
+        [Fact]
+        public void Diagnose_Remediate_Route_Must_Agree_With_The_Reported_Reapply_Capability()
         {
             var pattern = NonWwp();
             var caps = typeof(PatternApplyService.PatternRouteCapabilities);
@@ -115,7 +116,6 @@ namespace GxMcp.Worker.Tests
 
             Assert.NotNull(caps);
             Assert.Equal(reapplySupported, remediateClaimsRegeneration);
-            if (regenerates) Assert.True(PatternApplyService.PatternRouteCapabilities.IsRegeneratingReapply(Wwp()));
         }
 
         [Fact]

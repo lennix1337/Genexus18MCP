@@ -194,7 +194,7 @@ namespace GxMcp.Gateway
                     readOnly: new[] { "list", "settings_templates", "settings_read", "list_tabs", "tab_schema" },
                     mutating: new[] { "add_action", "add_user_action", "update_action", "move_action", "remove_action",
                         "add_tab", "move_tab", "remove_tab", "set_table_type", "add_table", "move_control", "add_grid_attribute",
-                        "move_grid_column", "add_grid_variable", "add_grid", "set_combo_properties",
+                        "move_grid_column", "add_grid_variable", "add_grid", "set_combo_properties", "regenerate_derived",
                         "replace_web_component_with_user_action", "settings_edit" }),
                 ["genexus_workwith"] = Contract(
                     readOnly: new[] { "list_actions", "list_filters" },
@@ -285,6 +285,7 @@ namespace GxMcp.Gateway
             "genexus_wwp:add_grid_variable",
             "genexus_wwp:add_grid",
             "genexus_wwp:set_combo_properties",
+            "genexus_wwp:regenerate_derived",
             "genexus_wwp:replace_web_component_with_user_action",
             "genexus_workwith:add_action",
             "genexus_workwith:remove_action",

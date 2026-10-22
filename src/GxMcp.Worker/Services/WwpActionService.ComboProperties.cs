@@ -214,7 +214,8 @@ namespace GxMcp.Worker.Services
                             "After the projection the instance no longer holds the requested combo properties: " + finalVerification["message"],
                             finalVerification);
 
-                    return McpResponse.Ok(target: target, code: "WwpComboPropertiesUpdated", result: new JObject
+                    JObject derivedContract = DescribeDerivedContract(finalInstance ?? currentInstance, finalXml, parent);
+                    var updated = new JObject
                     {
                         ["instance"] = (finalInstance ?? currentInstance).Name,
                         ["parent"] = parent.Name,
@@ -247,8 +248,18 @@ namespace GxMcp.Worker.Services
                         ["lifecycleExecuted"] = false,
                         ["specified"] = false,
                         ["generated"] = false,
-                        ["built"] = false
-                    });
+                        ["built"] = false,
+                        // The projection above updated the parent; the helpers the instance derives are
+                        // separate KB objects this operation does not rebuild. Say whether they still
+                        // agree with the parent's calls instead of leaving that to a later compile error.
+                        ["derivedContract"] = derivedContract
+                    };
+                    if (derivedContract["consistent"]?.Type == JTokenType.Boolean && !(bool)derivedContract["consistent"])
+                        updated["nextSteps"] = new JArray(McpResponse.NextStep(
+                            tool: "genexus_wwp",
+                            args: new JObject { ["action"] = RegenerateDerivedOperation, ["name"] = target, ["dryRun"] = true },
+                            why: "A derived helper no longer matches the calls the parent makes; plan its regeneration."));
+                    return McpResponse.Ok(target: target, code: "WwpComboPropertiesUpdated", result: updated);
                 }
                 catch (Exception ex)
                 {
@@ -280,6 +291,31 @@ namespace GxMcp.Worker.Services
                     if (typed?.Detail != null) extra["detail"] = typed.Detail;
                     return McpResponse.Err(code: typed?.Code ?? "WwpComboFailed", message: ExceptionRoot.Message(ex), target: target, extra: extra);
                 }
+            }
+        }
+
+        // Read-only: do the derived helpers of the instance still agree with the calls the parent
+        // makes? Never fails the write that already succeeded; an unreadable unit is reported as such.
+        private JObject DescribeDerivedContract(KBObject host, string hostXml, KBObject parent)
+        {
+            try
+            {
+                if (WwpDerivedEngine.EnumerateDerived(host).Count == 0)
+                    return new JObject { ["evaluated"] = true, ["derivedObjects"] = 0, ["helpers"] = new JArray(), ["consistent"] = true };
+                DerivedUnit unit = CaptureUnit(host, hostXml, parent);
+                JObject contract = EvaluateContract(unit);
+                return new JObject
+                {
+                    ["evaluated"] = true,
+                    ["derivedObjects"] = unit.Derived.Count,
+                    ["helpers"] = new JArray(unit.Derived.Where(d => d.Helper).Select(d => d.State.Name)),
+                    ["consistent"] = contract["consistent"],
+                    ["details"] = contract["helpers"]
+                };
+            }
+            catch (Exception ex)
+            {
+                return new JObject { ["evaluated"] = false, ["error"] = ExceptionRoot.Message(ex) };
             }
         }
 

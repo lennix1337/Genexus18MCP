@@ -601,14 +601,17 @@ namespace GxMcp.Worker.Services
             /// its own supported routes, so its regeneration claim needs its own constant.
             ///
             /// <para>
-            /// True on the basis that a WWP reapply runs the package's own apply route,
-            /// the same path that produces the generated objects on first apply. This is
-            /// a declared capability, not a measurement from this build: no live WWP
-            /// reapply regeneration was executed for this change, so the diagnostic
-            /// reports the intended route rather than certifying observed output.
+            /// False. The first apply runs the engine and produces the generated objects,
+            /// but for an existing instance <c>ApplyPatternToObject</c> skips the engine
+            /// ("existing host detected - skipping engine reapply") and only re-projects
+            /// the parent with <c>UpdateParentObject</c>. A reapply therefore returns
+            /// <c>PatternApplied</c> while every derived object, such as the
+            /// <c>LoadDVCombo&lt;Trn&gt;</c> helper, keeps the contract it had before the
+            /// instance changed. The route that rebuilds them is
+            /// <c>genexus_wwp action=regenerate_derived</c>.
             /// </para>
             /// </summary>
-            internal const bool WwpReapplyRegenerates = true;
+            internal const bool WwpReapplyRegenerates = false;
 
             /// <summary>
             /// Whether a reapply of <paramref name="pattern"/> regenerates the pattern's
@@ -1235,6 +1238,13 @@ namespace GxMcp.Worker.Services
                 ["generatedObjects"] = new JArray(generated),
                 ["errors"] = new JArray(result?.Errors ?? Enumerable.Empty<string>())
             };
+            // A first apply runs the engine. A reapply of an existing instance only re-projects the
+            // parent, so a derived object (the LoadDVCombo helper, the WW family) is NOT rebuilt:
+            // saying PatternApplied without this would read as "everything is consistent".
+            patternResult["derivedObjectsRegenerated"] = wasFirstApply;
+            if (!wasFirstApply)
+                patternResult["derivedObjectsNote"] = "The existing instance was re-projected onto the parent only; its derived objects "
+                    + "were not rebuilt. Use genexus_wwp action=regenerate_derived to rebuild them and check their call contract.";
 
             // Issue #359: say which expected family members were not observed.
             //
@@ -3641,7 +3651,10 @@ namespace GxMcp.Worker.Services
                     string action = reapplySupported
                         ? (reapplyReconciles
                             ? "Call genexus_apply_pattern with reapply=true to regenerate the existing pattern instance."
-                            : "Call genexus_apply_pattern with reapply=true to re-apply the existing instance; this does not regenerate the pattern's objects.")
+                            : "Call genexus_apply_pattern with reapply=true to re-apply the existing instance; this does not regenerate the pattern's objects."
+                              + (pattern != null && pattern.IsWorkWithPlus
+                                  ? " To rebuild the derived objects of a WorkWithPlus instance use genexus_wwp action=regenerate_derived."
+                                  : string.Empty))
                         : "Do not repeat apply headless: reapply for this pattern is not supported by this MCP build. Apply the pattern in the GeneXus IDE to regenerate the pattern's objects, then re-read the instance with genexus_read part=PatternInstance.";
 
                     var conflict = Finding("overrideConflict", reapplyReconciles ? "warn" : "info",
