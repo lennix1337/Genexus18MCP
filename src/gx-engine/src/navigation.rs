@@ -222,13 +222,11 @@ fn collect_expr_attributes(expr: &Expr, attrs: &mut BTreeSet<String>) {
             collect_expr_attributes(a, attrs);
             collect_expr_attributes(b, attrs);
         }
-        Expr::Call(name, args) => {
-            // Aggregate formula attributes belong to the formula's own query plan;
-            // do not mix their attributes into the enclosing query's base table!
-            if !is_aggregate_call(name) {
-                for arg in args {
-                    collect_expr_attributes(arg, attrs);
-                }
+        // Aggregate formula attributes belong to the formula's own query plan;
+        // do not mix their attributes into the enclosing query's base table!
+        Expr::Call(name, args) if !is_aggregate_call(name) => {
+            for arg in args {
+                collect_expr_attributes(arg, attrs);
             }
         }
         _ => {}

@@ -9,9 +9,21 @@
 
 ### Changed
 
+- **`workwith_persistence_smoke.ps1` removes what it creates.** The durability smoke now removes its filter attribute and condition with `remove_filter_attribute` (and the optional action with `remove_action`), restarts the Worker a second time and checks that the Level's filter reads back equal to its baseline. It refuses to start when the attribute name already exists, cleans up after a failed run without an extra restart, reports `durability` and `cleanup` states in the summary, and exits 1 for a failed or unverified cleanup.
+
 ### Fixed
 
+- **`genexus_query` `fields` sent as text.** A client whose schema did not declare `fields` sent `["name","type"]` as a string, the comma split cut it into `["name"` and `"type"]`, every result was projected to an empty object and a type-only query never reached gx-engine. `fields` is now declared as an array of strings in the input schema, so clients send the array, and a text value holding a JSON array is read as that array when the result is projected. The engine route still requires the array form: a JSON array sent as text stays on the SDK.
+- **WorkWithPlus `add_table` and `move_control` save the object that owns the edited part.** The operations resolved the instance from one read and the edited part from another resolution of the host, which could give two copies of the WorkWithPlus object; the save then left the new table out and `add_table` ended in `WwpTableNotPersisted` while `add_grid` on the same instance persisted. They now take the part from the instance they save, as `add_grid` does. When the re-read still lacks the table, the refusal now states how many tables the plan expected, how many the re-read contains and their names, so a dropped table can be told from a renamed one.
+- **Docs: `GXMCP_ENGINE_BACKEND` default.** `docs/environment_variables.md` listed `sdk` as the default; the Gateway resolves `gxengine` when the variable and `Engine.Backend` are absent. The row now states the default and what `gxengine`, `auto` and `sdk` route.
+
 ### Internal
+
+- CI: each `cargo` command of the gxwire and gx-engine lanes (clippy, fmt, test, build, staging) is its own step, so a failing command can no longer be masked by the one after it; `test-ci-workflow-policy.ps1` rejects a step with several native commands that does not check `$LASTEXITCODE` between them, with mutation checks.
+- gx-engine: the eight `cargo clippy --all-targets -- -D warnings` diagnostics are fixed (`as_chunks`, one collapsed `match` arm, needless borrows). `a_kept_command_builds_a_project_named_by_a_relative_path` builds under the temp folder, or under the nearest parent of the checkout free of ambient MSBuild files when the temp folder is on another drive, and skips locally when no relative path exists; the symlink test skips only on `ERROR_PRIVILEGE_NOT_HELD`. Both fail instead of skipping when `CI` is set.
+- `scripts/run-gate.ps1`: the gate status record is replaced with one atomic `File.Move` and read with a short retry. `Move-Item -Force` left a moment with no file, so a `Wait` racing the writer reported a gate that had just passed as an unreadable path and failed `test-run-gate.ps1` on CI (a concurrent reader failed 4444 of 16403 reads with the old replace and 0 of 2431 with the new one).
+- `WorkerPoolTests`: the drain wait and the cancellation during a drain are separate tests, use a counting spawn factory (no real Worker is started) and the cancellation test no longer races `DrainComplete`.
+- Tool schema budget: `genexus_query.fields` brings `tool_definitions.json` to about 39666 of 39700 tokens (no bump) and the `ui` tool profile to 50098 bytes, so its byte budget moves from 50000 to 50200.
 
 ## v4.0.1 - 2026-10-21
 

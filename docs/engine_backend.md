@@ -341,7 +341,9 @@ its existence is not native MCP read-parity evidence. See
 
 Admitted: one bare `type:X` filter, or `typeFilter` without a `type:` term.
 Calls must explicitly select `fields` limited to `name` and `type`, the only row
-fields supplied by the engine. A supplied `limit` must be 1..200 (default 50).
+fields supplied by the engine. `fields` is an array of strings in the tool schema. A
+JSON array sent as text (`["name","type"]`) is not admitted to the engine: the call
+stays on the SDK, whose compact projection does read it as that array. A supplied `limit` must be 1..200 (default 50).
 `exactMatch` has no effect for a query without a name term. A nonempty external
 `typeFilter` must have no leading/trailing whitespace: the SDK preserves it
 verbatim, so normalization would change its match set. Type tokens use the

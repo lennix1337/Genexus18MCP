@@ -117,6 +117,8 @@ cargo run --manifest-path src/gx-engine/Cargo.toml -- run src/gx-engine/fixtures
 cargo run --manifest-path src/gx-engine/Cargo.toml -- --version
 ```
 
+On Windows two tests of `tests/csc_direct.rs` depend on the host. The symlink test needs Developer Mode or the symlink privilege and skips locally on `ERROR_PRIVILEGE_NOT_HELD`. The relative-project-path test builds under the temp folder, or under the nearest parent of the checkout that has no ambient MSBuild or analyzer file when the temp folder is on another drive (the checkout itself sits under `Directory.Build.props`, which the direct path refuses), and skips locally when none shares a root with the crate folder. A skip is a message on stderr, not an ignored test; when `CI` is set both fail instead of skipping, so the coverage cannot quietly disappear from the pipeline.
+
 `check` validates admitted source and emits nothing executable. `emit` prints generated Rust; `build` prints the native executable path. The compiler version probe has a ten-second deadline; native compilation has a 120-second deadline. `run` then executes **authored code**, inheriting the console and enforcing a separate ten-second execution deadline. Compiler timeout cleanup targets the owned process tree on Windows; descendant cleanup on other platforms is not guaranteed. Timeouts are not memory/disk quotas or a sandbox. Only use trusted projects, especially as the language grows.
 
 ## Host integration (experimental)

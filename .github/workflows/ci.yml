@@ -204,11 +204,19 @@ jobs:
           restore-keys: |
             gxwire-${{ runner.os }}-${{ steps.rust.outputs.version }}-
 
-      - name: Build and test gxwire engine
+      # One native command per step: a step's exit code is the last native command's, so a
+      # failing `cargo test` followed by a passing command would leave the step green.
+      - name: Test gxwire engine
+        shell: pwsh
+        run: cargo test --manifest-path src/gxwire/Cargo.toml
+
+      - name: Build gxwire engine
+        shell: pwsh
+        run: cargo build --release --manifest-path src/gxwire/Cargo.toml
+
+      - name: Stage gxwire engine
         shell: pwsh
         run: |
-          cargo test --manifest-path src/gxwire/Cargo.toml
-          cargo build --release --manifest-path src/gxwire/Cargo.toml
           New-Item -ItemType Directory -Path publish -Force | Out-Null
           Copy-Item src/gxwire/target/release/gxwire.exe -Destination publish/gxwire.exe -Force
 
@@ -238,17 +246,26 @@ jobs:
           restore-keys: |
             gx-engine-${{ runner.os }}-${{ steps.rust.outputs.version }}-
 
-      - name: Lint and format gx-engine
+      # One native command per step, as in the gxwire lane above.
+      - name: Lint gx-engine
         shell: pwsh
-        run: |
-          cargo clippy --manifest-path src/gx-engine/Cargo.toml --all-targets -- -D warnings
-          cargo fmt --manifest-path src/gx-engine/Cargo.toml --check
+        run: cargo clippy --manifest-path src/gx-engine/Cargo.toml --all-targets -- -D warnings
 
-      - name: Build and test gx-engine
+      - name: Check gx-engine formatting
+        shell: pwsh
+        run: cargo fmt --manifest-path src/gx-engine/Cargo.toml --check
+
+      - name: Test gx-engine
+        shell: pwsh
+        run: cargo test --manifest-path src/gx-engine/Cargo.toml
+
+      - name: Build gx-engine
+        shell: pwsh
+        run: cargo build --release --manifest-path src/gx-engine/Cargo.toml
+
+      - name: Stage gx-engine
         shell: pwsh
         run: |
-          cargo test --manifest-path src/gx-engine/Cargo.toml
-          cargo build --release --manifest-path src/gx-engine/Cargo.toml
           New-Item -ItemType Directory -Path publish -Force | Out-Null
           Copy-Item src/gx-engine/target/release/gx-engine.exe -Destination publish/gx-engine.exe -Force
 

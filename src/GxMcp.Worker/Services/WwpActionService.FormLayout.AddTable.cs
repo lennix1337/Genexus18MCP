@@ -357,7 +357,8 @@ namespace GxMcp.Worker.Services
             List<XElement> tables = persisted.Descendants().Where(e => Is(e, "table")
                 && string.Equals(Attr(e, "name"), tableName, StringComparison.OrdinalIgnoreCase)).ToList();
             if (tables.Count != 1)
-                return NotConfirmed("The re-read PatternInstance contains table '" + tableName + "' " + tables.Count + " time(s) instead of once.");
+                return NotConfirmed("The re-read PatternInstance contains table '" + tableName + "' " + tables.Count + " time(s) instead of once. "
+                    + DescribeTablesForDiagnostics(planned, persisted));
             XElement table = tables[0];
             if (!string.Equals(ContainerPath(table.Parent), containerPath, StringComparison.OrdinalIgnoreCase))
                 return NotConfirmed("The re-read table '" + tableName + "' is under '" + ContainerPath(table.Parent) + "' instead of '" + containerPath + "'.");
@@ -392,6 +393,23 @@ namespace GxMcp.Worker.Services
                     forbidden.Add(new KeyValuePair<XElement, string>(source, identifier));
             }
             return VerifyOrderedLists(planned.Root, persisted.Root, plannedTable, table, requiredIdentifier: tableName, forbidden: forbidden);
+        }
+
+        // A table that is missing after the save is either absent (the SDK dropped it) or present
+        // under another identity (the SDK renamed it); the count and the names tell which, so the
+        // next report does not have to be reproduced to find out.
+        internal static string DescribeTablesForDiagnostics(XDocument planned, XDocument persisted)
+        {
+            const int Limit = 20;
+            List<XElement> plannedTables = planned.Descendants().Where(e => Is(e, "table")).ToList();
+            List<XElement> persistedTables = persisted.Descendants().Where(e => Is(e, "table")).ToList();
+            string listed = string.Join("; ", persistedTables.Take(Limit).Select(t =>
+            {
+                string name = Attr(t, "name");
+                return (string.IsNullOrEmpty(name) ? "(unnamed)" : name) + " under '" + ContainerPath(t.Parent) + "'";
+            }));
+            return "Tables expected from the plan: " + plannedTables.Count + "; tables in the re-read PatternInstance: " + persistedTables.Count
+                + (persistedTables.Count == 0 ? "." : " (" + listed + (persistedTables.Count > Limit ? "; ..." : "") + ").");
         }
 
         internal static JObject VerifyAddedTableProjection(string webForm, JObject plan)

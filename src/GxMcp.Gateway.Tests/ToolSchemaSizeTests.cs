@@ -291,12 +291,14 @@ namespace GxMcp.Gateway.Tests
         // the property names, types, enums and 40-character published descriptions of the new
         // genexus_wwp/genexus_workwith/genexus_wire inputs, which cannot shrink without changing
         // the schema. Headroom over the measured size is ~132 / ~126 bytes.
+        // genexus_query.fields (#637: clients that did not see the array sent it as text): ui 50000 -> 50200
+        // (measured 50098), the only profile that crossed its budget; the token budget above does not move.
         [InlineData("all", 102750)]
         [InlineData("core", 27000)]
         [InlineData("standard", 61000)]
         [InlineData("authoring", 71200)]
         [InlineData("devops", 52500)]
-        [InlineData("ui", 50000)]
+        [InlineData("ui", 50200)]
         [InlineData("db", 40000)]
         public void PublishedToolProfileStaysWithinItsByteBudget(string profile, int maxBytes)
         {

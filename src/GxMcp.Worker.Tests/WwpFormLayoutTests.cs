@@ -261,7 +261,16 @@ namespace GxMcp.Worker.Tests
 
             XDocument missing = Persisted(planned);
             Table(missing, "tableOp").Remove();
-            Assert.Contains("0 time(s)", (string)WwpActionService.VerifyAddedTable(planned, missing, plan)["message"]);
+            string missingMessage = (string)WwpActionService.VerifyAddedTable(planned, missing, plan)["message"];
+            Assert.Contains("0 time(s)", missingMessage);
+            // The refusal says whether the SDK dropped the table or kept it under another name.
+            Assert.Contains("Tables expected from the plan: 5; tables in the re-read PatternInstance: 4", missingMessage);
+
+            XDocument renamed = Persisted(planned);
+            Table(renamed, "tableOp").SetAttributeValue("name", "tableOp_1");
+            string renamedMessage = (string)WwpActionService.VerifyAddedTable(planned, renamed, plan)["message"];
+            Assert.Contains("0 time(s)", renamedMessage);
+            Assert.Contains("tableOp_1 under 'TableMain/TableContent'", renamedMessage);
 
             XDocument elsewhere = Persisted(planned);
             XElement table = Table(elsewhere, "tableOp");

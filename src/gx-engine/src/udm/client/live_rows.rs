@@ -118,7 +118,9 @@ pub(super) fn decode_hex_value(hex: &str, declared_len: usize) -> Result<Vec<u8>
     };
     let mut invalid = 0u8;
     let data: Vec<u8> = digits
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let (high, low) = (TABLE[pair[0] as usize], TABLE[pair[1] as usize]);
             invalid |= (high | low) & 0xF0;
