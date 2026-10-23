@@ -314,6 +314,53 @@ still clear it before changing scope, so concurrent readers can see unknown.
 Snapshot RPCs reserve the already-ready Worker by identity, never acquire or
 respawn one, and bound both send and response to one two-second budget.
 
+#### Why a build in a KB with versions still runs on the SDK (issue #637)
+
+Naming the trunk (`--design-model 1 --kb-version 0`) does not unlock a build:
+`select_design_model` refuses every build when the KB has more than one Design
+model, and a KB that has ever had a version has at least two. Three separate
+things stand behind that refusal, and the first one is only the visible one:
+
+1. **The guard.** `ScopeUse::Build` requires `designs.len() == 1`
+   (`src/gx-engine/src/udm/version_scope.rs`).
+2. **Environment models.** After the guard, the same function refuses a KB where an
+   environment model (`ModelParentId` different from the selected Design model)
+   generates another version's Design model. A versioned KB normally has one
+   environment per version.
+3. **The facts a build reads are not scoped to a model.** `attribute_facts`,
+   `subtype_groups`, `table_keys`, `design_system_classes`,
+   `translation_messages`, `language_names`, `default_web_theme` and
+   `stored_model_properties` (`src/gx-engine/src/udm/client/kb_facts.rs`) take the
+   latest `EntityVersion` of each entity, or every model's row, instead of the
+   version the Design model sees. A branch that edits an attribute title, a table
+   key or a stored property would change what a trunk build emits.
+
+What the storage of a disposable KB with two Design models (trunk plus version 2;
+read-only `SELECT`s, 2026-10-23) says about pinning them:
+
+- `ModelEntityVersion`, which the readers use for objects and parts, is not a pin
+  for these facts: for the trunk model it lists 72 of the 237 Attributes and none
+  of the Groups, `DesignSystemClass`, `TranslationMessage` or `Udm.Types.Property`
+  entities.
+- `ModelEntityHistory` keeps one history per model for Attribute, Group, Table,
+  Domain, SDT, Image, DesignSystem and Language (every entity of those types has
+  entries for the trunk model; the branch has 17 entries in total), and its latest
+  entry names the same `EntityVersionId` as `MAX(EntityVersionId)` for all of them
+  except one Image. `DesignSystemClass`, `TranslationMessage` and the property
+  entities have no history in any model. Whether the latest history entry of a model
+  is the version the SDK shows for that model is not established: the branch of that
+  KB never changed any of these entities, so the data cannot tell a pin from a
+  coincidence.
+
+The refusal therefore stays, and v4.0.1 behavior is unchanged. A safe change is
+three steps, each reviewable on its own: (1) read the per-model version of each fact
+through `ModelEntityHistory` and compare it with the latest version, refusing, by
+fact family and count, only when they differ; (2) choose the environment models of
+the selected Design model instead of refusing the others; (3) relax the guard only
+after a build of a KB with a version that edits one of those entities matches the
+SDK's output. Step 3 needs a disposable KB whose branch edits an attribute, a table
+and a stored property; the current one has none.
+
 Stored model properties are decoded as full XML, including formatted integer
 values. Missing `KBVersion` (trunk default) is distinct from duplicated, malformed
 or non-scalar metadata, which refuses the operation. Legacy catalog commands
@@ -341,7 +388,9 @@ its existence is not native MCP read-parity evidence. See
 
 Admitted: one bare `type:X` filter, or `typeFilter` without a `type:` term.
 Calls must explicitly select `fields` limited to `name` and `type`, the only row
-fields supplied by the engine. A supplied `limit` must be 1..200 (default 50).
+fields supplied by the engine. `fields` is an array of strings in the tool schema. A
+JSON array sent as text (`["name","type"]`) is not admitted to the engine: the call
+stays on the SDK, whose compact projection does read it as that array. A supplied `limit` must be 1..200 (default 50).
 `exactMatch` has no effect for a query without a name term. A nonempty external
 `typeFilter` must have no leading/trailing whitespace: the SDK preserves it
 verbatim, so normalization would change its match set. Type tokens use the

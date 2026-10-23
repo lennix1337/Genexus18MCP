@@ -89,6 +89,64 @@ foreach ($workflowFile in Get-ChildItem -LiteralPath (Join-Path $root '.github/w
     Assert-Policy ($text -notmatch '(?m)^\s*continue-on-error\s*:') "$($workflowFile.Name) must not mask failures with continue-on-error."
 }
 
+# A pwsh step exits with the code of the LAST native command, so a failing native command followed
+# by a passing one leaves the step green (the gx-engine lane once ran 8 clippy errors and a failed
+# test green). Every native command of a multi-command step must be followed by an explicit
+# $LASTEXITCODE check; a step with a single native command needs none.
+function Get-WorkflowSteps([string]$Workflow) {
+    @([regex]::Split($Workflow, '(?m)^      - (?=name:|uses:)') | Select-Object -Skip 1)
+}
+
+function Get-StepRunLines([string]$Step) {
+    $lines = @($Step -split '\r?\n')
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -notmatch '^        run:\s*(?<inline>.*)$') { continue }
+        $inline = $Matches['inline'].Trim()
+        $body = @()
+        if ($inline -and $inline -notmatch '^[|>][-+]?$') { $body += $inline }
+        for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+            if ($lines[$j].Trim() -and $lines[$j] -notmatch '^          ') { break }
+            $body += $lines[$j].Trim()
+        }
+        return @($body | Where-Object { $_ -and -not $_.StartsWith('#') })
+    }
+    return @()
+}
+
+function Test-NativeCommandExitCodes([string]$Workflow) {
+    $errors = @()
+    foreach ($step in (Get-WorkflowSteps $Workflow)) {
+        $name = [regex]::Match($step, '(?m)^name:\s*(?<n>.+?)\s*$').Groups['n'].Value
+        $lines = @(Get-StepRunLines $step)
+        $native = @(for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^(cargo|python|dotnet|npm|node)(\.exe)?\s') { $i }
+        })
+        foreach ($index in ($native | Select-Object -SkipLast 1)) {
+            $next = if ($index + 1 -lt $lines.Count) { $lines[$index + 1] } else { '' }
+            if ($next -notmatch '\$LASTEXITCODE') {
+                $errors += "step '$name' runs '$($lines[$index])' without checking `$LASTEXITCODE before the next command"
+            }
+        }
+    }
+    return $errors
+}
+
+Assert-Policy (@(Get-WorkflowSteps $ci).Count -gt 20) 'the step parser must find the workflow steps.'
+Assert-Policy (@(Test-NativeCommandExitCodes $ci).Count -eq 0) ("native command exit codes: " + (@(Test-NativeCommandExitCodes $ci) -join '; '))
+foreach ($lane in @('gxwire', 'gx-engine')) {
+    Assert-Policy ($ci -match "(?m)^        run: cargo test --manifest-path src/$lane/Cargo.toml\s*$") "the $lane lane must run cargo test as a step of its own."
+}
+Assert-Policy ($ci -match '(?m)^        run: cargo clippy --manifest-path src/gx-engine/Cargo.toml --all-targets -- -D warnings\s*$') 'the gx-engine lint must be a step of its own (-D warnings).'
+$mergedCargo = [regex]::Replace($ci, '(?m)^        run: (cargo clippy [^\r\n]+)\r?\n', [System.Text.RegularExpressions.MatchEvaluator] {
+    param($match)
+    "        run: |`n          $($match.Groups[1].Value)`n          cargo fmt --manifest-path src/gx-engine/Cargo.toml --check`n"
+})
+Assert-Policy ($mergedCargo -ne $ci) 'mutation setup: clippy and fmt were not merged.'
+Assert-Policy (@(Test-NativeCommandExitCodes $mergedCargo).Count -gt 0) 'two cargo commands in one step without an exit-code check were not detected.'
+$guardedCargo = $mergedCargo -replace '(?m)^(          cargo clippy [^\r\n]+)\r?\n', "`$1`n          if (`$LASTEXITCODE -ne 0) { throw 'clippy failed' }`n"
+Assert-Policy ($guardedCargo -ne $mergedCargo) 'mutation setup: the exit-code check was not added.'
+Assert-Policy (@(Test-NativeCommandExitCodes $guardedCargo).Count -eq 0) 'an explicit $LASTEXITCODE check after the first cargo command must satisfy the rule.'
+
 # Publication workflow: gate precedes every trust decision, and nothing can bypass it.
 $gateIndex = $release.IndexOf('name: Verify release commit identity and required checks')
 Assert-Policy ($gateIndex -ge 0) 'release.yml must verify the release commit identity and required checks.'

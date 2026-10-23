@@ -238,12 +238,23 @@ namespace GxMcp.Worker.Services
             MethodInfo executeUpdate = part.GetType().GetMethod("ExecuteUpdate",
                 BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(string), typeof(Action) }, null);
             int? insertIndex = null;
+            bool sameContainer = ReferenceEquals(source, target);
             Action mutation = () =>
             {
                 insertIndex = ResolveNativeInsertIndex(target, args, element);
-                ExecuteElementCommand(source, element, "RemoveElementCommand", NativeChildren(source).IndexOf(element));
-                if (insertIndex.HasValue) ExecuteElementCommand(target, element, "InsertElementCommand", insertIndex.Value);
-                else ExecuteElementCommand(target, element, "AddElementCommand", null);
+                if (sameContainer)
+                {
+                    ExecuteElementCommand(source, element, "RemoveElementCommand", NativeChildren(source).IndexOf(element));
+                    if (insertIndex.HasValue) ExecuteElementCommand(target, element, "InsertElementCommand", insertIndex.Value);
+                    else ExecuteElementCommand(target, element, "AddElementCommand", null);
+                }
+                else
+                {
+                    MoveNativeElement(element, target);
+                    int appended = NativeChildren(target).IndexOf(element);
+                    if (insertIndex.HasValue && appended != insertIndex.Value)
+                        ExecuteMoveCommand(target, element, appended, insertIndex.Value);
+                }
                 foreach (var edit in orderingEdits) SetNativeAttribute(edit.Key, "childrenOrderedList", edit.Value["after"].ToString());
             };
             if (executeUpdate != null) executeUpdate.Invoke(part, new object[] { "genexus_wwp move_control", mutation });
@@ -252,7 +263,9 @@ namespace GxMcp.Worker.Services
             return new JObject
             {
                 ["changed"] = true,
-                ["sdkOperation"] = "RemoveElementCommand + " + (insertIndex.HasValue ? "InsertElementCommand" : "AddElementCommand")
+                ["sdkOperation"] = sameContainer
+                    ? "RemoveElementCommand + " + (insertIndex.HasValue ? "InsertElementCommand" : "AddElementCommand")
+                    : "PatternInstanceElement.MoveElement" + (insertIndex.HasValue ? " + MoveElementCommand" : string.Empty)
             };
         }
 

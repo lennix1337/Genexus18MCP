@@ -397,7 +397,7 @@ fn item(
 
     let data_type = match (based_on, custom) {
         (Some(target), None) => {
-            let domain_id = domain_id_of(target).map_err(&refuse)?;
+            let domain_id = domain_id_of(target).map_err(refuse)?;
             let Some(data_type) = (lookup.domain_type)(domain_id) else {
                 return Err(refuse(format!(
                     "based on '{target}': the domain has no stored type this engine maps"
@@ -411,16 +411,16 @@ fn item(
                 "based on '{target}' together with a declared type is not mapped"
             )));
         }
-        (None, None) => untyped_item(&props, lookup.sdt_name).map_err(&refuse)?,
+        (None, None) => untyped_item(&props, lookup.sdt_name).map_err(refuse)?,
         (None, Some(fragment)) => {
-            let (code, reference) = attcustomtype(fragment).map_err(&refuse)?;
+            let (code, reference) = attcustomtype(fragment).map_err(refuse)?;
             let row = evidenced_length(&code, &props);
             let data_type =
-                decode_type(&code, reference.as_deref(), &row, lookup.sdt_name).map_err(&refuse)?;
+                decode_type(&code, reference.as_deref(), &row, lookup.sdt_name).map_err(refuse)?;
             if let DataType::Record { .. } = data_type {
                 let reference = reference
                     .ok_or_else(|| refuse("SDT item has no StructureTypeReference".into()))?;
-                let (type_guid, sdt_id) = structure_ref(&reference).map_err(&refuse)?;
+                let (type_guid, sdt_id) = structure_ref(&reference).map_err(refuse)?;
                 if !type_guid.eq_ignore_ascii_case(SDT_TYPE_GUID) {
                     return Err(refuse(format!(
                         "structure type {type_guid} is not an SDT type this engine reads (nested SDT levels are not mapped)"

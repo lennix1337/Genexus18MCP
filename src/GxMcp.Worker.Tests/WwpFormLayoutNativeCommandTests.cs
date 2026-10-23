@@ -72,7 +72,11 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("Responsive", table.Attributes.GetPropertyValueString("defaultType"));
             Assert.IsType<int>(table.Attributes.GetPropertyValue("numberOfColumns"));
             Assert.Equal(3, table.Attributes.GetPropertyValue("numberOfColumns"));
-            Assert.Equal("True", table.Attributes.GetPropertyValueString("includeInPanel"));
+            // The pattern declares includeInPanel as bool: a string value makes the WorkWithPlus table
+            // element fail its cast when it reads the property back (issue #638).
+            Assert.IsType<bool>(table.Attributes.GetPropertyValue("includeInPanel"));
+            Assert.Equal(true, table.Attributes.GetPropertyValue("includeInPanel"));
+            Assert.IsType<bool>(table.Attributes.GetPropertyValue("defaultIncludeInPanel"));
             Assert.Equal("Options", table.Attributes.GetPropertyValueString("panelTitle"));
             Assert.Equal(new[] { "textBlock", "attribute" }, table.Children.Items.Select(c => c.Type));
             Assert.Equal("[C] Consulta", table.Children.Items[0].Attributes.GetPropertyValueString("caption"));
@@ -147,10 +151,53 @@ namespace GxMcp.Worker.Tests
             Assert.Null(result["error"]);
             Assert.Equal(1, part.Updates);
             Assert.Same(legend, target.Children.Items[0]);
+            // Between two containers the element changes parent through MoveElement; Remove + Add alone
+            // leave Parent on the old table and the SDK refuses the add (issue #638).
+            Assert.Same(target, legend.Parent);
+            Assert.Equal("PatternInstanceElement.MoveElement + MoveElementCommand", (string)result["sdkOperation"]);
             Assert.Equal(new[] { "Legend", "opcoes1" }, target.Children.Items.Select(c => c.Attributes.GetPropertyValueString("controlName")));
             Assert.Equal(new[] { "attribute" }, attributes.Children.Items.Select(c => c.Type));
             Assert.Equal("2;22;A", attributes.Attributes.GetPropertyValueString("childrenOrderedList"));
             Assert.Equal("2;27;Legend-2;27;opcoes1", target.Attributes.GetPropertyValueString("childrenOrderedList"));
+        }
+
+        [Fact]
+        public void NativeMoveControl_WithoutPlacementBetweenContainers_AppendsTheReparentedElement()
+        {
+            Part part = Form(out Element content, out Element attributes);
+            Element target = Child(content, "table", ("name", "tableOp"));
+            Child(target, "textBlock", ("controlName", "opcoes1"), ("caption", "[C]"));
+            string xml = Xml.Replace("</table></table></table></transaction>",
+                "</table><table name='tableOp'><textBlock controlName='opcoes1' caption='[C]'/></table></table></table></transaction>");
+            JObject args = JObject.Parse("{controlName:'Legend',tableName:'tableOp'}");
+            JObject plan = WwpActionService.PlanMoveControlXml(XDocument.Parse(xml), args);
+            Assert.Null(plan["error"]);
+            Element legend = attributes.Children.Items[1];
+
+            JObject result = WwpActionService.ApplyNativeMoveControl(part, args, plan);
+
+            Assert.Null(result["error"]);
+            Assert.Same(target, legend.Parent);
+            Assert.Same(legend, target.Children.Items.Last());
+            Assert.Equal("PatternInstanceElement.MoveElement", (string)result["sdkOperation"]);
+            Assert.DoesNotContain(legend, attributes.Children.Items);
+        }
+
+        [Fact]
+        public void NativeMoveControl_InsideOneContainer_RepositionsWithoutChangingTheParent()
+        {
+            Part part = Form(out _, out Element attributes);
+            JObject args = JObject.Parse("{controlName:'Legend',tableName:'TableAttributes',position:0}");
+            JObject plan = WwpActionService.PlanMoveControlXml(XDocument.Parse(Xml), args);
+            Assert.Null(plan["error"]);
+            Element legend = attributes.Children.Items[1];
+
+            JObject result = WwpActionService.ApplyNativeMoveControl(part, args, plan);
+
+            Assert.Null(result["error"]);
+            Assert.Same(attributes, legend.Parent);
+            Assert.Same(legend, attributes.Children.Items[0]);
+            Assert.Equal("RemoveElementCommand + InsertElementCommand", (string)result["sdkOperation"]);
         }
 
         [Theory]

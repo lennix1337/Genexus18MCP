@@ -244,7 +244,7 @@ namespace GxMcp.Worker.Services
                 SetNativeAttribute(table, "name", request.TableName);
                 SetNativePair(table, "type", request.TableType);
                 SetNativeNumberPair(table, "numberOfColumns", request.NumberOfColumns);
-                if (request.IncludeInPanel.HasValue) SetNativePair(table, "includeInPanel", request.IncludeInPanel.Value ? "True" : "False");
+                if (request.IncludeInPanel.HasValue) SetNativeBoolPair(table, "includeInPanel", request.IncludeInPanel.Value);
                 if (request.PanelTitle != null) SetNativeAttribute(table, "panelTitle", request.PanelTitle);
                 foreach (JObject child in request.Children?.OfType<JObject>() ?? Enumerable.Empty<JObject>())
                     AttachNativeControl(table, child, scope, requestedAttributes);
@@ -286,9 +286,17 @@ namespace GxMcp.Worker.Services
 
         // numberOfColumns is declared as a number by the pattern; a string is the fallback for
         // a package that declares it as text. Either way the default twin follows.
-        private static void SetNativeNumberPair(object element, string name, int value)
+        private static void SetNativeNumberPair(object element, string name, int value) =>
+            SetNativeTypedPair(element, name, value, value.ToString(CultureInfo.InvariantCulture));
+
+        // includeInPanel is a bool attribute of the pattern: the string "True" is stored as a string
+        // and the table element fails its cast when it reads the property back (InvalidCastException
+        // in GeneralTableElement on a real WorkWithPlus package), so the bool itself is stored.
+        private static void SetNativeBoolPair(object element, string name, bool value) =>
+            SetNativeTypedPair(element, name, value, value ? "True" : "False");
+
+        private static void SetNativeTypedPair(object element, string name, object value, string text)
         {
-            string text = value.ToString(CultureInfo.InvariantCulture);
             foreach (string attribute in new[] { name, "default" + char.ToUpperInvariant(name[0]) + name.Substring(1) })
             {
                 bool applied;
@@ -357,7 +365,8 @@ namespace GxMcp.Worker.Services
             List<XElement> tables = persisted.Descendants().Where(e => Is(e, "table")
                 && string.Equals(Attr(e, "name"), tableName, StringComparison.OrdinalIgnoreCase)).ToList();
             if (tables.Count != 1)
-                return NotConfirmed("The re-read PatternInstance contains table '" + tableName + "' " + tables.Count + " time(s) instead of once.");
+                return NotConfirmed("The re-read PatternInstance contains table '" + tableName + "' " + tables.Count + " time(s) instead of once. "
+                    + DescribeTablesForDiagnostics(planned, persisted));
             XElement table = tables[0];
             if (!string.Equals(ContainerPath(table.Parent), containerPath, StringComparison.OrdinalIgnoreCase))
                 return NotConfirmed("The re-read table '" + tableName + "' is under '" + ContainerPath(table.Parent) + "' instead of '" + containerPath + "'.");
@@ -392,6 +401,23 @@ namespace GxMcp.Worker.Services
                     forbidden.Add(new KeyValuePair<XElement, string>(source, identifier));
             }
             return VerifyOrderedLists(planned.Root, persisted.Root, plannedTable, table, requiredIdentifier: tableName, forbidden: forbidden);
+        }
+
+        // A table that is missing after the save is either absent (the SDK dropped it) or present
+        // under another identity (the SDK renamed it); the count and the names tell which, so the
+        // next report does not have to be reproduced to find out.
+        internal static string DescribeTablesForDiagnostics(XDocument planned, XDocument persisted)
+        {
+            const int Limit = 20;
+            List<XElement> plannedTables = planned.Descendants().Where(e => Is(e, "table")).ToList();
+            List<XElement> persistedTables = persisted.Descendants().Where(e => Is(e, "table")).ToList();
+            string listed = string.Join("; ", persistedTables.Take(Limit).Select(t =>
+            {
+                string name = Attr(t, "name");
+                return (string.IsNullOrEmpty(name) ? "(unnamed)" : name) + " under '" + ContainerPath(t.Parent) + "'";
+            }));
+            return "Tables expected from the plan: " + plannedTables.Count + "; tables in the re-read PatternInstance: " + persistedTables.Count
+                + (persistedTables.Count == 0 ? "." : " (" + listed + (persistedTables.Count > Limit ? "; ..." : "") + ").");
         }
 
         internal static JObject VerifyAddedTableProjection(string webForm, JObject plan)

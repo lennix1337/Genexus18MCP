@@ -36,12 +36,19 @@ function Write-Status {
     param([hashtable]$Value)
     $temp = "$statusPath.tmp"
     [IO.File]::WriteAllText($temp, ($Value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temp -Destination $statusPath -Force
+    # One atomic replace: Move-Item -Force can leave a moment with no file, and a Wait that reads then
+    # reported a gate that had just passed as an unreadable path.
+    [IO.File]::Move($temp, $statusPath, $true)
 }
 
 function Read-Status {
     if (-not (Test-Path -LiteralPath $statusPath -PathType Leaf)) { return $null }
-    return Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+    # The writer replaces the record while a Wait may be reading it; a read that loses that race
+    # (sharing violation, or the file swapped away) is retried instead of failing the gate.
+    for ($attempt = 1; ; $attempt++) {
+        try { return Get-Content -LiteralPath $statusPath -Raw -ErrorAction Stop | ConvertFrom-Json }
+        catch { if ($attempt -ge 20) { throw }; Start-Sleep -Milliseconds 50 }
+    }
 }
 
 switch ($Action) {

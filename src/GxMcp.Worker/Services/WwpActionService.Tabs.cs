@@ -68,8 +68,13 @@ namespace GxMcp.Worker.Services
                 KBObject lockedTarget = _objects.FindObject(target) ?? requestedObject;
                 string currentXml = _patterns.ReadPatternPartXml(lockedTarget, "PatternInstance", PatternRegistry.WorkWithPlusPatternId,
                     out KBObject currentInstance, out _);
-                _patterns.BuildPatternPartEnvelope(lockedTarget, "PatternInstance", currentXml, PatternRegistry.WorkWithPlusPatternId,
-                    out _, out KBObjectPart currentPart);
+                if (currentInstance == null || string.IsNullOrWhiteSpace(currentXml))
+                    return BuildWwpInstanceNotResolvable(target);
+                // The part is resolved from the instance that was read (issue #638): resolving it from
+                // the requested host yields another copy of the WorkWithPlus object, and saving one copy
+                // with the other's part persists nothing.
+                _patterns.BuildPatternPartEnvelope(currentInstance, "PatternInstance", currentXml, PatternRegistry.WorkWithPlusPatternId,
+                    out currentInstance, out KBObjectPart currentPart);
                 if (currentInstance == null || currentPart == null || string.IsNullOrWhiteSpace(currentXml))
                     return BuildWwpInstanceNotResolvable(target);
 
@@ -638,9 +643,9 @@ namespace GxMcp.Worker.Services
             ExecuteElementCommand(tab, table, "AddElementCommand", null);
         }
 
-        // Native twin of MoveFormAttributesIntoTab: the existing element is detached from its
-        // table with RemoveElementCommand and re-attached under the tab, so its typed
-        // reference and every other attribute travel with it. Returns false when the
+        // Native twin of MoveFormAttributesIntoTab: the existing element is moved from its
+        // table to the tab (MoveNativeElement), so its typed reference and every other
+        // attribute travel with it. Returns false when the
         // attribute is not on the form yet and a new element has to be created.
         private static bool MoveNativeFormAttribute(object parent, JObject control, string attName, object scope, List<string> requestedAttributes)
         {
@@ -656,9 +661,8 @@ namespace GxMcp.Worker.Services
             if (sources.Count == 0) return false;
             object existing = sources[0].Key;
             object sourceTable = sources[0].Value;
-            ExecuteElementCommand(sourceTable, existing, "RemoveElementCommand", NativeChildren(sourceTable).IndexOf(existing));
+            MoveNativeElement(existing, parent);
             SetNativePair(existing, "description", control["description"]);
-            ExecuteElementCommand(parent, existing, "AddElementCommand", null);
             return true;
         }
 
@@ -747,6 +751,20 @@ namespace GxMcp.Worker.Services
             object command = Activator.CreateInstance(commandType, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
                 null, new object[] { parent, child, oldIndex, newIndex }, null);
             ExecuteCommand(command, "MoveElementCommand");
+        }
+
+        // An existing element changes container through PatternInstanceElement.MoveElement: it detaches
+        // the element, re-parents it (ChangeParentCommand) and adds it to the new parent. Removing it
+        // with RemoveElementCommand and adding it with AddElementCommand leaves Parent on the old
+        // container, and the SDK refuses the add ("textBlock cannot be added as child of 'table'").
+        private static void MoveNativeElement(object element, object newParent)
+        {
+            MethodInfo move = element.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(m => m.Name == "MoveElement" && m.GetParameters().Length == 1
+                    && m.GetParameters()[0].ParameterType.IsInstanceOfType(newParent));
+            if (move == null)
+                throw new WwpTabException("WwpNativeMutationRejected", "PatternInstanceElement.MoveElement is unavailable in this WorkWithPlus package.");
+            move.Invoke(element, new[] { newParent });
         }
 
         private static void ExecuteCommand(object command, string name)

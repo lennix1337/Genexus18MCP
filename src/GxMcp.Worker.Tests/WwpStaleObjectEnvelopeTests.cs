@@ -209,8 +209,9 @@ namespace GxMcp.Worker.Tests
 
                 Assert.True(SourceAssert.Count(source, "_patterns.ReadPatternPartXml(lockedTarget, \"PatternInstance\"") == 1, file + ": read site");
                 Assert.True(SourceAssert.Count(source, "lock (WriteService.AcquirePerTargetLock(target))") == 1, file + ": lock");
-                int expectedRefusals = file == "WwpActionService.FormActions.cs" ? 2 : 1;
-                Assert.True(SourceAssert.Count(source, "return BuildWwpInstanceNotResolvable(target);") == expectedRefusals, file + ": unresolvable refusal");
+                // Two refusals: the read must resolve an instance before the part is looked up from it,
+                // and the lookup must resolve a part (issue #638).
+                Assert.True(SourceAssert.Count(source, "return BuildWwpInstanceNotResolvable(target);") == 2, file + ": unresolvable refusal");
             }
 
             Assert.Contains("It is deliberately NOT single-sourced.", Read("WwpActionService.Grid.cs"));
@@ -235,15 +236,26 @@ namespace GxMcp.Worker.Tests
             {
                 string source = SourceAssert.NormaliseNewlines(RepoSource.WithoutComments(Read(file)));
                 Assert.True(source.IndexOf("resolvedCurrentObject", StringComparison.Ordinal) < 0, file + ": unused local is back");
-                string ownerOutput = file == "WwpActionService.FormActions.cs"
-                    ? "out currentInstance, out KBObjectPart currentPart)" : "out _, out KBObjectPart currentPart)";
-                Assert.True(SourceAssert.Count(source, ownerOutput) == 1, file + ": envelope owner");
+                // The owner of the part is the instance that is saved; discarding it ("out _") is what left
+                // add_table, set_table_type and the other typed writes unpersisted for a host target (#638).
+                Assert.True(SourceAssert.Count(source, "out currentInstance, out KBObjectPart currentPart)") == 1, file + ": envelope owner");
+                Assert.True(SourceAssert.Count(source, "out _, out KBObjectPart currentPart)") == 0, file + ": envelope owner discarded");
             }
         }
 
+        // With the Transaction/WebPanel that hosts the pattern as target the SDK hands out one copy of the
+        // WorkWithPlus object per resolution, so the part must come from the instance that was read and
+        // that instance is the one saved. Proved on a real WorkWithPlus package: resolving the part from
+        // the requested host made add_table (WwpTableNotPersisted) and set_table_type
+        // (WwpTableTypeNotPersisted) roll back every time (issue #638).
         [Theory]
         [InlineData("WwpActionService.FormActions.cs", "private string RunFormUserActionOperation(")]
         [InlineData("WwpActionService.AddGrid.cs", "private string RunAddGridOperation(")]
+        [InlineData("WwpActionService.FormLayout.cs", "private string RunFormLayoutOperation(")]
+        [InlineData("WwpActionService.Grid.cs", "private string RunGridAttributeOperation(")]
+        [InlineData("WwpActionService.Tables.cs", "private string RunTableTypeOperation(")]
+        [InlineData("WwpActionService.Tabs.cs", "private string RunTabOperation(")]
+        [InlineData("WwpActionService.WebComponentReplacement.cs", "private string RunWebComponentReplacementOperation(")]
         public void PartLookupAndSaveRetainTheSameResolvedOwner(string file, string method)
         {
             string source = SourceAssert.NormaliseNewlines(RepoSource.WithoutComments(Read(file)));

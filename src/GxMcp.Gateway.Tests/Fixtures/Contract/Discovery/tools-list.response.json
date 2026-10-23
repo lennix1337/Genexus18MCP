@@ -3794,6 +3794,13 @@
             "description": "Require an exact object-name match.",
             "type": "boolean"
           },
+          "fields": {
+            "description": "Output projection: array of field…",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "inline_read_top": {
             "description": "0-3. Inline reads of top N.",
             "type": "integer"

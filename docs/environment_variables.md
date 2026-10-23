@@ -58,7 +58,7 @@ is the only authority there. Equivalent config keys: `Engine.Backend`,
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `GXMCP_ENGINE_BACKEND` | `gxengine` lets the engine serve capabilities the capability gate marks at measured parity; anything else stays on the GeneXus SDK. | `sdk` |
+| `GXMCP_ENGINE_BACKEND` | `gxengine` (default): admitted blocking builds and admitted field-limited type-only queries are routed to the engine; `auto`: admitted blocking builds only; `sdk`: engine off. See [engine_backend.md](engine_backend.md) for the admitted space and fallback behavior. | `gxengine` |
 | `GXMCP_ENGINE_FALLBACK` | What happens when a routed capability is not at parity: `sdk` keeps the GeneXus SDK; `error` refuses the call with `EngineCapabilityNotParity`. | `sdk` |
 | `GXMCP_ENGINE_EXE` | Absolute path to the `gx-engine` executable. Authoritative: a missing file reports `EngineNotFound` instead of searching further. | unset (Gateway directory → `publish/` → checkout cargo output → `PATH`) |
 | `GXMCP_ENGINE_TIMEOUT_SECONDS` | Wall-clock budget for one engine invocation. | `120` |

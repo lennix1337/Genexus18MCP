@@ -125,6 +125,26 @@ namespace Artech.Packages.Patterns.Objects
         public void Execute() => _parent.Children.Items.Insert(Math.Min(_index, _parent.Children.Items.Count), _child);
     }
 
+    // Children.MoveElement of the SDK: a position outside the list is ignored.
+    internal sealed class MoveElementCommand
+    {
+        private readonly GxMcp.Worker.Tests.WwpEmptyNativeCommandTests.Element _parent;
+        private readonly GxMcp.Worker.Tests.WwpEmptyNativeCommandTests.Element _child;
+        private readonly int _newPosition;
+        public MoveElementCommand(object parent, object child, int oldPosition, int newPosition)
+        {
+            _parent = (GxMcp.Worker.Tests.WwpEmptyNativeCommandTests.Element)parent;
+            _child = (GxMcp.Worker.Tests.WwpEmptyNativeCommandTests.Element)child;
+            _newPosition = newPosition;
+        }
+        public void Execute()
+        {
+            if (_newPosition < 0 || _newPosition > _parent.Children.Items.Count - 1) return;
+            _parent.Children.Items.Remove(_child);
+            _parent.Children.Items.Insert(_newPosition, _child);
+        }
+    }
+
     internal sealed class RemoveElementCommand
     {
         private readonly GxMcp.Worker.Tests.WwpEmptyNativeCommandTests.Element _parent;

@@ -78,8 +78,13 @@ namespace GxMcp.Worker.Services
                 KBObject lockedTarget = _objects.FindObject(target) ?? requestedObject;
                 string currentXml = _patterns.ReadPatternPartXml(lockedTarget, "PatternInstance", PatternRegistry.WorkWithPlusPatternId,
                     out KBObject currentInstance, out _);
-                _patterns.BuildPatternPartEnvelope(lockedTarget, "PatternInstance", currentXml, PatternRegistry.WorkWithPlusPatternId,
-                    out _, out KBObjectPart currentPart);
+                if (currentInstance == null || string.IsNullOrWhiteSpace(currentXml))
+                    return BuildWwpInstanceNotResolvable(target);
+                // The part is resolved from the instance that was read (issue #638): resolving it from
+                // the requested host yields another copy of the WorkWithPlus object, and saving one copy
+                // with the other's part persists nothing.
+                _patterns.BuildPatternPartEnvelope(currentInstance, "PatternInstance", currentXml, PatternRegistry.WorkWithPlusPatternId,
+                    out currentInstance, out KBObjectPart currentPart);
                 if (currentInstance == null || currentPart == null || string.IsNullOrWhiteSpace(currentXml))
                     return BuildWwpInstanceNotResolvable(target);
 
