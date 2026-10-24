@@ -555,6 +555,24 @@ namespace GxMcp.Gateway
             return true;
         }
 
+        /// <summary>
+        /// Drops what read-only calls cached while a write was in flight, once the write has
+        /// settled. The invalidation before the dispatch cannot cover them: a read that starts
+        /// after it and finishes before the write lands is stored at the new revision with
+        /// pre-write content and replays for the cache lifetime (#653). A preview does not
+        /// write and keeps its cache. An unresolved scope bumps the process-wide epoch, as the
+        /// pre-dispatch invalidation does.
+        /// </summary>
+        internal static bool InvalidateSettledMutationScope(
+            SemanticCacheStore cache, string kbScope, JObject? args, bool isMutating)
+        {
+            if (!isMutating || IsMutationPreview(args)) return false;
+            cache.InvalidateScope(kbScope);
+            if (string.IsNullOrWhiteSpace(kbScope))
+                System.Threading.Interlocked.Increment(ref SemanticCacheEpoch);
+            return true;
+        }
+
         internal static void AttachGatewaySemanticCacheAge(JObject toolResult, long cacheAgeMs)
         {
             if (toolResult == null) return;

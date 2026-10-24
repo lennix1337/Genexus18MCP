@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- **A read after an edit no longer replays the pre-edit source.** The Gateway cleared its read cache before it sent a write but not when the write finished, so a read that started in between (an edit and a read sent together, or a read during a slow save) was cached with the old source and replayed for up to 30 minutes ([#653](https://github.com/lennix1337/Genexus18MCP/issues/653)). The cache is now cleared again once the write has settled, including a write that timed out. `genexus_read` `refresh: true` still forces a fresh SDK read.
+
 ### Internal
 
 ## v4.0.1 - 2026-10-21

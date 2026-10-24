@@ -845,6 +845,14 @@ namespace GxMcp.Gateway
             // survive the authoritative refresh.
             InvalidateRefreshReadScope(_semanticCache, kbScope, tName, tArgs);
 
+            // The same race exists for every write (#653): the pre-dispatch invalidation
+            // above opens a new generation, a read that starts inside it (a batched
+            // edit+read, or a read while a slow edit is still saving) is cached with the
+            // pre-edit source, and the generation fence cannot tell that entry from a
+            // fresh one. Close the generation again now that the write has settled
+            // (applied, refused or timed out).
+            InvalidateSettledMutationScope(_semanticCache, kbScope, tArgs, isMutating);
+
             // apply_pattern { validate: true } — post-apply build of the
             // generated host so the LLM sees compile failures in a single
             // tool call. Without this the agent declared "Success" and only
