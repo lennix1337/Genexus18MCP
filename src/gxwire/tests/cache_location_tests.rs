@@ -17,11 +17,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn scratch(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "gxwire-cache-loc-{}-{}",
-        label,
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("gxwire-cache-loc-{}-{}", label, std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -92,7 +89,10 @@ fn save_index_to_creates_a_missing_cache_directory() {
     let tree = scratch("mkparent");
     write_source(&tree, "MyProc.txt", "// one\n");
 
-    let nested = scratch("mkparent-outer").join("a").join("b").join("idx.bin");
+    let nested = scratch("mkparent-outer")
+        .join("a")
+        .join("b")
+        .join("idx.bin");
     let (graph, parses) = build_index(&tree).unwrap();
 
     save_index_to(&graph, &parses, &nested).unwrap();

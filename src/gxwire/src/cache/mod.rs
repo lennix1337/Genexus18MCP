@@ -1,7 +1,7 @@
 use crate::graph::CsrGraph;
 use crate::model::{EdgeKind, EntityKind, EntityNode, RawEdge};
 use crate::parser::lexer::ParsedSymbolRef;
-use crate::parser::{parse_genexus_source, ParseResult};
+use crate::parser::{ParseResult, parse_genexus_source};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
@@ -141,7 +141,9 @@ const PRUNED_DIR_NAMES: &[&str] = &[
 
 fn is_pruned_dir_name(name: &std::ffi::OsStr) -> bool {
     let name = name.to_string_lossy();
-    PRUNED_DIR_NAMES.iter().any(|p| p.eq_ignore_ascii_case(&name))
+    PRUNED_DIR_NAMES
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(&name))
 }
 
 fn collect_source_files(dir: &Path) -> Vec<SourceFile> {
@@ -173,10 +175,7 @@ fn collect_source_files(dir: &Path) -> Vec<SourceFile> {
         // Restricted to the analysed root, which is the only place this metadata
         // lives: an export that nests its objects is unaffected, and a deeper
         // object that happens to share one of these names is still indexed.
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if path.parent() == Some(dir) && is_knowledge_base_metadata(stem) {
             continue;
         }
@@ -368,9 +367,7 @@ fn reindex(root: &Path, mut cached: ParseMap) -> Result<Option<Reindex>, Box<dyn
         let signature = stat_signature(&sf.path);
 
         let reusable = match cached.get(&key) {
-            Some(previous) => {
-                previous.mtime_ticks == signature.0 && previous.size == signature.1
-            }
+            Some(previous) => previous.mtime_ticks == signature.0 && previous.size == signature.1,
             None => false,
         };
 
@@ -561,11 +558,17 @@ fn is_supported_ext(ext: &str) -> bool {
 /// name says the real kind.
 fn kind_from_type_guid(guid: &str) -> Option<EntityKind> {
     match guid.to_ascii_lowercase().as_str() {
-        "84a12160-f59b-4ad7-a683-ea4481ac23e9" | "2a9e9aba-d2de-4801-ae7f-5e3819222daf" => Some(EntityKind::Procedure),
+        "84a12160-f59b-4ad7-a683-ea4481ac23e9" | "2a9e9aba-d2de-4801-ae7f-5e3819222daf" => {
+            Some(EntityKind::Procedure)
+        }
         "1db606f2-af09-4cf9-a3b5-b481519d28f6" => Some(EntityKind::Transaction),
-        "c9584656-94b6-4ccd-890f-332d11fc2c25" | "198e8ea4-1d49-4c9c-8a9a-417024baa9d1" => Some(EntityKind::WebPanel),
+        "c9584656-94b6-4ccd-890f-332d11fc2c25" | "198e8ea4-1d49-4c9c-8a9a-417024baa9d1" => {
+            Some(EntityKind::WebPanel)
+        }
         "d82625fd-5892-40b0-99c9-5c8559c197fc" => Some(EntityKind::Panel),
-        "78cecefe-be7d-4980-86ce-8d6e91fba04b" | "15cf49b5-fc38-4899-91b5-395d02d79889" => Some(EntityKind::WorkWithPlus),
+        "78cecefe-be7d-4980-86ce-8d6e91fba04b" | "15cf49b5-fc38-4899-91b5-395d02d79889" => {
+            Some(EntityKind::WorkWithPlus)
+        }
         "857ca50e-7905-0000-0007-c5d9ff2975ec" => Some(EntityKind::Table),
         "adbb33c9-0906-4971-833c-998de27e0676" => Some(EntityKind::Attribute),
         "00972a17-9975-449e-aab1-d26165d51393" => Some(EntityKind::Domain),
@@ -675,12 +678,11 @@ fn detect_entity_kind(path: &Path, file_stem: &str, ext: &str) -> EntityKind {
                         return EntityKind::Sdt;
                     } else if head.contains("<dataselector") {
                         return EntityKind::DataSelector;
-                    } else if head.contains("<object") {
-                        if let Some(guid) = extract_type_guid_from_xml(&head) {
-                            if let Some(kind) = kind_from_type_guid(guid) {
-                                return kind;
-                            }
-                        }
+                    } else if head.contains("<object")
+                        && let Some(guid) = extract_type_guid_from_xml(&head)
+                        && let Some(kind) = kind_from_type_guid(guid)
+                    {
+                        return kind;
                     }
                 }
             }

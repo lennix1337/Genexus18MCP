@@ -144,7 +144,12 @@ impl CsrGraph {
     }
 
     /// Fast BFS transitive callers (Backward traversal)
-    pub fn transitive_callers(&self, root_id: u32, max_depth: usize, max_nodes: usize) -> Vec<(u32, usize)> {
+    pub fn transitive_callers(
+        &self,
+        root_id: u32,
+        max_depth: usize,
+        max_nodes: usize,
+    ) -> Vec<(u32, usize)> {
         let mut visited = vec![false; self.nodes.len()];
         let mut queue = std::collections::VecDeque::new();
         let mut result = Vec::new();
@@ -177,7 +182,11 @@ impl CsrGraph {
 
     /// Shortest path BFS between two nodes in forward direction (callees traversal).
     /// Returns a list of (from_id, to_id, EdgeKind, line_number).
-    pub fn shortest_path(&self, from_id: u32, to_id: u32) -> Option<Vec<(u32, u32, EdgeKind, u32)>> {
+    pub fn shortest_path(
+        &self,
+        from_id: u32,
+        to_id: u32,
+    ) -> Option<Vec<(u32, u32, EdgeKind, u32)>> {
         if from_id == to_id {
             return Some(Vec::new());
         }
@@ -240,24 +249,21 @@ impl CsrGraph {
         let base_score = (1.0 - damping) / n as f32;
 
         for _ in 0..iterations {
-            for v in 0..n {
-                next_pr[v] = base_score;
-            }
+            next_pr.fill(base_score);
 
-            for u in 0..n {
+            for (u, &rank) in pr.iter().enumerate() {
                 let start = self.forward_offsets[u] as usize;
                 let end = self.forward_offsets[u + 1] as usize;
                 let out_degree = end - start;
                 if out_degree > 0 {
-                    let share = damping * pr[u] / out_degree as f32;
-                    for i in start..end {
-                        let target = self.forward_targets[i] as usize;
-                        next_pr[target] += share;
+                    let share = damping * rank / out_degree as f32;
+                    for &target in &self.forward_targets[start..end] {
+                        next_pr[target as usize] += share;
                     }
                 } else {
-                    let share = damping * pr[u] / n as f32;
-                    for v in 0..n {
-                        next_pr[v] += share;
+                    let share = damping * rank / n as f32;
+                    for slot in next_pr.iter_mut() {
+                        *slot += share;
                     }
                 }
             }

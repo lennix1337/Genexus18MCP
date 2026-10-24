@@ -100,9 +100,12 @@ foreach ($marker in @('publicationState', 'publicationEvidencePath', 'nextAction
     if ($releaseSource -notmatch [regex]::Escape($marker)) { throw "Release publication status marker is missing: $marker" }
 }
 $buildSource = Get-Content -LiteralPath (Join-Path $root 'build.ps1') -Raw
+# The fallback config is composed in scripts\publish-config.ps1; build.ps1 hands it the catalog path.
+$publishConfigSource = Get-Content -LiteralPath (Join-Path $root 'scripts\publish-config.ps1') -Raw
 if ($buildSource -notmatch '\$artifactGxPath\s*=\s*Get-GxPrimaryInstallPath\s+-Catalog\s+\$gxCatalog' -or
     $buildSource -notmatch '\$buildGxPath\s*=\s*\$artifactGxPath' -or
-    $buildSource -notmatch 'InstallationPath\s*=\s*\$artifactGxPath' -or
+    $buildSource -notmatch 'Get-PublishFallbackConfigJson\s+-ArtifactGxPath\s+\$artifactGxPath' -or
+    $publishConfigSource -notmatch 'InstallationPath\s*=\s*\$ArtifactGxPath' -or
     $buildSource -notmatch 'GX_PATH=\$buildGxPath' -or
     $buildSource -match '\$gxPath') {
     throw 'Build must keep the catalog artifact path separate from machine-specific SDK overrides.'

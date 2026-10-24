@@ -27,7 +27,11 @@ pub struct CallersResult {
 }
 
 #[allow(dead_code)]
-pub fn analyze_callers(graph: &CsrGraph, target_name: &str, max_depth: usize) -> Option<CallersResult> {
+pub fn analyze_callers(
+    graph: &CsrGraph,
+    target_name: &str,
+    max_depth: usize,
+) -> Option<CallersResult> {
     analyze_callers_ext(graph, target_name, max_depth, false)
 }
 
@@ -88,9 +92,15 @@ pub fn analyze_callers_ext(
     };
 
     let next = if empty {
-        format!("gxwire --for \"{}\" to find similar symbols", target_node.name)
+        format!(
+            "gxwire --for \"{}\" to find similar symbols",
+            target_node.name
+        )
     } else {
-        format!("gxwire --impact {} or gxwire --slice {}:VAR", target_node.name, target_node.name)
+        format!(
+            "gxwire --impact {} or gxwire --slice {}:VAR",
+            target_node.name, target_node.name
+        )
     };
 
     Some(CallersResult {

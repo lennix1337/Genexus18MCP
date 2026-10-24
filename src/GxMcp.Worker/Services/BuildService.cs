@@ -859,6 +859,14 @@ namespace GxMcp.Worker.Services
             public string BuildPath { get; set; }
             public List<string> CallersToAlsoBuild { get; set; }
             public string Hint { get; set; }
+            // #654: action=specify validates the environment's copy of each object, which
+            // only a build refreshes, so after an edit its diagnostics can describe the
+            // source as of the last build. Say what was validated, and flag the case where
+            // the specifier itself warned that the object changed since that build.
+            [JsonProperty("validatedSource", NullValueHandling = NullValueHandling.Ignore)]
+            public string ValidatedSource { get; set; }
+            [JsonProperty("staleEnvironmentCopy", NullValueHandling = NullValueHandling.Ignore)]
+            public bool? StaleEnvironmentCopy { get; set; }
             // v2.3.8 (Task 5.1/5.2): expansion plan applied to the BuildOne
             // sequence. Surfaced under _meta.buildPlan in status/result.
             public BuildPlan BuildPlan { get; set; }
@@ -2401,6 +2409,7 @@ namespace GxMcp.Worker.Services
             status.Targets = targets.Count > 0 ? targets : null;
             status.BuildPlan = plan;
             status.SpecifyOnly = specifyOnly && targetedBuild;
+            if (status.SpecifyOnly) status.ValidatedSource = "environment-copy";
             status.SkipFullDeploy = effectiveSkipFullDeploy;
             status.FullDeploy = fullDeploy
                 && string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase);
@@ -3006,6 +3015,7 @@ namespace GxMcp.Worker.Services
                     var paginatedResult = BatchService.BuildResultPayload(status.Errors, page, pageSize);
                     jo["items"] = paginatedResult["items"];
                     jo["_meta"] = paginatedResult["_meta"];
+                    AttachErrorCoverage(jo, status);
                     jo["operationId"] = status.TaskId;
                     jo["queuePosition"] = status.QueuePosition.HasValue
                         ? (JToken)status.QueuePosition.Value : JValue.CreateNull();
@@ -3015,6 +3025,26 @@ namespace GxMcp.Worker.Services
                 }
             }
             return "{\"status\":\"Error\",\"message\": \"Task ID not found\"}";
+        }
+
+        /// <summary>
+        /// The task keeps the first 50 error lines but counts every error, so an error list
+        /// shorter than <c>errorCount</c> is a cut, not a different answer (#656). Say how many
+        /// were kept and where the rest are.
+        /// </summary>
+        internal static void AttachErrorCoverage(JObject payload, BuildTaskStatus status)
+        {
+            int retained = status.Errors?.Count ?? 0;
+            int total = Math.Max(status.ErrorCount, retained);
+            payload["errorsTotal"] = total;
+            payload["errorsRetained"] = retained;
+            payload["omittedErrors"] = total - retained;
+            if (total > retained)
+            {
+                payload["errorsHint"] = "Only the first " + retained + " of " + total
+                    + " error lines are retained; the complete list is in the build log"
+                    + (string.IsNullOrEmpty(status.FullLogPath) ? "." : " (fullLogPath).");
+            }
         }
 
         public string Cancel(string taskId)
@@ -4896,6 +4926,12 @@ namespace GxMcp.Worker.Services
                         {
                             return;
                         }
+                    }
+                    if (status.SpecifyOnly && SpecificationDiagnostics.IsStaleEnvironmentCopyWarning(line))
+                    {
+                        status.StaleEnvironmentCopy = true;
+                        if (string.IsNullOrEmpty(status.Hint))
+                            status.Hint = "The specifier read the environment's copy of an object that changed since the last build, so these diagnostics may describe the source as of that build. Run genexus_lifecycle action=build for the current source.";
                     }
                     status.WarningCount++;
                     if (status.Warnings.Count < 50) status.Warnings.Add(line.Trim());

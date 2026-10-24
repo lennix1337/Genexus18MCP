@@ -34,7 +34,10 @@ pub fn compute_status(graph: &CsrGraph, root: &Path, cache_path: &Path) -> Statu
         .collect();
 
     let next = if empty {
-        format!("gxwire --index \"{}\" to scan and index Knowledge Base", root.display())
+        format!(
+            "gxwire --index \"{}\" to scan and index Knowledge Base",
+            root.display()
+        )
     } else {
         "gxwire --for \"<task>\" or gxwire --pack-task \"<task>\"".to_string()
     };

@@ -92,8 +92,23 @@ namespace GxMcp.Gateway
                 if (match != null) return match;
             }
 
+            // Read verbs: the toolset's actions read with "get" (get, get_visual, ...) or
+            // "inspect", not "read" (#655).
+            if (ReadVerbs.Contains(input, StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (string verb in new[] { "get", "inspect", "view", "list" })
+                {
+                    var match = list.FirstOrDefault(c => string.Equals(c, verb, StringComparison.OrdinalIgnoreCase));
+                    if (match != null) return match;
+                }
+                var getVariant = list.FirstOrDefault(c => c.StartsWith("get_", StringComparison.OrdinalIgnoreCase));
+                if (getVariant != null) return getVariant;
+            }
+
             return null;
         }
+
+        private static readonly string[] ReadVerbs = { "read", "fetch", "show", "view" };
 
         public static string FormatSuggestionMessage(string field, string value, IEnumerable<string> candidates, int maxDistance = 2)
         {

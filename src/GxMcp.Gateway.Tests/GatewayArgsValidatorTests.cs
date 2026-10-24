@@ -356,5 +356,153 @@ namespace GxMcp.Gateway.Tests
             Assert.Contains(result.Violations, v => v.Path == "limit" && v.Suggestion == "maxResults");
             Assert.DoesNotContain(result.Violations, v => v.Path == "kbAlias");
         }
+
+        // ── #655: the rejection says which field is wrong and what is accepted ──
+
+        private static async Task<JObject> InvalidArgsErrorFor(string tool, JObject args)
+        {
+            var request = new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = "invalid-args-report",
+                ["method"] = "tools/call",
+                ["params"] = new JObject { ["name"] = tool, ["arguments"] = args }
+            };
+            var response = await Program.ProcessMcpRequest(request);
+            var payload = JObject.Parse(response!["result"]!["content"]![0]!["text"]!.ToString());
+            Assert.Equal("InvalidArgs", payload["error"]!["code"]!.ToString());
+            return (JObject)payload["error"]!;
+        }
+
+        [Fact]
+        public async Task InvalidArgs_MessageNamesTheOffendingFieldsAndTheAcceptedValues()
+        {
+            GatewayArgsValidator.ClearCache();
+            GatewayArgsValidator.PrimeCache("genexus_edit", MakeSchema(
+                props: new[]
+                {
+                    ("name", "string", (string[]?)null),
+                    ("validate", "string", new[] { "strict", "best-effort", "only" }),
+                },
+                required: new[] { "name" },
+                additionalPropertiesFalse: true));
+
+            var error = await InvalidArgsErrorFor("genexus_edit", new JObject
+            {
+                ["name"] = "SyntheticProc",
+                ["validate"] = "none",
+                ["bogus"] = 1,
+            });
+
+            string message = error["message"]!.ToString();
+            Assert.Contains("genexus_edit", message);
+            Assert.Contains("'validate' expected one of [strict, best-effort, only], got none", message);
+            Assert.Contains("'bogus' is not an argument of this tool", message);
+
+            // The hint walks the other violations too, and the unknown argument lists the names to use.
+            string hint = error["hint"]!.ToString();
+            Assert.Contains("Field 'validate': expected one of [strict, best-effort, only], got none.", hint);
+            Assert.Contains("Also: 'bogus' is not an argument of this tool", hint);
+            var unknown = ((JArray)error["violations"]!).OfType<JObject>().Single(v => v["path"]!.ToString() == "bogus");
+            Assert.Equal(new[] { "name", "validate" }, unknown["accepted"]!.Select(t => t.ToString()).ToArray());
+        }
+
+        [Fact]
+        public async Task InvalidArgs_UnknownArgumentHintListsTheAcceptedNames()
+        {
+            GatewayArgsValidator.ClearCache();
+            GatewayArgsValidator.PrimeCache("genexus_structure", MakeSchema(
+                props: new[]
+                {
+                    ("action", "string", new[] { "get_visual", "add", "remove" }),
+                    ("name", "string", (string[]?)null),
+                },
+                additionalPropertiesFalse: true));
+
+            var error = await InvalidArgsErrorFor("genexus_structure", new JObject
+            {
+                ["action"] = "get_visual",
+                ["name"] = "SyntheticTrn",
+                ["mode"] = "read",
+            });
+
+            Assert.Contains("Unknown argument 'mode'.", error["hint"]!.ToString());
+            Assert.Contains("Accepted arguments: action, name.", error["hint"]!.ToString());
+        }
+
+        [Fact]
+        public void InvalidArgsReport_CapsTheAcceptedNamesAndTheClausesOfALongViolationList()
+        {
+            var accepted = Enumerable.Range(1, 20).Select(i => "arg" + i).ToList();
+            var violations = new List<GatewayArgsValidator.Violation>
+            {
+                new() { Path = "zzz", Expected = "none (additionalProperties: false)", Actual = "unknown argument", Accepted = accepted },
+                new() { Path = "a", Expected = "string", Actual = "number" },
+                new() { Path = "b", Expected = "string", Actual = "number" },
+                new() { Path = "c", Expected = "string", Actual = "number" },
+                new() { Path = "d", Expected = "string", Actual = "number" },
+            };
+
+            string hint = InvalidArgsReport.Hint(violations);
+            Assert.Contains("arg15, and 5 more (see violations[].accepted)", hint);
+            Assert.DoesNotContain("arg16,", hint);
+            Assert.Contains("and 2 more (see violations)", hint);
+
+            string message = InvalidArgsReport.Message("genexus_x", violations);
+            Assert.Contains("'zzz' is not an argument", message);
+            Assert.Contains("'b' expected string, got number", message);
+            Assert.DoesNotContain("'c'", message);
+            Assert.EndsWith("; and 2 more.", message);
+        }
+
+        [Theory]
+        [InlineData("read", new[] { "get", "set", "move" }, "get")]
+        [InlineData("read", new[] { "get_visual", "add", "remove" }, "get_visual")]
+        [InlineData("fetch", new[] { "inspect", "set" }, "inspect")]
+        [InlineData("read", new[] { "set", "move" }, null)]
+        public void DidYouMean_ReadVerbsPointAtTheGetActions(string input, string[] candidates, string? expected)
+        {
+            Assert.Equal(expected, DidYouMean.Suggest(input, candidates));
+        }
+
+        // ── #652: objectName as an array ─────────────────────────────────────
+
+        [Fact]
+        public void SearchSource_ObjectNameArray_IsRefusedUntilItIsJoined_ThenAccepted()
+        {
+            GatewayArgsValidator.ClearCache();
+            var args = new JObject { ["pattern"] = "SoloSi", ["objectName"] = new JArray("ProcA", " ProcB ") };
+
+            Assert.False(GatewayArgsValidator.Validate("genexus_search_source", args).Ok);
+
+            Assert.True(ListArgumentCoercion.Apply("genexus_search_source", args));
+            Assert.Equal("ProcA,ProcB", args["objectName"]!.ToString());
+            Assert.True(GatewayArgsValidator.Validate("genexus_search_source", args).Ok);
+        }
+
+        [Theory]
+        [InlineData("[]")]
+        [InlineData("[1,2]")]
+        [InlineData("[\"A\",\"\"]")]
+        [InlineData("[\"A\",[\"B\"]]")]
+        public void SearchSource_ObjectNameThatIsNotAListOfNames_IsLeftForTheValidator(string json)
+        {
+            var args = new JObject { ["pattern"] = "x", ["objectName"] = JArray.Parse(json) };
+
+            Assert.False(ListArgumentCoercion.Apply("genexus_search_source", args));
+            Assert.Equal(JTokenType.Array, args["objectName"]!.Type);
+        }
+
+        [Fact]
+        public void ListCoercion_OnlyTouchesTheDocumentedArgumentOfItsTool()
+        {
+            var other = new JObject { ["objectName"] = new JArray("A", "B") };
+            Assert.False(ListArgumentCoercion.Apply("genexus_read", other));
+            Assert.Equal(JTokenType.Array, other["objectName"]!.Type);
+
+            var text = new JObject { ["objectName"] = "A,B" };
+            Assert.False(ListArgumentCoercion.Apply("genexus_search_source", text));
+            Assert.False(ListArgumentCoercion.Apply("genexus_search_source", null));
+        }
     }
 }

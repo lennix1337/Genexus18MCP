@@ -61,15 +61,15 @@ struct Args {
     index: Option<Option<PathBuf>>,
 
     /// Where the index is read from and written to.
-  ///
-  /// Defaults to `.gxwire_cache.bin` inside `--dir`. Point it elsewhere to keep
-  /// the analysed directory untouched: the published contract declares
-  /// `genexus_wire` read-only, and with a native Knowledge Base the analysed
-  /// directory is the KB itself (#499).
-  #[arg(long = "cache-path")]
-  cache_path: Option<PathBuf>,
+    ///
+    /// Defaults to `.gxwire_cache.bin` inside `--dir`. Point it elsewhere to keep
+    /// the analysed directory untouched: the published contract declares
+    /// `genexus_wire` read-only, and with a native Knowledge Base the analysed
+    /// directory is the KB itself (#499).
+    #[arg(long = "cache-path")]
+    cache_path: Option<PathBuf>,
 
-  /// Self-diagnostic and cache status
+    /// Self-diagnostic and cache status
     #[arg(long)]
     doctor: bool,
 
@@ -100,7 +100,10 @@ fn emit_error(format: &str, code: &str, target: &str, message: &str, next: &str)
             },
             "next": next
         });
-        eprintln!("{}", serde_json::to_string_pretty(&err_obj).unwrap_or_default());
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&err_obj).unwrap_or_default()
+        );
     } else if format == "toon" {
         eprint!("{}", output::format_error_toon(code, target, message, next));
     } else {
@@ -259,7 +262,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "SymbolNotFound",
                 &format!("{} -> {}", from_sym, to_sym),
                 "One or both symbols not found in graph",
-                &format!("gxwire --for \"{}\" or gxwire --for \"{}\" to find exact symbol names", from_sym, to_sym),
+                &format!(
+                    "gxwire --for \"{}\" or gxwire --for \"{}\" to find exact symbol names",
+                    from_sym, to_sym
+                ),
             );
         }
         return Ok(());
@@ -278,7 +284,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(task) = args.pack_task {
-        let budget = if args.full { usize::MAX } else { args.token_budget };
+        let budget = if args.full {
+            usize::MAX
+        } else {
+            args.token_budget
+        };
         let res = analysis::pack_task_ext(&g, &task, budget, args.full);
         if args.format == "mermaid" {
             print!("{}", output::format_pack_task_mermaid(&res));
@@ -325,7 +335,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(target) = args.safe_delete {
         if let Some(res) = analysis::analyze_impact_ext(&g, &target, args.full) {
-            let can_delete = res.blast_radius == 0 && res.callers.is_empty() && res.writers.is_empty();
+            let can_delete =
+                res.blast_radius == 0 && res.callers.is_empty() && res.writers.is_empty();
             let safe_del = model::SafeDeleteResult {
                 schema: "gxwire.safe_delete/v1".to_string(),
                 symbol: target.clone(),

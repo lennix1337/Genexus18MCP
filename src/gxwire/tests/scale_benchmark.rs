@@ -63,7 +63,10 @@ fn benchmark_scale_50k_nodes() {
     let t0 = Instant::now();
     let graph = generate_large_kb(num_nodes, edges_per_node);
     let build_time = t0.elapsed();
-    println!("1. Tempo de Construção do Grafo CSR + PageRank: {:?}", build_time);
+    println!(
+        "1. Tempo de Construção do Grafo CSR + PageRank: {:?}",
+        build_time
+    );
 
     // Benchmark 1: Instant 1-hop Callers
     let t_callers = Instant::now();
@@ -73,7 +76,10 @@ fn benchmark_scale_50k_nodes() {
         "2. Query --callers: {:?} (encontrou {} diretos, {} transitivos)",
         callers_latency, callers_res.count, callers_res.transitive_count
     );
-    assert!(callers_latency.as_micros() < 5_000, "Callers query should be < 5ms");
+    assert!(
+        callers_latency.as_micros() < 5_000,
+        "Callers query should be < 5ms"
+    );
 
     // Benchmark 2: Impact Analysis & Blast Radius
     let t_impact = Instant::now();
@@ -83,7 +89,10 @@ fn benchmark_scale_50k_nodes() {
         "3. Query --impact (Blast Radius): {:?} (blast radius: {} objetos)",
         impact_latency, impact_res.blast_radius
     );
-    assert!(impact_latency.as_micros() < 10_000, "Impact query should be < 10ms");
+    assert!(
+        impact_latency.as_micros() < 10_000,
+        "Impact query should be < 10ms"
+    );
 
     // Benchmark 3: Search for task
     let t_search = Instant::now();
@@ -91,10 +100,15 @@ fn benchmark_scale_50k_nodes() {
     let search_latency = t_search.elapsed();
     println!(
         "4. Query --for (Busca Semantica + PageRank): {:?} ({} resultados)",
-        search_latency, search_res.hits.len()
+        search_latency,
+        search_res.hits.len()
     );
     let max_search_ms = if cfg!(debug_assertions) { 200 } else { 50 };
-    assert!(search_latency.as_millis() < max_search_ms, "Search query should be < {}ms", max_search_ms);
+    assert!(
+        search_latency.as_millis() < max_search_ms,
+        "Search query should be < {}ms",
+        max_search_ms
+    );
 
     // Benchmark 4: Pack task under token budget
     let t_pack = Instant::now();
@@ -104,7 +118,11 @@ fn benchmark_scale_50k_nodes() {
         "5. Query --pack-task (Orientacao One-Shot): {:?} (est_tokens: {})",
         pack_latency, pack_res.est_tokens
     );
-    assert!(pack_latency.as_millis() < max_search_ms, "Pack task query should be < {}ms", max_search_ms);
+    assert!(
+        pack_latency.as_millis() < max_search_ms,
+        "Pack task query should be < {}ms",
+        max_search_ms
+    );
 
     println!("===================================================================\n");
 }

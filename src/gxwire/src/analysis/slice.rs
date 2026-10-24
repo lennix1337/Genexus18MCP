@@ -63,7 +63,10 @@ pub fn analyze_slice(object_name: &str, var_name: &str, source_code: &str) -> Sl
 
     let points_count = points.len();
     let empty = points_count == 0;
-    let next = format!("genexus_read {} or genexus_edit {}", object_name, object_name);
+    let next = format!(
+        "genexus_read {} or genexus_edit {}",
+        object_name, object_name
+    );
 
     SliceResult {
         schema: "gxwire.slice/v1".to_string(),

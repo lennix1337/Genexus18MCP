@@ -1,3 +1,3 @@
 pub mod lexer;
 
-pub use lexer::{formula_references, parse_genexus_source, ParseResult};
+pub use lexer::{ParseResult, formula_references, parse_genexus_source};

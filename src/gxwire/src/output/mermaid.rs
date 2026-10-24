@@ -3,7 +3,13 @@ use crate::model::StatusResult;
 
 fn sanitize_mermaid_id(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -74,17 +80,26 @@ pub fn format_impact_mermaid(res: &ImpactResult) -> String {
         let mut idx = 0;
         for c in &res.callers {
             let cid = format!("c{}_{}", idx, sanitize_mermaid_id(&c.name));
-            out.push_str(&format!("  {} -->|caller| {}[\"{}\"]\n", root_id, cid, c.name));
+            out.push_str(&format!(
+                "  {} -->|caller| {}[\"{}\"]\n",
+                root_id, cid, c.name
+            ));
             idx += 1;
         }
         for w in &res.writers {
             let wid = format!("w{}_{}", idx, sanitize_mermaid_id(&w.name));
-            out.push_str(&format!("  {} -->|writer| {}[\"{}\"]\n", root_id, wid, w.name));
+            out.push_str(&format!(
+                "  {} -->|writer| {}[\"{}\"]\n",
+                root_id, wid, w.name
+            ));
             idx += 1;
         }
         for r in &res.readers {
             let rid = format!("r{}_{}", idx, sanitize_mermaid_id(&r.name));
-            out.push_str(&format!("  {} -->|reader| {}[\"{}\"]\n", root_id, rid, r.name));
+            out.push_str(&format!(
+                "  {} -->|reader| {}[\"{}\"]\n",
+                root_id, rid, r.name
+            ));
             idx += 1;
         }
     }
@@ -120,11 +135,17 @@ pub fn format_pack_task_mermaid(res: &PackTaskResult) -> String {
         out.push_str(&format!("  {}[[\"{}\"]]\n", aid, anchor.name));
         for (cidx, caller_name) in anchor.callers.iter().enumerate() {
             let cid = format!("c_{}_{}_{}", idx, cidx, sanitize_mermaid_id(caller_name));
-            out.push_str(&format!("  {}[\"{}\"] -->|caller| {}\n", cid, caller_name, aid));
+            out.push_str(&format!(
+                "  {}[\"{}\"] -->|caller| {}\n",
+                cid, caller_name, aid
+            ));
         }
         for (cidx, callee_name) in anchor.callees.iter().enumerate() {
             let cid = format!("ce_{}_{}_{}", idx, cidx, sanitize_mermaid_id(callee_name));
-            out.push_str(&format!("  {} -->|callee| {}[\"{}\"]\n", aid, cid, callee_name));
+            out.push_str(&format!(
+                "  {} -->|callee| {}[\"{}\"]\n",
+                aid, cid, callee_name
+            ));
         }
     }
     out.push_str("```\n");

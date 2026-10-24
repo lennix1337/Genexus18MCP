@@ -1136,7 +1136,7 @@ namespace GxMcp.Worker.Services
             return key;
         }
 
-        private void NormalizeLegacyHierarchy(SearchIndex index)
+        internal void NormalizeLegacyHierarchy(SearchIndex index)
         {
             if (index?.Objects == null) return;
 
@@ -1152,7 +1152,11 @@ namespace GxMcp.Worker.Services
                     entry.Path = InferLegacyPath(entry);
                 }
 
-                if (string.IsNullOrWhiteSpace(entry.ParentFolderPath))
+                // ParentFolderPath is always derived from ParentPath. Indexes written
+                // before #650 hold "Root Module/Root Module/<Folder>" for the entries
+                // the lite walk produced, which no pathPrefix can match; recomputing
+                // here heals them on load without a reindex.
+                if (!string.IsNullOrWhiteSpace(entry.ParentPath) || string.IsNullOrWhiteSpace(entry.ParentFolderPath))
                 {
                     entry.ParentFolderPath = ComposeParentFolderPath(entry.ParentPath);
                 }
@@ -1204,7 +1208,7 @@ namespace GxMcp.Worker.Services
         // "Root Module" so callers can pathPrefix-filter by the same string they
         // see in the GeneXus IDE. Empty hierarchy.ParentPath means object lives
         // directly under DesignModel -> we surface "Root Module" as the folder.
-        private static string ComposeParentFolderPath(string hierarchyParentPath)
+        internal static string ComposeParentFolderPath(string hierarchyParentPath)
         {
             if (string.IsNullOrWhiteSpace(hierarchyParentPath))
                 return "Root Module";

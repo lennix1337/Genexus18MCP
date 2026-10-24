@@ -231,7 +231,7 @@ namespace GxMcp.Worker.Tests
                 MaxResults = 10,
                 TimeoutMs = 0
             }));
-            Assert.Equal("Timeout", timedOut["code"]?.ToString());
+            SourceSearchEnvelopeTests.AssertMarkedIncomplete(timedOut, "Timeout");
             string cursor = timedOut["result"]?["nextCursor"]?.ToString();
             Assert.True(SourceSearchService.TryParseResumeCursor(
                 cursor, out int entry, out int skipped, out bool metadata));

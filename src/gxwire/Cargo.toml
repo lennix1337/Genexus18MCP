@@ -2,6 +2,7 @@
 name = "gxwire"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 authors = ["Genexus18MCP Team"]
 description = "High-performance architectural discovery, call graph, and impact engine for GeneXus"
 

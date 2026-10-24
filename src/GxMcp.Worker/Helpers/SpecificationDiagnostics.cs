@@ -156,10 +156,14 @@ namespace GxMcp.Worker.Helpers
         {
             if (warnings == null) return false;
             foreach (var w in warnings)
-                if ((w?.ToString() ?? string.Empty).IndexOf(StaleCopyMarker, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (IsStaleEnvironmentCopyWarning(w?.ToString()))
                     return true;
             return false;
         }
+
+        /// <summary>True for the specifier warning that an object changed since the last build.</summary>
+        public static bool IsStaleEnvironmentCopyWarning(string line)
+            => (line ?? string.Empty).IndexOf(StaleCopyMarker, StringComparison.OrdinalIgnoreCase) >= 0;
 
         /// <summary>
         /// Parse a build-status envelope into structured diagnostics.

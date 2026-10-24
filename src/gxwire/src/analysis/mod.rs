@@ -7,16 +7,15 @@ pub mod slice;
 pub mod status;
 
 #[allow(unused_imports)]
-pub use callers::{analyze_callers, analyze_callers_ext, CallerItem, CallersResult};
+pub use callers::{CallerItem, CallersResult, analyze_callers, analyze_callers_ext};
 #[allow(unused_imports)]
-pub use impact::{analyze_impact, analyze_impact_ext, ImpactItem, ImpactResult};
+pub use impact::{ImpactItem, ImpactResult, analyze_impact, analyze_impact_ext};
 #[allow(unused_imports)]
-pub use pack_task::{pack_task, pack_task_ext, AnchorObject, PackTaskResult};
+pub use pack_task::{AnchorObject, PackTaskResult, pack_task, pack_task_ext};
 #[allow(unused_imports)]
-pub use path::{analyze_path, analyze_path_ext, PathHop, PathResult};
+pub use path::{PathHop, PathResult, analyze_path, analyze_path_ext};
 #[allow(unused_imports)]
-pub use search::{search_for_task, search_for_task_ext, SearchHit, SearchResult};
+pub use search::{SearchHit, SearchResult, search_for_task, search_for_task_ext};
 #[allow(unused_imports)]
-pub use slice::{analyze_slice, SlicePoint, SliceResult};
+pub use slice::{SlicePoint, SliceResult, analyze_slice};
 pub use status::compute_status;
-

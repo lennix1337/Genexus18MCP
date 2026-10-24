@@ -313,7 +313,13 @@ namespace GxMcp.Worker.Services
                 ["object"] = new JObject
                 {
                     ["name"] = entry.Name, ["type"] = entry.Type, ["guid"] = entry.Guid, ["entityKey"] = entry.EntityKey,
-                    ["path"] = entry.Path, ["module"] = entry.Module, ["description"] = entry.Description,
+                    ["path"] = entry.Path, ["module"] = entry.Module,
+                    // `module` is the nearest SDK Module ancestor; a Folder between the object and
+                    // that Module does not change it (#651). The containing container is reported
+                    // separately, with the same strings genexus_list_objects returns and filters on.
+                    ["parent"] = entry.Parent, ["parentPath"] = entry.ParentPath,
+                    ["parentFolderPath"] = IndexCacheService.ComposeParentFolderPath(entry.ParentPath),
+                    ["description"] = entry.Description,
                     ["lastUpdate"] = entry.LastUpdate == DateTime.MinValue ? null : (JToken)entry.LastUpdate.ToString("o")
                 },
                 ["references"] = references,

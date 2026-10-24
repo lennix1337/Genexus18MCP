@@ -204,6 +204,14 @@ jobs:
           restore-keys: |
             gxwire-${{ runner.os }}-${{ steps.rust.outputs.version }}-
 
+      - name: Lint gxwire engine
+        shell: pwsh
+        run: cargo clippy --manifest-path src/gxwire/Cargo.toml --all-targets -- -D warnings
+
+      - name: Check gxwire engine formatting
+        shell: pwsh
+        run: cargo fmt --manifest-path src/gxwire/Cargo.toml --check
+
       - name: Build and test gxwire engine
         shell: pwsh
         run: |

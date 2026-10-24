@@ -27,7 +27,12 @@ pub fn analyze_path(graph: &CsrGraph, from_name: &str, to_name: &str) -> Option<
     analyze_path_ext(graph, from_name, to_name, false)
 }
 
-pub fn analyze_path_ext(graph: &CsrGraph, from_name: &str, to_name: &str, _full: bool) -> Option<PathResult> {
+pub fn analyze_path_ext(
+    graph: &CsrGraph,
+    from_name: &str,
+    to_name: &str,
+    _full: bool,
+) -> Option<PathResult> {
     let from_node = graph.get_node_by_name(from_name)?;
     let to_node = graph.get_node_by_name(to_name)?;
 
@@ -61,7 +66,10 @@ pub fn analyze_path_ext(graph: &CsrGraph, from_name: &str, to_name: &str, _full:
                 } else {
                     &to_node.name
                 };
-                format!("genexus_wire action=slice symbol={} or genexus_read name={}", intermediate, from_node.name)
+                format!(
+                    "genexus_wire action=slice symbol={} or genexus_read name={}",
+                    intermediate, from_node.name
+                )
             } else {
                 format!("genexus_read name={}", from_node.name)
             };
@@ -78,18 +86,19 @@ pub fn analyze_path_ext(graph: &CsrGraph, from_name: &str, to_name: &str, _full:
                 next,
             })
         }
-        None => {
-            Some(PathResult {
-                schema: "gxwire.path/v1".to_string(),
-                from: from_node.name.clone(),
-                to: to_node.name.clone(),
-                found: false,
-                hops_count: 0,
-                hops: Vec::new(),
-                empty: true,
-                est_tokens: 40,
-                next: format!("gxwire --callers {} or gxwire --impact {}", to_node.name, from_node.name),
-            })
-        }
+        None => Some(PathResult {
+            schema: "gxwire.path/v1".to_string(),
+            from: from_node.name.clone(),
+            to: to_node.name.clone(),
+            found: false,
+            hops_count: 0,
+            hops: Vec::new(),
+            empty: true,
+            est_tokens: 40,
+            next: format!(
+                "gxwire --callers {} or gxwire --impact {}",
+                to_node.name, from_node.name
+            ),
+        }),
     }
 }

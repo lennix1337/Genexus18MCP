@@ -30,6 +30,11 @@ namespace GxMcp.Gateway
             /// is within edit distance. Null when there's no close candidate.
             /// </summary>
             public string? Suggestion { get; init; }
+            /// <summary>
+            /// For an unknown argument: the argument names the tool declares, so the
+            /// caller can pick one instead of guessing again. Null for other violations.
+            /// </summary>
+            public IReadOnlyList<string>? Accepted { get; init; }
         }
 
         // Cross-cutting arguments the gateway/worker honour on (almost) every tool
@@ -100,7 +105,8 @@ namespace GxMcp.Gateway
                             Path = prop.Name,
                             Expected = "none (additionalProperties: false)",
                             Actual = "unknown argument",
-                            Suggestion = keySuggestion
+                            Suggestion = keySuggestion,
+                            Accepted = properties.Properties().Select(p => p.Name).ToList()
                         });
                         continue;
                     }
@@ -124,7 +130,8 @@ namespace GxMcp.Gateway
                                     Path = prop.Name,
                                     Expected = "a known argument",
                                     Actual = "unknown argument",
-                                    Suggestion = keySuggestion
+                                    Suggestion = keySuggestion,
+                                    Accepted = properties.Properties().Select(p => p.Name).ToList()
                                 });
                             }
                         }

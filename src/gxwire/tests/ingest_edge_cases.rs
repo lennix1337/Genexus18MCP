@@ -49,14 +49,22 @@ fn same_length_edit_within_the_same_millisecond_invalidates_the_cache() {
     write_source(&dir, "Caller.txt", "// obj\nCall(Alpha);\n");
 
     let before = load_cache(&dir).unwrap();
-    assert_eq!(before.nodes.len(), 2, "the cold graph must have the call and its target");
+    assert_eq!(
+        before.nodes.len(),
+        2,
+        "the cold graph must have the call and its target"
+    );
 
     // Move the stamp into the same millisecond the cache recorded, but to a
     // different tick inside it. This is what two writes a microsecond apart
     // actually look like on NTFS.
     let recorded = recorded_mtime_ticks(&dir);
     let same_millisecond = (recorded / 1_000_000) * 1_000_000 + 1_000;
-    assert_eq!(same_millisecond / 1_000_000, recorded / 1_000_000, "must stay in one millisecond");
+    assert_eq!(
+        same_millisecond / 1_000_000,
+        recorded / 1_000_000,
+        "must stay in one millisecond"
+    );
     assert_ne!(same_millisecond, recorded, "must differ at tick resolution");
 
     write_source(&dir, "Caller.txt", "// obj\nCall(Bravo);\n");
@@ -86,7 +94,11 @@ fn same_timestamp_different_length_invalidates_the_cache() {
 
     load_cache(&dir).unwrap();
 
-    write_source(&dir, "Caller.txt", "// obj\nCall(AlphaWithAVeryMuchLongerName);\n");
+    write_source(
+        &dir,
+        "Caller.txt",
+        "// obj\nCall(AlphaWithAVeryMuchLongerName);\n",
+    );
     restore_modified_time(&file, recorded_mtime_ticks(&dir));
 
     let names = node_names(&dir);
@@ -181,7 +193,10 @@ fn knowledge_base_metadata_at_the_root_is_not_indexed() {
             "{metadata} is IDE bookkeeping, not an object: found {names:?}"
         );
     }
-    assert!(names.iter().any(|n| n == "RealProc"), "a real object must still index");
+    assert!(
+        names.iter().any(|n| n == "RealProc"),
+        "a real object must still index"
+    );
     assert!(names.iter().any(|n| n == "Other"));
 }
 

@@ -52,6 +52,19 @@ storage facts behind the read path are recorded in
 | `Engine.Executable` | path | unset | Explicit `gx-engine.exe`. Authoritative: when the path is missing the probe reports `EngineNotFound` instead of running a different binary. |
 | `Engine.TimeoutSeconds` | positive integer | `120` | Wall-clock budget for one engine invocation (matches the engine's native-compilation deadline). |
 
+**Which `config.json`?** A Gateway reads `GX_CONFIG_PATH` first; without it, it
+takes the first `config.json` found walking up from its own executable. A Gateway
+started from `publish\GxMcp.Gateway.exe` or `publish\start_mcp.bat` without
+`GX_CONFIG_PATH` therefore reads `publish\config.json`, not the `config.json` at
+the checkout root, and `build.ps1` rebuilds `publish\` (and that file, as a
+neutral fallback with no `Engine` section) on every run. To keep an engine choice
+for that launcher, pass it to the build: `.\build.ps1 -EngineBackend sdk` (or
+`.\install.ps1 -EngineBackend sdk`) writes `Engine.Backend` into
+`publish\config.json`. A build that finds an `Engine` section in the previous
+`publish\config.json` that it does not carry over prints a warning naming the
+keys it dropped; `Fallback`, `Executable` and `TimeoutSeconds` are not written by
+the switch and are restored by editing `publish\config.json` afterwards.
+
 Environment overrides (non-strict documents; a **strict** document rejects all
 four at load time, because the engine backend is a behavioral/execution switch
 and the file must stay authoritative — the same rule as `GXMCP_PROFILE`):

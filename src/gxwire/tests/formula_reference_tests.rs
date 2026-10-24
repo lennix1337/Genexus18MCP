@@ -8,8 +8,7 @@ use gxwire::model::EdgeKind;
 use gxwire::parser::formula_references;
 
 /// The attribute shape from the report, single line.
-const ATTR_ONE_LINE: &str =
-    "LimiteAnualDeAbatePeloCARFazendaId : NUMERIC(6) // \"\", [Formula: procPessoaIdComRegistroNoCAR(LimiteAnualDeAbateEmpresaId, LimiteAnualDeAbateCodigoDeRegistroNoCAR, 0) IF LimiteAnualDeAbateEmpresaId <> 0;]";
+const ATTR_ONE_LINE: &str = "LimiteAnualDeAbatePeloCARFazendaId : NUMERIC(6) // \"\", [Formula: procPessoaIdComRegistroNoCAR(LimiteAnualDeAbateEmpresaId, LimiteAnualDeAbateCodigoDeRegistroNoCAR, 0) IF LimiteAnualDeAbateEmpresaId <> 0;]";
 
 /// The same attribute written across several physical lines, which GeneXus
 /// allows and which a line-oriented parse cannot see.
@@ -47,7 +46,10 @@ fn multiline_formula_call_is_reported() {
         found
     );
 
-    let with_call = format!("{}\nTotal : NUMERIC(6) [Formula: procSomaTotal(&a, &b);]", ATTR_MULTILINE);
+    let with_call = format!(
+        "{}\nTotal : NUMERIC(6) [Formula: procSomaTotal(&a, &b);]",
+        ATTR_MULTILINE
+    );
     let found = callees(&with_call);
     assert!(
         found.iter().any(|n| n == "procSomaTotal"),
@@ -115,11 +117,12 @@ fn a_plain_attribute_reference_is_not_a_formula_call() {
 fn formula_edges_use_the_defines_formula_kind() {
     // The kind is what `impact` groups into `formulas`, so an edge of the wrong
     // kind would populate the list with something that is not a formula.
-    let refs = formula_references(
-        "Total : NUMERIC(6) [Formula: procSomaTotal(&a);]",
-    );
+    let refs = formula_references("Total : NUMERIC(6) [Formula: procSomaTotal(&a);]");
     assert_eq!(refs.len(), 1);
-    assert_eq!(refs[0].kind, EdgeKind::Calls(gxwire::model::CallMode::Static));
+    assert_eq!(
+        refs[0].kind,
+        EdgeKind::Calls(gxwire::model::CallMode::Static)
+    );
 }
 
 #[test]
@@ -134,7 +137,9 @@ fn xml_property_formula_call_is_reported() {
 "#;
     let found = callees(xml);
     assert!(
-        found.iter().any(|n| n.eq_ignore_ascii_case("procPessoaIdComRegistroNoCAR")),
+        found
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case("procPessoaIdComRegistroNoCAR")),
         "a Procedure called from XML <Property> Formula must be reported: {:?}",
         found
     );

@@ -1,4 +1,6 @@
-use crate::analysis::{CallersResult, ImpactResult, PackTaskResult, PathResult, SearchResult, SliceResult};
+use crate::analysis::{
+    CallersResult, ImpactResult, PackTaskResult, PathResult, SearchResult, SliceResult,
+};
 use crate::model::{DoctorResult, SafeDeleteResult, StatusResult};
 
 pub fn escape_toon_scalar(val: &str) -> String {
@@ -50,7 +52,10 @@ pub fn format_status_toon(res: &StatusResult) -> String {
     if res.hubs.is_empty() {
         out.push_str("top_hubs: []\n");
     } else {
-        out.push_str(&format!("top_hubs:\n  [{}]{{kind,name,pagerank,refs}}:\n", res.hubs.len()));
+        out.push_str(&format!(
+            "top_hubs:\n  [{}]{{kind,name,pagerank,refs}}:\n",
+            res.hubs.len()
+        ));
         for h in &res.hubs {
             out.push_str(&format!(
                 "    {},{},{:.2},{}\n",
@@ -123,7 +128,10 @@ pub fn format_callers_toon(res: &CallersResult) -> String {
     if res.callers.is_empty() {
         out.push_str("callers: []\n");
     } else {
-        out.push_str(&format!("callers:\n  [{}]{{call_mode,depth,kind,line,name}}:\n", res.callers.len()));
+        out.push_str(&format!(
+            "callers:\n  [{}]{{call_mode,depth,kind,line,name}}:\n",
+            res.callers.len()
+        ));
         for c in &res.callers {
             out.push_str(&format!(
                 "    {},{},{},{},{}\n",
@@ -139,7 +147,10 @@ pub fn format_callers_toon(res: &CallersResult) -> String {
     if res.transitive.is_empty() {
         out.push_str("transitive: []\n");
     } else {
-        out.push_str(&format!("transitive:\n  [{}]{{depth,kind,name}}:\n", res.transitive.len()));
+        out.push_str(&format!(
+            "transitive:\n  [{}]{{depth,kind,name}}:\n",
+            res.transitive.len()
+        ));
         for t in &res.transitive {
             out.push_str(&format!(
                 "    {},{},{}\n",
@@ -191,7 +202,10 @@ pub fn format_impact_toon(res: &ImpactResult) -> String {
     if res.writers.is_empty() {
         out.push_str("writers: []\n");
     } else {
-        out.push_str(&format!("writers:\n  [{}]{{depth,kind,line,name,relationship}}:\n", res.writers.len()));
+        out.push_str(&format!(
+            "writers:\n  [{}]{{depth,kind,line,name,relationship}}:\n",
+            res.writers.len()
+        ));
         for w in &res.writers {
             out.push_str(&format!(
                 "    {},{},{},{},{}\n",
@@ -207,7 +221,10 @@ pub fn format_impact_toon(res: &ImpactResult) -> String {
     if res.readers.is_empty() {
         out.push_str("readers: []\n");
     } else {
-        out.push_str(&format!("readers:\n  [{}]{{depth,kind,line,name,relationship}}:\n", res.readers.len()));
+        out.push_str(&format!(
+            "readers:\n  [{}]{{depth,kind,line,name,relationship}}:\n",
+            res.readers.len()
+        ));
         for r in &res.readers {
             out.push_str(&format!(
                 "    {},{},{},{},{}\n",
@@ -223,7 +240,10 @@ pub fn format_impact_toon(res: &ImpactResult) -> String {
     if res.formulas.is_empty() {
         out.push_str("formulas: []\n");
     } else {
-        out.push_str(&format!("formulas:\n  [{}]{{kind,name}}:\n", res.formulas.len()));
+        out.push_str(&format!(
+            "formulas:\n  [{}]{{kind,name}}:\n",
+            res.formulas.len()
+        ));
         for f in &res.formulas {
             out.push_str(&format!(
                 "    {},{}\n",
@@ -236,7 +256,10 @@ pub fn format_impact_toon(res: &ImpactResult) -> String {
     if res.callers.is_empty() {
         out.push_str("callers: []\n");
     } else {
-        out.push_str(&format!("callers:\n  [{}]{{depth,kind,name}}:\n", res.callers.len()));
+        out.push_str(&format!(
+            "callers:\n  [{}]{{depth,kind,name}}:\n",
+            res.callers.len()
+        ));
         for c in &res.callers {
             out.push_str(&format!(
                 "    {},{},{}\n",
@@ -292,7 +315,10 @@ pub fn format_search_toon(res: &SearchResult) -> String {
     if res.hits.is_empty() {
         out.push_str("hits: []\n");
     } else {
-        out.push_str(&format!("hits:\n  [{}]{{callers,complexity,kind,name,parm,rank,score}}:\n", res.hits.len()));
+        out.push_str(&format!(
+            "hits:\n  [{}]{{callers,complexity,kind,name,parm,rank,score}}:\n",
+            res.hits.len()
+        ));
         for h in &res.hits {
             out.push_str(&format!(
                 "    {},{},{},{},{},{},{:.1}\n",
@@ -339,7 +365,10 @@ pub fn format_pack_task_toon(res: &PackTaskResult) -> String {
     if res.anchors.is_empty() {
         out.push_str("anchors: []\n");
     } else {
-        out.push_str(&format!("anchors:\n  [{}]{{callees,callers,kind,name,parm,rank}}:\n", res.anchors.len()));
+        out.push_str(&format!(
+            "anchors:\n  [{}]{{callees,callers,kind,name,parm,rank}}:\n",
+            res.anchors.len()
+        ));
         for a in &res.anchors {
             let callers_str = a.callers.join(",");
             let callees_str = a.callees.join(",");
@@ -358,7 +387,10 @@ pub fn format_pack_task_toon(res: &PackTaskResult) -> String {
     if res.related_tests.is_empty() {
         out.push_str("related_tests: []\n");
     } else {
-        out.push_str(&format!("related_tests:\n  [{}]:\n", res.related_tests.len()));
+        out.push_str(&format!(
+            "related_tests:\n  [{}]:\n",
+            res.related_tests.len()
+        ));
         for t in &res.related_tests {
             out.push_str(&format!("    - {}\n", escape_toon_scalar(t)));
         }
@@ -396,7 +428,10 @@ pub fn format_slice_toon(res: &SliceResult) -> String {
     if res.points.is_empty() {
         out.push_str("points: []\n");
     } else {
-        out.push_str(&format!("points:\n  [{}]{{kind,line,snippet}}:\n", res.points.len()));
+        out.push_str(&format!(
+            "points:\n  [{}]{{kind,line,snippet}}:\n",
+            res.points.len()
+        ));
         for p in &res.points {
             out.push_str(&format!(
                 "    {},{},{}\n",
@@ -477,7 +512,10 @@ pub fn format_path_toon(res: &PathResult) -> String {
     if res.hops.is_empty() {
         out.push_str("hops: []\n");
     } else {
-        out.push_str(&format!("hops:\n  [{}]{{from,kind,line,to}}:\n", res.hops.len()));
+        out.push_str(&format!(
+            "hops:\n  [{}]{{from,kind,line,to}}:\n",
+            res.hops.len()
+        ));
         for h in &res.hops {
             out.push_str(&format!(
                 "    {},{},{},{}\n",
@@ -490,4 +528,3 @@ pub fn format_path_toon(res: &PathResult) -> String {
     }
     out
 }
-

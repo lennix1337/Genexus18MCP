@@ -136,10 +136,18 @@ Call(Callee);
 ",
     );
     for pruned in ["build", "UserControls", "Locks", "OutputLogs"] {
-        write_source(&dir, &format!("{pruned}/Stray{pruned}.txt"), "// obj
-");
-        write_source(&dir, &format!("Env/{pruned}/Deep{pruned}.txt"), "// obj
-");
+        write_source(
+            &dir,
+            &format!("{pruned}/Stray{pruned}.txt"),
+            "// obj
+",
+        );
+        write_source(
+            &dir,
+            &format!("Env/{pruned}/Deep{pruned}.txt"),
+            "// obj
+",
+        );
     }
 
     let names = node_names(&dir);

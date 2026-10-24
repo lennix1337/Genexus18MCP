@@ -149,19 +149,26 @@ fn test_capability_3_reads_attr_dependency_extraction() {
         .references
         .iter()
         .any(|r| r.target_name == "CustomerBalance" && r.kind == EdgeKind::ReadsAttr);
-    assert!(reads_assign, "CustomerBalance in assignment RHS must be ReadsAttr");
+    assert!(
+        reads_assign,
+        "CustomerBalance in assignment RHS must be ReadsAttr"
+    );
 
     // Check WritesAttr on Attr = &Var
     let writes_assign = parsed
         .references
         .iter()
         .any(|r| r.target_name == "CustomerBalance" && matches!(r.kind, EdgeKind::WritesAttr(_)));
-    assert!(writes_assign, "CustomerBalance in assignment LHS must be WritesAttr");
+    assert!(
+        writes_assign,
+        "CustomerBalance in assignment LHS must be WritesAttr"
+    );
 }
 
 #[test]
 fn test_capability_4_incremental_cache_freshness() {
-    let tmp_dir = std::env::temp_dir().join(format!("gxwire_freshness_test_{}", std::process::id()));
+    let tmp_dir =
+        std::env::temp_dir().join(format!("gxwire_freshness_test_{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp_dir);
     fs::create_dir_all(&tmp_dir).unwrap();
 

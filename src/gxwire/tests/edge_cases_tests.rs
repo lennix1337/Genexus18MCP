@@ -7,15 +7,60 @@ use gxwire::parser::parse_genexus_source;
 fn test_edge_case_circular_dependency_cycles() {
     // ProcA -> ProcB -> ProcC -> ProcA (Cycle!)
     let nodes = vec![
-        EntityNode { id: 0, name: "ProcA".to_string(), kind: EntityKind::Procedure, module: None, description: None, parm_rule: None, path: None, lines: 10, complexity: 1 },
-        EntityNode { id: 1, name: "ProcB".to_string(), kind: EntityKind::Procedure, module: None, description: None, parm_rule: None, path: None, lines: 10, complexity: 1 },
-        EntityNode { id: 2, name: "ProcC".to_string(), kind: EntityKind::Procedure, module: None, description: None, parm_rule: None, path: None, lines: 10, complexity: 1 },
+        EntityNode {
+            id: 0,
+            name: "ProcA".to_string(),
+            kind: EntityKind::Procedure,
+            module: None,
+            description: None,
+            parm_rule: None,
+            path: None,
+            lines: 10,
+            complexity: 1,
+        },
+        EntityNode {
+            id: 1,
+            name: "ProcB".to_string(),
+            kind: EntityKind::Procedure,
+            module: None,
+            description: None,
+            parm_rule: None,
+            path: None,
+            lines: 10,
+            complexity: 1,
+        },
+        EntityNode {
+            id: 2,
+            name: "ProcC".to_string(),
+            kind: EntityKind::Procedure,
+            module: None,
+            description: None,
+            parm_rule: None,
+            path: None,
+            lines: 10,
+            complexity: 1,
+        },
     ];
 
     let edges = vec![
-        RawEdge { from: 0, to: 1, kind: EdgeKind::Calls(CallMode::Static), line: 5 },
-        RawEdge { from: 1, to: 2, kind: EdgeKind::Calls(CallMode::Static), line: 5 },
-        RawEdge { from: 2, to: 0, kind: EdgeKind::Calls(CallMode::Static), line: 5 },
+        RawEdge {
+            from: 0,
+            to: 1,
+            kind: EdgeKind::Calls(CallMode::Static),
+            line: 5,
+        },
+        RawEdge {
+            from: 1,
+            to: 2,
+            kind: EdgeKind::Calls(CallMode::Static),
+            line: 5,
+        },
+        RawEdge {
+            from: 2,
+            to: 0,
+            kind: EdgeKind::Calls(CallMode::Static),
+            line: 5,
+        },
     ];
 
     let graph = CsrGraph::build(nodes, &edges);
@@ -29,9 +74,17 @@ fn test_edge_case_circular_dependency_cycles() {
 
 #[test]
 fn test_edge_case_case_insensitivity() {
-    let nodes = vec![
-        EntityNode { id: 0, name: "PProcessaVenda".to_string(), kind: EntityKind::Procedure, module: None, description: None, parm_rule: None, path: None, lines: 10, complexity: 1 },
-    ];
+    let nodes = vec![EntityNode {
+        id: 0,
+        name: "PProcessaVenda".to_string(),
+        kind: EntityKind::Procedure,
+        module: None,
+        description: None,
+        parm_rule: None,
+        path: None,
+        lines: 10,
+        complexity: 1,
+    }];
     let graph = CsrGraph::build(nodes, &[]);
 
     // Search with lower, upper, and mixed case
@@ -53,7 +106,12 @@ fn test_edge_case_empty_source_and_comments() {
     "#;
     let res_comments = parse_genexus_source(comment_code);
     // Shouldn't pick up comments starting with //
-    assert!(!res_comments.references.iter().any(|r| r.target_name == "PFalso1"));
+    assert!(
+        !res_comments
+            .references
+            .iter()
+            .any(|r| r.target_name == "PFalso1")
+    );
 }
 
 #[test]

@@ -38,7 +38,9 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     if h_bytes.len() < n_len {
         return false;
     }
-    h_bytes.windows(n_len).any(|window| window.eq_ignore_ascii_case(needle_bytes))
+    h_bytes
+        .windows(n_len)
+        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
 }
 
 #[inline]
@@ -47,7 +49,15 @@ fn equals_case_insensitive(a: &str, b: &str) -> bool {
 }
 
 static GX_SYNONYM_GROUPS: &[&[&str]] = &[
-    &["fat", "fatura", "faturamento", "faturar", "invoice", "billing", "invoicing"],
+    &[
+        "fat",
+        "fatura",
+        "faturamento",
+        "faturar",
+        "invoice",
+        "billing",
+        "invoicing",
+    ],
     &["ped", "pedido", "pedidos", "order", "orders"],
     &["cli", "cliente", "clientes", "customer", "client"],
     &["forn", "fornecedor", "fornecedores", "supplier", "vendor"],
@@ -79,7 +89,10 @@ fn expand_synonyms(terms: &[&str]) -> Vec<&'static str> {
     for term in terms {
         let term_lower = term.to_ascii_lowercase();
         for group in GX_SYNONYM_GROUPS {
-            if group.iter().any(|syn| syn.eq_ignore_ascii_case(&term_lower) || term_lower.starts_with(syn)) {
+            if group
+                .iter()
+                .any(|syn| syn.eq_ignore_ascii_case(&term_lower) || term_lower.starts_with(syn))
+            {
                 for syn in *group {
                     if !syn.eq_ignore_ascii_case(&term_lower) && !expanded.contains(syn) {
                         expanded.push(*syn);
@@ -96,7 +109,12 @@ pub fn search_for_task(graph: &CsrGraph, query: &str, limit: usize) -> SearchRes
     search_for_task_ext(graph, query, limit, false)
 }
 
-pub fn search_for_task_ext(graph: &CsrGraph, query: &str, limit: usize, full: bool) -> SearchResult {
+pub fn search_for_task_ext(
+    graph: &CsrGraph,
+    query: &str,
+    limit: usize,
+    full: bool,
+) -> SearchResult {
     let query_trimmed = query.trim();
     let terms: Vec<&str> = query_trimmed.split_whitespace().collect();
     let synonyms = expand_synonyms(&terms);
@@ -118,15 +136,15 @@ pub fn search_for_task_ext(graph: &CsrGraph, query: &str, limit: usize, full: bo
             if contains_case_insensitive(&node.name, term) {
                 score += 15.0;
             }
-            if let Some(ref desc) = node.description {
-                if contains_case_insensitive(desc, term) {
-                    score += 5.0;
-                }
+            if let Some(ref desc) = node.description
+                && contains_case_insensitive(desc, term)
+            {
+                score += 5.0;
             }
-            if let Some(ref module) = node.module {
-                if contains_case_insensitive(module, term) {
-                    score += 3.0;
-                }
+            if let Some(ref module) = node.module
+                && contains_case_insensitive(module, term)
+            {
+                score += 3.0;
             }
         }
 
@@ -187,7 +205,10 @@ pub fn search_for_task_ext(graph: &CsrGraph, query: &str, limit: usize, full: bo
     let next = if empty {
         "gxwire --doctor or check query spelling".to_string()
     } else {
-        format!("gxwire --path {} --to <Target> or gxwire --callers {} or gxwire --pack-task \"{}\"", hits[0].name, hits[0].name, hits[0].name)
+        format!(
+            "gxwire --path {} --to <Target> or gxwire --callers {} or gxwire --pack-task \"{}\"",
+            hits[0].name, hits[0].name, hits[0].name
+        )
     };
 
     SearchResult {

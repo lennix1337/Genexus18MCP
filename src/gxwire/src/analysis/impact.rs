@@ -118,8 +118,13 @@ pub fn analyze_impact_ext(graph: &CsrGraph, target_name: &str, full: bool) -> Op
     };
 
     let can_delete = blast_radius == 0 && callers.is_empty() && writers.is_empty();
-    let empty = blast_radius == 0 && writers.is_empty() && readers.is_empty() && formulas.is_empty() && callers.is_empty();
-    let est_tokens = 60 + writers.len() * 12 + readers.len() * 10 + formulas.len() * 15 + callers.len() * 10;
+    let empty = blast_radius == 0
+        && writers.is_empty()
+        && readers.is_empty()
+        && formulas.is_empty()
+        && callers.is_empty();
+    let est_tokens =
+        60 + writers.len() * 12 + readers.len() * 10 + formulas.len() * 15 + callers.len() * 10;
 
     let (truncated, omitted) = if !full && callers.len() > 40 {
         let omit = callers.len() - 40;
@@ -130,9 +135,15 @@ pub fn analyze_impact_ext(graph: &CsrGraph, target_name: &str, full: bool) -> Op
     };
 
     let next = if can_delete {
-        format!("gxwire --safe-delete {} or genexus_delete {}", target_node.name, target_node.name)
+        format!(
+            "gxwire --safe-delete {} or genexus_delete {}",
+            target_node.name, target_node.name
+        )
     } else {
-        format!("gxwire --slice {}:VAR or gxwire --callers {}", target_node.name, target_node.name)
+        format!(
+            "gxwire --slice {}:VAR or gxwire --callers {}",
+            target_node.name, target_node.name
+        )
     };
 
     Some(ImpactResult {

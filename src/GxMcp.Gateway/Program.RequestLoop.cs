@@ -483,6 +483,11 @@ namespace GxMcp.Gateway
                     }
                 }
 
+                // A list of names sent as a JSON array where the tool documents a
+                // comma-separated string (genexus_search_source.objectName) is joined
+                // here, so it reaches the validator and the Worker in the form they read.
+                if (!string.IsNullOrEmpty(toolName)) ListArgumentCoercion.Apply(toolName, args);
+
                 // Gateway-side schema pre-validation: reject malformed args immediately,
                 // before forwarding to the worker. Saves an STA round-trip and gives LLM
                 // clients faster feedback on typos / missing required fields.
@@ -491,16 +496,10 @@ namespace GxMcp.Gateway
                     var validationResult = GatewayArgsValidator.Validate(toolName, args);
                     if (!validationResult.Ok)
                     {
-                        var firstViolation = validationResult.Violations[0];
-                        string hint = firstViolation.Actual == "missing"
-                            ? $"Required field '{firstViolation.Path}' is missing — expected {firstViolation.Expected}."
-                            : firstViolation.Actual == "unknown argument"
-                                ? $"Unknown argument '{firstViolation.Path}'."
-                                : $"Field '{firstViolation.Path}': expected {firstViolation.Expected}, got {firstViolation.Actual}.";
-                        if (!string.IsNullOrEmpty(firstViolation.Suggestion))
-                        {
-                            hint += $" Did you mean '{firstViolation.Suggestion}'?";
-                        }
+                        // The message names the offending fields (clients often render only
+                        // the message) and the hint walks every violation; see InvalidArgsReport.
+                        string hint = InvalidArgsReport.Hint(validationResult.Violations);
+                        string invalidArgsMessage = InvalidArgsReport.Message(toolName, validationResult.Violations);
 
                         var violationsArr = new Newtonsoft.Json.Linq.JArray(
                             validationResult.Violations.Select(v =>
@@ -512,6 +511,7 @@ namespace GxMcp.Gateway
                                     ["actual"] = v.Actual
                                 };
                                 if (!string.IsNullOrEmpty(v.Suggestion)) vo["suggestion"] = v.Suggestion;
+                                if (v.Accepted != null) vo["accepted"] = new JArray(v.Accepted);
                                 return vo;
                             }));
 
@@ -526,7 +526,7 @@ namespace GxMcp.Gateway
                                 ["error"] = new JObject
                                 {
                                     ["code"] = "InvalidArgs",
-                                    ["message"] = $"Arguments for tool '{toolName}' failed schema validation.",
+                                    ["message"] = invalidArgsMessage,
                                     ["hint"] = hint,
                                     ["violations"] = violationsArr
                                 }
@@ -537,7 +537,7 @@ namespace GxMcp.Gateway
                             ["error"] = new JObject
                             {
                                 ["code"] = "InvalidArgs",
-                                ["message"] = $"Arguments for tool '{toolName}' failed schema validation.",
+                                ["message"] = invalidArgsMessage,
                                 ["hint"] = hint,
                                 ["nextSteps"] = new JArray
                                 {

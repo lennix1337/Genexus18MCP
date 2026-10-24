@@ -4252,7 +4252,7 @@
             "type": "integer"
           },
           "timeoutMs": {
-            "description": "Wall-clock budget (default 30000).…",
+            "description": "Wall-clock budget (default 30000). A…",
             "type": "integer"
           },
           "typeFilter": {

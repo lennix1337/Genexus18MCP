@@ -1,4 +1,6 @@
-use gxwire::analysis::{analyze_callers, analyze_impact, analyze_slice, pack_task, search_for_task};
+use gxwire::analysis::{
+    analyze_callers, analyze_impact, analyze_slice, pack_task, search_for_task,
+};
 use gxwire::graph::CsrGraph;
 use gxwire::model::{CallMode, EdgeKind, EntityKind, EntityNode, RawEdge, WriteMode};
 
@@ -85,21 +87,61 @@ fn create_sample_kb_graph() -> CsrGraph {
 
     let edges = vec![
         // ProcA calls ProcB
-        RawEdge { from: 0, to: 1, kind: EdgeKind::Calls(CallMode::Static), line: 25 },
+        RawEdge {
+            from: 0,
+            to: 1,
+            kind: EdgeKind::Calls(CallMode::Static),
+            line: 25,
+        },
         // ProcB calls ProcC
-        RawEdge { from: 1, to: 2, kind: EdgeKind::Calls(CallMode::Static), line: 40 },
+        RawEdge {
+            from: 1,
+            to: 2,
+            kind: EdgeKind::Calls(CallMode::Static),
+            line: 40,
+        },
         // TrnCliente calls ProcB via BC
-        RawEdge { from: 3, to: 1, kind: EdgeKind::Calls(CallMode::BusinessComponent), line: 15 },
+        RawEdge {
+            from: 3,
+            to: 1,
+            kind: EdgeKind::Calls(CallMode::BusinessComponent),
+            line: 15,
+        },
         // UT_ProcB calls ProcB
-        RawEdge { from: 6, to: 1, kind: EdgeKind::Calls(CallMode::Static), line: 10 },
+        RawEdge {
+            from: 6,
+            to: 1,
+            kind: EdgeKind::Calls(CallMode::Static),
+            line: 10,
+        },
         // ProcB writes CliSaldo
-        RawEdge { from: 1, to: 4, kind: EdgeKind::WritesAttr(WriteMode::ForEachUpdate), line: 55 },
+        RawEdge {
+            from: 1,
+            to: 4,
+            kind: EdgeKind::WritesAttr(WriteMode::ForEachUpdate),
+            line: 55,
+        },
         // TrnCliente writes CliSaldo
-        RawEdge { from: 3, to: 4, kind: EdgeKind::WritesAttr(WriteMode::New), line: 30 },
+        RawEdge {
+            from: 3,
+            to: 4,
+            kind: EdgeKind::WritesAttr(WriteMode::New),
+            line: 30,
+        },
         // CliTotDivida is a formula depending on CliSaldo
-        RawEdge { from: 5, to: 4, kind: EdgeKind::DefinesFormula, line: 0 },
+        RawEdge {
+            from: 5,
+            to: 4,
+            kind: EdgeKind::DefinesFormula,
+            line: 0,
+        },
         // ProcA reads CliSaldo
-        RawEdge { from: 0, to: 4, kind: EdgeKind::ReadsAttr, line: 12 },
+        RawEdge {
+            from: 0,
+            to: 4,
+            kind: EdgeKind::ReadsAttr,
+            line: 12,
+        },
     ];
 
     CsrGraph::build(nodes, &edges)
@@ -111,16 +153,34 @@ fn test_callers_precision() {
     let res = analyze_callers(&graph, "ProcB", 3).expect("ProcB should exist");
 
     assert_eq!(res.count, 3); // ProcA, TrnCliente, UT_ProcB
-    assert!(res.callers.iter().any(|c| c.name == "ProcA" && c.call_mode == "static"));
-    assert!(res.callers.iter().any(|c| c.name == "TrnCliente" && c.call_mode == "bc"));
+    assert!(
+        res.callers
+            .iter()
+            .any(|c| c.name == "ProcA" && c.call_mode == "static")
+    );
+    assert!(
+        res.callers
+            .iter()
+            .any(|c| c.name == "TrnCliente" && c.call_mode == "bc")
+    );
     assert!(res.callers.iter().any(|c| c.name == "UT_ProcB"));
 
     // Check callers of ProcC (should have ProcB as 1-hop, and ProcA, TrnCliente, UT_ProcB as transitive)
     let res_c = analyze_callers(&graph, "ProcC", 3).expect("ProcC should exist");
     assert_eq!(res_c.count, 1);
     assert_eq!(res_c.callers[0].name, "ProcB");
-    assert!(res_c.transitive.iter().any(|t| t.name == "ProcA" && t.depth == 2));
-    assert!(res_c.transitive.iter().any(|t| t.name == "TrnCliente" && t.depth == 2));
+    assert!(
+        res_c
+            .transitive
+            .iter()
+            .any(|t| t.name == "ProcA" && t.depth == 2)
+    );
+    assert!(
+        res_c
+            .transitive
+            .iter()
+            .any(|t| t.name == "TrnCliente" && t.depth == 2)
+    );
 }
 
 #[test]
@@ -144,13 +204,23 @@ fn test_search_and_pack_task() {
     // Search for task
     let search = search_for_task(&graph, "pedido faturamento", 5);
     assert!(!search.hits.is_empty());
-    assert!(search.hits.iter().any(|h| h.name == "ProcA" || h.name == "ProcB"));
+    assert!(
+        search
+            .hits
+            .iter()
+            .any(|h| h.name == "ProcA" || h.name == "ProcB")
+    );
 
     // Pack task under 1000 tokens
     let packed = pack_task(&graph, "calculo boleto", 1000);
     assert!(packed.est_tokens <= 1000);
     assert!(!packed.anchors.is_empty());
-    assert!(packed.anchors.iter().any(|a| a.name == "ProcB" || a.name == "ProcC"));
+    assert!(
+        packed
+            .anchors
+            .iter()
+            .any(|a| a.name == "ProcB" || a.name == "ProcC")
+    );
 }
 
 #[test]

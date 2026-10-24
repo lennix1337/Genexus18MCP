@@ -926,7 +926,7 @@ namespace GxMcp.Worker.Services
                                 Description = description,
                                 Parent = hierarchy.ParentName,
                                 ParentPath = hierarchy.ParentPath,
-                                ParentFolderPath = string.IsNullOrEmpty(hierarchy.ParentPath) ? "Root Module" : "Root Module/" + hierarchy.ParentPath,
+                                ParentFolderPath = IndexCacheService.ComposeParentFolderPath(hierarchy.ParentPath),
                                 Path = hierarchy.Path,
                                 Module = hierarchy.ModuleName,
                                 LastUpdate = lu,

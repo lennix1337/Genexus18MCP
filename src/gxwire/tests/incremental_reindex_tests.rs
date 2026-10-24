@@ -53,7 +53,13 @@ fn fingerprint(graph: &CsrGraph) -> (BTreeMap<String, String>, BTreeMap<String, 
     let mut edges = BTreeMap::new();
     for id in 0..graph.nodes.len() as u32 {
         for (to, kind, line) in graph.get_callers(id) {
-            let key = format!("{}->{}|{}|{}", name_of(id), name_of(to), kind.as_str(), line);
+            let key = format!(
+                "{}->{}|{}|{}",
+                name_of(id),
+                name_of(to),
+                kind.as_str(),
+                line
+            );
             *edges.entry(key).or_insert(0usize) += 1;
         }
     }
@@ -101,7 +107,11 @@ fn assert_same_graph(label: &str, incremental: &CsrGraph, full: &CsrGraph) {
 /// Copies `src` into a fresh directory so a cold build can be compared against
 /// the incrementally-maintained one.
 fn clone_dir(src: &Path, tag: &str) -> PathBuf {
-    let dst = src.with_file_name(format!("{}_{}", src.file_name().unwrap().to_string_lossy(), tag));
+    let dst = src.with_file_name(format!(
+        "{}_{}",
+        src.file_name().unwrap().to_string_lossy(),
+        tag
+    ));
     let _ = fs::remove_dir_all(&dst);
     fs::create_dir_all(&dst).unwrap();
     for entry in fs::read_dir(src).unwrap() {
@@ -128,11 +138,7 @@ fn cold_build(dir: &Path) -> CsrGraph {
 }
 
 fn scenario_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "gxwire_incr_{}_{}",
-        std::process::id(),
-        name
-    ));
+    let dir = std::env::temp_dir().join(format!("gxwire_incr_{}_{}", std::process::id(), name));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -147,7 +153,11 @@ fn incremental_edit_matches_full_rebuild() {
     save_index(&initial, &parses, &dir).unwrap();
 
     // Warm load must be a no-op rebuild.
-    assert_same_graph("warm", &load_cache(&dir).unwrap(), &cold_build(&clone_dir(&dir, "edit_ref")));
+    assert_same_graph(
+        "warm",
+        &load_cache(&dir).unwrap(),
+        &cold_build(&clone_dir(&dir, "edit_ref")),
+    );
 
     // Edit one object: new call target, a dropped reference, a size change.
     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -219,7 +229,11 @@ fn size_change_alone_invalidates_a_reused_entry() {
         g.symbol_to_id.contains_key("zzzunknown"),
         "a same-size content change must still be observed"
     );
-    assert_same_graph("after resize", &g, &cold_build(&clone_dir(&dir, "resize_ref")));
+    assert_same_graph(
+        "after resize",
+        &g,
+        &cold_build(&clone_dir(&dir, "resize_ref")),
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -255,7 +269,11 @@ fn renamed_object_renames_its_node() {
         "the old name must no longer resolve to a file"
     );
 
-    assert_same_graph("after rename", &g, &cold_build(&clone_dir(&dir, "rename_ref")));
+    assert_same_graph(
+        "after rename",
+        &g,
+        &cold_build(&clone_dir(&dir, "rename_ref")),
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -327,7 +345,10 @@ fn empty_knowledge_base_yields_an_empty_graph() {
     fs::create_dir_all(&dir).unwrap();
 
     let g = load_cache(&dir).unwrap();
-    assert!(g.nodes.is_empty(), "an empty KB must produce an empty graph");
+    assert!(
+        g.nodes.is_empty(),
+        "an empty KB must produce an empty graph"
+    );
 
     // And it must stay answerable once an object shows up.
     write_object(&dir, "ProcFirst", "// first\n");

@@ -607,13 +607,8 @@ namespace GxMcp.Worker.Services
                 {
                     filteredObjects = filteredObjects.Where(x =>
                     {
-                        // ParentPath here is hierarchy.ParentPath (without "Root Module").
                         // Synthesize the same Root-Module-prefixed string used by ParentFolderPath.
-                        var pp = x.Hierarchy.ParentPath ?? string.Empty;
-                        string folderPath = string.IsNullOrEmpty(pp)
-                            ? "Root Module"
-                            : "Root Module/" + pp;
-                        return PathPrefixMatches(folderPath, invokerPathPrefix);
+                        return PathPrefixMatches(IndexCacheService.ComposeParentFolderPath(x.Hierarchy.ParentPath), invokerPathPrefix);
                     });
                 }
 
@@ -670,9 +665,7 @@ namespace GxMcp.Worker.Services
                 for (int i = startRuntime; i < endRuntime; i++)
                 {
                     var item = orderedRuntime[i];
-                    var runtimeParentFolderPath = string.IsNullOrEmpty(item.Hierarchy.ParentPath)
-                        ? "Root Module"
-                        : "Root Module/" + item.Hierarchy.ParentPath;
+                    var runtimeParentFolderPath = IndexCacheService.ComposeParentFolderPath(item.Hierarchy.ParentPath);
                     DateTime rtLastUpdate = default(DateTime);
                     DateTime rtCreatedAt = default(DateTime);
                     string rtLastModifiedBy = null;

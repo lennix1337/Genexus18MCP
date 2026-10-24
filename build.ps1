@@ -4,7 +4,13 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')]
-    [string]$Version
+    [string]$Version,
+
+    # Writes `Engine.Backend` into publish\config.json. publish\ is rebuilt from
+    # scratch on every run, so a hand-edited Engine section there does not survive
+    # a build; this makes the choice explicit for the direct-exe launcher.
+    [ValidateSet('sdk', 'auto', 'gxengine')]
+    [string]$EngineBackend
 )
 
 Set-StrictMode -Version Latest
@@ -15,6 +21,7 @@ $publishDir = Join-Path $root "publish"
 $gatewayProject = Join-Path $root "src\GxMcp.Gateway\GxMcp.Gateway.csproj"
 $workerProject = Join-Path $root "src\GxMcp.Worker\GxMcp.Worker.csproj"
 . (Join-Path $root "scripts\gx-version-catalog.ps1")
+. (Join-Path $root "scripts\publish-config.ps1")
 $gxCatalog = Get-GxVersionCatalog -Root $root
 
 function Fail-Build([string]$message, [int]$exitCode = 1) {
@@ -109,6 +116,9 @@ Start-Sleep -Seconds 1
 $ErrorActionPreference = "Stop"
 
 # 1. Clean Publish Directory
+# Read the Engine section of the previous publish\config.json first: the clean
+# below deletes it and the rebuilt fallback config does not carry it (#649).
+$previousEngineSection = Get-PublishedEngineSection -ConfigPath (Join-Path $publishDir "config.json")
 if (Test-Path $publishDir) {
     Write-Host "   > Cleaning publish directory..."
     Get-ChildItem -Path "$publishDir\*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
@@ -208,26 +218,15 @@ Write-Host "   > Skipping Definitions/ copy - resolved at runtime from GeneXus i
 #    This file is only a fallback for a bare manual run. It deliberately contains
 #    no KB catalog or startup default; KB selection is an explicit session action.
 Write-Host "   > Writing sanitized neutral fallback config.json to publish..."
-$defaultConfig = @{
-    ConfigSchemaVersion = 2
-    GatewayMode = "stdio-isolated"
-    GeneXus = @{
-        InstallationPath = $artifactGxPath
-        WorkerExecutable = "worker\\GxMcp.Worker.exe"
-    }
-    Server = @{
-        HttpPort = 0
-        McpStdio = $true
-        SessionIdleTimeoutMinutes = 10
-        WorkerIdleTimeoutMinutes = 5
-        EmitStructuredContent = $false
-        TerseResponses = $true
-    }
-    Environment = @{
-        ResolutionPolicy = "strict"
-    }
-} | ConvertTo-Json -Depth 4
+$defaultConfig = Get-PublishFallbackConfigJson -ArtifactGxPath $artifactGxPath -EngineBackend $EngineBackend
 Set-Content "$publishDir\config.json" $defaultConfig
+if (-not [string]::IsNullOrWhiteSpace($EngineBackend)) {
+    Write-Host "   > Engine.Backend=$EngineBackend written to publish\config.json." -ForegroundColor Gray
+}
+$discardedEngineWarning = Get-DiscardedEngineSectionWarning -PreviousEngine $previousEngineSection -EngineBackend $EngineBackend
+if ($discardedEngineWarning) {
+    Write-Host "   > Warning: $discardedEngineWarning" -ForegroundColor Yellow
+}
 
 # 6. Generate start_mcp.bat
 Write-Host "   > Generating start_mcp.bat..."

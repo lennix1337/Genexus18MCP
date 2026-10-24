@@ -48,7 +48,9 @@ pub fn pack_task_ext(graph: &CsrGraph, task: &str, budget: usize, full: bool) ->
             for (src_id, _, _) in callers_raw.iter().take(4) {
                 if let Some(src_node) = graph.get_node(*src_id) {
                     callers.push(src_node.name.clone());
-                    if src_node.kind == crate::model::EntityKind::Test && !tests.contains(&src_node.name) {
+                    if src_node.kind == crate::model::EntityKind::Test
+                        && !tests.contains(&src_node.name)
+                    {
                         tests.push(src_node.name.clone());
                     }
                 }
@@ -93,7 +95,10 @@ pub fn pack_task_ext(graph: &CsrGraph, task: &str, budget: usize, full: bool) ->
     let next = if empty {
         "gxwire --doctor or try broader task keywords".to_string()
     } else {
-        format!("gxwire --callers {} or genexus_read {}", anchors[0].name, anchors[0].name)
+        format!(
+            "gxwire --callers {} or genexus_read {}",
+            anchors[0].name, anchors[0].name
+        )
     };
 
     PackTaskResult {

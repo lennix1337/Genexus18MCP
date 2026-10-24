@@ -1,4 +1,6 @@
-use crate::analysis::{CallersResult, ImpactResult, PackTaskResult, PathResult, SearchResult, SliceResult};
+use crate::analysis::{
+    CallersResult, ImpactResult, PackTaskResult, PathResult, SearchResult, SliceResult,
+};
 use crate::model::{DoctorResult, SafeDeleteResult, StatusResult};
 
 pub fn format_status_xml(res: &StatusResult) -> String {
@@ -280,7 +282,10 @@ pub fn format_pack_task_xml(res: &PackTaskResult) -> String {
     out.push_str("</anchors>");
 
     if !res.related_tests.is_empty() {
-        out.push_str(&format!(r#"<tests>{}</tests>"#, res.related_tests.join(",")));
+        out.push_str(&format!(
+            r#"<tests>{}</tests>"#,
+            res.related_tests.join(",")
+        ));
     }
 
     out.push_str(&format!("<next>{}</next>", res.next));
@@ -339,4 +344,3 @@ pub fn format_path_xml(res: &PathResult) -> String {
     out.push_str("</path>");
     out
 }
-

@@ -580,6 +580,25 @@ namespace GxMcp.Worker.Services
             return SearchCore(c, ct, partial, status);
         }
 
+        /// <summary>
+        /// Marks the result of a scan that stopped before reading every object (a timeout or a
+        /// cancellation) with the same fields a completed search carries, so a caller that
+        /// reads <c>hits</c> and <c>partial</c> cannot take the hits found so far for the whole
+        /// answer (#652). The envelope keeps its <c>Timeout</c>/<c>Cancelled</c> code and
+        /// <c>partialHits</c>.
+        /// </summary>
+        private static void MarkScanIncomplete(JObject result, JArray hits, int scanned, string indexStatus, string stopped)
+        {
+            result["hits"] = hits;
+            result["partial"] = true;
+            result["complete"] = false;
+            result["truncated"] = true;
+            result["scannedObjects"] = scanned;
+            result["indexStatus"] = indexStatus;
+            result["partialHint"] = $"The scan {stopped} before every object was read, so an empty or short `hits` does NOT mean the text is absent. "
+                + "Resume with cursor=nextCursor until a response has no nextCursor, or narrow the scan (objectName, typeFilter, pathPrefix).";
+        }
+
         private bool ScheduleContinuation(SourceSearchCriteria criteria, string nextCursor)
         {
             if (criteria == null || string.IsNullOrWhiteSpace(nextCursor)) return false;
@@ -1053,7 +1072,7 @@ namespace GxMcp.Worker.Services
                     if (ct.IsCancellationRequested)
                     {
                         JObject executionSnapshot = BuildExecutionSnapshot();
-                        return Models.McpResponse.Ok(code: "Cancelled", result: new JObject
+                        var cancelledResult = new JObject
                         {
                             ["partialHits"] = hits,
                             ["totalScanned"] = scanned,
@@ -1063,7 +1082,9 @@ namespace GxMcp.Worker.Services
                             ["nextCursor"] = BuildBoundCursor(cursor, skippedHits, metadata: false),
                             ["nextOffset"] = cursor,
                             ["resumeHint"] = "Pass cursor=nextCursor to resume this scan; legacy callers may pass startIndex=nextOffset."
-                        });
+                        };
+                        MarkScanIncomplete(cancelledResult, hits, scanned, indexStatus, "was cancelled");
+                        return Models.McpResponse.Ok(code: "Cancelled", result: cancelledResult);
                     }
                     if (timeoutMs == 0 || swBudget.ElapsedMilliseconds > timeoutMs)
                     {
@@ -1076,7 +1097,7 @@ namespace GxMcp.Worker.Services
                             && !c.SuppressContinuation
                             && cursor < entries.Count
                             && ScheduleContinuation(c, continuationCursor);
-                        return Models.McpResponse.Ok(code: "Timeout", result: new JObject
+                        var timeoutResult = new JObject
                         {
                             ["partialHits"] = hits,
                             ["totalScanned"] = scanned,
@@ -1095,7 +1116,12 @@ namespace GxMcp.Worker.Services
                             // each), so a whole-KB scan spans many budget windows. Prefer scoping
                             // for an instant search; resume only for an exhaustive sweep.
                             ["resumeHint"] = $"Scanned {pct}% ({cursor}/{entries.Count}). FASTEST: narrow the scan — objectName=\"A,B\" (searches only those, O(objects)), or typeFilter / pathPrefix. To keep sweeping the whole KB, resume with cursor=nextCursor (legacy: startIndex={cursor}); optionally use a larger timeoutMs."
-                        });
+                        };
+                        MarkScanIncomplete(timeoutResult, hits, scanned, indexStatus,
+                            broadSdkScan
+                                ? $"ran out of its {timeoutMs} ms slice (a whole-KB scan is cut into short slices whatever timeoutMs asks)"
+                                : $"ran out of its {timeoutMs} ms budget");
+                        return Models.McpResponse.Ok(code: "Timeout", result: timeoutResult);
                     }
                     scanned++;
                     // PERFORMANCE (perf round 2): cache-first, per-part. The index entry
@@ -1473,6 +1499,8 @@ namespace GxMcp.Worker.Services
                         ["nextOffset"] = metadataNextEntry,
                         ["resumeHint"] = "Pass cursor=nextCursor to resume the metadata scan; the cursor is bound to this query, scope, index generation and KB."
                     };
+                    MarkScanIncomplete(interruptedResult, hits, scanned, indexStatus,
+                        metadataCancelled ? "was cancelled" : $"ran out of its {timeoutMs} ms budget");
                     return Models.McpResponse.Ok(code: interruptionCode, result: interruptedResult);
                 }
 

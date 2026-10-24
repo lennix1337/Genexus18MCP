@@ -50,10 +50,11 @@ fn function_form_call_is_not_also_reported_as_an_attribute_read() {
     let source = "&x = procPessoaIdComRegistroNoCAR(&EmpresaId, 0)\n";
     let parsed = parse_genexus_source(source);
 
-    let misclassified = parsed
-        .references
-        .iter()
-        .any(|r| r.target_name.eq_ignore_ascii_case("procPessoaIdComRegistroNoCAR") && r.kind == EdgeKind::ReadsAttr);
+    let misclassified = parsed.references.iter().any(|r| {
+        r.target_name
+            .eq_ignore_ascii_case("procPessoaIdComRegistroNoCAR")
+            && r.kind == EdgeKind::ReadsAttr
+    });
     assert!(
         !misclassified,
         "the callee must not also appear as an attribute read"
@@ -132,7 +133,9 @@ fn a_real_procedure_call_alongside_a_builtin_is_still_found() {
     let source = "&x = Str(procCalculaTotal(&a, &b))\n";
     let names = callees(source);
     assert!(
-        names.iter().any(|n| n.eq_ignore_ascii_case("procCalculaTotal")),
+        names
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case("procCalculaTotal")),
         "a genuine call nested in an expression must survive: {:?}",
         names
     );
@@ -154,9 +157,10 @@ fn reported_counts_are_recovered() {
     let count = parsed
         .references
         .iter()
-        .filter(|r| r
-            .target_name
-            .eq_ignore_ascii_case("procDadosFiscaisAdicionaisPrincipalDaPessoa"))
+        .filter(|r| {
+            r.target_name
+                .eq_ignore_ascii_case("procDadosFiscaisAdicionaisPrincipalDaPessoa")
+        })
         .count();
     assert_eq!(count, 5, "every invocation must be counted");
 }
@@ -172,7 +176,10 @@ fn object_link_method_invocation_targets_object_not_first_argument() {
     let link_refs: Vec<_> = parsed
         .references
         .iter()
-        .filter(|r| r.target_name.eq_ignore_ascii_case("PessoaDadosFiscaisAdicionais"))
+        .filter(|r| {
+            r.target_name
+                .eq_ignore_ascii_case("PessoaDadosFiscaisAdicionais")
+        })
         .collect();
     assert_eq!(
         link_refs.len(),

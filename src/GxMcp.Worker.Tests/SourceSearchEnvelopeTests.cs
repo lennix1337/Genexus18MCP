@@ -182,6 +182,28 @@ namespace GxMcp.Worker.Tests
             Assert.NotNull(obj["result"]?["coverage"]?["requestedParts"]);
             Assert.NotNull(obj["result"]?["partExecution"]?["requestedParts"]);
             Assert.True(obj["result"]?["sliceContinuation"]?.ToObject<bool>() ?? false);
+            AssertMarkedIncomplete(obj, "Timeout");
+        }
+
+        /// <summary>
+        /// #652: a scan that stopped early carries the fields a completed search carries, so a
+        /// caller that reads <c>hits</c> and <c>partial</c> cannot take what was found so far for
+        /// the whole answer.
+        /// </summary>
+        internal static void AssertMarkedIncomplete(JObject envelope, string code)
+        {
+            Assert.Equal(code, envelope["code"]?.ToString());
+            var result = (JObject)envelope["result"];
+            Assert.True(result["partial"]?.ToObject<bool>());
+            Assert.False(result["complete"]?.ToObject<bool>());
+            Assert.True(result["truncated"]?.ToObject<bool>());
+            Assert.NotNull(result["scannedObjects"]);
+            Assert.Equal("Ready", result["indexStatus"]?.ToString());
+            Assert.Contains("does NOT mean the text is absent", result["partialHint"]?.ToString());
+            Assert.Contains("cursor=nextCursor", result["partialHint"]?.ToString());
+            // `hits` is what a client reads; it must carry the same hits as `partialHits`.
+            Assert.NotNull(result["hits"]);
+            Assert.True(JToken.DeepEquals(result["partialHits"], result["hits"]));
         }
     }
 }

@@ -7,7 +7,11 @@ param(
     # Replaces the legacy -SkipClaudeConfig / -SkipCodexConfig / -SkipVsCodeMcp
     # switches, which are still accepted as aliases for backward compatibility.
     [Alias('SkipClaudeConfig', 'SkipCodexConfig', 'SkipVsCodeMcp', 'SkipExtensionInstall')]
-    [switch]$SkipClientConfig
+    [switch]$SkipClientConfig,
+    # Forwarded to build.ps1, which writes it as Engine.Backend into publish\config.json
+    # (the config the direct-exe launcher reads). Omitted: the build writes no Engine section.
+    [ValidateSet('sdk', 'auto', 'gxengine')]
+    [string]$EngineBackend
 )
 
 $progressPreference = "SilentlyContinue"
@@ -246,7 +250,11 @@ if ($PSBoundParameters.ContainsKey("GeneXusPath")) {
 $config.GeneXus.InstallationPath = Get-ExistingPathOrPrompt "GeneXus installation path" $config.GeneXus.InstallationPath
 
 Write-Step "[1/2] Building gateway and worker"
-& (Join-Path $root "build.ps1")
+$buildArguments = @{}
+if ($PSBoundParameters.ContainsKey("EngineBackend")) {
+    $buildArguments.EngineBackend = $EngineBackend
+}
+& (Join-Path $root "build.ps1") @buildArguments
 if ($LASTEXITCODE -ne 0) {
     Fail "Build failed."
 }
