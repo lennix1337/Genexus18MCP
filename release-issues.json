@@ -1,7 +1,198 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "4.0.1",
-  "tag": "v4.0.1",
-  "collectedAtUtc": "2026-10-21T18:12:02.6200553Z",
-  "issues": []
+  "version": "4.0.2",
+  "tag": "v4.0.2",
+  "collectedAtUtc": "2026-10-25T14:52:18.4929987Z",
+  "issues": [
+    {
+      "number": 637,
+      "title": "[gx-engine 4.0.1] Follow-up #635: on real versioned GX18 KBs nothing is built by the engine, and type queries are slower than the SDK index",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/637",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 640,
+      "title": "Suspeita de flake: WorkerPoolTests.AcquireAsync_during_drain_waits_for_DrainComplete falha e pode spawnar Worker real",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/640",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 641,
+      "title": "cargo clippy --all-targets -- -D warnings falha com 8 diagnósticos em src/gx-engine",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/641",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 642,
+      "title": "cargo test do gx-engine falha quando o diretório de temp_dir() e o checkout não compartilham raiz (Windows)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/642",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 643,
+      "title": "Teste de symlink em csc_direct falha em Windows sem Developer Mode/privilégio de symlink",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/643",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 644,
+      "title": "CI: steps de lint, build e test dos jobs Rust não verificam $LASTEXITCODE entre comandos nativos",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/644",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 645,
+      "title": "[Reliability][Follow-up #590] workwith_persistence_smoke.ps1: limpar o atributo de filtro criado e corrigir textos obsoletos",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/645",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 646,
+      "title": "[Docs] Default de GXMCP_ENGINE_BACKEND está desatualizado na página de variáveis (doc diz sdk; código diz gxengine)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/646",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 649,
+      "title": "[Bug] build.ps1 descarta a seção Engine de publish\\config.json usada pelo launcher direto",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/649",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 650,
+      "title": "[Bug] genexus_list_objects with pathPrefix returns a subset (1 of 6 objects) - module looks empty",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/650",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 651,
+      "title": "[Bug] genexus_object_context: module says \"Root Module\" for objects whose path is \"Root Module/<Module>/<Object>\"",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/651",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 652,
+      "title": "[Bug] genexus_search_source: index timeout is returned as zero hits (false negative); objectName array rejected",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/652",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 653,
+      "title": "[Bug] genexus_read returns pre-edit source after a successful genexus_edit (sdkCacheRefreshConfirmed: false, no force refresh)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/653",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 654,
+      "title": "[Bug] genexus_lifecycle action=specify validates the last build's source, not the current source",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/654",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 655,
+      "title": "[Bug] Argument validation fails without naming the offending field or the accepted values",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/655",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 656,
+      "title": "[Bug] ~55s silent stalls on genexus_edit with no persisted/verified flag; lifecycle result returns another job's output and truncates silently",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/656",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 659,
+      "title": "[Bug] gxwire: fmt e clippy --all-targets -D warnings falham; CI não roda esses gates no crate",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/659",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 662,
+      "title": "[Bug] genexus_kb action=open fails with \"Tool conversion produced no worker command\" when the CLI config declares no KB path/aliases (reads still work)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/662",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 675,
+      "title": "[Bug] gx-engine rebuild-all --object on an unreachable object emits a project with a missing Main (CS1555)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/675",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    }
+  ]
 }
