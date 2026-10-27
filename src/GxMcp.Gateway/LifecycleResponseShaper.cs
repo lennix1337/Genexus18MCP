@@ -129,6 +129,7 @@ namespace GxMcp.Gateway
                 ["buildMode"] = obj["buildMode"] ?? obj["BuildMode"],
                 ["kbOpened"] = obj["kbOpened"] ?? obj["KbOpened"],
                 ["buildAllDone"] = obj["buildAllDone"] ?? obj["BuildAllDone"],
+                ["buildEvents"] = obj["buildEvents"] ?? obj["BuildEvents"],
                 ["reorgRequired"] = obj["reorgRequired"] ?? obj["ReorgRequired"],
                 ["msBuildExitCode"] = obj["msBuildExitCode"] ?? obj["MsBuildExitCode"],
                 ["fullLogPath"] = obj["fullLogPath"] ?? obj["FullLogPath"],

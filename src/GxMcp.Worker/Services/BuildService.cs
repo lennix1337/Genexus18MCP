@@ -553,6 +553,12 @@ namespace GxMcp.Worker.Services
         {
             if (status == null || !string.Equals(status.Action, "BuildAll", StringComparison.OrdinalIgnoreCase)) return;
             status.BuildMode = "BuildAll";
+            status.BuildEvents = new JObject
+            {
+                ["policy"] = "sdk",
+                ["executionVerified"] = JValue.CreateNull(),
+                ["verification"] = "Build All completion does not independently verify configured build commands. Inspect their output in fullLogPath and their external effects."
+            };
             status.KbOpened = status.KbOpened == true
                 || (!string.IsNullOrEmpty(output) && output.IndexOf("[GXMCP-BUILD-ALL] KB opened", StringComparison.OrdinalIgnoreCase) >= 0);
             status.BuildAllDone = status.BuildAllDone == true || HasBuildAllCompletionEvidence(output);
@@ -735,6 +741,8 @@ namespace GxMcp.Worker.Services
             public bool? KbOpened { get; set; }
             [JsonProperty("buildAllDone", NullValueHandling = NullValueHandling.Ignore)]
             public bool? BuildAllDone { get; set; }
+            [JsonProperty("buildEvents", NullValueHandling = NullValueHandling.Ignore)]
+            public JObject BuildEvents { get; set; }
             [JsonProperty("reorgRequired", NullValueHandling = NullValueHandling.Ignore)]
             public bool? ReorgRequired { get; set; }
             [JsonProperty("msBuildExitCode", NullValueHandling = NullValueHandling.Ignore)]
@@ -3903,7 +3911,7 @@ namespace GxMcp.Worker.Services
             {
                 sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] KB opened\" />");
                 sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] BuildAll started\" />");
-                sb.AppendLine("    <BuildAll ForceRebuild=\"false\" CompileMains=\"true\" FailIfReorg=\"true\" DoNotExecuteReorg=\"true\" DetailedNavigation=\"false\" Output=\"IDE\" EventsSuspended=\"true\" />");
+                sb.AppendLine("    <BuildAll ForceRebuild=\"false\" CompileMains=\"true\" FailIfReorg=\"true\" DoNotExecuteReorg=\"true\" DetailedNavigation=\"false\" Output=\"IDE\" EventsSuspended=\"false\" />");
                 sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] BuildAll completed\" />");
             }
             else if (targets != null && targets.Count > 0 &&

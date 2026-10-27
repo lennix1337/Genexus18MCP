@@ -96,6 +96,24 @@ namespace GxMcp.Gateway.Tests
             Assert.True(evidence["callerGraphAvailable"]!.Value<bool>());
         }
 
+        [Theory]
+        [InlineData("buildEvents")]
+        [InlineData("BuildEvents")]
+        public void Compact_True_PreservesUnverifiedBuildEventEvidence(string field)
+        {
+            var raw = JObject.Parse(MakeBuildStatus(0, 0));
+            raw[field] = new JObject
+            {
+                ["policy"] = "sdk",
+                ["executionVerified"] = JValue.CreateNull()
+            };
+            raw["buildAllDone"] = true;
+            var compact = JObject.Parse(LifecycleResponseShaper.Compact(raw.ToString(), compact: true));
+            Assert.True(JToken.DeepEquals(raw[field], compact["buildEvents"]));
+            Assert.Equal(JTokenType.Null, compact["buildEvents"]!["executionVerified"]!.Type);
+            Assert.True(compact["buildAllDone"]!.Value<bool>());
+        }
+
         [Fact]
         public void Compact_True_PreservesWarningDeltaAndCursor()
         {

@@ -1,6 +1,21 @@
 {
   "version": 1,
   "checks": {
+    "build-event-regression": {
+      "description": "Build All event dispatch, broker restoration, external template and persistence confirmation regressions (no KB)",
+      "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~BuildAllEventDispatchTests|FullyQualifiedName~BuildAllTests|FullyQualifiedName~PersistenceConfirmationTests", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 120000
+    },
+    "build-event-gateway": {
+      "description": "Lifecycle compact response preserves Build All event evidence and classification",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~LifecycleResponseShaperTests", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 120000
+    },
+    "worker-unit": {
+      "description": "Worker non-process tests; live SDK/KB evidence remains a separate lane",
+      "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--filter", "Category!=ProcessSmoke", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 600000
+    },
     "lint-setup": {
       "description": "CLI setup and lint contract tests",
       "argv": ["node", "--test", "scripts/lint.test.js"],

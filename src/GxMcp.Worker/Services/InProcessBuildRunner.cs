@@ -1653,8 +1653,12 @@ namespace GxMcp.Worker.Services
 
         private static bool ExecuteBuildAll(object kbHandle, IBuildEngine engine, Action<string, bool> lineSink)
         {
+            var events = Artech.Architecture.Common.Events.EventsService.Events;
+            bool originallySuspended = events.EventsSuspended;
             try
             {
+                if (SdkEventSuppressionScope.IsActive)
+                    throw new InvalidOperationException("Build All cannot start during SDK write-event isolation.");
                 object task = Activator.CreateInstance(_typeBuildAll);
                 SetProp(task, "KB", kbHandle);
                 SetProp(task, "ForceRebuild", false);
@@ -1663,7 +1667,9 @@ namespace GxMcp.Worker.Services
                 SetProp(task, "DoNotExecuteReorg", true);
                 SetProp(task, "DetailedNavigation", false);
                 SetProp(task, "Output", "IDE");
-                SetProp(task, "EventsSuspended", true);
+                // BuildEventsService consumes BeforeBuild/AfterCompile/AfterBuild from
+                // this broker. Suspending it also skips configured shell events (#696).
+                events.EventsSuspended = false;
                 SetProp(task, "BuildEngine", engine);
 
                 var execute = _typeBuildAll.GetMethod("Execute", BindingFlags.Public | BindingFlags.Instance);
@@ -1680,8 +1686,12 @@ namespace GxMcp.Worker.Services
             catch (Exception ex)
             {
                 LogExceptionChain("BuildAll", ex);
-                lineSink("[GXMCP-BUILD-ALL] BuildAll task failed: " + ex.Message, true);
+                lineSink("[GXMCP-BUILD-ALL] BuildAll task failed: " + ExceptionRoot.Unwrap(ex).Message, true);
                 return false;
+            }
+            finally
+            {
+                events.EventsSuspended = originallySuspended;
             }
         }
 

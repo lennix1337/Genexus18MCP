@@ -2983,10 +2983,10 @@
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Build, validate, index or poll the KB (build, build_all, rebuild, specify, validate, index, status, result); long operations are async with operationId. Full guidance: genexus://kb/tool-help/genexus_lifecycle",
+      "description": "Build, validate, index or poll the KB; Build All may run SDK-configured commands with external effects. Long operations are async with operationId. Full guidance: genexus://kb/tool-help/genexus_lifecycle",
       "inputSchema": {
         "properties": {
           "action": {

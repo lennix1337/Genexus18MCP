@@ -54,7 +54,7 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("FailIfReorg=\"true\"", xml);
             Assert.Contains("DoNotExecuteReorg=\"true\"", xml);
             Assert.Contains("Output=\"IDE\"", xml);
-            Assert.Contains("EventsSuspended=\"true\"", xml);
+            Assert.Contains("EventsSuspended=\"false\"", xml);
             Assert.Contains("<OnError ExecuteTargets=\"CloseOnBuildAllError\"", xml);
             Assert.Contains("<Target Name=\"CloseOnBuildAllError\"><CloseKnowledgeBase />", xml);
             Assert.DoesNotContain("IdeWebBuildAndDeploy", xml);
@@ -76,8 +76,10 @@ namespace GxMcp.Worker.Tests
             Assert.DoesNotContain(" /m ", args);
         }
 
-        [Fact]
-        public void BuildAll_completion_requires_explicit_evidence_even_with_zero_exit()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void BuildAll_completion_requires_explicit_evidence_even_with_zero_exit(bool completed)
         {
             var status = new BuildService.BuildTaskStatus
             {
@@ -85,13 +87,16 @@ namespace GxMcp.Worker.Tests
                 ExitCode = 0,
                 Status = "Succeeded"
             };
+            string output = completed ? "[GXMCP-BUILD-ALL] BuildAll completed" : "[GXMCP-BUILD-ALL] KB opened\n";
+            BuildService.FinalizeBuildAllStatus(status, output);
 
-            BuildService.FinalizeBuildAllStatus(status, "[GXMCP-BUILD-ALL] KB opened\n");
-
-            Assert.Equal("Failed", status.Status);
-            Assert.False(status.BuildAllDone);
+            Assert.Equal(completed ? "Succeeded" : "Failed", status.Status);
+            Assert.Equal(completed, status.BuildAllDone);
             Assert.Equal(0, status.MsBuildExitCode);
-            Assert.Contains("completion evidence", status.Error);
+            if (!completed) Assert.Contains("completion evidence", status.Error);
+            Assert.Equal("sdk", status.BuildEvents["policy"]);
+            Assert.Equal(JTokenType.Null, status.BuildEvents["executionVerified"].Type);
+            Assert.Contains("fullLogPath", status.BuildEvents["verification"].ToString());
         }
 
         [Fact]

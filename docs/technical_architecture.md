@@ -85,6 +85,22 @@ Terminal results include `buildMode`, `kbOpened`, `buildAllDone`,
 `reorgRequired`, `msBuildExitCode`, and `fullLogPath`, and a zero exit code is
 not accepted as completion evidence by itself.
 
+Both SDK Build All paths permit the SDK's configured pre/post-build commands,
+including their normal conditions and external effects. The in-process runner
+refuses to start during SDK write-event isolation and restores the global
+broker's previous suspension state even if the task throws. Other operations'
+write-event isolation is unchanged.
+
+`buildEvents.policy="sdk"` describes the event policy, not proof that a command
+ran. `buildEvents.executionVerified=null` explicitly leaves that outcome
+unverified, even when `buildAllDone=true`; compact responses preserve this
+metadata. Inspect `fullLogPath` for SDK command output and independently verify
+the intended effects. A missing output line alone does not prove non-execution.
+For a controlled comparison of IDE, MSBuild and MCP, use the same disposable KB,
+environment, SDK and harmless marker commands, with Cloud disabled. Check both
+marker files and command output; never rerun an uncertain external command just
+to obtain a log line.
+
 ## Discovery-first surface
 
 Clients are expected to discover capabilities dynamically:
