@@ -3,7 +3,7 @@
   "checks": {
     "build-event-regression": {
       "description": "Build All event dispatch, broker restoration, external template and persistence confirmation regressions (no KB)",
-      "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~BuildAllEventDispatchTests|FullyQualifiedName~BuildAllTests|FullyQualifiedName~PersistenceConfirmationTests", "--logger", "console;verbosity=minimal"],
+      "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~BuildAllEventDispatchTests|FullyQualifiedName~BuildAllFailureEvidenceTests|FullyQualifiedName~BuildAllTests|FullyQualifiedName~PersistenceConfirmationTests", "--logger", "console;verbosity=minimal"],
       "timeoutMs": 120000
     },
     "build-event-gateway": {

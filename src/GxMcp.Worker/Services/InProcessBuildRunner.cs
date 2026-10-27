@@ -1675,18 +1675,21 @@ namespace GxMcp.Worker.Services
                 var execute = _typeBuildAll.GetMethod("Execute", BindingFlags.Public | BindingFlags.Instance);
                 if (execute == null)
                 {
-                    Logger.Error("[BUILD-INPROCESS] BuildAll.Execute method not found");
+                    lineSink("[GXMCP-BUILD-ALL] error: BuildAll.Execute method not found; no build was executed.", true);
                     return false;
                 }
                 object result = execute.Invoke(task, null);
                 bool ok = result is bool b && b;
-                if (!ok) Logger.Warn("[BUILD-INPROCESS] BuildAll.Execute returned false");
+                if (!ok)
+                    lineSink("[GXMCP-BUILD-ALL] error: BuildAll task did not report success (Execute returned "
+                        + (result is bool ? "false" : "a non-boolean result")
+                        + "). Inspect the preceding SDK output; do not automatically repeat configured build commands.", true);
                 return ok;
             }
             catch (Exception ex)
             {
                 LogExceptionChain("BuildAll", ex);
-                lineSink("[GXMCP-BUILD-ALL] BuildAll task failed: " + ExceptionRoot.Unwrap(ex).Message, true);
+                lineSink("[GXMCP-BUILD-ALL] error: BuildAll task failed: " + ExceptionRoot.Unwrap(ex).Message, true);
                 return false;
             }
             finally

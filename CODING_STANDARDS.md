@@ -194,6 +194,10 @@ An SDK failure response carries the root cause. Catches around reflective or
 wrapped SDK calls report and log through `ExceptionRoot` (message, type, trace),
 never a wrapper's `ex.Message`; a "see the worker log" hint needs a matching log
 line. Known SDK preconditions are refused with a typed code before the call.
+A failed SDK task also emits its diagnostic through the operation's output sink,
+including a false or invalid return without an exception; an internal debug log
+alone does not explain the failure to the MCP caller. Test these silent-return
+paths and verify that they execute at most once.
 
 Absence of evidence is reported as absence. When a contract is unverifiable on
 this host, say so and name what would unblock it, rather than merging on the

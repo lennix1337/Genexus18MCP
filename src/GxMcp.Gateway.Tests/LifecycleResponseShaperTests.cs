@@ -97,9 +97,12 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Theory]
-        [InlineData("buildEvents")]
-        [InlineData("BuildEvents")]
-        public void Compact_True_PreservesUnverifiedBuildEventEvidence(string field)
+        [InlineData("buildEvents", "Running")]
+        [InlineData("BuildEvents", "Succeeded")]
+        [InlineData("buildEvents", "Failed")]
+        [InlineData("BuildEvents", "Cancelled")]
+        [InlineData("buildEvents", "ReorgRequired")]
+        public void Compact_True_PreservesUnverifiedBuildEventEvidence(string field, string status)
         {
             var raw = JObject.Parse(MakeBuildStatus(0, 0));
             raw[field] = new JObject
@@ -107,11 +110,15 @@ namespace GxMcp.Gateway.Tests
                 ["policy"] = "sdk",
                 ["executionVerified"] = JValue.CreateNull()
             };
-            raw["buildAllDone"] = true;
+            raw["Status"] = status;
+            raw["buildAllDone"] = status == "Succeeded";
             var compact = JObject.Parse(LifecycleResponseShaper.Compact(raw.ToString(), compact: true));
             Assert.True(JToken.DeepEquals(raw[field], compact["buildEvents"]));
             Assert.Equal(JTokenType.Null, compact["buildEvents"]!["executionVerified"]!.Type);
-            Assert.True(compact["buildAllDone"]!.Value<bool>());
+            Assert.Equal(status, compact["Status"]!.Value<string>());
+            Assert.Equal(status == "Succeeded", compact["buildAllDone"]!.Value<bool>());
+            var full = JObject.Parse(LifecycleResponseShaper.Compact(raw.ToString(), compact: false));
+            Assert.True(JToken.DeepEquals(raw[field], full[field]));
         }
 
         [Fact]

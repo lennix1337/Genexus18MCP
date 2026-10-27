@@ -585,7 +585,7 @@ namespace GxMcp.Worker.Services
                 if (status.FailureOrigin == null)
                     status.FailureOrigin = (status.ErrorCount > 0) ? "errors" : "missing_completion_evidence";
                 status.Error = "Build All did not emit completion evidence; an exit code of 0 alone is not sufficient to confirm that Build All ran.";
-                status.Hint = "Inspect fullLogPath and retry after confirming the SDK/MSBuild task completed.";
+                status.Hint = "Inspect fullLogPath and reconcile any configured build commands and their external effects before retrying; missing completion evidence does not prove those commands did not run.";
             }
         }
 

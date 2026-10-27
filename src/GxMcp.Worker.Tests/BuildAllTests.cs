@@ -93,7 +93,12 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(completed ? "Succeeded" : "Failed", status.Status);
             Assert.Equal(completed, status.BuildAllDone);
             Assert.Equal(0, status.MsBuildExitCode);
-            if (!completed) Assert.Contains("completion evidence", status.Error);
+            if (!completed)
+            {
+                Assert.Contains("completion evidence", status.Error);
+                Assert.Contains("configured build commands", status.Hint);
+                Assert.Contains("before retrying", status.Hint);
+            }
             Assert.Equal("sdk", status.BuildEvents["policy"]);
             Assert.Equal(JTokenType.Null, status.BuildEvents["executionVerified"].Type);
             Assert.Contains("fullLogPath", status.BuildEvents["verification"].ToString());
