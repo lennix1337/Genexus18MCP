@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- `genexus_layout` help and `docs/mcp_capabilities_inventory.md` now name the printblock refusals added in v4.0.4 (`AddPrintBlockVerificationFailed`, `RenamePrintBlockVerificationFailed`, `DeletePrintBlockVerificationFailed`), what the refusal envelope does and does not carry, that add/rename retry and may repair Source before refusing, that delete reads once, and that a refusal does not prove the store state (#714).
+
 ### Internal
 
 ## v4.0.4 - 2026-10-27
