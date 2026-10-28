@@ -30,6 +30,21 @@
       "description": "Canonical PR integration gates against the fetched origin/main; no SDK KB writes or publication",
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/integration-preflight.ps1", "-BaseRef", "origin/main"],
       "timeoutMs": 600000
+    },
+    "tool-contracts": {
+      "description": "Tool schema (tool_definitions.json) and capabilities table contract gate; read-only",
+      "argv": ["python", "scripts/validate-tool-contracts.py"],
+      "timeoutMs": 120000
+    },
+    "operation-inventory": {
+      "description": "docs/operation-contract-inventory.json matches its generator; read-only",
+      "argv": ["python", "scripts/generate-operation-contract-inventory.py", "--check"],
+      "timeoutMs": 120000
+    },
+    "gateway-tests": {
+      "description": "Gateway .NET tests excluding ProcessSmoke (help budgets, goldens, tool help); no SDK, KB or Cloud",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--filter", "Category!=ProcessSmoke", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 600000
     }
   }
 }
