@@ -234,4 +234,3 @@ test('agent guide links canonical lanes and runs build script last in coding sta
     // Verify build.ps1 is in CODING_STANDARDS.md
     assert.match(standards, /`?\.\\build\.ps1`?/);
 });
-
