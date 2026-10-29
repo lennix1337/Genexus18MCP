@@ -146,6 +146,9 @@ namespace GxMcp.Worker.Tests
         [Theory]
         [InlineData("{\"status\":\"Error\",\"error\":\"part write blew up\"}", null, "part write blew up")]
         [InlineData("{\"status\":\"error\",\"message\":\"top level message\",\"code\":\"X\"}", "X", "top level message")]
+        // #746: the WebForm writer's errors travel in validationDiagnostics, not in its message; warnings stay out.
+        [InlineData("{\"status\":\"error\",\"error\":{\"code\":\"WebFormValidationFailed\",\"message\":\"The WebForm SDK validator found errors.\"},\"validationDiagnostics\":[{\"severity\":\"Error\",\"message\":\"Unknown attribute 'BDIId'\",\"source\":\"GridWWP\"},{\"severity\":\"Warning\",\"message\":\"Theme class not found\"},{\"severity\":\"Error\",\"message\":\"Invalid property 'Visible'\"}]}",
+            "WebFormValidationFailed", "The WebForm SDK validator found errors.\nGridWWP: Unknown attribute 'BDIId'\nInvalid property 'Visible'")]
         [InlineData("not json at all", null, "not json at all")]
         [InlineData("", null, null)]
         public void The_failure_summary_reads_each_envelope_shape_a_writer_answers_with(string inner, string code, string message)

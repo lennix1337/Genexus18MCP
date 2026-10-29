@@ -312,6 +312,11 @@ namespace GxMcp.Worker.Services
                 }
                 if (string.IsNullOrWhiteSpace(code)) code = inner["code"]?.ToString();
                 if (string.IsNullOrWhiteSpace(message)) message = inner["message"]?.ToString();
+                // The WebForm writer's message only says that the validator refused the form; the
+                // errors themselves travel in its top-level validationDiagnostics list (#746).
+                string diagnostics = ValidationErrorLines(inner["validationDiagnostics"] as JArray);
+                if (diagnostics != null)
+                    message = string.IsNullOrWhiteSpace(message) ? diagnostics : message.TrimEnd() + "\n" + diagnostics;
             }
             catch
             {
@@ -322,6 +327,22 @@ namespace GxMcp.Worker.Services
                 message = message.Trim();
                 if (message.Length > 1200) message = message.Substring(0, 1200) + "...";
             }
+        }
+
+        private static string ValidationErrorLines(JArray diagnostics)
+        {
+            if (diagnostics == null) return null;
+            var lines = diagnostics.OfType<JObject>()
+                .Where(d => GxMcp.Worker.Helpers.WebFormPreSaveValidator.IsErrorSeverity(d["severity"]?.ToString()))
+                .Select(d =>
+                {
+                    string text = d["message"]?.ToString()?.Trim();
+                    string source = d["source"]?.ToString()?.Trim();
+                    return string.IsNullOrEmpty(source) ? text : source + ": " + text;
+                })
+                .Where(line => !string.IsNullOrEmpty(line))
+                .ToList();
+            return lines.Count == 0 ? null : string.Join("\n", lines);
         }
 
         private static string JoinLines(string text)

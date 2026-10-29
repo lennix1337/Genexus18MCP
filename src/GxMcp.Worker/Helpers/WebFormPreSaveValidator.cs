@@ -180,11 +180,15 @@ namespace GxMcp.Worker.Helpers
             if (msgs == null) return false;
             foreach (var m in msgs)
             {
-                if (m == null) continue;
-                string s = m.Severity?.ToLowerInvariant() ?? "";
-                if (s.Contains("error") || s == "1" || s == "erro") return true;
+                if (m != null && IsErrorSeverity(m.Severity)) return true;
             }
             return false;
+        }
+
+        public static bool IsErrorSeverity(string severity)
+        {
+            string s = severity?.ToLowerInvariant() ?? "";
+            return s.Contains("error") || s == "1" || s == "erro";
         }
 
         private static Type FindType(string fullName)

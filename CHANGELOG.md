@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- `genexus_create action=save_as`: when the WebForm SDK validator refuses a cloned WebForm, the `SaveAsPartFailed` message and `error.cause` now list the validator's errors (control: message) instead of only saying that the validator found errors ([#746](https://github.com/lennix1337/Genexus18MCP/issues/746)).
+
 ### Internal
 
 ## v4.1.0 - 2026-10-29
