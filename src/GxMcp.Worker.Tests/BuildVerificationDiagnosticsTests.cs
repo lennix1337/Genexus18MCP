@@ -26,7 +26,7 @@ namespace GxMcp.Worker.Tests
             public object GetPropertyValue(string name) => name == "TargetPath" ? BagPath : null;
         }
 
-        public enum FakeBuildOptions { BuildCalled = 1 }
+        public enum FakeBuildOptions { BuildCalled = 1, DoNotExecuteReorg = 0x400000, FailIfReorg = 0xC00000 }
         public class FakeBuildService
         {
             public bool Result;
@@ -52,7 +52,7 @@ namespace GxMcp.Worker.Tests
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
-        public void VerifiedSdkResultPreservesKeysAndZeroOptionsWithoutRepeating(bool result)
+        public void VerifiedSdkResultPreservesKeysAndRefusesReorgWithoutRepeating(bool result)
         {
             var sdk = new FakeBuildService { Result = result };
             var keys = new[] { Guid.NewGuid() };
@@ -61,7 +61,7 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(result, actual);
             Assert.Equal(1, sdk.Calls);
             Assert.Same(keys, sdk.SeenKeys);
-            Assert.Equal(0, (int)sdk.SeenOptions);
+            Assert.Equal(FakeBuildOptions.FailIfReorg, sdk.SeenOptions);
         }
 
         [Fact]

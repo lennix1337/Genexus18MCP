@@ -40,6 +40,8 @@ namespace GxMcp.Worker.Tests
         {
             public static Func<object> ExecuteCallback;
             public object KB { get; set; }
+            public bool FailIfReorg { get; set; }
+            public bool DoNotExecuteReorg { get; set; }
             public IBuildEngine BuildEngine { get; set; }
             public object Execute() => ExecuteCallback();
         }
@@ -49,6 +51,10 @@ namespace GxMcp.Worker.Tests
             public ConstructorFailureTask() => throw new InvalidOperationException("synthetic root cause");
         }
 
-        public sealed class MissingExecuteTask { }
+        public sealed class MissingExecuteTask
+        {
+            public bool FailIfReorg { get; set; }
+            public bool DoNotExecuteReorg { get; set; }
+        }
     }
 }

@@ -551,6 +551,7 @@ namespace GxMcp.Worker.Services
 
         internal static void FinalizeBuildAllStatus(BuildTaskStatus status, string output)
         {
+            FinalizeReorgRefusal(status, output);
             if (status == null || !string.Equals(status.Action, "BuildAll", StringComparison.OrdinalIgnoreCase)) return;
             status.BuildMode = "BuildAll";
             status.BuildEvents = new JObject
@@ -576,8 +577,8 @@ namespace GxMcp.Worker.Services
             {
                 status.Status = "ReorgRequired";
                 status.FailureOrigin = "reorg_required";
-                status.Error = "Build All stopped because the selected Knowledge Base requires reorganization. Run genexus_lifecycle action=reorg explicitly, then retry action=build_all.";
-                status.Hint = "FailIfReorg=true prevented a silent schema change. Run genexus_lifecycle action=reorg, then retry action=build_all.";
+                status.Error = "Build stopped because the selected Knowledge Base requires reorganization. No implicit database reorganization is permitted.";
+                status.Hint = ReorgRefusalHint;
             }
             else if (status.BuildAllDone != true)
             {
@@ -587,6 +588,25 @@ namespace GxMcp.Worker.Services
                 status.Error = "Build All did not emit completion evidence; an exit code of 0 alone is not sufficient to confirm that Build All ran.";
                 status.Hint = "Inspect fullLogPath and reconcile any configured build commands and their external effects before retrying; missing completion evidence does not prove those commands did not run.";
             }
+        }
+
+        private const string ReorgRefusalHint = "FailIfReorg=true prevented a silent schema change. Inspect genexus_lifecycle action=reorg_preview; only run action=reorg after explicit approval for the selected environment database.";
+
+        private static readonly HashSet<string> NoImplicitReorgActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Build", "BuildAll", "Rebuild", "RebuildAll", "Sync"
+        };
+
+        private static void FinalizeReorgRefusal(BuildTaskStatus status, string output)
+        {
+            if (status?.Action == null || !NoImplicitReorgActions.Contains(status.Action)) return;
+            if (status.ReorgRequired != true && !DetectBuildAllReorgRequired(output)) return;
+            status.ReorgRequired = true;
+            status.Status = "ReorgRequired";
+            status.FailureOrigin = "reorg_required";
+            status.Error = "Build stopped because the selected Knowledge Base requires reorganization. No implicit database reorganization is permitted.";
+            status.Hint = ReorgRefusalHint;
+            status.PartialSuccess = false;
         }
 
         // v2.6.6 Stream E (FR#9): CS2001 referencing "<obj>_bc.cs" is treated as
@@ -3928,12 +3948,12 @@ namespace GxMcp.Worker.Services
                 sb.AppendLine("    <SpecifyOneOnly ObjectNames=\"" + joined + "\" />");
                 bool force = string.Equals(action, "RebuildAll", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(action, "Rebuild", StringComparison.OrdinalIgnoreCase);
-                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"" + (force ? "true" : "false") + "\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
+                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"" + (force ? "true" : "false") + "\" CompileMains=\"true\" FailIfReorg=\"true\" DoNotExecuteReorg=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
             }
             else if (string.Equals(action, "RebuildAll", StringComparison.OrdinalIgnoreCase)
                   || string.Equals(action, "Rebuild", StringComparison.OrdinalIgnoreCase))
             {
-                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"true\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
+                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"true\" CompileMains=\"true\" FailIfReorg=\"true\" DoNotExecuteReorg=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
             }
             else if (string.Equals(action, "Reorg", StringComparison.OrdinalIgnoreCase))
                 sb.AppendLine("    <CheckAndInstallDatabase />");
@@ -3941,19 +3961,15 @@ namespace GxMcp.Worker.Services
                   || string.Equals(action, "Check", StringComparison.OrdinalIgnoreCase))
                 sb.AppendLine("    <CheckKnowledgeBase />");
             else
-                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"false\" CompileMains=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
+                sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"false\" CompileMains=\"true\" FailIfReorg=\"true\" DoNotExecuteReorg=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");
 
             sb.AppendLine("    <CloseKnowledgeBase />");
-            if (buildAll)
-            {
-                // OnError must be the last task in the target. If BuildAll fails
-                // (especially on ReorgRequired), the normal close is skipped and
-                // this handler releases the SDK KB before MSBuild exits.
-                sb.AppendLine("    <OnError ExecuteTargets=\"CloseOnBuildAllError\" />");
-            }
+            // A reorg refusal skips the normal close, including targeted builds.
+            // OnError must be last so the SDK KB is released before MSBuild exits.
+            string closeOnError = buildAll ? "CloseOnBuildAllError" : "CloseOnBuildError";
+            sb.AppendLine("    <OnError ExecuteTargets=\"" + closeOnError + "\" />");
             sb.AppendLine("  </Target>");
-            if (buildAll)
-                sb.AppendLine("  <Target Name=\"CloseOnBuildAllError\"><CloseKnowledgeBase /></Target>");
+            sb.AppendLine("  <Target Name=\"" + closeOnError + "\"><CloseKnowledgeBase /></Target>");
             sb.AppendLine("</Project>");
             return sb.ToString();
         }
@@ -4278,7 +4294,7 @@ namespace GxMcp.Worker.Services
                         // partial success so the gateway renders effective_status=
                         // PartialSuccess (isError=false) instead of a contradictory
                         // "Failed with 0 errors".
-                        if (failed && status.ErrorCount == 0
+                        if (failed && status.ErrorCount == 0 && status.ReorgRequired != true
                             && DidGenerationAndCompilationSucceed(fullText))
                         {
                             status.PartialSuccess = true;
@@ -4490,7 +4506,7 @@ namespace GxMcp.Worker.Services
                 if (status.ErrorCount == 0 && status.ExitCode.HasValue && status.ExitCode.Value != 0)
                 {
                     status.PhaseFailure = ExtractPhaseFailure(fullText);
-                    if (DidGenerationAndCompilationSucceed(fullText))
+                    if (status.ReorgRequired != true && DidGenerationAndCompilationSucceed(fullText))
                     {
                         status.PartialSuccess = true;
                     }
@@ -4760,7 +4776,7 @@ namespace GxMcp.Worker.Services
                     status.KbOpened = true;
                 if (line.IndexOf("[GXMCP-BUILD-ALL] BuildAll completed", StringComparison.OrdinalIgnoreCase) >= 0)
                     status.BuildAllDone = true;
-                if (string.Equals(status.Action, "BuildAll", StringComparison.OrdinalIgnoreCase)
+                if (status.Action != null && NoImplicitReorgActions.Contains(status.Action)
                     && DetectBuildAllReorgRequired(line))
                     status.ReorgRequired = true;
 

@@ -25,7 +25,7 @@ namespace GxMcp.Worker.Tests
         public void Batch_build_options_request_full_build_of_called_objects()
         {
             // GeneXus 18 BuildOptions: BuildCalled=1, ContinueOnError=224, BuildProcess=14336.
-            Assert.Equal(14561, InProcessBuildRunner.BatchBuildOptions);
+            Assert.Equal(14561 | 0xC00000, InProcessBuildRunner.BatchBuildOptions);
         }
 
         private static BuildService.BuildTaskStatus NewStatus()
@@ -569,6 +569,8 @@ namespace GxMcp.Worker.Tests
         public object KB { get; set; }
         public bool ForceRebuild { get; set; }
         public bool CompileMains { get; set; }
+        public bool FailIfReorg { get; set; }
+        public bool DoNotExecuteReorg { get; set; }
         public string Output { get; set; }
         public bool EventsSuspended { get; set; }
         public IBuildEngine BuildEngine { get; set; }

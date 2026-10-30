@@ -34,7 +34,8 @@ namespace GxMcp.Worker.Tests
             using (var fixture = new BrokerWritingTaskFixture("_typeBuildOne", originallySuspended, outcome == "missing"))
             {
                 bool suspendedDuringTask = false;
-                BrokerWritingTask.ExecuteCallback = () => { suspendedDuringTask = broker.EventsSuspended; return Result(outcome); };
+                var originalFactory = Artech.Genexus.Common.Commands.BuildCommandFactory.Factory;
+                BrokerWritingTask.ExecuteCallback = () => { suspendedDuringTask = broker.EventsSuspended; BuildReorgPolicyTests.AssertBuildFactoryRefusesReorg(); return Result(outcome); };
 
                 bool built = (bool)typeof(InProcessBuildRunner).GetMethod("ExecuteBuildOne", Private)
                     .Invoke(null, new object[] { new object(), "SyntheticObject", new InProcessBuildEngine((line, error) => { }), false });
@@ -44,6 +45,7 @@ namespace GxMcp.Worker.Tests
                 Assert.True(outcome == "missing" || suspendedDuringTask);
                 // What changes: the switch the task flipped is put back, whatever the outcome.
                 Assert.Equal(originallySuspended, broker.EventsSuspended);
+                Assert.Same(originalFactory, Artech.Genexus.Common.Commands.BuildCommandFactory.Factory);
             }
         }
 
@@ -63,7 +65,7 @@ namespace GxMcp.Worker.Tests
             using (var fixture = new BrokerWritingTaskFixture("_typeIdeWebBuildAndDeploy", originallySuspended, outcome == "missing"))
             {
                 bool suspendedDuringTask = false;
-                BrokerWritingTask.ExecuteCallback = () => { suspendedDuringTask = broker.EventsSuspended; return Result(outcome); };
+                BrokerWritingTask.ExecuteCallback = () => { suspendedDuringTask = broker.EventsSuspended; Assert.True(BrokerWritingTask.Last.FailIfReorg); Assert.True(BrokerWritingTask.Last.DoNotExecuteReorg); return Result(outcome); };
 
                 bool built = (bool)typeof(InProcessBuildRunner).GetMethod("ExecuteIdeWebBuildAndDeploy", Private)
                     .Invoke(null, new object[] { new object(), new InProcessBuildEngine((line, error) => { }), forceRebuild });
@@ -85,6 +87,9 @@ namespace GxMcp.Worker.Tests
         internal sealed class BrokerWritingTask
         {
             public static Func<object> ExecuteCallback;
+            public static BrokerWritingTask Last;
+            public bool FailIfReorg { get; set; }
+            public bool DoNotExecuteReorg { get; set; }
             public object KB { get; set; }
             public string ObjectName { get; set; }
             public bool ForceRebuild { get; set; }
@@ -97,7 +102,7 @@ namespace GxMcp.Worker.Tests
                 get { return EventsService.Events.EventsSuspended; }
                 set { EventsService.Events.EventsSuspended = value; }
             }
-            public object Execute() => ExecuteCallback();
+            public object Execute() { Last = this; return ExecuteCallback(); }
         }
 
         // Same property surface, no Execute entry point.
@@ -116,7 +121,7 @@ namespace GxMcp.Worker.Tests
         }
 
         // The reflected task types and the SDK broker are process-global: both are restored together.
-        private sealed class BrokerWritingTaskFixture : IDisposable
+        internal sealed class BrokerWritingTaskFixture : IDisposable
         {
             private readonly FieldInfo _field;
             private readonly object _originalType;

@@ -104,23 +104,6 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("fullLogPath", status.BuildEvents["verification"].ToString());
         }
 
-        [Fact]
-        public void BuildAll_reorg_is_a_terminal_structured_state()
-        {
-            var status = new BuildService.BuildTaskStatus
-            {
-                Action = "BuildAll",
-                ExitCode = 1,
-                Status = "Failed"
-            };
-
-            BuildService.FinalizeBuildAllStatus(status, "Reorganization required by the KB\n");
-
-            Assert.Equal("ReorgRequired", status.Status);
-            Assert.True(status.ReorgRequired);
-            Assert.Contains("action=reorg", status.Hint);
-        }
-
         [Theory]
         [InlineData("No reorganization is required by the KB")]
         [InlineData("Build completed; reorganization not needed")]

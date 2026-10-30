@@ -94,6 +94,10 @@
       <HintPath>$(GX_PATH)\Artech.Common.Properties.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="Artech.Common.Framework">
+      <HintPath>$(GX_PATH)\Artech.Common.Framework.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="Artech.Common.Helpers">
       <HintPath>$(GX_PATH)\Artech.Common.Helpers.dll</HintPath>
       <Private>False</Private>

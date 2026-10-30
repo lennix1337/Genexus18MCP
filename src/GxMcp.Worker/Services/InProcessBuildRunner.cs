@@ -54,7 +54,8 @@ namespace GxMcp.Worker.Services
         // Artech.Genexus.Common.Commands.BuildOptions (GeneXus 18) values for
         // ContinueOnError (0xE0) | BuildProcess (Specify|Generate|Compile, 0x3800) | BuildCalled (0x1).
         // 0x01|0x04|0x08 (BuildCalled|CompileMains|OnlyThemes) skipped generating called SDTs.
-        internal const int BatchBuildOptions = 0xE0 | 0x3800 | 0x1;
+        internal const int BatchBuildOptions = 0xE0 | 0x3800 | 0x1
+            | (int)Artech.Genexus.Common.Commands.BuildOptions.FailIfReorg;
         private static Type _typeGenexusBLServices;
         private static System.Reflection.MethodInfo _miBuildBuild; // Build(workingSet, BuildOptions, IEnumerable<EntityKey>, CancellationToken)
         private static System.Reflection.MethodInfo _miBuildWithTheseOnly; // BuildWithTheseOnly(workingSet, IEnumerable<EntityKey>, CancellationToken)
@@ -801,24 +802,20 @@ namespace GxMcp.Worker.Services
                     }
 
                     // GX18 U16 BuildWithTheseOnly is void and discards BuildProcess's bool.
-                    // The public Build overload with options=0 invokes the same pipeline
-                    // with the same keys, while preserving its result (no BuildCalled flag).
+                    // The result-bearing overload preserves the same keys and no
+                    // BuildCalled flag, but must refuse any implicit reorganization.
                     var verifiedResult = WithTaskOutput(kbHandle, engine, () => InvokeVerifiedBuild(_miBuildBuild, buildService, workingSet,
                         typedList, _typeBuildOptions, cts.Token));
                     if (verifiedResult.HasValue)
                     {
-                        lineSink("[BUILD-INPROCESS] native Build(options=0) returned " + verifiedResult.Value + ".", false);
+                        lineSink("[BUILD-INPROCESS] native Build(FailIfReorg) returned " + verifiedResult.Value + ".", false);
                         return verifiedResult.Value ? BatchOutcome.Success : BatchOutcome.Failure;
                     }
 
-                    lineSink("[BUILD-INPROCESS] batch BuildWithTheseOnly: " + typedList.Count + " keys → BL.BuildWithTheseOnly (shared spec/gen/compile).", false);
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
-                    WithTaskOutput(kbHandle, engine, () => _miBuildWithTheseOnly.Invoke(buildService, new object[] { workingSet, typedList, cts.Token }));
-                    sw.Stop();
-                    Logger.Info("[BUILD-INPROCESS] ExecuteBuildWithTheseOnly(" + string.Join(",", keysList) + ") completed in " + sw.ElapsedMilliseconds + "ms");
-                    // BuildWithTheseOnly is void: its diagnostics reach the sink, but a
-                    // non-throwing Invoke is not proof that compilation succeeded.
-                    return BatchOutcome.Unverified;
+                    // The void overload cannot carry FailIfReorg. Refuse before
+                    // invocation rather than falling back to a schema-mutating build.
+                    lineSink("[BUILD-INPROCESS] error: safe result-bearing Build overload unavailable; no build was executed.", true);
+                    return BatchOutcome.Failure;
                 }
             }
             catch (Exception ex)
@@ -842,7 +839,8 @@ namespace GxMcp.Worker.Services
                 || !parameters[0].ParameterType.IsInstanceOfType(workingSet)
                 || !parameters[2].ParameterType.IsInstanceOfType(keys))
                 return null;
-            return (bool)method.Invoke(service, new[] { workingSet, Enum.ToObject(optionsType, 0), keys, (object)token });
+            object options = Enum.Parse(optionsType, "FailIfReorg, DoNotExecuteReorg");
+            return (bool)method.Invoke(service, new[] { workingSet, options, keys, (object)token });
         }
 
         // A failed Specification/Generation section means the compile that followed
@@ -895,10 +893,13 @@ namespace GxMcp.Worker.Services
                     Logger.Error("[BUILD-INPROCESS] BuildOne.Execute method not found");
                     return false;
                 }
-                object result = execute.Invoke(task, null);
-                bool ok = result is bool b && b;
-                if (!ok) Logger.Warn("[BUILD-INPROCESS] BuildOne.Execute returned false for '" + objectName + "'");
-                return ok;
+                using (var policy = new NoReorgBuildCommandFactory())
+                {
+                    object result = execute.Invoke(task, null);
+                    bool ok = result is bool b && b;
+                    if (!ok) Logger.Warn("[BUILD-INPROCESS] BuildOne.Execute returned false for '" + objectName + "'");
+                    return ok;
+                }
             }
             catch (Exception ex)
             {
@@ -1660,6 +1661,7 @@ namespace GxMcp.Worker.Services
                 object task = Activator.CreateInstance(_typeIdeWebBuildAndDeploy);
                 SetProp(task, "KB", kbHandle);
                 SetProp(task, "ForceRebuild", forceRebuild);
+                SetRequiredReorgPolicy(task);
                 SetProp(task, "CompileMains", true);
                 SetProp(task, "Output", "IDE");
                 SetProp(task, "EventsSuspended", true);
@@ -1699,8 +1701,7 @@ namespace GxMcp.Worker.Services
                 SetProp(task, "KB", kbHandle);
                 SetProp(task, "ForceRebuild", false);
                 SetProp(task, "CompileMains", true);
-                SetProp(task, "FailIfReorg", true);
-                SetProp(task, "DoNotExecuteReorg", true);
+                SetRequiredReorgPolicy(task);
                 SetProp(task, "DetailedNavigation", false);
                 SetProp(task, "Output", "IDE");
                 // BuildEventsService consumes BeforeBuild/AfterCompile/AfterBuild from
@@ -1731,6 +1732,19 @@ namespace GxMcp.Worker.Services
             finally
             {
                 events.EventsSuspended = originallySuspended;
+            }
+        }
+
+        private static void SetRequiredReorgPolicy(object task)
+        {
+            foreach (string name in new[] { "FailIfReorg", "DoNotExecuteReorg" })
+            {
+                var property = task.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
+                if (property == null || property.PropertyType != typeof(bool) || !property.CanWrite || !property.CanRead)
+                    throw new InvalidOperationException("Required build safety property unavailable: " + name + "; no build was executed.");
+                property.SetValue(task, true);
+                if (!Equals(property.GetValue(task), true))
+                    throw new InvalidOperationException("Required build safety property was not applied: " + name + "; no build was executed.");
             }
         }
 
