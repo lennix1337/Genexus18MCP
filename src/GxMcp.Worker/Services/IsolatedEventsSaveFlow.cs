@@ -22,6 +22,12 @@ namespace GxMcp.Worker.Services
         /// <summary>True when the post-commit verification proved the complete isolated persistence.</summary>
         bool Verified { get; }
 
+        /// <summary>
+        /// The one-line reason a save that ran without an exception was not confirmed, when the verification knows
+        /// it (for example the target is verified and only other objects could not be cleared); null otherwise.
+        /// </summary>
+        string UnconfirmedMessage { get; }
+
         void ReadOriginal();
         void CaptureBaseline();
         void BeginTransaction();
@@ -195,7 +201,7 @@ namespace GxMcp.Worker.Services
                         return IsolatedEventsSaveOutcome.Success();
                     }
                     return IsolatedEventsSaveOutcome.NotConfirmed(
-                        failureMessage ?? NotConfirmedMessage, trace.FailedPhase ?? trace.Phase);
+                        failureMessage ?? steps.UnconfirmedMessage ?? NotConfirmedMessage, trace.FailedPhase ?? trace.Phase);
                 }
             }
             catch (Exception ex)

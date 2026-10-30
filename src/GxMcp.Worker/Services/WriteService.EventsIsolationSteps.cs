@@ -30,7 +30,7 @@ namespace GxMcp.Worker.Services
             private DateTime _lastUpdateBefore;
             private ObjectMoveSnapshot _snapshot;
             private JObject _timings;
-            private Dictionary<Guid, string> _inventory;
+            private Dictionary<Guid, EventsInventoryEntry> _inventory;
             private IDisposable _transaction;
             private Action _commit;
             private Action _rollback;
@@ -41,6 +41,16 @@ namespace GxMcp.Worker.Services
             private string _sourceAfterPartSave;
             private KBObject _persisted;
             private int _postCommitReadAttempts;
+
+            // The Worker clock around the writes, and the target's stamp as the open transaction holds it after the
+            // object save. Together they say which stamp an object written by this save can carry (EventsSaveWindow).
+            private DateTime _transactionStartUtc;
+            private DateTime _transactionEndUtc;
+            private bool _transactionEnded;
+            private DateTime _writeStartUtc;
+            private DateTime _objectSavedUtc;
+            private long? _stampAfterObjectSave;
+            private string _unconfirmedMessage;
 
             internal SdkIsolatedEventsSaveSteps(
                 KnowledgeBase kb, Guid guid, string target, string source, JObject isolation, JObject receipt)
@@ -58,6 +68,8 @@ namespace GxMcp.Worker.Services
             public bool WorkerRestartRequired => SdkEventSuppressionScope.IsPoisoned;
 
             public bool Verified { get; private set; }
+
+            public string UnconfirmedMessage => _unconfirmedMessage;
 
             /// <summary>The fresh SDK instance the verification read; null until the verification completed.</summary>
             internal KBObject VerifiedState { get; private set; }
@@ -94,6 +106,7 @@ namespace GxMcp.Worker.Services
 
             public void BeginTransaction()
             {
+                _transactionStartUtc = DateTime.UtcNow;
                 var transaction = _kb.BeginTransaction();
                 _transaction = transaction;
                 _commit = transaction.Commit;
@@ -110,6 +123,7 @@ namespace GxMcp.Worker.Services
 
             public void AssignSource()
             {
+                _writeStartUtc = DateTime.UtcNow;
                 _receipt["mutationAttempted"] = true;
                 _eventsPart = GxMcp.Worker.Structure.PartAccessor.GetPart(_current, "Events");
                 if (!(_eventsPart is ISource eventsSource)) throw new InvalidOperationException("The audited WebPanel does not expose an Events source part.");
@@ -152,6 +166,9 @@ namespace GxMcp.Worker.Services
                     ForceSave = true, ForceSaveDefaultParts = false,
                     SkipValidation = true, UpdateParentModels = false
                 });
+                // The SDK stamps the object while it saves it; this stamp is what ties the SDK's clock to the Worker's.
+                _objectSavedUtc = DateTime.UtcNow;
+                _stampAfterObjectSave = SdkTimestampNormalizer.NormalizeUtc(_current.LastUpdate).Ticks;
                 string sourceAfterObjectSave = EventsSaveIsolation.Source(_current);
                 _receipt["preCommitPartSourceMatch"] = EventsSaveIsolation.SourceEquivalent(_sourceAfterPartSave, _source);
                 _receipt["preCommitObjectSourceMatch"] = EventsSaveIsolation.SourceEquivalent(sourceAfterObjectSave, _source);
@@ -178,7 +195,9 @@ namespace GxMcp.Worker.Services
                 // proof below.
                 var comparison = _snapshot.Compare(_current, new[] { "Events" });
                 var inventoryWatch = Stopwatch.StartNew();
-                var changedOthers = EventsSaveIsolation.ChangedOthers(_inventory, EventsSaveIsolation.Inventory(_kb), _guid);
+                // The transaction is still open: only a stamp from before it shows that someone else wrote an object.
+                var changedOthers = EventsOtherObjectChanges.Classify(
+                    _inventory, EventsSaveIsolation.Inventory(_kb), _guid, BuildSaveWindow(transactionClosed: false));
                 _timings["inventoryPreCommitMs"] = inventoryWatch.ElapsedMilliseconds;
                 _receipt["preCommitObjectStateVerified"] = true;
                 _receipt["preCommitFreshReadDeferred"] = true;
@@ -196,7 +215,8 @@ namespace GxMcp.Worker.Services
                 _receipt["preCommitChangedPartKeys"] = new JArray(comparison.ChangedPartKeys);
                 _receipt["preCommitChangedPartDeltas"] = _snapshot.DescribeDifferences(_current, "Events");
                 _receipt["unexpectedChangedParts"] = comparison.ChangedParts;
-                _receipt["unexpectedChangedObjects"] = changedOthers;
+                // Apart from the final verdict: the rollback this refusal triggers can undo the change it names.
+                IsolatedEventsSaveVerdict.RecordPreCommitOthers(_receipt, changedOthers);
                 string changedParts = comparison.ChangedParts is JArray changedList
                     ? string.Join(", ", changedList.Select(part => part.ToString()))
                     : comparison.ChangedParts?.ToString();
@@ -204,7 +224,7 @@ namespace GxMcp.Worker.Services
                     _receipt["preCommitSourceMatch"]?.Value<bool>() == true,
                     changedParts,
                     comparison.Equal || preCommitPatternProjectionAllowed,
-                    changedOthers.Count,
+                    changedOthers.Blocking.Count,
                     EventsSaveIsolation.Placement(_current) == _originalPlacement);
                 if (mismatch != null) throw new InvalidOperationException(mismatch);
             }
@@ -218,6 +238,26 @@ namespace GxMcp.Worker.Services
                 var transaction = _transaction;
                 _transaction = null;
                 transaction?.Dispose();
+                if (transaction != null && !_transactionEnded)
+                {
+                    _transactionEndUtc = DateTime.UtcNow;
+                    _transactionEnded = true;
+                }
+            }
+
+            // Where, in the SDK's stamp clock, a write made by this save can be stamped. The target's own new stamp,
+            // read right after the object save, is the anchor: it was assigned somewhere between the first write call
+            // and that read. Without an advanced stamp there is no anchor and no object can be cleared.
+            private EventsSaveWindow BuildSaveWindow(bool transactionClosed)
+            {
+                if (_stampAfterObjectSave == null) return EventsSaveWindow.Unavailable("TargetNotSaved");
+                if (_stampAfterObjectSave.Value <= SdkTimestampNormalizer.NormalizeUtc(_lastUpdateBefore).Ticks)
+                    return EventsSaveWindow.Unavailable("TargetStampNotAdvanced");
+                if (transactionClosed && !_transactionEnded) return EventsSaveWindow.Unavailable("TransactionNotClosed");
+                return EventsSaveWindow.Calibrate(
+                    _transactionStartUtc.Ticks, transactionClosed ? _transactionEndUtc.Ticks : (long?)null,
+                    _writeStartUtc.Ticks, _objectSavedUtc.Ticks, _stampAfterObjectSave.Value,
+                    TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).Ticks);
             }
 
             public void RereadAfterCommit()
@@ -241,7 +281,12 @@ namespace GxMcp.Worker.Services
                 var finalComparison = _snapshot.Compare(persisted, new[] { "Events" });
                 _receipt["preservedPartSnapshotAfter"] = ObjectMoveSnapshot.Capture(persisted).DescribeParts("Events");
                 var inventoryWatch = Stopwatch.StartNew();
-                var finalOthers = EventsSaveIsolation.ChangedOthers(_inventory, EventsSaveIsolation.Inventory(_kb), _guid);
+                EventsSaveWindow window = BuildSaveWindow(transactionClosed: true);
+                // A committed save must have persisted the stamp the window was calibrated with.
+                if (window.Calibrated && committed
+                    && SdkTimestampNormalizer.NormalizeUtc(persisted.LastUpdate).Ticks != _stampAfterObjectSave)
+                    window = EventsSaveWindow.Unavailable("PersistedStampDiffersFromSaveStamp");
+                var finalOthers = EventsOtherObjectChanges.Classify(_inventory, EventsSaveIsolation.Inventory(_kb), _guid, window);
                 _timings["inventoryFinalMs"] = inventoryWatch.ElapsedMilliseconds;
                 bool partPersisted = EventsSaveIsolation.SourceEquivalent(EventsSaveIsolation.Source(persisted), _source);
                 bool metadataAdvanced = persisted.VersionId > _revisionBefore || persisted.LastUpdate > _lastUpdateBefore;
@@ -256,22 +301,27 @@ namespace GxMcp.Worker.Services
                 _receipt["postCommitReadAttempts"] = _postCommitReadAttempts;
                 _receipt["otherPartsIntact"] = otherPartsIntact;
                 _receipt["unexpectedChangedParts"] = finalComparison.ChangedParts;
-                _receipt["unexpectedChangedObjects"] = finalOthers;
-                _receipt["otherObjectMetadataIntact"] = finalOthers.Count == 0;
                 _receipt["revisionAfter"] = persisted.VersionId;
                 _receipt["lastUpdateAfter"] = persisted.LastUpdate.ToUniversalTime().ToString("o");
                 _receipt["versionToken"] = EventsSaveIsolation.Token(persisted);
                 _receipt["persistedHash"] = EventsSaveIsolation.ContentHash(EventsSaveIsolation.Source(persisted));
-                _receipt["verified"] = committed && partPersisted && metadataAdvanced && otherPartsIntact && finalOthers.Count == 0;
                 _receipt["reReadConfirmed"] = partPersisted;
                 _receipt["persisted"] = committed && partPersisted;
                 _receipt["saved"] = committed;
-                _receipt["rollbackVerified"] = !committed && EventsSaveIsolation.SourceEquivalent(EventsSaveIsolation.Source(persisted), _originalSource)
-                    && otherPartsIntact && finalOthers.Count == 0
-                    && persisted.VersionId == _revisionBefore && persisted.LastUpdate == _lastUpdateBefore;
                 _receipt["verificationCompleted"] = true;
                 VerifiedState = persisted;
-                Verified = committed && partPersisted && metadataAdvanced && otherPartsIntact && finalOthers.Count == 0;
+                Verified = IsolatedEventsSaveVerdict.Apply(
+                    _receipt,
+                    new IsolatedEventsTargetEvidence
+                    {
+                        Committed = committed,
+                        PartPersisted = partPersisted,
+                        MetadataAdvanced = metadataAdvanced,
+                        OtherPartsIntact = otherPartsIntact,
+                        RestoredToOriginal = EventsSaveIsolation.SourceEquivalent(EventsSaveIsolation.Source(persisted), _originalSource)
+                            && persisted.VersionId == _revisionBefore && persisted.LastUpdate == _lastUpdateBefore
+                    },
+                    finalOthers, window, out _unconfirmedMessage);
             }
 
             public IEnumerable<KeyValuePair<string, object>> SdkMessageSources()

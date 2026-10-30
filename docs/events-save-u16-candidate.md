@@ -62,7 +62,9 @@ and verified content no-ops add no new dirty mark; changed or uncertain
 persistence remains dirty. This bookkeeping does not schedule a build.
 
 The complete metadata inventory is deliberately expensive and concurrent edits
-to other objects can prevent this candidate from committing. Metadata equality
+to other objects can prevent this candidate from committing, unless the SDK stamp
+puts the edit outside the save's transaction (see
+[Edits by other processes while the save runs](events-object-save-isolation.md#edits-by-other-processes-while-the-save-runs)). Metadata equality
 does not prove byte equality for another object's parts if an independent
 writer persisted those parts without advancing metadata. The optimistic token
 checks also do not establish atomic cross-process compare-and-swap semantics.

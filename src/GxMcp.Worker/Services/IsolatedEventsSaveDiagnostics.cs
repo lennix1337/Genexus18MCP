@@ -535,7 +535,8 @@ namespace GxMcp.Worker.Services
                 reasons.Add(string.IsNullOrWhiteSpace(changedParts)
                     ? "other parts of the object changed"
                     : "other parts of the object changed (" + Sanitize(changedParts) + ")");
-            if (otherObjectsChanged != 0) reasons.Add(otherObjectsChanged + " other object(s) in the Knowledge Base changed");
+            if (otherObjectsChanged != 0)
+                reasons.Add(otherObjectsChanged + " other object(s) in the Knowledge Base changed (see preCommitUnexpectedChangedObjectDetails)");
             if (!placementMatches) reasons.Add("the object placement changed");
             return reasons.Count == 0
                 ? null

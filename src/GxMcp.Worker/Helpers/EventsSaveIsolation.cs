@@ -275,18 +275,30 @@ namespace GxMcp.Worker.Helpers
 
         internal static string Placement(KBObject obj) => obj.Parent?.Guid.ToString() ?? "root";
 
-        internal static Dictionary<Guid, string> Inventory(KnowledgeBase kb)
+        internal static Dictionary<Guid, EventsInventoryEntry> Inventory(KnowledgeBase kb)
         {
             var ids = kb.DesignModel.Objects.Cast<KBObject>().Select(o => o.Guid).ToArray();
-            var result = new Dictionary<Guid, string>();
+            var result = new Dictionary<Guid, EventsInventoryEntry>();
             foreach (Guid guid in ids)
             {
                 var obj = Fresh(kb, guid);
-                result.Add(guid, obj.VersionId.ToString(CultureInfo.InvariantCulture) + ":"
-                    + SdkTimestampNormalizer.NormalizeUtc(obj.LastUpdate).Ticks.ToString(CultureInfo.InvariantCulture) + ":"
-                    + obj.Parent?.Guid.ToString() + ":" + obj.Name + ":" + obj.TypeDescriptor.Id);
+                result.Add(guid, new EventsInventoryEntry(
+                    obj.VersionId,
+                    SdkTimestampNormalizer.NormalizeUtc(obj.LastUpdate).Ticks,
+                    obj.Parent?.Guid.ToString(),
+                    obj.Name,
+                    Convert.ToString(obj.TypeDescriptor.Id, CultureInfo.InvariantCulture),
+                    obj.TypeDescriptor.Name,
+                    LastModifiedBy(obj)));
             }
             return result;
+        }
+
+        // The author is diagnostic only: it is read apart so that an object that cannot name one is still inventoried.
+        private static string LastModifiedBy(KBObject obj)
+        {
+            try { return obj.UserName; }
+            catch { return null; }
         }
 
         internal static JArray ChangedOthers(Dictionary<Guid, string> before, Dictionary<Guid, string> after, Guid target)

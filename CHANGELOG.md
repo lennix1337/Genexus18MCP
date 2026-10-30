@@ -7,6 +7,8 @@
 
 ### Added
 
+- `scripts/sdk-local-build.ps1` builds objects of a disposable test KB with the installed SDK outside the MCP: `SpecifyOneOnly`/`SpecifyAllOnly` and `GenerateOnly` under 32-bit MSBuild, then `dotnet msbuild -t:Build;Publish` on the projects the SDK regenerated, publishing to the environment's `web\bin` like the IDE. It never runs `BuildOne`, `BuildAll`, reorganization or deployment (which reach GeneXus Cloud on a Trial install), refuses KBs outside `C:\KBs\*teste*`, checks the generated project against a task allow-list and records logs and `summary.json`. Guide: `docs/sdk-local-msbuild.md`; plan-level test: `sdk-local-build-plan` check.
+
 ### Changed
 
 ### Fixed
@@ -15,7 +17,11 @@
 - CI no longer treats a failed or empty PR diff as documentation-only and skips the heavy contract suites. The contracts checkout includes full history, Git failures stop classification, and source-to-documentation renames retain the source deletion in scope. A regression runs before the classifier on every event ([report in #757](https://github.com/lennix1337/Genexus18MCP/issues/757)); the proposed whitespace gate is unchanged.
 - `genexus_create action=save_as`: when the WebForm SDK validator refuses a cloned WebForm, the `SaveAsPartFailed` message and `error.cause` now list the validator's errors (control: message) instead of only saying that the validator found errors ([#746](https://github.com/lennix1337/Genexus18MCP/issues/746)).
 
+- **A protected Events save no longer fails because another process saved a different object.** `genexus_edit part=Events mode=patch requireObjectSave=true` proves that it wrote nothing but the target by comparing three whole-KB inventories, and any other object that differed failed the operation with a generic `ObjectSaveIncomplete`, even when the Events source had been committed and read back (before the commit it rolled the save back instead). On a large KB each inventory takes about a minute, so a developer saving anything in the IDE during those minutes was enough. The save now compares the SDK stamp of each differing object with the interval in which the save itself writes, calibrated on the target's own new stamp: an object that another process saved once, outside that interval, is listed in `concurrentChanges[]` and does not fail the save. Anything else still fails as before (a stamp inside the interval, two saves of one object, an object created, deleted, moved or renamed, or no calibration), and the failure now names the objects (`unexpectedChangedObjectDetails[]`), says that the target itself is verified (`writeVerifiedForTarget`), carries `reasonCode: OtherObjectsChangedDuringSave` and a one-line message instead of the generic one. `otherObjectMetadataIntact` and `rollbackVerified` now mean "no object in doubt", and the default (terse) error projection keeps these fields. A save refused before the commit keeps naming the objects that caused the refusal in `preCommitUnexpectedChangedObjects` and `preCommitUnexpectedChangedObjectDetails[]`, also when the rollback undid their change and the final fields show a clean Knowledge Base. See `docs/events-object-save-isolation.md`. [#741](https://github.com/lennix1337/Genexus18MCP/issues/741)
+
 ### Internal
+
+- The classification of the other objects (`EventsSaveWindow`, `EventsOtherObjectChanges`) and the verdict of the isolated Events save (`IsolatedEventsSaveVerdict`) hold no SDK type, so they are unit-tested, together with a double of the SDK half driven through the real flow; `IIsolatedEventsSaveSteps` gained `UnconfirmedMessage`.
 
 ## v4.1.0 - 2026-10-29
 

@@ -266,6 +266,16 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void PreCommitMismatch_PointsAtTheDescriptionOfTheOtherObjects_OnlyWhenThereAreSome()
+        {
+            string withOthers = IsolatedEventsSaveDiagnostics.DescribePreCommitMismatch(true, null, true, 2, true);
+            string withoutOthers = IsolatedEventsSaveDiagnostics.DescribePreCommitMismatch(false, null, true, 0, true);
+
+            Assert.Contains("2 other object(s) in the Knowledge Base changed (see preCommitUnexpectedChangedObjectDetails)", withOthers);
+            Assert.DoesNotContain("preCommitUnexpectedChangedObjectDetails", withoutOthers);
+        }
+
+        [Fact]
         public void Describe_KeepsTheSdkLocationExactly_ANegativeLineIsNotNormalized()
         {
             // Field report: the IDE showed "Line -1657, Char 49" for a Pattern-generated Events.

@@ -84,6 +84,7 @@ namespace GxMcp.Worker.Tests
             internal string FreshToken { get; set; } = "token-1";
             public bool WorkerRestartRequired { get; set; }
             public bool Verified { get; set; } = true;
+            public string UnconfirmedMessage { get; set; }
             internal bool? VerifiedCommitted;
 
             private void Step(string name)
