@@ -1,6 +1,11 @@
 {
   "version": 1,
   "checks": {
+    "gateway-harness-cleanup": {
+      "description": "Disposable process-tree cleanup smoke; no SDK, KB or Cloud",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~LiveGatewayHarnessCleanupTests", "--logger", "console;verbosity=normal"],
+      "timeoutMs": 120000
+    },
     "build-no-reorg": {
       "description": "Issue 749: build safety flags, native policy, external XML and structured refusal (no KB)",
       "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~BuildAllTests|FullyQualifiedName~TargetedBuildReorgSafetyTests|FullyQualifiedName~BuildReorgPolicyTests|FullyQualifiedName~BuildEventBrokerRestoreTests|FullyQualifiedName~BuildVerificationDiagnosticsTests|FullyQualifiedName~InProcessBuildRunnerTests", "--logger", "console;verbosity=minimal"],

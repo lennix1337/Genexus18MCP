@@ -12,8 +12,8 @@ namespace GxMcp.Gateway.Tests
         [Fact]
         public async Task TimeoutCleanup_stops_owned_child_without_touching_unrelated_process()
         {
-            // The child and the unrelated process share one lightweight image (ping.exe), so cleanup
-            // must stop the owned tree, not processes by name; only the parent needs PowerShell.
+            // Same-image peers catch name-wide kills. Node avoids PowerShell cold-start time.
+            // A detached console keeps parent-only termination from masking a missing tree kill.
             using var unrelated = Process.Start(new ProcessStartInfo
             {
                 FileName = "ping.exe",
@@ -25,8 +25,15 @@ namespace GxMcp.Gateway.Tests
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = "powershell.exe",
-                    Arguments = "-NoProfile -NonInteractive -Command \"$child = Start-Process ping.exe -ArgumentList '-n 61 127.0.0.1' -WindowStyle Hidden -PassThru; Write-Output $child.Id; Start-Sleep -Seconds 60\"",
+                    FileName = "node",
+                    ArgumentList =
+                    {
+                        "-e",
+                        "const child = require('node:child_process').spawn('ping.exe', " +
+                        "['-n', '61', '127.0.0.1'], {stdio: 'ignore', windowsHide: true, detached: true}); " +
+                        "child.once('spawn', () => console.log(child.pid)); " +
+                        "child.once('error', error => { console.error(error); process.exitCode = 1; });"
+                    },
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardInput = true,
@@ -39,8 +46,9 @@ namespace GxMcp.Gateway.Tests
                 parent.Start();
                 var childId = await parent.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
                 child = Process.GetProcessById(int.Parse(childId!));
+                Assert.False(child.HasExited, "The owned child exited before cleanup.");
                 // The stub ignores stdin, so the graceful-exit wait would only add 2s of waiting.
-                LiveGatewayHarness.StopOwnedProcess(parent, gracefulExitMs: 0);
+                Assert.True(LiveGatewayHarness.StopOwnedProcess(parent, gracefulExitMs: 0));
                 Assert.True(child.WaitForExit(5000), "The owned child outlived timeout cleanup.");
                 Assert.False(unrelated.HasExited);
             }
