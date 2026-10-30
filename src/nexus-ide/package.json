@@ -495,6 +495,6 @@
     "mermaid": "^12.2.0",
     "mocha": "^12.0.3",
     "typescript": "^5.3.2",
-    "typescript-eslint": "^8.72.0"
+    "typescript-eslint": "^8.72.1"
   }
 }
