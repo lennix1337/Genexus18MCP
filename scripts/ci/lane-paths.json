@@ -120,7 +120,8 @@
         "docs/plans/2026-10-13-open-issues-plan.md",
         "docs/sdk-probe/*",
         "docs/sdk_coverage_gap_matrix.md",
-        "docs/udm_storage_notes.md"
+        "docs/udm_storage_notes.md",
+        "docs/wwp-webpanel-authoring.md"
       ]
     },
     {

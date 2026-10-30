@@ -97,6 +97,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_workwith", "add_filter_attribute")]
         [InlineData("genexus_workwith", "remove_filter_attribute")]   // issue #586
         [InlineData("genexus_wwp", "add_tab")]
+        [InlineData("genexus_wwp", "add_layout")]
         [InlineData("genexus_wwp", "add_table")]        // issue #595
         [InlineData("genexus_wwp", "move_control")]     // issue #595
         public void MutatingActions_AreDetected(string toolName, string action)
@@ -197,6 +198,7 @@ namespace GxMcp.Gateway.Tests
         [Theory]
         [InlineData("add_table")]
         [InlineData("move_control")]
+        [InlineData("add_layout")]
         public void WorkWithPlusLayout_DryRun_DoesNotInvalidate(string action)
         {
             Assert.False(Program.IsMutatingTool("genexus_wwp", new JObject

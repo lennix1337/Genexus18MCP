@@ -5260,7 +5260,8 @@
               "replace_web_component_with_user_action",
               "settings_templates",
               "settings_read",
-              "settings_edit"
+              "settings_edit",
+              "add_layout"
             ],
             "type": "string"
           },

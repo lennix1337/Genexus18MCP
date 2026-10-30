@@ -106,6 +106,7 @@ namespace GxMcp.Gateway.Tests
 
         [Theory]
         [InlineData("add_tab")]
+        [InlineData("add_layout")]
         [InlineData("move_tab")]
         [InlineData("remove_tab")]
         [InlineData("set_table_type")]

@@ -2028,6 +2028,9 @@ namespace GxMcp.Gateway
                 // Optimistic-concurrency retry contract: a refused token is only useful if the
                 // caller can see the token that is current.
                 "currentVersion", "expectedVersion",
+                // genexus_wwp add_layout: the stage a failure stopped at and the verification checks it failed.
+                // Small on purpose; the full verification receipts stay in verbose_errors.
+                "nativeOperation", "failureStage", "failedChecks",
                 // genexus_wwp regenerate_derived: which objects were stale or missing a token, the
                 // paste-ready token map, and the evidence of the unit's rollback.
                 "staleObjects", "expectedVersions", "missing",
@@ -2099,14 +2102,18 @@ namespace GxMcp.Gateway
                     if (value != null) trimmed[key] = value;
                 }
             }
-            if (code?.ToString().StartsWith("Pattern", StringComparison.Ordinal) == true
+            string receiptCode = code?.ToString() ?? string.Empty;
+            if ((receiptCode.StartsWith("Pattern", StringComparison.Ordinal)
+                    || receiptCode.StartsWith("WwpLayout", StringComparison.Ordinal)
+                    || receiptCode.StartsWith("WwpProjection", StringComparison.Ordinal))
                 && (ResolveErrorField(error, "commitCompleted") != null || ResolveErrorField(error, "persistenceState") != null))
             {
                 // PatternInstance write receipt: whether the commit happened, what an independent re-read
                 // observed, and the parent projection and restoration evidence the caller inspects before
                 // retrying. Gated on the receipt itself so unrelated errors keep their terse shape.
-                // Patch, visual-write, WebForm and TransactionRecords errors report persistenceState too;
-                // the Pattern* code keeps their snapshot path and hashes out of the terse shape.
+                // Patch, visual-write, WebForm and TransactionRecords errors report persistenceState too; the
+                // Pattern* codes of the pattern writers and the WwpLayout*/WwpProjection* codes of add_layout
+                // keep their snapshot path and hashes out of the terse shape.
                 foreach (string key in new[] { "persistenceState", "commitCompleted", "snapshot", "stateRestoredExactly",
                     "rollbackPerformed", "beforeHash", "projection", "restorationVerification",
                     "hostHashBefore", "parentHashBefore", "transactionFinalizationError", "verificationError",

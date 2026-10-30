@@ -323,6 +323,8 @@ namespace GxMcp.Worker.Services
                 _patterns.BuildPatternPartEnvelope(requestedObject, "PatternInstance", xml, PatternRegistry.WorkWithPlusPatternId,
                     out _, out KBObjectPart instancePart);
 
+                if (operation == "add_layout")
+                    return RunLayoutOperation(target, instance, args);
                 if (IsTabRead(operation))
                     return RunTabRead(target, instance, instancePart, xml, operation, args);
                 if (IsAddGridOperation(operation))

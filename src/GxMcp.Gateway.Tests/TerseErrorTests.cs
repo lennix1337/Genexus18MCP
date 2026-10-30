@@ -396,5 +396,26 @@ namespace GxMcp.Gateway.Tests
             var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
             Assert.Equal("flat string failure", (string)trimmed["message"]!);
         }
+
+        [Fact]
+        public void AddLayoutFailureReceiptSurvivesTerseProjection()
+        {
+            var input = new JObject
+            {
+                ["code"] = "WwpLayoutNotVerified",
+                ["message"] = "Inspect the saved PatternInstance before retrying.",
+                ["commitCompleted"] = true,
+                ["rollbackPerformed"] = false,
+                ["restorationVerification"] = new JObject
+                {
+                    ["host"] = new JObject { ["equal"] = false }, ["parent"] = new JObject { ["equal"] = true }
+                },
+                ["projection"] = new JObject { ["webForm"] = false },
+                ["snapshot"] = "snapshot-id"
+            };
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+            foreach (string key in new[] { "commitCompleted", "rollbackPerformed", "restorationVerification", "projection", "snapshot" })
+                Assert.True(JToken.DeepEquals(input[key], trimmed[key]), key);
+        }
     }
 }

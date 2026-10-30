@@ -253,7 +253,8 @@ namespace GxMcp.Gateway.Tests
             // Issue #710: 39800 -> 39850 for genexus_versioning history_diff (read-only comparison of native
             // revisions: the action enum value and the `toVersionId` input; the versionId/async/context
             // descriptions were shortened to offset part of it). Measured ~39813 tokens; ~37 headroom.
-            Assert.True(approxTokens < 39850, $"tool_definitions.json is ~{approxTokens} tokens; budget 39850.");
+            // The typed genexus_wwp add_layout (the action value plus one description sentence) takes the schema from ~39844 to ~39879 tokens, so 39850 -> 39900.
+            Assert.True(approxTokens < 39900, $"tool_definitions.json is ~{approxTokens} tokens; budget 39900.");
         }
 
         [Theory]

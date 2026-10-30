@@ -5,7 +5,7 @@
     "src/GxMcp.Gateway/OperationClassifier.cs"
   ],
   "toolCount": 60,
-  "actionCount": 311,
+  "actionCount": 312,
   "tools": [
     {
       "tool": "genexus_k2b_designer",
@@ -4075,6 +4075,20 @@
         },
         {
           "action": "settings_edit",
+          "kind": "mutating",
+          "effects": "kb.write",
+          "execution": "worker",
+          "retry": "operation_key",
+          "cache": "never",
+          "invalidation": [
+            "kb",
+            "dependents",
+            "collections"
+          ],
+          "previewSupported": true
+        },
+        {
+          "action": "add_layout",
           "kind": "mutating",
           "effects": "kb.write",
           "execution": "worker",
