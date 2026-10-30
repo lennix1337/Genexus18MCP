@@ -1,6 +1,16 @@
 {
   "version": 1,
   "checks": {
+    "ci-docs-scope": {
+      "description": "Execute the workflow docs-only classifier against real Git revisions, missing/shallow history and mutations; no SDK or KB",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/tests/test-ci-docs-scope.ps1"],
+      "timeoutMs": 60000
+    },
+    "ci-workflow-policy": {
+      "description": "Workflow dependency, routing, native exit and time-budget contracts; no SDK or KB",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/tests/test-ci-workflow-policy.ps1"],
+      "timeoutMs": 120000
+    },
     "build-event-regression": {
       "description": "Build All event dispatch, broker restoration, external template and persistence confirmation regressions (no KB)",
       "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~BuildAllEventDispatchTests|FullyQualifiedName~BuildAllFailureEvidenceTests|FullyQualifiedName~BuildAllTests|FullyQualifiedName~PersistenceConfirmationTests", "--logger", "console;verbosity=minimal"],

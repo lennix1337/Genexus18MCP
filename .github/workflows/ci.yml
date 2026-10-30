@@ -327,11 +327,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: 24
+
+      - name: Docs scope regression tests
+        shell: pwsh
+        run: ./scripts/tests/test-ci-docs-scope.ps1
 
       - name: Detect change scope
         id: scope
@@ -341,9 +347,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if ($env:GITHUB_EVENT_NAME -eq 'pull_request' -and $env:BASE_SHA -and $env:HEAD_SHA) {
-            $changed = @(& git diff --name-only "$env:BASE_SHA...$env:HEAD_SHA")
+            $changed = @(& git diff --name-only --no-renames "$env:BASE_SHA...$env:HEAD_SHA" 2>&1)
+            if ($LASTEXITCODE -ne 0) { throw "git diff failed; cannot determine docs-only scope: $($changed -join ' ')" }
             $nonDocs = @($changed | Where-Object { $_ -and $_ -notmatch '^(.*\.md|docs/.*|plans/.*|LICENSE)$' })
-            if ($nonDocs.Count -eq 0) {
+            if ($changed.Count -gt 0 -and $nonDocs.Count -eq 0) {
               Write-Host "Docs-only change ($($changed.Count) files) - skipping heavy script suites."
               "docs_only=true" >> $env:GITHUB_OUTPUT
               exit 0

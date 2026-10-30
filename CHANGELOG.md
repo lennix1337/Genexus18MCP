@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- CI no longer treats a failed or empty PR diff as documentation-only and skips the heavy contract suites. The contracts checkout includes full history, Git failures stop classification, and source-to-documentation renames retain the source deletion in scope. A regression runs before the classifier on every event ([report in #757](https://github.com/lennix1337/Genexus18MCP/issues/757)); the proposed whitespace gate is unchanged.
 - `genexus_create action=save_as`: when the WebForm SDK validator refuses a cloned WebForm, the `SaveAsPartFailed` message and `error.cause` now list the validator's errors (control: message) instead of only saying that the validator found errors ([#746](https://github.com/lennix1337/Genexus18MCP/issues/746)).
 
 ### Internal
