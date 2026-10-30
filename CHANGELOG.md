@@ -7,6 +7,8 @@
 
 ### Added
 
+- `scripts/sdk-local-build.ps1` builds objects of a disposable test KB with the installed SDK outside the MCP: `SpecifyOneOnly`/`SpecifyAllOnly` and `GenerateOnly` under 32-bit MSBuild, then `dotnet msbuild -t:Build;Publish` on the projects the SDK regenerated, publishing to the environment's `web\bin` like the IDE. It never runs `BuildOne`, `BuildAll`, reorganization or deployment (which reach GeneXus Cloud on a Trial install), refuses KBs outside `C:\KBs\*teste*`, checks the generated project against a task allow-list and records logs and `summary.json`. Guide: `docs/sdk-local-msbuild.md`; plan-level test: `sdk-local-build-plan` check.
+
 ### Changed
 
 ### Fixed

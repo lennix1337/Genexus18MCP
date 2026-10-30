@@ -1,6 +1,11 @@
 {
   "version": 1,
   "checks": {
+    "sdk-local-build-plan": {
+      "description": "scripts/sdk-local-build.ps1 -PlanOnly: allow-listed SDK task sequence, escaping, test-KB admission and argument refusals; no SDK or KB",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/tests/test-sdk-local-build.ps1"],
+      "timeoutMs": 120000
+    },
     "ci-docs-scope": {
       "description": "Execute the workflow docs-only classifier against real Git revisions, missing/shallow history and mutations; no SDK or KB",
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/tests/test-ci-docs-scope.ps1"],
