@@ -564,7 +564,7 @@ namespace GxMcp.Gateway.Tests
             WriteDiagnosticsSummary(stopped ? "passed" : "failed", stopped);
         }
 
-        internal static bool StopOwnedProcess(Process process)
+        internal static bool StopOwnedProcess(Process process, int gracefulExitMs = 2000)
         {
             bool stopped = false;
             try
@@ -575,7 +575,7 @@ namespace GxMcp.Gateway.Tests
                 // EditSnapshotStore writes. 500ms was too aggressive — the
                 // shared SDK state outlived the kill and crashed the next
                 // spawn on rapid test-class cycles.
-                if (!process.WaitForExit(2000))
+                if (!process.WaitForExit(gracefulExitMs))
                 {
                     process.Kill(entireProcessTree: true);
                     process.WaitForExit(5000);
