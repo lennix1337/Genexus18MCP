@@ -178,7 +178,12 @@ Disposable test Knowledge Bases live under `C:\KBs`. Any directory whose name
 contains `teste` is a scratch KB that may be written to, retargeted and left in
 a modified state — it is not user data, and a lane that needs to reproduce a
 write, a rollback or a persistence failure should use one rather than asking
-for a KB.
+for a KB. Full end-to-end validation with the real SDK on these available test
+KBs is standing-authorized; choose a compatible test KB and run the required
+live flow without requesting permission again. A pending live validation is
+work to complete, not a permission blocker. This authorization covers test-KB
+mutations needed by that flow, not production KBs, Cloud, release or deployment;
+keep Cloud off and preserve the existing isolation and provenance checks.
 
 The paths below are this maintainer's machine, not a requirement: the portable
 rule is the `teste` name. The release preflight resolves its live KB as

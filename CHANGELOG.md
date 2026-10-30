@@ -12,6 +12,7 @@
 ### Fixed
 
 - SDK lifecycle builds now pass `FailIfReorg` and `DoNotExecuteReorg` through targeted, batch, rebuild and external MSBuild paths. `BuildOne`, whose SDK task has no reorganization policy properties, receives the policy at command construction. Missing task safety properties and the unguarded void native-build fallback are refused before execution. Reorganization refusals remain `ReorgRequired`, never partial success; database changes still require explicit `action=reorg`. Disposable-KB end-to-end validation remains pending ([#749](https://github.com/lennix1337/Genexus18MCP/issues/749)).
+- CI no longer treats a failed or empty PR diff as documentation-only and skips the heavy contract suites. The contracts checkout includes full history, Git failures stop classification, and source-to-documentation renames retain the source deletion in scope. A regression runs before the classifier on every event ([report in #757](https://github.com/lennix1337/Genexus18MCP/issues/757)); the proposed whitespace gate is unchanged.
 - `genexus_create action=save_as`: when the WebForm SDK validator refuses a cloned WebForm, the `SaveAsPartFailed` message and `error.cause` now list the validator's errors (control: message) instead of only saying that the validator found errors ([#746](https://github.com/lennix1337/Genexus18MCP/issues/746)).
 
 ### Internal
