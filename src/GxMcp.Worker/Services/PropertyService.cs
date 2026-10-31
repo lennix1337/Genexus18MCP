@@ -1443,21 +1443,27 @@ namespace GxMcp.Worker.Services
             return referenced == null ? null : new global::Artech.Genexus.Common.CustomTypes.WebPanelReference(referenced.Key);
         }
 
-        internal static void ApplyPropertiesDirect(KBObject obj, JObject properties, dynamic container = null)
+        // The direct object write of object_atomic. It takes the template decision SetProperties takes, before the first value
+        // is written, and then writes each property under the name the decision gives it.
+        internal void ApplyPropertiesDirect(KBObject obj, JObject properties, dynamic container = null)
         {
             if (obj == null || properties == null || properties.Count == 0) return;
+            var wiring = WwpTemplateWiring.Write((object)container == null ? TargetTypeOf(obj) : Guid.Empty,
+                properties.Properties().Select(p => new KeyValuePair<string, string>(p.Name, p.Value?.ToString() ?? string.Empty)),
+                name => ReadStoredProperty(obj, name, null));
+            if (wiring.RefusalCode != null) throw new WwpTemplateRefusedException(wiring);
             dynamic targetContainer = container ?? obj;
             foreach (var p in properties.Properties())
             {
-                string pName = p.Name;
+                string pName = wiring.NativeNames[p.Name];
                 string directWriteValidation = ValidateDirectPropertyWrite(pName);
                 if (directWriteValidation != null) throw new InvalidOperationException(directWriteValidation);
                 string pVal = p.Value?.ToString();
-                object reportContainer = ResolveReportPropertyContainer(obj, pName, null);
-                dynamic propertyContainer = reportContainer ?? targetContainer;
-                string propertyValidation = reportContainer != null ? ValidateReportTextMode(pVal) : ValidatePropertyWrite(propertyContainer, pName, pVal);
+                object reportContainer = ResolvePropertyContainer(obj, pName, null);
+                object propertyContainer = reportContainer ?? targetContainer;
+                string propertyValidation = ValidatePropertyValue(propertyContainer, pName, pVal, reportContainer != null);
                 if (propertyValidation != null) throw new InvalidOperationException(propertyValidation);
-                ApplyPropertyValue(propertyContainer, pName, pVal, null, obj);
+                WritePropertyValue(propertyContainer, pName, pVal, null, obj);
                 if (ReportLayoutHelper.IsTextModeProperty(pName))
                     ReportLayoutHelper.MarkLayoutDirty(GxMcp.Worker.Structure.PartAccessor.GetPart(obj, "Layout"));
             }
@@ -1754,6 +1760,16 @@ namespace GxMcp.Worker.Services
 
         protected internal virtual object ReadTextMode(KBObject obj)
             => ReflectionHelper.TryGetPropertyBagValue(ResolveReportPropertyContainer(obj, ReportLayoutHelper.TextModeProperty, null), ReportLayoutHelper.TextModeProperty);
+
+        protected internal virtual object ResolvePropertyContainer(KBObject obj, string nativeName, string controlName)
+            => ResolveReportPropertyContainer(obj, nativeName, controlName);
+
+        // textMode: the property lives in a report container, so its value is checked as report text mode.
+        protected internal virtual string ValidatePropertyValue(object container, string nativeName, string value, bool textMode)
+            => textMode ? ValidateReportTextMode(value) : ValidatePropertyWrite((dynamic)container, nativeName, value);
+
+        protected internal virtual void WritePropertyValue(object container, string nativeName, string value, string controlName, KBObject obj)
+            => ApplyPropertyValue((dynamic)container, nativeName, value, controlName, obj);
 
         // The SDK names a call used for a requested name, when they differ, so the caller reads both. Only WorkWithPlus
         // template objects have such names.

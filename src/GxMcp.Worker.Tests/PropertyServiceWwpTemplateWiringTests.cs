@@ -149,12 +149,50 @@ namespace GxMcp.Worker.Tests
             Assert.NotEqual("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
         }
 
+        [Fact]
+        public void ADirectWriteOfAnEmptyTypeIsRefusedBeforeAnyValueIsWritten()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", "<selection />");
+
+            WwpTemplateRefusedException refusal = Assert.Throws<WwpTemplateRefusedException>(() =>
+                service.ApplyPropertiesDirect(service.Target, new JObject { ["WWPTemplate_Type"] = "" }));
+
+            Assert.Equal("WwpTemplateInvalid", refusal.Wiring.RefusalCode);
+            Assert.Equal("TypeEmpty", refusal.Wiring.Violations[0]["check"]?.ToString());
+            Assert.Empty(service.Writes);
+        }
+
+        [Fact]
+        public void ADirectWriteWritesTheSdkNameOfAnAliasWithTheValueSent()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", "<selection />");
+
+            service.ApplyPropertiesDirect(service.Target, new JObject { ["TemplateType"] = "Trn.View", ["TemplateXml"] = "<view />" });
+
+            Assert.Equal(new[] { ("WWPTemplate_Type", "Trn.View"), ("WWPTemplate_TemplateXml", "<view />") }, service.Writes);
+        }
+
+        [Fact]
+        public void ADirectWriteOnAnotherObjectTypeWritesTheNameAsItIs()
+        {
+            var service = new FakeTemplateTarget(OtherObjectType, "Trn.Selection", "<selection />");
+
+            service.ApplyPropertiesDirect(service.Target, new JObject { ["TemplateType"] = "" });
+
+            Assert.Equal(new[] { ("TemplateType", "") }, service.Writes);
+        }
+
         // A PropertyService whose SDK steps answer from fixed values: the target is an uninitialized SDK object of a
         // type that is not a template, unless the test says otherwise, and the stored template properties are the test's.
         private sealed class FakeTemplateTarget : PropertyService
         {
             private readonly Guid _objectType;
             private readonly string _cacheKey = Guid.NewGuid().ToString();
+
+            // What the production path asked of the SDK, in order: each value checked, and each value written.
+            internal List<(string Name, string Value)> Validations { get; } = new List<(string Name, string Value)>();
+
+            internal List<(string Name, string Value)> Writes { get; } = new List<(string Name, string Value)>();
             private readonly Dictionary<string, string> _stored = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             internal FakeTemplateTarget(Guid objectType, string storedType, string storedXml)
@@ -195,6 +233,21 @@ namespace GxMcp.Worker.Tests
             }
 
             protected internal override object ReadTextMode(Artech.Architecture.Common.Objects.KBObject obj) => null;
+
+            protected internal override object ResolvePropertyContainer(Artech.Architecture.Common.Objects.KBObject obj, string nativeName, string controlName)
+                => null;
+
+            protected internal override string ValidatePropertyValue(object container, string nativeName, string value, bool textMode)
+            {
+                Validations.Add((nativeName, value));
+                return null;
+            }
+
+            protected internal override void WritePropertyValue(object container, string nativeName, string value, string controlName,
+                Artech.Architecture.Common.Objects.KBObject obj)
+            {
+                Writes.Add((nativeName, value));
+            }
         }
     }
 }

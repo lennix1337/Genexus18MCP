@@ -67,4 +67,15 @@ namespace GxMcp.Worker.Services
         internal static WriteWiring Refused(string code, string message, string hint, IDictionary<string, string> nativeNames, JArray violations)
             => new WriteWiring { RefusalCode = code, RefusalMessage = message, RefusalHint = hint, Violations = violations, NativeNames = nativeNames };
     }
+
+    // A refused template write raised where the write has no response envelope of its own, as in the direct write of object_atomic.
+    internal sealed class WwpTemplateRefusedException : InvalidOperationException
+    {
+        internal WwpTemplateRefusedException(WriteWiring wiring) : base(wiring.RefusalMessage)
+        {
+            Wiring = wiring;
+        }
+
+        internal WriteWiring Wiring { get; }
+    }
 }
