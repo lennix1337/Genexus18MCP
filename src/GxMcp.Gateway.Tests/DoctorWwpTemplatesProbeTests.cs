@@ -138,6 +138,25 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public async Task A_refusal_at_the_worker_admission_answers_WorkerBusy()
+        {
+            // The Worker's admission budget refused the command before it was queued: nothing ran.
+            var refusal = new JObject
+            {
+                ["status"] = "error",
+                ["error"] = new JObject { ["code"] = "WorkerQueueSaturated", ["message"] = "The Worker SDK lane is at its admission budget." }
+            };
+
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                RouteReply(id => ReplyFrame(id, refusal)),
+                TimeSpan.FromSeconds(5),
+                sessionId: null);
+
+            Assert.Equal("WorkerBusy", block["reason"]!.ToString());
+            Assert.Null(block["errorCode"]);
+        }
+
+        [Fact]
         public async Task A_command_error_keeps_its_code()
         {
             var error = new JObject

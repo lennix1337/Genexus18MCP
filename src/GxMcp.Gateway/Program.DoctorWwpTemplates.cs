@@ -128,9 +128,10 @@ namespace GxMcp.Gateway
 
         /// <summary>
         /// The block from the Worker's reply. The reply is the JSON-RPC frame the reply router delivers, whose `result`
-        /// is the command envelope, whose `result` is the block. A JSON-RPC error, a command error (WorkerBusy keeps its
-        /// own reason), and a result that is not the block (an older Worker that ignores the action answers the whole
-        /// doctor envelope) are unavailable blocks that name why.
+        /// is the command envelope, whose `result` is the block. A JSON-RPC error, a command error, and a result that is
+        /// not the block (an older Worker that ignores the action answers the whole doctor envelope) are unavailable
+        /// blocks that name why. A refusal that ran nothing answers WorkerBusy, whether it came from the SDK thread or
+        /// from the admission budget of the Worker's queue.
         /// </summary>
         internal static JObject ParseWwpTemplatesAnswer(string replyJson)
         {
@@ -151,7 +152,7 @@ namespace GxMcp.Gateway
             if (!string.Equals(response["status"]?.ToString(), "ok", StringComparison.Ordinal))
             {
                 string? code = response["error"]?["code"]?.ToString();
-                return string.Equals(code, "WorkerBusy", StringComparison.Ordinal)
+                return IsRefusedBeforeRunning(code)
                     ? UnavailableWwpTemplatesBlock("WorkerBusy")
                     : UnavailableWwpTemplatesBlock("WorkerError", code);
             }
@@ -160,6 +161,14 @@ namespace GxMcp.Gateway
                 return (JObject)block.DeepClone();
             return UnavailableWwpTemplatesBlock("WorkerError", "UnexpectedReply");
         }
+
+        /// <summary>
+        /// The Worker refuses a command without running it when its SDK thread stays busy past the busy wait
+        /// (WorkerBusy), and when the admission budget of its queue is full (WorkerQueueSaturated).
+        /// </summary>
+        private static bool IsRefusedBeforeRunning(string? code) =>
+            string.Equals(code, "WorkerBusy", StringComparison.Ordinal)
+            || string.Equals(code, "WorkerQueueSaturated", StringComparison.Ordinal);
 
         internal static JObject UnavailableWwpTemplatesBlock(string reason, string? errorCode = null)
         {
