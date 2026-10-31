@@ -26,7 +26,8 @@ namespace GxMcp.Worker.Tests
             => new EventsInventoryEntry(version, stamp, parent, name, typeId, typeName, by);
 
         // The transaction is open from 100 s to 160 s, the writes happen between 101 s and 103 s and the target is
-        // stamped 102 s by the same clock. The window is then 97 s (100 - 1 - 2 margin) to 163 s (160 + 1 + 2).
+        // stamped 102 s by the same clock. The measured offset is one second either way; the clock tolerance widens it to
+        // five seconds, so the window is 93 s (100 - 5 - 2 margin) to 167 s (160 + 5 + 2).
         private static EventsSaveWindow Closed() => EventsSaveWindow.Calibrate(At(100), At(160), At(101), At(103), At(102), LocalOffset);
         private static EventsSaveWindow Open() => EventsSaveWindow.Calibrate(At(100), null, At(101), At(103), At(102), LocalOffset);
 
@@ -49,9 +50,22 @@ namespace GxMcp.Worker.Tests
 
             Assert.True(window.Calibrated);
             Assert.Null(window.Reason);
-            Assert.Equal(At(97), window.LowTicks);
-            Assert.Equal(At(163), window.HighTicks);
+            Assert.Equal(At(93), window.LowTicks);
+            Assert.Equal(At(167), window.HighTicks);
             Assert.Equal(0, window.OffsetTicks);
+        }
+
+        [Fact]
+        public void AStampClockThreeSecondsAhead_IsReportedAsThreeSeconds_AndTheWindowStaysWidened()
+        {
+            // The target is stamped 105 s with the writes at 101 s to 103 s: the stamp clock reads three seconds ahead.
+            var window = EventsSaveWindow.Calibrate(At(100), At(160), At(101), At(103), At(105), LocalOffset);
+
+            Assert.True(window.Calibrated);
+            Assert.Equal(TimeSpan.FromSeconds(3).Ticks, window.OffsetTicks);
+            Assert.Equal(3d, window.Describe()["stampClockOffsetSeconds"]!.Value<double>());
+            Assert.Equal(At(93), window.LowTicks);
+            Assert.Equal(At(167), window.HighTicks);
         }
 
         [Fact]
@@ -61,8 +75,8 @@ namespace GxMcp.Worker.Tests
             var window = EventsSaveWindow.Calibrate(At(100), At(160), At(101), At(103), At(102) + LocalOffset, LocalOffset);
 
             Assert.True(window.Calibrated);
-            Assert.Equal(At(97) + LocalOffset, window.LowTicks);
-            Assert.Equal(At(163) + LocalOffset, window.HighTicks);
+            Assert.Equal(At(93) + LocalOffset, window.LowTicks);
+            Assert.Equal(At(167) + LocalOffset, window.HighTicks);
         }
 
         [Theory]
@@ -104,7 +118,7 @@ namespace GxMcp.Worker.Tests
             var window = Open();
 
             Assert.True(window.Calibrated);
-            Assert.Equal(At(97), window.LowTicks);
+            Assert.Equal(At(93), window.LowTicks);
             Assert.Null(window.HighTicks);
         }
 
@@ -114,7 +128,7 @@ namespace GxMcp.Worker.Tests
             var calibrated = Closed().Describe();
             Assert.True(calibrated["calibrated"]!.Value<bool>());
             Assert.Equal(0d, calibrated["stampClockOffsetSeconds"]!.Value<double>());
-            Assert.Equal(66d, calibrated["seconds"]!.Value<double>());
+            Assert.Equal(74d, calibrated["seconds"]!.Value<double>());
             Assert.NotNull(calibrated["from"]);
             Assert.NotNull(calibrated["to"]);
 
@@ -155,10 +169,64 @@ namespace GxMcp.Worker.Tests
         {
             var window = Closed();
 
+            Assert.Equal("InsideSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(93)), window)));
+            Assert.Equal("BeforeSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(93) - 1), window)));
+            Assert.Equal("InsideSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(167)), window)));
+            Assert.Equal("AfterSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(167) + 1), window)));
+        }
+
+        // The anchor is the target's stamp after the object save. The review's probes assumed it could come a little before
+        // the write span, or that the Worker's clock could step inside the span; the tolerance keeps the own writes inside.
+
+        [Fact]
+        public void AnAnchorStampedBeforeTheWriteSpan_DoesNotClearTheWritesOfTheSave()
+        {
+            // The anchor is 2.5 s before the write span and the transaction closes 0.05 s after the last write.
+            var window = EventsSaveWindow.Calibrate(At(100), At(100.6) + TimeSpan.FromSeconds(0.05).Ticks, At(100.1), At(100.6), At(97), LocalOffset);
+
+            Assert.True(window.Calibrated);
+            foreach (double write in new[] { 100.1, 100.35, 100.6 })
+                Assert.Equal("InsideSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(write)), window)));
+        }
+
+        [Fact]
+        public void ABackwardClockStepInsideTheSpan_DoesNotClearAnOwnWrite()
+        {
+            // The Worker's clock steps back 5 s after the target is stamped: a side effect written after the step carries 97 s.
+            var window = EventsSaveWindow.Calibrate(At(100), At(130), At(101), At(101), At(102), LocalOffset);
+
+            Assert.True(window.Calibrated);
             Assert.Equal("InsideSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(97)), window)));
-            Assert.Equal("BeforeSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(97) - 1), window)));
-            Assert.Equal("InsideSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(163)), window)));
-            Assert.Equal("AfterSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(163) + 1), window)));
+        }
+
+        [Fact]
+        public void ALocalOffsetChangeBetweenASideEffectAndTheStamp_IsStillConcurrent_AsADocumentedLimit()
+        {
+            // LIMIT, documented in docs/events-object-save-isolation.md: the SDK stamps the local wall clock labelled as UTC,
+            // and the offset changes by one hour between the side effect and the target's stamp. The tolerance is five seconds,
+            // so this write still reads as concurrent.
+            var window = EventsSaveWindow.Calibrate(At(100), At(160), At(101), At(103), At(102) + LocalOffset, LocalOffset);
+            long sideEffect = At(101) + TimeSpan.FromHours(-2).Ticks;
+
+            Assert.True(window.Calibrated);
+            Assert.Equal("AfterSaveWindow", OnlyReason(Classify(Entry(3, At(-20000)), Entry(4, sideEffect), window)));
+        }
+
+        [Fact]
+        public void TheWidenedWindow_ContainsTheMeasuredOne_ForEveryAnchorInTheTolerance()
+        {
+            // The measured window is the transaction with the measured offsets and the margin on both ends. Widening can only
+            // move its edges outwards, so no write that the measured window contained is lost.
+            foreach (double anchor in new double[] { 96, 97, 99, 101, 102, 103, 104, 106 })
+            {
+                var window = EventsSaveWindow.Calibrate(At(100), At(160), At(101), At(103), At(anchor), LocalOffset);
+                Assert.True(window.Calibrated, anchor.ToString());
+
+                long measuredLow = At(100) + (At(anchor) - At(103)) - EventsSaveWindow.Margin.Ticks;
+                long measuredHigh = At(160) + (At(anchor) - At(101)) + EventsSaveWindow.Margin.Ticks;
+                Assert.True(window.LowTicks <= measuredLow, anchor.ToString());
+                Assert.True(window.HighTicks >= measuredHigh, anchor.ToString());
+            }
         }
 
         [Fact]
