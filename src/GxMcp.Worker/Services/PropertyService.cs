@@ -1710,6 +1710,9 @@ namespace GxMcp.Worker.Services
                 && ResolvePropertyEntry(obj, "IsMain") != null
                     ? "IsMain" : requestedName;
 
+        /// <summary>The name of the SDT a Data Provider outputs, or null when it has none.</summary>
+        public string ReadDataProviderOutputSdt(KBObject obj) => TryReadPropertyString(obj, "OutputSDT", obj?.Model);
+
         private static string TryReadPropertyString(dynamic container, string propName, KBModel model = null)
         {
             try

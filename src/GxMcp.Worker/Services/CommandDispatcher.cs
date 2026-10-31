@@ -271,7 +271,7 @@ namespace GxMcp.Worker.Services
             _explainService = new ExplainService(_kbService, _objectService);
             _generatedDiffService = new GeneratedDiffService(_kbService);
             _kbReadmeService = new KbReadmeService(_kbService, _indexCacheService);
-            _saveAsService = new SaveAsService(new SdkObjectCloner(_objectService, _writeService, _patternApplyService));
+            _saveAsService = new SaveAsService(new SdkObjectCloner(_objectService, _writeService, _patternApplyService, _propertyService));
             _ocrScreenshotService = new OcrScreenshotService();
             _prDescriptionService = new PrDescriptionService(_kbService);
             _screenshotPublishService = new ScreenshotPublishService(_kbService);

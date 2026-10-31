@@ -3,16 +3,18 @@ param(
     [string]$EventName = $env:GITHUB_EVENT_NAME,
     [string]$BaseSha,
     [string]$HeadSha,
+    # Blocking phase (#757): findings fail the job instead of only warning.
+    [switch]$Enforce,
     # Test seam: the repository whose base...head diff is checked.
     [string]$Repository = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 )
 
-# Advisory whitespace gate (#757): runs `git diff --check` over the lines a pull
-# request adds. Findings become ::warning annotations and never fail the job;
+# Whitespace gate (#757): runs `git diff --check` over the lines a pull
+# request adds. Findings become ::warning annotations; they fail the job only with -Enforce;
 # anything that is not "clean" or "findings with parseable diagnostics" is a fatal
 # error, so a broken diff can never be read as a clean one.
 #   exit 0, no output          -> clean
-#   exit 2 + parseable lines   -> findings (advisory warnings, this script exits 0)
+#   exit 2 + parseable lines   -> findings (warnings; exit 0, or exit 1 with -Enforce)
 #   anything else              -> throw
 
 $ErrorActionPreference = 'Stop'
@@ -55,6 +57,10 @@ if ($code -ne 2 -or $findings.Count -eq 0) {
 foreach ($f in $findings) {
     # No line= property: a path with ':' or a rename must not misplace the annotation.
     Write-Host "::warning file=$($f.Path),title=whitespace::line $($f.Line): $($f.Message)"
+}
+if ($Enforce) {
+    Write-Host "::error title=whitespace::whitespace check: $($findings.Count) finding(s) on added lines; fix them (git diff --check)."
+    exit 1
 }
 Write-Host "whitespace check: $($findings.Count) advisory finding(s); not blocking."
 exit 0
