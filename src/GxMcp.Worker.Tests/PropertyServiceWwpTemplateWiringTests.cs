@@ -150,6 +150,29 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void AStaleVersionIsReportedAsAConflictBeforeTheTemplateChecksRun()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Transaction", "<transaction />");
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", new JObject { ["TemplateXml"] = "<selection />" },
+                expectedVersion: "v-old", dryRun: true));
+
+            Assert.Equal("VersionConflict", json["error"]?["code"]?.ToString());
+        }
+
+        [Fact]
+        public void TheSameChangeWithTheCurrentVersionIsCheckedAndRefused()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Transaction", "<transaction />");
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", new JObject { ["TemplateXml"] = "<selection />" },
+                expectedVersion: "v-current", dryRun: true));
+
+            Assert.Equal("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Equal("RootMismatch", json["error"]?["violations"]?[0]?["check"]?.ToString());
+        }
+
+        [Fact]
         public void ADirectWriteOfAnEmptyTypeIsRefusedBeforeAnyValueIsWritten()
         {
             var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", "<selection />");
@@ -233,6 +256,8 @@ namespace GxMcp.Worker.Tests
             }
 
             protected internal override object ReadTextMode(Artech.Architecture.Common.Objects.KBObject obj) => null;
+
+            protected internal override string VersionOf(Artech.Architecture.Common.Objects.KBObject obj) => "v-current";
 
             protected internal override object ResolvePropertyContainer(Artech.Architecture.Common.Objects.KBObject obj, string nativeName, string controlName)
                 => null;

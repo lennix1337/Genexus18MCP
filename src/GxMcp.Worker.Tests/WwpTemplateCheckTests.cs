@@ -35,12 +35,21 @@ namespace GxMcp.Worker.Tests
         }
 
         [Theory]
-        [InlineData(null)]
         [InlineData("")]
         [InlineData("   ")]
         public void AnEmptyTypeIsRefused(string type)
         {
             Assert.Equal(new[] { "TypeEmpty" }, Checks(WwpTemplatePropertyRules.Check(type, "<selection />")));
+        }
+
+        [Fact]
+        public void AStoredTypeThatCannotBeReadIsRefusedWithoutCallingItEmpty()
+        {
+            JToken only = Assert.Single(WwpTemplatePropertyRules.Check(null, "<selection />"));
+
+            Assert.Equal("TypeNotRead", only["check"]?.ToString());
+            Assert.Contains("could not be read", only["message"]?.ToString());
+            Assert.DoesNotContain("empty", only["message"]?.ToString());
         }
 
         [Fact]
@@ -59,12 +68,21 @@ namespace GxMcp.Worker.Tests
         }
 
         [Theory]
-        [InlineData(null)]
         [InlineData("")]
         [InlineData("  ")]
         public void AnEmptyXmlIsRefused(string xml)
         {
             Assert.Equal(new[] { "XmlEmpty" }, Checks(WwpTemplatePropertyRules.Check("Trn.Selection", xml)));
+        }
+
+        [Fact]
+        public void StoredXmlThatCannotBeReadIsRefusedWithoutCallingItEmpty()
+        {
+            JToken only = Assert.Single(WwpTemplatePropertyRules.Check("Trn.Selection", null));
+
+            Assert.Equal("XmlNotRead", only["check"]?.ToString());
+            Assert.Contains("could not be read", only["message"]?.ToString());
+            Assert.DoesNotContain("empty", only["message"]?.ToString());
         }
 
         [Fact]
@@ -78,7 +96,11 @@ namespace GxMcp.Worker.Tests
         {
             const string withDtd = "<!DOCTYPE selection [<!ENTITY synth \"value\">]><selection />";
 
-            Assert.Equal(new[] { "XmlMalformed" }, Checks(WwpTemplatePropertyRules.Check("Trn.Selection", withDtd)));
+            JToken only = Assert.Single(WwpTemplatePropertyRules.Check("Trn.Selection", withDtd));
+
+            Assert.Equal("XmlDtd", only["check"]?.ToString());
+            Assert.Contains("DTDs are not accepted", only["message"]?.ToString());
+            Assert.DoesNotContain("DtdProcessing", only["message"]?.ToString());
         }
 
         [Fact]
@@ -99,7 +121,7 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void EveryFailedCheckIsReported()
         {
-            Assert.Equal(new[] { "TypeEmpty", "XmlMalformed" }, Checks(WwpTemplatePropertyRules.Check(null, "<selection>")));
+            Assert.Equal(new[] { "TypeNotRead", "XmlMalformed" }, Checks(WwpTemplatePropertyRules.Check(null, "<selection>")));
         }
 
         [Fact]

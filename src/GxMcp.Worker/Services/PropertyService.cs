@@ -1015,8 +1015,7 @@ namespace GxMcp.Worker.Services
                 string verified = VerifyPropertyPersisted(target, propName, value, controlName, typeFilter, beforeVal, obj);
                 if (verified != null) return verified;
 
-                var applied = new JObject { ["property"] = requestedName, ["value"] = value };
-                if (!string.Equals(requestedName, propName, StringComparison.Ordinal)) applied["nativeName"] = propName;
+                var applied = SingleSetReceipt(requestedName, propName, value);
                 return Models.McpResponse.Ok(target: target, code: "PropertyApplied", result: applied);
             }
             catch (PropertyWipeException pwe)
@@ -1069,24 +1068,24 @@ namespace GxMcp.Worker.Services
                     if (IsLayoutControlContainer((object)container)) return LayoutControlWriteUnsupported(target, controlName, string.Join(", ", properties.Properties().Select(p => p.Name)));
                 }
 
+                var beforeValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                // Unlike beforeValues, keeps null for a value that could not be read: the rollback never writes back an unread value.
+                var previousValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                string beforeVersion = VersionOf(obj);
+                if (!string.IsNullOrWhiteSpace(expectedVersion)
+                    && !string.Equals(expectedVersion, beforeVersion, StringComparison.Ordinal))
+                    return Models.McpResponse.Err(code: "VersionConflict", target: target,
+                        message: "The object changed after the property read; no write was attempted.",
+                        extra: new JObject { ["expectedVersion"] = expectedVersion, ["currentVersion"] = beforeVersion });
+
                 // The template decision (aliases, conflicts and the checks of a WorkWithPlus template) is the same for a dry run
-                // and for a write, and it is taken before any value is read for the write.
+                // and for a write. It is taken once the version has matched, before any value is read for the write.
                 var objectTypeId = string.IsNullOrEmpty(controlName) ? TargetTypeOf(obj) : Guid.Empty;
                 var wiring = WwpTemplateWiring.Write(objectTypeId,
                     properties.Properties().Select(p => new KeyValuePair<string, string>(p.Name, p.Value?.ToString() ?? string.Empty)),
                     name => ReadStoredProperty(obj, name, null));
                 string refusedWrite = WiringRefusal(wiring, target);
                 if (refusedWrite != null) return refusedWrite;
-
-                var beforeValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                // Unlike beforeValues, keeps null for a value that could not be read: the rollback never writes back an unread value.
-                var previousValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                string beforeVersion = WriteService.ComputeVersionToken(obj);
-                if (!string.IsNullOrWhiteSpace(expectedVersion)
-                    && !string.Equals(expectedVersion, beforeVersion, StringComparison.Ordinal))
-                    return Models.McpResponse.Err(code: "VersionConflict", target: target,
-                        message: "The object changed after the property read; no write was attempted.",
-                        extra: new JObject { ["expectedVersion"] = expectedVersion, ["currentVersion"] = beforeVersion });
 
                 var references = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
                 var nativeNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1748,6 +1747,9 @@ namespace GxMcp.Worker.Services
         // The key of a target's cached properties. Production derives it from the object's identity.
         protected internal virtual string TargetKey(KBObject obj, string controlName) => CacheKey(obj, controlName);
 
+        // The version token of a target, which a write checks against the version the caller read.
+        protected internal virtual string VersionOf(KBObject obj) => WriteService.ComputeVersionToken(obj);
+
         protected internal virtual bool IsWebPanelTarget(KBObject obj) => IsWebPanel(obj);
 
         protected internal virtual string ReadStoredProperty(KBObject obj, string nativeName, string controlName)
@@ -1771,9 +1773,20 @@ namespace GxMcp.Worker.Services
         protected internal virtual void WritePropertyValue(object container, string nativeName, string value, string controlName, KBObject obj)
             => ApplyPropertyValue((dynamic)container, nativeName, value, controlName, obj);
 
+        // The receipt of a single set. A requested name that stands for another SDK name is reported both ways: nativeName for the
+        // property, and nativeNames for the same pair in the form a batch set reports.
+        internal static JObject SingleSetReceipt(string requestedName, string nativeName, string value)
+        {
+            var receipt = new JObject { ["property"] = requestedName, ["value"] = value };
+            if (string.Equals(requestedName, nativeName, StringComparison.Ordinal)) return receipt;
+            receipt["nativeName"] = nativeName;
+            receipt["nativeNames"] = new JObject { [requestedName] = nativeName };
+            return receipt;
+        }
+
         // The SDK names a call used for a requested name, when they differ, so the caller reads both. Only WorkWithPlus
         // template objects have such names.
-        private static void NoteNativeNames(JObject result, Guid objectType, JObject properties, IDictionary<string, string> nativeNames)
+        internal static void NoteNativeNames(JObject result, Guid objectType, JObject properties, IDictionary<string, string> nativeNames)
         {
             if (objectType != WwpTemplateXml.ObjectType) return;
             var names = new JObject();

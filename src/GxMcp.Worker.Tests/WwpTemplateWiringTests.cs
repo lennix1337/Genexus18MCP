@@ -102,7 +102,7 @@ namespace GxMcp.Worker.Tests
             WriteWiring wiring = WwpTemplateWiring.Write(WwpTemplateXml.ObjectType,
                 Pairs(("TemplateType", "Trn.Selection")), _ => null);
 
-            Assert.Equal("XmlEmpty", FirstCheck(wiring));
+            Assert.Equal("XmlNotRead", FirstCheck(wiring));
         }
 
         [Fact]

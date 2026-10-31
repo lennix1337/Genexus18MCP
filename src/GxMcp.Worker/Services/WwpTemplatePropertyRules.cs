@@ -112,14 +112,26 @@ namespace GxMcp.Worker.Services
         internal static JArray Check(string type, string xml)
         {
             var violations = new JArray();
-            if (string.IsNullOrWhiteSpace(type))
+            if (type == null)
+                violations.Add(Violation("TypeNotRead", "WWPTemplate_Type could not be read from the template, so its type cannot be checked."));
+            else if (string.IsNullOrWhiteSpace(type))
                 violations.Add(Violation("TypeEmpty", "WWPTemplate_Type is empty. WorkWithPlus cannot list a template without a type (Unknown TemplateType)."));
             else if (!RootByType.ContainsKey(type))
                 violations.Add(Violation("TypeUnknown", $"'{type}' is not one of the template types known for WorkWithPlus 16.2. Known WorkWithPlus 16.2 types: {string.Join(", ", RootByType.Keys)}."));
 
+            if (xml == null)
+            {
+                violations.Add(Violation("XmlNotRead", "WWPTemplate_TemplateXml could not be read from the template, so its XML cannot be checked."));
+                return violations;
+            }
             if (string.IsNullOrWhiteSpace(xml))
             {
                 violations.Add(Violation("XmlEmpty", "WWPTemplate_TemplateXml is empty."));
+                return violations;
+            }
+            if (xml.IndexOf("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                violations.Add(Violation("XmlDtd", "WWPTemplate_TemplateXml declares a DTD, and DTDs are not accepted in a template."));
                 return violations;
             }
             XElement root;
