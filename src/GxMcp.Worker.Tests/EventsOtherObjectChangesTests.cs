@@ -175,8 +175,8 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("AfterSaveWindow", OnlyReason(Classify(Entry(3, At(10)), Entry(4, At(167) + 1), window)));
         }
 
-        // The anchor is the target's stamp after the object save. The review's probes assumed it could come a little before
-        // the write span, or that the Worker's clock could step inside the span; the tolerance keeps the own writes inside.
+        // The anchor is the target's stamp after the object save. It can come a little before the write span, or the Worker's
+        // clock can step inside the span; the tolerance keeps the save's own writes inside the window.
 
         [Fact]
         public void AnAnchorStampedBeforeTheWriteSpan_DoesNotClearTheWritesOfTheSave()
