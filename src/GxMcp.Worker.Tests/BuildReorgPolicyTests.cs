@@ -42,6 +42,16 @@ namespace GxMcp.Worker.Tests
             }
         }
 
+        [Fact]
+        public void FailIfReorg_alone_already_requests_DoNotExecuteReorg()
+        {
+            // The guard requests FailIfReorg only. The SDK reads that flag as a refusal that
+            // also skips execution (0xC00000 contains 0x400000), so no separate
+            // DoNotExecuteReorg policy is needed. A DoNotExecuteReorg-only policy would instead
+            // let the reorganization report success and the model record it as done.
+            Assert.Equal(BuildOptions.DoNotExecuteReorg, BuildOptions.FailIfReorg & BuildOptions.DoNotExecuteReorg);
+        }
+
         public class UnsafeTask
         {
             public static int Calls;
