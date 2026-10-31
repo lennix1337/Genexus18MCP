@@ -29,12 +29,14 @@ namespace GxMcp.Worker.Services
         private readonly KbService _kbService;
         private readonly IndexCacheService _indexCacheService;
         private readonly object _operationTracker; // Gateway-owned; loosely typed here.
+        private Func<object> _kbProvider;
 
         public DoctorService(KbService kbService, IndexCacheService indexCacheService, object operationTracker = null)
         {
             _kbService = kbService;
             _indexCacheService = indexCacheService;
             _operationTracker = operationTracker;
+            _kbProvider = () => (object)_kbService?.GetKB();
         }
 
         public string Diagnose()
@@ -378,14 +380,17 @@ namespace GxMcp.Worker.Services
         /// Builds the block. It never throws: a failure becomes an unavailable block with its reason, and a template
         /// whose properties cannot be read is counted as unreadable without affecting the others.
         /// </summary>
-        internal JObject BuildWwpTemplatesBlock()
+        internal JObject BuildWwpTemplatesBlock(PatternRegistry registry = null)
         {
             try
             {
-                var kb = _kbService?.GetKB() as KnowledgeBase;
-                if (kb == null) return WwpTemplatesUnavailable("KbNotOpen");
-                if (PatternRegistry.Current.FindById(PatternRegistry.WorkWithPlusPatternId) == null)
-                    return WwpTemplatesUnavailable("WorkWithPlusNotInstalled");
+                var manifest = (registry ?? PatternRegistry.Current).FindById(PatternRegistry.WorkWithPlusPatternId);
+                if (!IsWorkWithPlusInstalled(manifest)) return WwpTemplatesUnavailable("WorkWithPlusNotInstalled");
+
+                object raw = _kbProvider();
+                if (raw == null) return WwpTemplatesUnavailable("KbNotOpen");
+                var kb = raw as KnowledgeBase;
+                if (kb == null) return WwpTemplatesUnavailable("UnsupportedDriver");
 
                 var objects = kb.DesignModel.Objects;
                 var records = new List<WwpTemplateHealth.TemplateRecord>();
@@ -393,7 +398,7 @@ namespace GxMcp.Worker.Services
                 {
                     try
                     {
-                        var obj = PatternSettingsService.Fresh(objects.Get(key));
+                        var obj = objects.Get(key);
                         records.Add(new WwpTemplateHealth.TemplateRecord
                         {
                             Name = obj.Name,
@@ -413,6 +418,21 @@ namespace GxMcp.Worker.Services
                 Logger.Error("Doctor WorkWithPlus template block failed: " + ex.Message);
                 return WwpTemplatesUnavailable("ReadFailed");
             }
+        }
+
+        /// <summary>
+        /// A WorkWithPlus package is installed when its pattern manifest was discovered on disk. The registry always
+        /// holds a placeholder for WorkWithPlus, and the placeholder has no manifest path.
+        /// </summary>
+        internal static bool IsWorkWithPlusInstalled(PatternManifest manifest)
+        {
+            return manifest != null && !string.IsNullOrWhiteSpace(manifest.ManifestPath);
+        }
+
+        /// <summary>Test seam: replaces the KB lookup, so the no-KB and unsupported-driver answers can be checked.</summary>
+        internal void SetKbProviderForTest(Func<object> provider)
+        {
+            _kbProvider = provider;
         }
 
         private static JObject WwpTemplatesUnavailable(string reason)

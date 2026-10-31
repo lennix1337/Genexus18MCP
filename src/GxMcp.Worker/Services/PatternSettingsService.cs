@@ -134,7 +134,7 @@ namespace GxMcp.Worker.Services
             };
         }
 
-        internal static KBObject Fresh(KBObject seed)
+        private static KBObject Fresh(KBObject seed)
         {
             if (seed == null) throw new InvalidOperationException("VersionConflict: an object disappeared while reading.");
             var objects = seed.Model.Objects;
