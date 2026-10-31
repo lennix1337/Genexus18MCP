@@ -67,12 +67,21 @@ namespace GxMcp.Worker.Services
         {
             if (entry == null) return false;
             if (Matches(selector, entry.Name, entry.Type)) return true;
-            // A GUID or EntityKey names one object whatever its type, so it selects that entry too.
+            // A GUID or EntityKey names one object whatever its type, so it selects that entry too. A folder or
+            // module is a container: selecting it by identity would also select its same-named children elsewhere.
             return selector != null
+                && !IsContainer(entry)
                 && !string.IsNullOrWhiteSpace(selector.Name)
                 && (string.IsNullOrWhiteSpace(selector.Type) || string.Equals(selector.Type, entry.Type, StringComparison.OrdinalIgnoreCase))
                 && (string.Equals(selector.Name, entry.Guid, StringComparison.OrdinalIgnoreCase)
                     || string.Equals(selector.Name, entry.EntityKey, StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static bool IsContainer(SearchIndex.IndexEntry entry)
+        {
+            return entry != null
+                && (string.Equals(entry.Type, "Folder", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(entry.Type, "Module", StringComparison.OrdinalIgnoreCase));
         }
 
         internal static bool Matches(TextSelector selector, string name, string type)

@@ -111,9 +111,7 @@ namespace GxMcp.Worker.Services
 
         private static bool IsContainerEntry(SearchIndex.IndexEntry entry)
         {
-            return entry != null
-                && (string.Equals(entry.Type, "Folder", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(entry.Type, "Module", StringComparison.OrdinalIgnoreCase));
+            return TextSelectorParser.IsContainer(entry);
         }
 
         private static bool IsDescendantOf(SearchIndex.IndexEntry entry, SearchIndex.IndexEntry container)
