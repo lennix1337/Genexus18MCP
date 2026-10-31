@@ -335,6 +335,14 @@ edit by another process outside the window no longer turns a verified rollback i
 reached the object save. Before that the target has no stamp, no window exists (`saveWindow.reason` is `TargetNotSaved`),
 and an edit of another object blocks the rollback as it did before.
 
+Before the commit, the pre-commit window is also checked against the target's stamp as the open transaction reads it
+after the object save (`freshStampAtPreCommit`, with its `freshStampAtPreCommitKind`). A reading equal to the save's own
+stamp keeps the window. A reading that differs but is later than the stamp the target carried before the save means the
+two readings use different representations of the clock, and the pre-commit window becomes unavailable
+(`saveWindow.reason` is `PreCommitStampRepresentationMismatch`). A reading that failed makes it unavailable too
+(`PreCommitStampNotRead`). In both cases an edit of another object blocks the save; nothing is cleared. The receipt also
+keeps `preCommitSaveWindow` and the changes another process made outside the window (`preCommitConcurrentChanges`).
+
 What does not change: the target checks (`baseVersion` and the in-transaction token, pins, audited bundle,
 callbacks), the comparison of the target's other parts and placement, the explicit rollback, the single-writer gate,
 and the fingerprint that decides whether an object differs.
