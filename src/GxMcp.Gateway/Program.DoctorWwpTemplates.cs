@@ -60,8 +60,8 @@ namespace GxMcp.Gateway
         /// <summary>
         /// Registers the probe as a pending Worker request and sends it inside the budget, as the engine read does, then
         /// waits for the reply with what is left of the budget. The command carries a busy wait below the budget, so a
-        /// Worker whose SDK thread is busy refuses the command with WorkerBusy instead of running it late. Whatever the
-        /// outcome, the pending entry is removed, so a late reply is dropped.
+        /// command still queued behind a busy SDK thread after that wait is refused with WorkerBusy instead of running
+        /// late. Whatever the outcome, the pending entry is removed, so a late reply is dropped.
         /// </summary>
         internal static async Task<JObject> ExchangeDoctorWwpTemplatesAsync(
             Func<JObject, Task> send,
