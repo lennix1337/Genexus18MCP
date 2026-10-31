@@ -116,8 +116,8 @@ to obtain a log line.
 
 ### Reorganization guard in lifecycle builds
 
-Every build path that can reach the SDK's database step asks for a refusal
-instead of a silent reorganization: `FailIfReorg`, which already contains the
+The lifecycle build paths set `FailIfReorg`, so the SDK refuses a database
+reorganization instead of running it. That flag already contains the
 `DoNotExecuteReorg` bit (`BuildOptions.FailIfReorg` is `0xC00000`;
 `DoNotExecuteReorg` is `0x400000`). The paths are `BuildOne` (the worker's
 `NoReorgBuildCommandFactory` sets the flags when the SDK builds the command),
@@ -134,19 +134,26 @@ The SDK chain for a targeted refusal, as decompiled from GeneXus 18 U16
 - `ReorganizeCommand.Do` maps the flags to `ReorganizeOptions` and calls
   `RunBase.Reorganize`. With `FailIfReorg` set, that method raises
   `Messages.FailIfReorg` before the `EXECUTE_CMD` step, which is the database
-  change. The refusal is written as a build error line.
-- `IdeWebBuildAndDeploy.Execute` installs `WebBuildCommandFactory`, whose
-  `GetReorganizeCommand` returns `WebReorganizeCommand`. Its
-  `WaitUserConfirmation` reads the console for up to four minutes before the
-  refusal, even with `FailIfReorg`, and the SDK does not restore the previous
-  factory afterwards, so a targeted `BuildOne` later in the same worker process
-  uses the web command too. The guard does not cover this wait.
+  change. The refusal is written to the build output.
+- `IdeWebBuildAndDeploy.Execute` replaces the static `BuildCommandFactory.Factory`
+  with `WebBuildCommandFactory`, whose `GetReorganizeCommand` returns
+  `WebReorganizeCommand`, and the SDK does not restore the previous factory.
+  `ReorganizeCommand.Do` calls `WaitUserConfirmation` before `Run.Reorganize`,
+  where the refusal is raised. In `WebReorganizeCommand`, that wait reads the
+  console for up to four minutes. Without an answer, the reorganization is
+  cancelled by timeout, the `FailIfReorg` sentence is never written, and the
+  build ends as `Failed`. The guard does not change this wait.
 
-The worker classifies the refusal as `ReorgRequired` by matching the sentence
-the running SDK resolves for `Messages.FailIfReorg` in the worker's UI culture.
-An English-form pattern is the fallback when that resource cannot be read.
-Diagnostics for a missing or unapplied `FailIfReorg` or `DoNotExecuteReorg`
-property are build errors and never match that classifier.
+This applies to every route that runs `IdeWebBuildAndDeploy`, including the
+external MSBuild route, and to in-process routes that run after one of them in
+the same worker process, because the static factory is not restored.
+
+On the targeted routes (`BuildOne` and `BuildWithTheseOnly`), a refusal ends as
+`Failed`: the SDK sentence does not match the worker's reorganization heuristic
+(`BuildService.DetectBuildAllReorgRequired`). A missing or unapplied
+`FailIfReorg` or `DoNotExecuteReorg` property is a build error with its own
+wording, which that heuristic does not match either, so it is not read as a
+refusal.
 
 Across the installed SDKs, `RunBase.Reorganize` and `ReorganizeCommand.Do` are
 the same in GeneXus 18 U11, U12 and U16, but `BuildOne` is not: U16 resolves the
@@ -154,9 +161,6 @@ object with `ObjectsResolverHelper` and returns `false` for an unresolved name,
 while U11 and U12 use `ObjectNameHelper` and return `true`. To check a method,
 decompile the SDK assembly from the GeneXus installation directory with
 `ilspycmd -t <type> <dll>`.
-
-Do not set `DoNotGenerateReorg` to skip the guard: `ReorganizeCommand.Do` then
-skips the reorganization and reports success.
 
 ## Discovery-first surface
 
