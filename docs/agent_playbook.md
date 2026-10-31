@@ -426,6 +426,25 @@ The facade's empty `KBObject.Parent`/`Module` setters are misleading; runtime
 persistence goes through `Artech.Udm.Framework.EntityManager.UpdateParent` in
 `src/GxMcp.Worker/Helpers/ObjectMover.cs`, with full snapshot verification.
 
+### Text-tree formats: native export and the official text
+
+- `genexus_io action=export_kb_to_text format=native` (`SdkTextTreeService`) writes each
+  part as the SDK holds it, inside a `<Type> <Name> { ... }` envelope. Folder names are
+  plain (`WWPBaseObjects/WWPTemplates/Selection`). `module.toml` is written once, at each
+  module root (`WWPBaseObjects/module.toml`), never inside a folder.
+- A DesignSystem exported with `format=native` is
+  `DesignSystem <Name> { styles <Name> { ... } }`. The official GeneXus MCP server writes
+  the same object as `#DesignStyles ... #End` and `#Properties Name = ... IsDefault = ...
+  #End` blocks, and names folders `@Folder`. The two forms do not exchange: the native
+  reader recognizes only its own part names, so it does not read the official blocks. To
+  move a DesignSystem to or from the official server, use that server's export and import,
+  not `format=native`.
+- The native format is not changed to match the official text. That would need a writer
+  and a reader for the official blocks, which this repository does not have, and it would
+  change the output of trees that already exist.
+- Without `format=native`, export takes the `ObjectTextService` path and writes the
+  `_gxmcp-object-text-manifest.json` manifest. This section does not describe that output.
+
 ### Control-bound events
 
 Write the layout or PatternInstance before the Events part. A control-bound
