@@ -9,32 +9,149 @@ namespace GxMcp.Worker.Tests
 {
     // #746: the WebForm of a clone binds its controls to variables by id. A text clone writes the Variables first and
     // the target numbers them in the order it reads them, so a control can be bound to another variable with no error.
-    // The clone rebinds each control by name to the target's variable of that name, after the Variables are written and
-    // before the WebForm is written, and reports the rebinding only when a control changed its id.
+    // The clone rebinds each binding by name to the target's variable of that name, after the Variables are written and
+    // before the WebForm is written, and reports the rebinding only when there is something to report.
     public sealed class SaveAsWebFormRemapTests
     {
         [Fact]
-        public void The_clone_rebinds_the_webform_after_the_variables_are_written_and_before_it_is_written()
+        public void The_clone_writes_the_webform_through_the_rebinding_with_the_target_read_again()
         {
             string source = RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "SaveAsService.cs");
             string clonePart = SourceAssert.MethodBody(source, "public string ClonePart(string sourceName, string newName, string partName, string typeFilter)");
 
-            int rebind = clonePart.IndexOf("RemapWebFormVariableIds(sourceName, newName, typeFilter, code)", System.StringComparison.Ordinal);
-            int write = clonePart.IndexOf("_writes.WriteObject(newName, partName, code, typeFilter)", System.StringComparison.Ordinal);
-            Assert.True(rebind > 0, "the WebForm must be rebound in ClonePart");
-            Assert.True(write > rebind, "the rebinding must come before the WebForm is written");
-            Assert.Equal(1, SourceAssert.Count(clonePart, "_writes.WriteObject(newName, partName, code, typeFilter)"));
+            // The target is read inside the clone of the WebForm, after its Variables were written, and the text that is
+            // written is the rebound one.
+            Assert.Contains("WriteRemappedWebForm(", clonePart, System.StringComparison.Ordinal);
+            Assert.Contains("VariableIdsOf(_objects.FindObject(newName, null))", clonePart, System.StringComparison.Ordinal);
+            Assert.Contains("text => _writes.WriteObject(newName, partName, text, typeFilter)", clonePart, System.StringComparison.Ordinal);
         }
 
         [Fact]
-        public void The_rebinding_reads_the_target_again_and_takes_the_variable_ids_from_both_objects()
+        public void The_text_written_is_the_webform_with_its_bindings_rebound()
         {
-            string source = RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "SaveAsService.cs");
-            string remap = SourceAssert.MethodBody(source, "private GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome RemapWebFormVariableIds(string sourceName, string newName, string typeFilter, string webFormXml)");
+            string written = null;
 
-            Assert.Contains("_objects.FindObject(newName, null)", remap, System.StringComparison.Ordinal);
-            Assert.Contains("_objects.FindObject(sourceName, typeFilter)", remap, System.StringComparison.Ordinal);
-            Assert.Contains("VariableIdsOf(source), VariableIdsOf(target)", remap, System.StringComparison.Ordinal);
+            var json = JObject.Parse(SdkObjectCloner.WriteRemappedWebForm(
+                "PanelACopy",
+                Form(Data("var:11"), "<data attribute=\"att:11\" />"),
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 11) },
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 14) },
+                text => { written = text; return "{\"status\":\"ok\"}"; }));
+
+            // The attribute that is not a binding keeps its number.
+            Assert.Equal(Form(Data("var:14"), "<data attribute=\"att:11\" />"), written);
+            Assert.Equal("ok", json["status"]?.ToString());
+        }
+
+        [Fact]
+        public void A_variable_the_target_does_not_declare_refuses_the_webform_and_writes_nothing()
+        {
+            bool written = false;
+
+            var json = JObject.Parse(SdkObjectCloner.WriteRemappedWebForm(
+                "PanelACopy",
+                Form(Data("var:15")),
+                new[] { new SaveAsVariableIdRemap.NamedId("Lambda", 15) },
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 11) },
+                text => { written = true; return "{\"status\":\"ok\"}"; }));
+
+            Assert.False(written);
+            Assert.Equal("error", json["status"]?.ToString());
+            Assert.Equal("WebFormVariableNotInTarget", json["error"]?["code"]?.ToString());
+            Assert.Contains("'Lambda'", json["error"]?["message"]?.ToString());
+        }
+
+        [Fact]
+        public void A_rebound_control_is_reported_in_the_answer_of_the_write()
+        {
+            var json = JObject.Parse(SdkObjectCloner.WriteRemappedWebForm(
+                "PanelACopy",
+                Form(Data("var:11")),
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 11) },
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 14) },
+                text => "{\"status\":\"ok\"}"));
+
+            Assert.Equal(1, json["variableIdRemap"]?["remapped"]?.ToObject<int>());
+        }
+
+        [Fact]
+        public void A_skipped_remap_writes_the_text_as_it_is_and_says_why()
+        {
+            string written = null;
+            string form = Form(Data("var:11"));
+
+            var json = JObject.Parse(SdkObjectCloner.WriteRemappedWebForm(
+                "PanelACopy",
+                form,
+                new SaveAsVariableIdRemap.NamedId[0],
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 14) },
+                text => { written = text; return "{\"status\":\"ok\"}"; }));
+
+            Assert.Same(form, written);
+            Assert.Equal(SaveAsVariableIdRemap.SourceVariablesEmpty, json["variableIdRemap"]?["skipped"]?.ToString());
+        }
+
+        [Fact]
+        public void An_object_that_was_not_found_writes_the_text_as_it_is_and_says_why()
+        {
+            var json = JObject.Parse(SdkObjectCloner.WriteRemappedWebForm(
+                "PanelACopy",
+                Form(Data("var:11")),
+                null,
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 14) },
+                text => "{\"status\":\"ok\"}"));
+
+            Assert.Equal(SaveAsVariableIdRemap.SourceOrTargetNotFound, json["variableIdRemap"]?["skipped"]?.ToString());
+        }
+
+        [Fact]
+        public void A_binding_left_unmapped_is_reported_and_the_text_is_written_as_it_is()
+        {
+            string written = null;
+            string form = Form(Data("var:99"));
+
+            var json = JObject.Parse(SdkObjectCloner.WriteRemappedWebForm(
+                "PanelACopy",
+                form,
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 11) },
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 14) },
+                text => { written = text; return "{\"status\":\"ok\"}"; }));
+
+            Assert.Same(form, written);
+            Assert.Equal(0, json["variableIdRemap"]?["remapped"]?.ToObject<int>());
+            Assert.Equal(99, json["variableIdRemap"]?["unmapped"]?[0]?.ToObject<int>());
+        }
+
+        [Fact]
+        public void An_other_reference_is_reported_and_the_text_is_written_as_it_is()
+        {
+            string written = null;
+            string form = Form("<label>var:7</label>");
+
+            var json = JObject.Parse(SdkObjectCloner.WriteRemappedWebForm(
+                "PanelACopy",
+                form,
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 11) },
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 14) },
+                text => { written = text; return "{\"status\":\"ok\"}"; }));
+
+            Assert.Same(form, written);
+            Assert.Equal(7, json["variableIdRemap"]?["otherReferences"]?[0]?.ToObject<int>());
+        }
+
+        [Fact]
+        public void A_webform_with_nothing_to_rebind_is_written_and_its_answer_is_returned_as_it_was()
+        {
+            const string writeAnswer = "{\"status\":\"ok\",\"result\":{\"name\":\"PanelACopy\"}}";
+
+            string answer = SdkObjectCloner.WriteRemappedWebForm(
+                "PanelACopy",
+                Form(Data("var:11")),
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 11) },
+                new[] { new SaveAsVariableIdRemap.NamedId("Eta", 11) },
+                text => writeAnswer);
+
+            Assert.Same(writeAnswer, answer);
         }
 
         [Fact]
@@ -165,6 +282,13 @@ namespace GxMcp.Worker.Tests
             outcome.OtherReferences.AddRange(other ?? new int[0]);
             return outcome;
         }
+
+        private static string Form(params string[] tags)
+        {
+            return "<GxMultiForm rootId=\"1\">\n" + string.Join("\n", tags) + "\n</GxMultiForm>";
+        }
+
+        private static string Data(string binding) => "<data attribute=\"" + binding + "\" />";
 
         // A cloner whose WebForm write answers as given, and which records the calls in the order they arrive.
         private sealed class ScriptedCloner : SaveAsService.IObjectCloner

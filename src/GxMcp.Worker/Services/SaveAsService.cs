@@ -579,40 +579,49 @@ namespace GxMcp.Worker.Services
             if (truncated != null) return truncated;
 
             string code = srcToken.ToString();
-            GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap = null;
             if (string.Equals(partName, "WebForm", StringComparison.OrdinalIgnoreCase))
             {
                 // The controls of a WebForm are bound to variables by id, and the target has just written its
-                // Variables and numbered them in the order it read them. Rebind each control to the variable of
+                // Variables and numbered them in the order it read them. Each binding is rebound to the variable of
                 // the same name, from a fresh read of the target, before the WebForm is written (#746).
-                remap = RemapWebFormVariableIds(sourceName, newName, typeFilter, code);
-                if (remap.MissingInTarget != null)
-                {
-                    return McpResponse.Err(
-                        code: "WebFormVariableNotInTarget",
-                        message: "The variable '" + remap.MissingInTarget + "' of the source WebForm is not declared in the target, " +
-                            "so its controls cannot be bound to it.",
-                        hint: "Nothing was written for this part. Declare the variable on the target, or report the object name.",
-                        target: newName);
-                }
-
-                code = remap.Xml;
+                return WriteRemappedWebForm(
+                    newName,
+                    code,
+                    VariableIdsOf(_objects.FindObject(sourceName, typeFilter)),
+                    VariableIdsOf(_objects.FindObject(newName, null)),
+                    text => _writes.WriteObject(newName, partName, text, typeFilter));
             }
 
-            string written = _writes.WriteObject(newName, partName, code, typeFilter);
-            return remap == null ? written : AttachVariableIdRemap(written, remap);
+            return _writes.WriteObject(newName, partName, code, typeFilter);
         }
 
         /// <summary>
-        /// The WebForm text rebound by name to the target's variables. The target is read again here rather than
-        /// reused from before its Variables were written, so the ids are the ones the WebForm will meet. A source or
-        /// target that is not found, or whose variables cannot be read, leaves the text as it is and says why.
+        /// The WebForm written with each binding rebound by name to the target's variables, or refused when the target
+        /// does not declare a variable the WebForm binds: a refused part writes nothing. The variables are read from the
+        /// source and from the target as the target holds them after its Variables were written, so the ids are the ones
+        /// the WebForm will meet. The answer is the write's answer, with the rebinding report attached when there is one.
         /// </summary>
-        private GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome RemapWebFormVariableIds(string sourceName, string newName, string typeFilter, string webFormXml)
+        internal static string WriteRemappedWebForm(
+            string newName,
+            string code,
+            IEnumerable<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId> sourceVariables,
+            IEnumerable<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId> targetVariables,
+            Func<string, string> write)
         {
-            var source = _objects.FindObject(sourceName, typeFilter);
-            var target = _objects.FindObject(newName, null);
-            return GxMcp.Worker.Helpers.SaveAsVariableIdRemap.ForClone(webFormXml, VariableIdsOf(source), VariableIdsOf(target));
+            GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap =
+                GxMcp.Worker.Helpers.SaveAsVariableIdRemap.ForClone(code, sourceVariables, targetVariables);
+            if (remap.MissingInTarget != null)
+            {
+                return McpResponse.Err(
+                    code: "WebFormVariableNotInTarget",
+                    message: "The variable '" + remap.MissingInTarget + "' of the source WebForm is not declared in the target, " +
+                        "so its controls cannot be bound to it.",
+                    hint: "Nothing was written for this part. Declare the variable on the target, or report the object name.",
+                    target: newName);
+            }
+
+            code = remap.Xml;
+            return AttachVariableIdRemap(write(code), remap);
         }
 
         /// <summary>
