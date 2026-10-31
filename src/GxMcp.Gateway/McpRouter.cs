@@ -2127,6 +2127,12 @@ namespace GxMcp.Gateway
                 if (ResolveErrorField(error, "sdkSaveError") is { Type: JTokenType.String } sdkSaveError)
                     trimmed["sdkSaveError"] = sdkSaveError;
             }
+            // genexus_wwp add_grid_variable refusal (WwpProjectionNotConfirmed): the WebForm the write was verified against, so
+            // the caller sees the grids and columns the form actually holds (#638). The lists are capped in the terse envelope,
+            // with their totals; the verbose envelope keeps them whole.
+            if (receiptCode.StartsWith("WwpProjection", StringComparison.Ordinal)
+                && ResolveErrorField(error, "webFormProjection") is JObject webFormProjection)
+                trimmed["webFormProjection"] = BoundWebFormProjection(webFormProjection);
             if (code?.ToString().StartsWith("ControlConditionCarriers", StringComparison.Ordinal) == true)
             {
                 // Issue #711: a refused WebForm write that would leave a control's Conditions
@@ -2151,6 +2157,25 @@ namespace GxMcp.Gateway
             JToken? existing = error["suggested_next_step"] ?? AttachSuggestedNextStep(error);
             if (existing != null) trimmed["suggested_next_step"] = existing;
             return trimmed;
+        }
+
+        // The lists of a WebForm projection (grids and columns) keep this many entries in the terse envelope.
+        private const int WebFormProjectionListLimit = 50;
+
+        // A copy of the projection whose long lists keep their first entries, with the length they had as <name>Total.
+        private static JObject BoundWebFormProjection(JObject projection)
+        {
+            var bounded = new JObject();
+            foreach (var property in projection.Properties())
+            {
+                if (property.Value is JArray items && items.Count > WebFormProjectionListLimit)
+                {
+                    bounded[property.Name] = new JArray(items.Take(WebFormProjectionListLimit).Select(item => item.DeepClone()));
+                    bounded[property.Name + "Total"] = items.Count;
+                }
+                else bounded[property.Name] = property.Value.DeepClone();
+            }
+            return bounded;
         }
 
         /// <summary>
