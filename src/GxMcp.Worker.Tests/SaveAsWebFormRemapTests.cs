@@ -59,6 +59,9 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("error", json["status"]?.ToString());
             Assert.Equal("WebFormVariableNotInTarget", json["error"]?["code"]?.ToString());
             Assert.Contains("'Lambda'", json["error"]?["message"]?.ToString());
+            // The hint points at the part that had to bring the variable, which the target no longer has after the rollback.
+            Assert.Contains("Variables part", json["error"]?["hint"]?.ToString());
+            Assert.DoesNotContain("Declare", json["error"]?["hint"]?.ToString());
         }
 
         [Fact]

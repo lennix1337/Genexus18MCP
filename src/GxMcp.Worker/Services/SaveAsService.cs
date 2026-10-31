@@ -616,7 +616,8 @@ namespace GxMcp.Worker.Services
                     code: "WebFormVariableNotInTarget",
                     message: "The variable '" + remap.MissingInTarget + "' of the source WebForm is not declared in the target, " +
                         "so its controls cannot be bound to it.",
-                    hint: "Nothing was written for this part. Declare the variable on the target, or report the object name.",
+                    hint: "The clone of the Variables part did not bring this variable: nothing was written for this part. " +
+                        "Try again, or give the object name.",
                     target: newName);
             }
 
