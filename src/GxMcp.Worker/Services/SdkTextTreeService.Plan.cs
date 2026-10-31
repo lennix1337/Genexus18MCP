@@ -207,6 +207,14 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // A part read that failed because the object exposes no text part at all. The read lists the available
+        // parts when there are some, so a missing or empty list means the type has none.
+        internal static bool IsNoTextPartsReply(JObject response)
+        {
+            if (!string.Equals(response?["code"]?.ToString(), "PartNotFound", StringComparison.Ordinal)) return false;
+            return !(response["availableParts"] is JArray available) || available.Count == 0;
+        }
+
         private bool TryReadPart(SearchIndex.IndexEntry entry, string part, out string source, out string error)
         {
             source = null;
@@ -226,6 +234,15 @@ namespace GxMcp.Worker.Services
                 {
                     source = sourceToken.ToString();
                     return true;
+                }
+                if (IsNoTextPartsReply(response))
+                {
+                    error = McpResponse.Err(
+                        code: "ObjectHasNoTextParts",
+                        message: "'" + entry.Name + "' (" + entry.Type + ") has no text parts to export: its data are SDK properties, not text parts.",
+                        hint: "Read the properties with genexus_properties action=get projection=full. The native export does not write them.",
+                        target: entry.Name);
+                    return false;
                 }
                 error = response["error"]?.ToString() ?? response["message"]?.ToString() ?? "The SDK part did not return text content.";
                 return false;
