@@ -5,7 +5,7 @@ using Xunit;
 namespace GxMcp.Gateway.Tests
 {
     // #638: the terse envelope of a refused add_grid_variable write (WwpProjectionNotConfirmed). It keeps the write receipt
-    // the caller already reads; the WebForm projection that the refusal carries is added to it in the next change.
+    // the caller already reads and carries the webFormProjection the refusal was verified against; the rest of the envelope stays the same.
     public class WwpProjectionTerseErrorTests
     {
         private const string Refusal = @"{status:'error',target:'SyntheticGridHost',
