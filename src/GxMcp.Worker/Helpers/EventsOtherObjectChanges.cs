@@ -105,8 +105,16 @@ namespace GxMcp.Worker.Helpers
             long offsetLow = targetStampTicks - writeSpanEndTicks;
             long offsetHigh = targetStampTicks - writeSpanStartTicks;
             long tolerance = ClockTolerance.Ticks;
-            if (!Covers(offsetLow, offsetHigh, 0, tolerance) && !Covers(offsetLow, offsetHigh, localUtcOffsetTicks, tolerance))
+            bool onUtcClock = Covers(offsetLow, offsetHigh, 0, tolerance);
+            if (!onUtcClock && !Covers(offsetLow, offsetHigh, localUtcOffsetTicks, tolerance))
                 return Unavailable("StampClockNotComparable");
+
+            // The known clock the anchor matched, with the tolerance on both sides, always lies inside the offset range. An
+            // anchor stamped a little before the write span, or a clock step inside it, must not close the window before the
+            // writes this save made. Widening only turns a concurrent verdict into a blocking one, never the reverse.
+            long matchedClock = onUtcClock ? 0 : localUtcOffsetTicks;
+            offsetLow = Math.Min(offsetLow, matchedClock - tolerance);
+            offsetHigh = Math.Max(offsetHigh, matchedClock + tolerance);
 
             return new EventsSaveWindow(
                 true, null,

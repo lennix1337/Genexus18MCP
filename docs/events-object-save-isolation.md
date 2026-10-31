@@ -289,7 +289,9 @@ An object that differs between two inventories is now judged by its SDK stamp ag
 - The SDK stamps an object when it saves it. The target's own new stamp, read right after the object save, was
   assigned by this Worker somewhere between its first write call and that read, so it fixes the offset between the
   SDK's clock and the Worker's. The window is the interval, in the SDK's clock, from the opening of the transaction
-  to its closing, widened by that span and by a 2 s margin on both ends. Every write the save makes carries a stamp
+  to its closing, widened by that span and by a 2 s margin on both ends. The measured offset is also widened to the 5 s tolerance around the
+  clock it matched (the SDK's UTC or the Worker's local clock), so an anchor stamped a little before the write span, or a
+  small clock step inside it, cannot close the window before the writes of the save. Every write the save makes carries a stamp
   inside it.
 - The window is trusted only when the offset is one the Worker knows (its UTC clock or its local clock, within
   5 s). When the target's stamp did not advance, the persisted stamp differs from the one read after the object save,
@@ -350,6 +352,9 @@ Limits:
   on its own after the transaction closed (a background task) would be taken for another process's.
 - Metadata equality is still not byte equality: an independent writer that persists an object's parts without
   advancing its metadata is not detected, with or without this classification.
+- A change of the local offset of one hour between a side effect and the target's stamp (for example a daylight-saving
+  change on a machine whose local clock the SDK stamps) is not covered by the 5 s tolerance: such a side effect still
+  reads as concurrent. This is a known limit, pinned by a test, and it is not fixed by this change.
 
 ## SDK audit and limitations
 

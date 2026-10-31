@@ -12,7 +12,7 @@ namespace GxMcp.Worker.Tests
     // open, saves a DIFFERENT object while the save runs. The real flow runs over a double of the SDK half; the
     // classification and the verdict are the production ones. Every instant is a number of seconds from a fixed
     // origin: the transaction is open from 100 s to 160 s and the target is stamped 102 s, so the save window is
-    // 97 s to 163 s (see EventsOtherObjectChangesTests).
+    // 93 s to 167 s (see EventsOtherObjectChangesTests).
     public sealed class EventsSaveConcurrentEditTests
     {
         private static readonly long Origin = new DateTime(2026, 10, 28, 12, 0, 0, DateTimeKind.Utc).Ticks;
