@@ -235,6 +235,11 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
+                if (string.IsNullOrEmpty(controlName))
+                    WwpTemplatePropertyRules.AddAliasReadItems(ObjectTypeOf(obj), fullPropsResult,
+                        (propertyName ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Concat(propertyNames ?? Enumerable.Empty<string>()));
+
                 string versionToken = null;
                 try { versionToken = WriteService.ComputeVersionToken(obj); } catch { }
 
@@ -852,6 +857,12 @@ namespace GxMcp.Worker.Services
                 var obj = _objectService.FindObject(target, typeFilter);
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
 
+                // A WorkWithPlus template alias is written and checked under the SDK name it stands for; the response keeps
+                // the name asked for, so both names show.
+                string requestedName = propName;
+                if (string.IsNullOrEmpty(controlName))
+                    propName = WwpTemplatePropertyRules.NativeName(ObjectTypeOf(obj), propName);
+
                 // Folder/module placement is not a scalar property write — it's a parent
                 // move. Route it to ObjectService.MoveObject (create-in-Root then reparent
                 // via the Udm EntityManager). The old "not writable — Parent/Module setters
@@ -1000,7 +1011,9 @@ namespace GxMcp.Worker.Services
                 string verified = VerifyPropertyPersisted(target, propName, value, controlName, typeFilter, beforeVal, obj);
                 if (verified != null) return verified;
 
-                return Models.McpResponse.Ok(target: target, code: "PropertyApplied", result: new JObject { ["property"] = propName, ["value"] = value });
+                var applied = new JObject { ["property"] = requestedName, ["value"] = value };
+                if (!string.Equals(requestedName, propName, StringComparison.Ordinal)) applied["nativeName"] = propName;
+                return Models.McpResponse.Ok(target: target, code: "PropertyApplied", result: applied);
             }
             catch (PropertyWipeException pwe)
             {
@@ -1032,6 +1045,12 @@ namespace GxMcp.Worker.Services
 
                 var obj = _objectService.FindObject(target, typeFilter);
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
+
+                var objectTypeId = ObjectTypeOf(obj);
+                string aliasConflict = string.IsNullOrEmpty(controlName)
+                    ? WwpTemplatePropertyRules.FindConflict(objectTypeId, properties.Properties().Select(p => p.Name)) : null;
+                if (aliasConflict != null)
+                    return Models.McpResponse.Err(code: "PropertyAliasConflict", target: target, message: aliasConflict);
 
                 // The write reads the persisted object independently inside its transaction. A preview
                 // needs the same read, or it would promise a write that cannot be verified.
@@ -1067,7 +1086,8 @@ namespace GxMcp.Worker.Services
                 foreach (var p in properties.Properties())
                 {
                     string propName = p.Name;
-                    string nativeName = NativeWebPanelPropertyName(obj, controlName, propName);
+                    string aliasedName = string.IsNullOrEmpty(controlName) ? WwpTemplatePropertyRules.NativeName(objectTypeId, propName) : propName;
+                    string nativeName = NativeWebPanelPropertyName(obj, controlName, aliasedName);
                     nativeNames[propName] = nativeName;
                     string val = p.Value?.ToString() ?? string.Empty;
                     if (string.IsNullOrEmpty(controlName) && IsObjectPlacementProperty(propName))
@@ -1105,7 +1125,8 @@ namespace GxMcp.Worker.Services
                         message: "Could not capture the complete object before editing: " + ex.Message);
                 }
                 if (dryRun)
-                    return Models.McpResponse.Ok(target: target, code: "DryRun", result: new JObject
+                {
+                    var preview = new JObject
                     {
                         ["before"] = JObject.FromObject(beforeValues),
                         ["requested"] = properties.DeepClone(),
@@ -1114,7 +1135,10 @@ namespace GxMcp.Worker.Services
                         ["persisted"] = false,
                         ["independentReadVerified"] = true,
                         ["implicitOperations"] = new JArray()
-                    });
+                    };
+                    NoteNativeNames(preview, objectTypeId, properties, nativeNames);
+                    return Models.McpResponse.Ok(target: target, code: "DryRun", result: preview);
+                }
                 using (var trans = obj.Model.KB.BeginTransaction())
                 {
                     bool committed = false;
@@ -1241,6 +1265,7 @@ namespace GxMcp.Worker.Services
                         + " or the parts could not be verified.");
 
                 var result = new JObject { ["properties"] = properties };
+                NoteNativeNames(result, objectTypeId, properties, nativeNames);
                 if (verifiedPersisted.Count == properties.Count)
                 {
                     result["before"] = verifiedBefore;
@@ -1690,6 +1715,19 @@ namespace GxMcp.Worker.Services
 
         private static bool IsWebPanel(KBObject obj)
             => string.Equals(obj?.TypeDescriptor?.Name, "WebPanel", StringComparison.OrdinalIgnoreCase);
+
+        private static Guid ObjectTypeOf(KBObject obj) => obj?.TypeDescriptor?.Id ?? Guid.Empty;
+
+        // The SDK names a call used for a requested name, when they differ, so the caller reads both. Only WorkWithPlus
+        // template objects have such names.
+        private static void NoteNativeNames(JObject result, Guid objectType, JObject properties, IDictionary<string, string> nativeNames)
+        {
+            if (objectType != WwpTemplateXml.ObjectType) return;
+            var names = new JObject();
+            foreach (var p in properties.Properties())
+                if (!string.Equals(p.Name, nativeNames[p.Name], StringComparison.Ordinal)) names[p.Name] = nativeNames[p.Name];
+            if (names.Count > 0) result["nativeNames"] = names;
+        }
 
         private static string NativeWebPanelPropertyName(KBObject obj, string controlName, string requestedName)
             => string.IsNullOrEmpty(controlName) && IsWebPanel(obj)
