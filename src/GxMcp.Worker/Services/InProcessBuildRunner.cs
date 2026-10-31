@@ -1661,7 +1661,17 @@ namespace GxMcp.Worker.Services
                 object task = Activator.CreateInstance(_typeIdeWebBuildAndDeploy);
                 SetProp(task, "KB", kbHandle);
                 SetProp(task, "ForceRebuild", forceRebuild);
-                SetRequiredReorgPolicy(task);
+                try
+                {
+                    SetRequiredReorgPolicy(task);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // The task never ran: the cause goes to the build status, not only to the worker log (#749).
+                    Logger.Error("[BUILD-INPROCESS] " + ex.Message);
+                    engine.LogErrorEvent(new BuildErrorEventArgs(null, null, null, 0, 0, 0, 0, ex.Message, null, "GxMcp.Worker"));
+                    return false;
+                }
                 SetProp(task, "CompileMains", true);
                 SetProp(task, "Output", "IDE");
                 SetProp(task, "EventsSuspended", true);
@@ -1735,16 +1745,18 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // The messages must not match BuildService.DetectBuildAllReorgRequired ("required",
+        // "needed", "necess"): a missing safety flag is not a reorganization refusal (#749).
         private static void SetRequiredReorgPolicy(object task)
         {
             foreach (string name in new[] { "FailIfReorg", "DoNotExecuteReorg" })
             {
                 var property = task.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
                 if (property == null || property.PropertyType != typeof(bool) || !property.CanWrite || !property.CanRead)
-                    throw new InvalidOperationException("Required build safety property unavailable: " + name + "; no build was executed.");
+                    throw new InvalidOperationException("Build safety flag unavailable on the SDK task: " + name + "; no build was started.");
                 property.SetValue(task, true);
                 if (!Equals(property.GetValue(task), true))
-                    throw new InvalidOperationException("Required build safety property was not applied: " + name + "; no build was executed.");
+                    throw new InvalidOperationException("Build safety flag not applied by the SDK task: " + name + "; no build was started.");
             }
         }
 
