@@ -3172,6 +3172,20 @@ namespace GxMcp.Worker.Services
                 (!string.IsNullOrWhiteSpace(entityKey) ? entityKey : guid);
         }
 
+        // An EntityKey given as the target names one object by identity, as an explicit entityKey does. It is
+        // refused when an explicit entityKey names another object, as a conflicting GUID is in NormalizeResolutionTarget.
+        internal static bool NormalizeEntityKeyTarget(string target, ref string entityKey)
+        {
+            string value = target?.Trim();
+            if (!TryParseEntityKey(value, out _, out _)) return true;
+            if (string.IsNullOrWhiteSpace(entityKey))
+            {
+                entityKey = value;
+                return true;
+            }
+            return string.Equals(entityKey.Trim(), value, StringComparison.OrdinalIgnoreCase);
+        }
+
         internal static bool NormalizeResolutionTarget(ref string target, ref string type, ref string guid)
         {
             target = target?.Trim();
@@ -3281,6 +3295,7 @@ namespace GxMcp.Worker.Services
             // Parse name syntax once before every resolution strategy, including
             // explicit identities; conflicting selectors must not select a homonym.
             if (!NormalizeResolutionTarget(ref target, ref typeFilter, ref guid)) return null;
+            if (!NormalizeEntityKeyTarget(target, ref entityKey)) return null;
             var sw = Stopwatch.StartNew();
             var kb = _kbService.GetKB();
             if (kb == null) return null;
