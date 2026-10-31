@@ -329,7 +329,9 @@ inventory showed in fields the final verdict never rewrites: `preCommitUnexpecte
 them empty and still names its cause in the `preCommit` ones. The default (terse) error projection keeps both sets.
 
 `otherObjectMetadataIntact` now means that no object is blocking. `rollbackVerified` follows the same rule, so an
-edit by another process outside the window no longer turns a verified rollback into an unverified one.
+edit by another process outside the window no longer turns a verified rollback into an unverified one, once the save has
+reached the object save. Before that the target has no stamp, no window exists (`saveWindow.reason` is `TargetNotSaved`),
+and an edit of another object blocks the rollback as it did before.
 
 What does not change: the target checks (`baseVersion` and the in-transaction token, pins, audited bundle,
 callbacks), the comparison of the target's other parts and placement, the explicit rollback, the single-writer gate,
