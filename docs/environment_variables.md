@@ -210,6 +210,7 @@ See [Human-in-the-loop elicitation](elicitation.md).
 | `GXMCP_BUILD_PROFILE` | Select a build profile. | unset |
 | `GXMCP_REAP_ORPHAN_MSBUILD` | Reap orphaned MSBuild processes after a build. | off |
 | `GXMCP_ALLOW_CONCURRENT_BUILDS` | Set to `1` to stop serializing builds per KB: the Gateway then admits a second lifecycle/build for the same Worker while one is already running, and the Worker stops rejecting the second one. Off by default because one STA Worker plus a shared MSBuild tree does not serialize safely. | off (one build at a time) |
+| `GXMCP_WRITE_KB_ALLOW` | `;`-separated globs over the whole KB path (e.g. `C:\KBs\*teste*`). When set, a mutating tool call on a KB that matches none of them is refused by the Gateway before it reaches the Worker, with `code=WriteBlockedKbNotAllowed`, `wrote:false`, `persisted:false`. Previews (`dryRun`, `validate`) pass. Meant for agents and CI that must only touch disposable KBs. | unset (no restriction) |
 
 ## Live KB and release preflight
 
