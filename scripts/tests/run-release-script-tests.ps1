@@ -40,6 +40,7 @@ $tests = @(
     'test-release-doctor.ps1',
     'test-warning-baseline.ps1',
     'test-line-endings.ps1',
+    'test-check-whitespace.ps1',
     'test-live-matrix.test.ps1',
     'test-workwith-persistence-smoke.ps1',
     'test-workwith-persistence-smoke-behavior.ps1',
