@@ -3,6 +3,7 @@
 ## Unreleased
 
 <!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+- `save_as` no longer fails at once when the WebForm SDK validator refuses the cloned WebForm (#746): the WebForm is retried one time after the other parts and the pattern instance exist, and the clone is rolled back only if the retry is refused too. Not reproduced live (the reporter's WorkWithPlus panel is not available); covered by unit tests.
      subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
 
 ### Added

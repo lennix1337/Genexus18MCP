@@ -165,6 +165,7 @@ namespace GxMcp.Worker.Services
             // but a real write failure means the target is not a functional clone. Roll it back
             // immediately instead of returning SavedAs over a partial object (issue #118).
             JObject variableIdRemap = null;
+            string deferredWebForm = null;
             foreach (var part in (src.Parts ?? new List<string>()))
             {
                 string r = _cloner.ClonePart(sourceName, newName, part, typeFilter);
@@ -175,6 +176,13 @@ namespace GxMcp.Worker.Services
                 }
                 if (!IsSuccess(r))
                 {
+                    // #746: the WebForm validator can refuse a form while the parts and the pattern instance it
+                    // depends on are missing from the target. Retry it once after them instead of failing at once.
+                    if (string.Equals(part, "WebForm", StringComparison.OrdinalIgnoreCase) && deferredWebForm == null)
+                    {
+                        deferredWebForm = part;
+                        continue;
+                    }
                     return RollbackFailedClone(sourceName, newName, src.Type, completedSteps,
                         partsCloned, partsSkipped, part, r);
                 }
@@ -184,7 +192,7 @@ namespace GxMcp.Worker.Services
             }
 
             // An object with no cloned part is not a clone. Remove the empty target too.
-            if (partsCloned.Count == 0)
+            if (partsCloned.Count == 0 && deferredWebForm == null)
             {
                 return RollbackFailedClone(sourceName, newName, src.Type, completedSteps,
                     partsCloned, partsSkipped, "<all>", "No cloneable parts on source.");
@@ -215,6 +223,26 @@ namespace GxMcp.Worker.Services
                     if (ok) completedSteps.Add("applyPattern:" + inst.PatternKey);
                 }
                 // No WWP instance on source → silently omit the block (per spec).
+            }
+
+            if (deferredWebForm != null)
+            {
+                string retried = _cloner.ClonePart(sourceName, newName, deferredWebForm, typeFilter);
+                if (IsSkipped(retried))
+                {
+                    partsSkipped.Add(new JObject { ["part"] = deferredWebForm, ["detail"] = SafeParseOrString(retried) });
+                }
+                else if (!IsSuccess(retried))
+                {
+                    return RollbackFailedClone(sourceName, newName, src.Type, completedSteps,
+                        partsCloned, partsSkipped, deferredWebForm, retried);
+                }
+                else
+                {
+                    completedSteps.Add("clonePart:" + deferredWebForm);
+                    partsCloned.Add(deferredWebForm);
+                    variableIdRemap = VariableIdRemapOf(retried);
+                }
             }
 
             var payload = new JObject
