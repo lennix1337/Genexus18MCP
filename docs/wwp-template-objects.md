@@ -124,7 +124,7 @@ ownership or save guards.
 
 A `set` that changes `WWPTemplate_Type` or `WWPTemplate_TemplateXml` reads the value the call does not send from the object, and refuses the write before anything is saved (`dryRun` too) when:
 
-- the type is empty (`TypeEmpty`), or is not one of the twelve types below (`TypeUnknown`; the comparison is exact, without case folding);
+- the type is empty (`TypeEmpty`), or is not one of the twelve types below (`TypeUnknown`; the comparison is exact, without case folding; the twelve are the types of WorkWithPlus 16.2, and a newer version may add a type that this list does not know, which is refused until the list is updated);
 - the XML is empty (`XmlEmpty`), is not well-formed, or declares a DTD (`XmlMalformed`; DTDs are not processed, as in the reader of `genexus_wwp`);
 - the root element is not the root of the type (`RootMismatch`).
 
