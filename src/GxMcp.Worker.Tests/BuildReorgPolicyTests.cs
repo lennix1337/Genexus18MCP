@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using Artech.Genexus.Common.Commands;
 using GxMcp.Worker.Helpers;
@@ -40,6 +41,57 @@ namespace GxMcp.Worker.Tests
                 Assert.False(built);
                 Assert.Equal(0, UnsafeTask.Calls);
             }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Safety_flag_failure_reaches_the_build_status_and_is_not_a_reorg_refusal(bool ignoredSetter)
+        {
+            var lines = new List<(string Line, bool IsError)>();
+            using (var fixture = new BuildEventBrokerRestoreTests.BrokerWritingTaskFixture("_typeIdeWebBuildAndDeploy", false, false))
+            {
+                typeof(InProcessBuildRunner).GetField("_typeIdeWebBuildAndDeploy", Private)
+                    .SetValue(null, ignoredSetter ? typeof(IgnoredPolicyTask) : typeof(UnsafeTask));
+                UnsafeTask.Calls = 0;
+                var engine = new InProcessBuildEngine((line, error) => lines.Add((line, error)));
+                bool built = (bool)typeof(InProcessBuildRunner).GetMethod("ExecuteIdeWebBuildAndDeploy", Private)
+                    .Invoke(null, new object[] { new object(), engine, false });
+                Assert.False(built);
+                Assert.Equal(0, UnsafeTask.Calls);
+            }
+
+            var cause = Assert.Single(lines, l => l.IsError);
+            Assert.Contains("FailIfReorg", cause.Line);
+            Assert.False(BuildService.DetectBuildAllReorgRequired(cause.Line));
+
+            var status = new BuildService.BuildTaskStatus { Action = "Build", Status = "Failed" };
+            typeof(BuildService).GetMethod("HandleLine", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(new BuildService(), new object[] { status, cause.Line, true });
+            Assert.NotEqual(true, status.ReorgRequired);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Safety_flag_messages_are_not_reorg_refusals(bool ignoredSetter)
+        {
+            object task = ignoredSetter ? (object)new IgnoredPolicyTask() : new UnsafeTask();
+            var apply = typeof(InProcessBuildRunner).GetMethod("SetRequiredReorgPolicy", Private);
+            var failure = Assert.Throws<TargetInvocationException>(() => apply.Invoke(null, new[] { task }));
+            Assert.IsType<InvalidOperationException>(failure.InnerException);
+            Assert.Contains("FailIfReorg", failure.InnerException.Message);
+            Assert.False(BuildService.DetectBuildAllReorgRequired(failure.InnerException.Message));
+        }
+
+        [Fact]
+        public void FailIfReorg_alone_already_requests_DoNotExecuteReorg()
+        {
+            // The guard requests FailIfReorg only. The SDK reads that flag as a refusal that
+            // also skips execution (0xC00000 contains 0x400000), so no separate
+            // DoNotExecuteReorg policy is needed. A DoNotExecuteReorg-only policy would instead
+            // let the reorganization report success and the model record it as done.
+            Assert.Equal(BuildOptions.DoNotExecuteReorg, BuildOptions.FailIfReorg & BuildOptions.DoNotExecuteReorg);
         }
 
         public class UnsafeTask
