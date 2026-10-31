@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -23,6 +24,7 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(8, outcome.Remapped);
             Assert.Empty(outcome.Unmapped);
             Assert.Null(outcome.MissingInTarget);
+            Assert.Null(outcome.Skipped);
             Assert.Equal(new[] { 11, 18, 19, 12, 13, 14, 15, 16, 17 }, BindingIds(outcome.Xml));
         }
 
@@ -182,6 +184,96 @@ namespace GxMcp.Worker.Tests
         {
             Assert.Empty(SaveAsVariableIdRemap.SourceNamesById(new[] { V("Zero", 0), V("Minus", -1) }));
             Assert.Empty(SaveAsVariableIdRemap.TargetIdsByName(new[] { V("Zero", 0), V("Minus", -1) }));
+        }
+
+        [Fact]
+        public void An_unreadable_id_in_the_source_skips_the_remap_and_keeps_the_webform()
+        {
+            string form = Form(Data("var:11"));
+
+            var outcome = SaveAsVariableIdRemap.ForClone(form, new[] { V("Eta", -1) }, new[] { V("Eta", 14) });
+
+            Assert.Equal(SaveAsVariableIdRemap.IdUnavailable, outcome.Skipped);
+            Assert.Equal(0, outcome.Remapped);
+            Assert.Same(form, outcome.Xml);
+        }
+
+        [Fact]
+        public void An_unreadable_id_in_the_target_skips_the_remap()
+        {
+            string form = Form(Data("var:11"));
+
+            var outcome = SaveAsVariableIdRemap.ForClone(form, new[] { V("Eta", 11) }, new[] { V("Eta", 0) });
+
+            Assert.Equal(SaveAsVariableIdRemap.IdUnavailable, outcome.Skipped);
+            Assert.Same(form, outcome.Xml);
+        }
+
+        [Fact]
+        public void Variables_that_cannot_be_listed_skip_the_remap()
+        {
+            string form = Form(Data("var:11"));
+
+            Assert.Equal(SaveAsVariableIdRemap.IdUnavailable, SaveAsVariableIdRemap.ForClone(form, null, new[] { V("Eta", 14) }).Skipped);
+            Assert.Equal(SaveAsVariableIdRemap.IdUnavailable, SaveAsVariableIdRemap.ForClone(form, new[] { V("Eta", 11) }, null).Skipped);
+        }
+
+        [Fact]
+        public void The_primary_id_is_the_id_property_read_as_an_int()
+        {
+            Assert.Equal(14, SaveAsVariableIdRemap.PrimaryVariableId(new WithIdProperty { Id = 14 }));
+        }
+
+        [Fact]
+        public void The_primary_id_reads_a_short_id_property_too()
+        {
+            Assert.Equal(9, SaveAsVariableIdRemap.PrimaryVariableId(new WithShortIdProperty { Id = 9 }));
+        }
+
+        [Fact]
+        public void An_object_without_an_id_property_is_unavailable_and_is_not_given_a_position()
+        {
+            // Index, Number and AttId are values an enumeration or a property bag can carry; none of them is the id.
+            Assert.Equal(-1, SaveAsVariableIdRemap.PrimaryVariableId(new WithOnlyPositionProperties()));
+        }
+
+        [Fact]
+        public void A_zero_or_negative_id_is_unavailable()
+        {
+            Assert.Equal(-1, SaveAsVariableIdRemap.PrimaryVariableId(new WithIdProperty { Id = 0 }));
+            Assert.Equal(-1, SaveAsVariableIdRemap.PrimaryVariableId(new WithIdProperty { Id = -3 }));
+        }
+
+        [Fact]
+        public void An_id_property_that_throws_is_unavailable_and_no_other_property_is_tried()
+        {
+            Assert.Equal(-1, SaveAsVariableIdRemap.PrimaryVariableId(new WithThrowingId()));
+        }
+
+        private sealed class WithIdProperty
+        {
+            public int Id { get; set; }
+        }
+
+        private sealed class WithShortIdProperty
+        {
+            public short Id { get; set; }
+        }
+
+        private sealed class WithOnlyPositionProperties
+        {
+            public int Index { get { return 3; } }
+
+            public int Number { get { return 2; } }
+
+            public int AttId { get { return 7; } }
+        }
+
+        private sealed class WithThrowingId
+        {
+            public int Id { get { throw new InvalidOperationException("the id is not readable"); } }
+
+            public int Index { get { return 3; } }
         }
 
         private static string Form(params string[] tags)

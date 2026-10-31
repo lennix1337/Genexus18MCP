@@ -49,6 +49,27 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void The_clone_reports_a_skipped_rebinding_when_an_id_cannot_be_read()
+        {
+            var cloner = new ScriptedCloner("{\"status\":\"ok\",\"variableIdRemap\":{\"skipped\":\"IdUnavailable\"}}");
+
+            var json = JObject.Parse(new SaveAsService(cloner).SaveAs(new JObject { ["name"] = "PanelA", ["newName"] = "PanelACopy" }));
+
+            Assert.Equal("SavedAs", json["code"]?.ToString());
+            Assert.Equal("IdUnavailable", json["result"]?["variableIdRemap"]?["skipped"]?.ToString());
+        }
+
+        [Fact]
+        public void The_production_reader_takes_the_variable_id_from_its_primary_property_only()
+        {
+            string source = RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "SaveAsService.cs");
+            string reader = SourceAssert.MethodBody(source, "private static IEnumerable<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId> VariableIdsOf(global::Artech.Architecture.Common.Objects.KBObject obj)");
+
+            Assert.Contains("PrimaryVariableId(", reader, System.StringComparison.Ordinal);
+            Assert.DoesNotContain("GetVariableInternalId", reader, System.StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void The_clone_says_nothing_about_variable_ids_when_no_control_changed_its_id()
         {
             var cloner = new ScriptedCloner("{\"status\":\"ok\"}");

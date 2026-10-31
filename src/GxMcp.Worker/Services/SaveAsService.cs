@@ -612,45 +612,53 @@ namespace GxMcp.Worker.Services
         {
             var source = _objects.FindObject(sourceName, typeFilter);
             var target = _objects.FindObject(newName, null);
-            if (source == null || target == null) return new GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome { Xml = webFormXml };
+            if (source == null || target == null)
+                return new GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome { Xml = webFormXml, Skipped = GxMcp.Worker.Helpers.SaveAsVariableIdRemap.IdUnavailable };
             return GxMcp.Worker.Helpers.SaveAsVariableIdRemap.ForClone(webFormXml, VariableIdsOf(source), VariableIdsOf(target));
         }
 
         /// <summary>
-        /// The variables of an object with the internal id each one carries. An id that cannot be read is -1, which
-        /// the remap never matches.
+        /// The variables of an object with the id each one carries on its primary path. The list is null when the
+        /// variables cannot be enumerated. An id that cannot be read is -1, and then the remap is skipped: a position
+        /// in the enumeration is never taken as an id.
         /// </summary>
         private static IEnumerable<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId> VariableIdsOf(global::Artech.Architecture.Common.Objects.KBObject obj)
         {
-            var variables = new List<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId>();
             try
             {
+                var variables = new List<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId>();
                 foreach (object variable in GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(obj))
                 {
-                    int? id = GxMcp.Worker.Helpers.VariableInjector.GetVariableInternalId(variable, -1);
                     string name = GxMcp.Worker.Structure.PartAccessor.GetVariableName(variable);
-                    variables.Add(new GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId(name, id ?? -1));
+                    variables.Add(new GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId(
+                        name, GxMcp.Worker.Helpers.SaveAsVariableIdRemap.PrimaryVariableId(variable)));
                 }
+                return variables;
             }
-            catch { /* an object without a readable Variables part has nothing to rebind */ }
-            return variables;
+            catch
+            {
+                return null;
+            }
         }
 
         /// <summary>
-        /// The clone's WebForm write answer, with the rebinding reported when at least one control changed its id.
-        /// The answer is returned as it was when nothing changed, and as it was when it cannot be read.
+        /// The clone's WebForm write answer, with the rebinding reported when a control changed its id, or the reason
+        /// the rebinding was skipped. The answer is returned as it was when neither happened, and as it was when it
+        /// cannot be read.
         /// </summary>
         private static string AttachVariableIdRemap(string written, GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap)
         {
-            if (remap == null || remap.Remapped == 0) return written;
+            if (remap == null || (remap.Remapped == 0 && remap.Skipped == null)) return written;
             try
             {
                 var answer = JObject.Parse(written);
-                answer["variableIdRemap"] = new JObject
-                {
-                    ["remapped"] = remap.Remapped,
-                    ["unmapped"] = new JArray(remap.Unmapped),
-                };
+                answer["variableIdRemap"] = remap.Skipped != null
+                    ? new JObject { ["skipped"] = remap.Skipped }
+                    : new JObject
+                    {
+                        ["remapped"] = remap.Remapped,
+                        ["unmapped"] = new JArray(remap.Unmapped),
+                    };
                 return answer.ToString(Newtonsoft.Json.Formatting.None);
             }
             catch { return written; }

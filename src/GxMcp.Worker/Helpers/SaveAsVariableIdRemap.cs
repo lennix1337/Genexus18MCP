@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 
 namespace GxMcp.Worker.Helpers
@@ -57,6 +58,37 @@ namespace GxMcp.Worker.Helpers
 
             /// <summary>The source variable that the target does not declare, or null when the remap is accepted.</summary>
             public string MissingInTarget { get; set; }
+
+            /// <summary>Why the remap did not run, or null when it ran. The text is then written as it is.</summary>
+            public string Skipped { get; set; }
+        }
+
+        /// <summary>The skip reason when a variable's id cannot be read on its primary path.</summary>
+        public const string IdUnavailable = "IdUnavailable";
+
+        /// <summary>
+        /// The variable's id as its primary path reads it: the <c>Id</c> property, and nothing else. A variable whose id
+        /// cannot be read, or reads as zero or less, gives -1. Its position in an enumeration is never an id, so it is
+        /// not given in its place.
+        /// </summary>
+        public static int PrimaryVariableId(object variable)
+        {
+            if (variable == null) return -1;
+            try
+            {
+                PropertyInfo idProperty = variable.GetType().GetProperty("Id", BindingFlags.Public | BindingFlags.Instance);
+                if (idProperty == null || !idProperty.CanRead) return -1;
+
+                object raw = idProperty.GetValue(variable);
+                if (raw is int value) return value > 0 ? value : -1;
+                if (raw is short shortValue) return shortValue > 0 ? shortValue : -1;
+                if (raw is long longValue) return longValue > 0 && longValue <= int.MaxValue ? (int)longValue : -1;
+                return -1;
+            }
+            catch
+            {
+                return -1;
+            }
         }
 
         /// <summary>
@@ -100,10 +132,22 @@ namespace GxMcp.Worker.Helpers
             IEnumerable<NamedId> sourceVariables,
             IEnumerable<NamedId> targetVariables)
         {
+            // A binding can only be matched to a variable through its id. When one id of either object cannot be
+            // read, nothing is rebound: the text is written as it is and the outcome says why.
+            List<NamedId> source = sourceVariables?.ToList();
+            List<NamedId> target = targetVariables?.ToList();
+            if (source == null || target == null || source.Any(IsUnreadable) || target.Any(IsUnreadable))
+                return new Outcome { Xml = webFormXml, Skipped = IdUnavailable };
+
             return Apply(
                 webFormXml,
-                SourceNamesById(sourceVariables),
-                TargetIdsByName(targetVariables));
+                SourceNamesById(source),
+                TargetIdsByName(target));
+        }
+
+        private static bool IsUnreadable(NamedId variable)
+        {
+            return variable == null || variable.Id <= 0;
         }
 
         /// <summary>
