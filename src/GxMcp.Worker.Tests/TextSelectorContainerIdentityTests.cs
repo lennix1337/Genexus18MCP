@@ -110,6 +110,58 @@ namespace GxMcp.Worker.Tests
             Assert.DoesNotContain(entries, entry => entry.Name == "SynthProcA");
         }
 
+        [Fact]
+        public void A_folder_name_with_children_still_selects_the_children_of_every_same_named_folder()
+        {
+            // The expansion is by name, not by identity: the same-named folder of the other module keeps its children.
+            ObjectTextService service = BuildService();
+
+            bool selected = service.TrySelectEntries(
+                "Procs",
+                new JObject(),
+                allowAll: false,
+                out List<SearchIndex.IndexEntry> entries,
+                out string error,
+                includeChildren: true);
+
+            Assert.True(selected, error);
+            Assert.Equal(new[] { "SynthProcA", "SynthProcB" }, entries.Select(entry => entry.Name).ToArray());
+        }
+
+        [Fact]
+        public void A_module_filter_narrows_a_folder_name_with_children_to_its_own_module()
+        {
+            ObjectTextService service = BuildService();
+
+            bool selected = service.TrySelectEntries(
+                "Procs",
+                new JObject { ["module"] = "SynthB" },
+                allowAll: false,
+                out List<SearchIndex.IndexEntry> entries,
+                out string error,
+                includeChildren: true);
+
+            Assert.True(selected, error);
+            Assert.Equal(new[] { "SynthProcB" }, entries.Select(entry => entry.Name).ToArray());
+        }
+
+        [Fact]
+        public void A_path_prefix_narrows_a_folder_name_with_children_to_its_own_path()
+        {
+            ObjectTextService service = BuildService();
+
+            bool selected = service.TrySelectEntries(
+                "Procs",
+                new JObject { ["pathPrefix"] = "SynthB/Procs" },
+                allowAll: false,
+                out List<SearchIndex.IndexEntry> entries,
+                out string error,
+                includeChildren: true);
+
+            Assert.True(selected, error);
+            Assert.Equal(new[] { "SynthProcB" }, entries.Select(entry => entry.Name).ToArray());
+        }
+
         private static ObjectTextService BuildService()
         {
             var entries = new[]
