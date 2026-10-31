@@ -36,7 +36,8 @@ namespace GxMcp.Worker.Services
             _kbService = kbService;
             _indexCacheService = indexCacheService;
             _operationTracker = operationTracker;
-            _kbProvider = () => (object)_kbService?.GetKB();
+            // KbObject reads the handle only. GetKB would start the background auto-open of GX_KB_PATH.
+            _kbProvider = () => _kbService?.KbObject;
         }
 
         public string Diagnose()
@@ -369,7 +370,8 @@ namespace GxMcp.Worker.Services
 
         /// <summary>
         /// The WorkWithPlus template block that genexus_doctor asks for by action WwpTemplates. It reads the KB
-        /// through the SDK, so the Gateway asks only a Worker that is already running with the KB open.
+        /// through the SDK, so the Gateway asks only a Worker that is already running. The block says KbNotOpen when no
+        /// KB is open in that Worker.
         /// </summary>
         public string WwpTemplatesResponse()
         {

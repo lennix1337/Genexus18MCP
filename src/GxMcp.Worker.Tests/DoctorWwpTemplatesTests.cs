@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Threading;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -77,6 +79,30 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("DoctorWwpTemplatesOk", json["code"]?.ToString());
             Assert.False(json["result"]?["available"]?.ToObject<bool>());
             Assert.NotNull(json["result"]?["reason"]);
+        }
+
+        [Fact]
+        public void Reading_the_block_with_the_KB_closed_does_not_start_the_background_open()
+        {
+            // With GX_KB_PATH set, GetKB() on a closed KB starts an open that fails for this path and counts the failure.
+            // The counter stays at zero only when the block read leaves the KB alone.
+            string previous = Environment.GetEnvironmentVariable("GX_KB_PATH");
+            Environment.SetEnvironmentVariable("GX_KB_PATH", @"C:\NotAnExistingKb\Synthetic");
+            try
+            {
+                var kb = new KbService(null);
+
+                var block = new DoctorService(kb, null).BuildWwpTemplatesBlock(InstalledRegistry());
+
+                Assert.Equal("KbNotOpen", block["reason"]?.ToString());
+                Thread.Sleep(500);
+                var failures = typeof(KbService).GetField("_autoOpenFailCount", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.Equal(0, (int)failures.GetValue(kb));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("GX_KB_PATH", previous);
+            }
         }
     }
 }
