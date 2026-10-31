@@ -11,13 +11,13 @@ namespace GxMcp.Worker.Tests
 {
     // The native envelope for a DesignSystem: the export writes the SDK's source inside
     // `DesignSystem <Name> { ... }`, and the native reader takes that envelope back to the same source.
-    // This is not the official GeneXus text (#DesignStyles / #Properties blocks), and the tests pin it.
+    // These tests pin that envelope and its round trip; they cover no other text format.
     public sealed class SdkTextTreeDesignSystemFormatTests
     {
         private const string Source = "styles SynthDS\n{\n\t@import SynthBaseDS;\n}";
 
         [Fact]
-        public void A_native_DesignSystem_document_reads_back_to_its_source()
+        public void A_DesignSystem_document_reads_back_to_its_source()
         {
             string document = SdkTextTreeService.BuildObjectDocument("DesignSystem", "SynthDS", Source);
 
@@ -28,7 +28,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void A_native_DesignSystem_document_reads_back_as_its_Source_part()
+        public void A_DesignSystem_document_reads_back_as_its_Source_part()
         {
             string document = SdkTextTreeService.BuildObjectDocument("DesignSystem", "SynthDS", Source);
 
@@ -40,7 +40,19 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void The_native_export_writes_a_DesignSystem_in_the_native_envelope_not_the_official_blocks()
+        public void A_DesignStyles_block_is_read_as_text_of_the_source_not_as_a_part()
+        {
+            const string document = "DesignSystem SynthDS\n{\n#DesignStyles\n\tstyles SynthDS\n\t{\n\t}\n#End\n}\n";
+
+            Assert.True(SdkTextTreeService.TryParseObjectDocumentParts(document, out string type, out string name,
+                out Dictionary<string, string> parts, out string error), error);
+            Assert.Equal("DesignSystem", type);
+            Assert.False(parts.ContainsKey("DesignStyles"));
+            Assert.Contains("#DesignStyles", parts["Source"]);
+        }
+
+        [Fact]
+        public void The_export_writes_a_DesignSystem_in_its_envelope_and_no_other_blocks()
         {
             string root = NewTempDirectory();
             try

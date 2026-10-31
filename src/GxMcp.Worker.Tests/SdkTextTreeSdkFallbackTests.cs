@@ -71,6 +71,33 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void A_missing_target_next_to_a_matching_target_is_skipped_and_the_export_goes_on()
+        {
+            var lookedUp = new List<string>();
+            SdkTextTreeService service = BuildService(
+                new[] { SynthTemplate() },
+                explicitTarget =>
+                {
+                    lookedUp.Add(explicitTarget.Name);
+                    return null;
+                });
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = Export(service, root, "SynthTemplate", "SynthMissing");
+
+                Assert.Null(response["error"]);
+                Assert.Equal(1, (int)response["result"]!["exported"]!);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
+                Assert.Equal(new[] { "SynthMissing" }, lookedUp.ToArray());
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
         public void A_target_neither_the_index_nor_the_SDK_holds_is_not_found_without_the_warming_hint_while_the_index_is_ready()
         {
             SdkTextTreeService service = BuildService(new[] { OtherObject() }, explicitTarget => null);
@@ -170,13 +197,13 @@ namespace GxMcp.Worker.Tests
                 sdkEntryLookup);
         }
 
-        private static JObject Export(SdkTextTreeService service, string root, string target)
+        private static JObject Export(SdkTextTreeService service, string root, params string[] targets)
         {
             var args = new JObject
             {
                 ["outputPath"] = root,
                 ["mode"] = "all",
-                ["targets"] = new JArray(target)
+                ["targets"] = new JArray(targets)
             };
             return JObject.Parse(service.Execute("export_kb_to_text", null, args, CancellationToken.None));
         }

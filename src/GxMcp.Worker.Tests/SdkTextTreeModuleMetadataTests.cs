@@ -64,6 +64,47 @@ namespace GxMcp.Worker.Tests
                 string expected = Path.Combine(root, "src", "WWPBaseObjects", "module.toml");
                 Assert.Equal(expected, Assert.Single(Directory.GetFiles(root, "module.toml", SearchOption.AllDirectories)));
                 Assert.True(File.Exists(expected));
+                Assert.True(File.Exists(Path.Combine(root, "src", "WWPBaseObjects", "WWPTemplates", "Selection", "SynthTemplate.gx")));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_full_export_removes_the_module_toml_that_an_earlier_export_listed()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                Export(root, Entry("Root Module/SynthOld/Folder", "SynthOld"));
+                string stale = Path.Combine(root, "src", "SynthOld", "module.toml");
+                Assert.True(File.Exists(stale));
+
+                Export(root, Entry("Root Module/SynthNew/Folder", "SynthNew"), fullSelection: true);
+
+                Assert.False(File.Exists(stale));
+                Assert.True(File.Exists(Path.Combine(root, "src", "SynthNew", "module.toml")));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_partial_export_keeps_the_module_toml_that_an_earlier_export_listed()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                Export(root, Entry("Root Module/SynthOld/Folder", "SynthOld"));
+                string kept = Path.Combine(root, "src", "SynthOld", "module.toml");
+
+                Export(root, Entry("Root Module/SynthNew/Folder", "SynthNew"));
+
+                Assert.True(File.Exists(kept));
             }
             finally
             {
@@ -143,7 +184,7 @@ namespace GxMcp.Worker.Tests
         }
 
         // Exports one object through the production export; only the SDK read is replaced.
-        private static void Export(string root, SearchIndex.IndexEntry entry)
+        private static void Export(string root, SearchIndex.IndexEntry entry, bool fullSelection = false)
         {
             var cache = new IndexCacheService();
             cache.LoadFromEntries(new[] { entry });
@@ -156,9 +197,9 @@ namespace GxMcp.Worker.Tests
             var args = new JObject
             {
                 ["outputPath"] = root,
-                ["mode"] = "all",
-                ["targets"] = new JArray(entry.Name)
+                ["mode"] = "all"
             };
+            if (!fullSelection) args["targets"] = new JArray(entry.Name);
 
             JObject response = JObject.Parse(service.Execute("export_kb_to_text", null, args, CancellationToken.None));
 

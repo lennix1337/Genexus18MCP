@@ -227,7 +227,7 @@ namespace GxMcp.Worker.Services
             try
             {
                 // The index identity (GUID, EntityKey, path) travels with the name, as it does in the
-                // multi-part read and in genexus_read. The EntityKey is no longer retried as a name.
+                // multi-part read and in genexus_read.
                 JObject response = ParseEnvelope(_readPartText(entry.Name, part, entry.Type, entry.Guid, entry.EntityKey, entry.Path));
                 JToken sourceToken = response["source"] ?? response["result"]?["source"];
                 if (sourceToken != null)
