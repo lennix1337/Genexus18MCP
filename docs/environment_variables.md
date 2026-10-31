@@ -111,7 +111,9 @@ The GeneXus model is single-threaded: only one SDK operation runs at a time on t
 - There is no published per-command override. The Worker resolves a `busyWaitMs`
   knob from the RPC envelope, but no Gateway conversion path forwards a tool
   argument or client `_meta` to it, so the environment variable above is the only
-  reachable control today.
+  reachable control today. The `genexus_doctor` template probe is the one internal request
+  that sets the knob: it sends 3500 ms, below its 4 s budget, and for that command the value
+  in the request takes precedence over `GXMCP_BUSY_WAIT_MS`.
 - See the `WorkerBusy` hints returned by the affected tools for the actionable
   value.
 

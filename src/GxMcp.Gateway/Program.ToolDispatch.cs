@@ -381,10 +381,8 @@ namespace GxMcp.Gateway
             // therefore benefit from the short-circuit. Gateway-served tools
             // (whoami, recipe, kb_diff, sandbox, etc.) bypass naturally because they
             // never hit the worker dispatcher. genexus_doctor is deliberately NOT
-            // listed: the Gateway answers it with its own SearchIndexMissing/Empty
-            // report and retry hints, far more useful than a generic IndexNotReady
-            // while indexing. Its one Worker read, the WorkWithPlus template block,
-            // does not go through the index.
+            // listed: the Gateway answers it from its own state, and its one Worker
+            // read, the WorkWithPlus template block, does not go through the index.
             if (IsIndexDependentTool(tName, tArgs))
             {
                 IndexStateSnapshot idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
