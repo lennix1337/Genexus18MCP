@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using GxMcp.Gateway;
 using Newtonsoft.Json.Linq;
@@ -149,6 +151,42 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(1, block["invalid"]!.Value<int>());
             Assert.Equal("high", block["severity"]!.ToString());
             Assert.Equal(1, ((JArray)block["listed"]!).Count);
+        }
+
+        [Fact]
+        public async Task Probe_with_a_session_kb_and_no_worker_pool_answers_WorkerNotRunning()
+        {
+            // With nothing serving the session's KB, the probe gives up; it does not start a Worker.
+            var field = typeof(Program).GetField("_currentKb", BindingFlags.NonPublic | BindingFlags.Static);
+            var currentKb = (AsyncLocal<KbHandle?>)field!.GetValue(null)!;
+            currentKb.Value = new KbHandle("synthkb", "C:\\SynthKb");
+            try
+            {
+                var block = await Program.ProbeDoctorWwpTemplatesAsync(null);
+
+                Assert.False(block["available"]!.Value<bool>());
+                Assert.Equal("WorkerNotRunning", block["reason"]!.ToString());
+            }
+            finally
+            {
+                currentKb.Value = null;
+            }
+        }
+
+        [Fact]
+        public void Probe_waits_at_most_four_seconds()
+        {
+            Assert.Equal(TimeSpan.FromSeconds(4), Program.DoctorWwpTemplatesBudget);
+        }
+
+        [Fact]
+        public void Doctor_envelope_keeps_the_kb_and_engine_blocks_whatever_the_template_answer()
+        {
+            var without = Program.BuildGatewayDoctorEnvelope(null, Program.UnavailableWwpTemplatesBlock("WorkerNotRunning"))["result"]!;
+            var with = Program.BuildGatewayDoctorEnvelope(null, Program.ParseWwpTemplatesAnswer(WorkerAnswer(read: 3, invalid: 1)))["result"]!;
+
+            Assert.Equal(without["kb"]!.ToString(), with["kb"]!.ToString());
+            Assert.Equal(without["engine"]!.ToString(), with["engine"]!.ToString());
         }
 
         [Fact]
