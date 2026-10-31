@@ -210,12 +210,38 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void Variables_that_cannot_be_listed_skip_the_remap()
+        public void An_object_that_was_not_found_skips_the_remap_as_such()
         {
             string form = Form(Data("var:11"));
 
-            Assert.Equal(SaveAsVariableIdRemap.IdUnavailable, SaveAsVariableIdRemap.ForClone(form, null, new[] { V("Eta", 14) }).Skipped);
-            Assert.Equal(SaveAsVariableIdRemap.IdUnavailable, SaveAsVariableIdRemap.ForClone(form, new[] { V("Eta", 11) }, null).Skipped);
+            Assert.Equal(SaveAsVariableIdRemap.SourceOrTargetNotFound, SaveAsVariableIdRemap.ForClone(form, null, new[] { V("Eta", 14) }).Skipped);
+            Assert.Equal(SaveAsVariableIdRemap.SourceOrTargetNotFound, SaveAsVariableIdRemap.ForClone(form, new[] { V("Eta", 11) }, null).Skipped);
+        }
+
+        [Fact]
+        public void A_source_with_no_variables_skips_a_webform_that_has_bindings()
+        {
+            // An empty list where the object has bindings is a list that failed to read, not one in which every binding
+            // is unmapped and the text is written without a word about it.
+            string form = Form(Data("var:11"));
+
+            var outcome = SaveAsVariableIdRemap.ForClone(form, new SaveAsVariableIdRemap.NamedId[0], new[] { V("Eta", 14) });
+
+            Assert.Equal(SaveAsVariableIdRemap.SourceVariablesEmpty, outcome.Skipped);
+            Assert.Empty(outcome.Unmapped);
+            Assert.Same(form, outcome.Xml);
+        }
+
+        [Fact]
+        public void A_source_with_no_variables_and_no_bindings_has_nothing_to_remap()
+        {
+            string form = Form("<label>text</label>");
+
+            var outcome = SaveAsVariableIdRemap.ForClone(form, new SaveAsVariableIdRemap.NamedId[0], new SaveAsVariableIdRemap.NamedId[0]);
+
+            Assert.Null(outcome.Skipped);
+            Assert.Equal(0, outcome.Remapped);
+            Assert.Same(form, outcome.Xml);
         }
 
         [Fact]

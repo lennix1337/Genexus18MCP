@@ -83,6 +83,12 @@ namespace GxMcp.Worker.Helpers
         /// <summary>The skip reason when a variable's id cannot be read on its primary path.</summary>
         public const string IdUnavailable = "IdUnavailable";
 
+        /// <summary>The skip reason when the source or the target object was not found.</summary>
+        public const string SourceOrTargetNotFound = "SourceOrTargetNotFound";
+
+        /// <summary>The skip reason when the source has no enumerated variable while the WebForm has bindings.</summary>
+        public const string SourceVariablesEmpty = "SourceVariablesEmpty";
+
         /// <summary>
         /// The variable's id as its primary path reads it: the <c>Id</c> property, and nothing else. A variable whose id
         /// cannot be read, or reads as zero or less, gives -1. Its position in an enumeration is never an id, so it is
@@ -149,12 +155,21 @@ namespace GxMcp.Worker.Helpers
             IEnumerable<NamedId> sourceVariables,
             IEnumerable<NamedId> targetVariables)
         {
+            // A null list is an object the clone could not find, so there is nothing to match the bindings to.
+            if (sourceVariables == null || targetVariables == null)
+                return new Outcome { Xml = webFormXml, Skipped = SourceOrTargetNotFound };
+
             // A binding can only be matched to a variable through its id. When one id of either object cannot be
             // read, nothing is rebound: the text is written as it is and the outcome says why.
-            List<NamedId> source = sourceVariables?.ToList();
-            List<NamedId> target = targetVariables?.ToList();
-            if (source == null || target == null || source.Any(IsUnreadable) || target.Any(IsUnreadable))
+            List<NamedId> source = sourceVariables.ToList();
+            List<NamedId> target = targetVariables.ToList();
+            if (source.Any(IsUnreadable) || target.Any(IsUnreadable))
                 return new Outcome { Xml = webFormXml, Skipped = IdUnavailable };
+
+            // A source with bindings and no variable is a list that failed to read, not one in which every binding is
+            // unmapped: the text is written as it is and the outcome says why.
+            if (source.Count == 0 && HasBinding(webFormXml))
+                return new Outcome { Xml = webFormXml, Skipped = SourceVariablesEmpty };
 
             return Apply(
                 webFormXml,
@@ -165,6 +180,11 @@ namespace GxMcp.Worker.Helpers
         private static bool IsUnreadable(NamedId variable)
         {
             return variable == null || variable.Id <= 0;
+        }
+
+        private static bool HasBinding(string webFormXml)
+        {
+            return !string.IsNullOrEmpty(webFormXml) && VarTokenPattern.IsMatch(webFormXml);
         }
 
         /// <summary>

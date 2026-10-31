@@ -606,24 +606,23 @@ namespace GxMcp.Worker.Services
         /// <summary>
         /// The WebForm text rebound by name to the target's variables. The target is read again here rather than
         /// reused from before its Variables were written, so the ids are the ones the WebForm will meet. A source or
-        /// target that cannot be read leaves the text as it is.
+        /// target that is not found, or whose variables cannot be read, leaves the text as it is and says why.
         /// </summary>
         private GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome RemapWebFormVariableIds(string sourceName, string newName, string typeFilter, string webFormXml)
         {
             var source = _objects.FindObject(sourceName, typeFilter);
             var target = _objects.FindObject(newName, null);
-            if (source == null || target == null)
-                return new GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome { Xml = webFormXml, Skipped = GxMcp.Worker.Helpers.SaveAsVariableIdRemap.IdUnavailable };
             return GxMcp.Worker.Helpers.SaveAsVariableIdRemap.ForClone(webFormXml, VariableIdsOf(source), VariableIdsOf(target));
         }
 
         /// <summary>
-        /// The variables of an object with the id each one carries on its primary path. The list is null when the
-        /// variables cannot be enumerated. An id that cannot be read is -1, and then the remap is skipped: a position
-        /// in the enumeration is never taken as an id.
+        /// The variables of an object with the id each one carries on its primary path, or null when the object was not
+        /// found. An id that cannot be read is -1, and a list that cannot be enumerated is one unreadable variable: either
+        /// way the remap is skipped. A position in the enumeration is never taken as an id.
         /// </summary>
         private static IEnumerable<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId> VariableIdsOf(global::Artech.Architecture.Common.Objects.KBObject obj)
         {
+            if (obj == null) return null;
             try
             {
                 var variables = new List<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId>();
@@ -637,31 +636,43 @@ namespace GxMcp.Worker.Services
             }
             catch
             {
-                return null;
+                return new[] { new GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId(string.Empty, -1) };
             }
         }
 
         /// <summary>
-        /// The clone's WebForm write answer, with the rebinding reported when a control changed its id, or the reason
-        /// the rebinding was skipped. The answer is returned as it was when neither happened, and as it was when it
-        /// cannot be read.
+        /// The clone's WebForm write answer, with the rebinding report attached when there is something to report: a
+        /// control rebound, a binding kept as unmapped or as another reference, or a remap skipped with its reason. The
+        /// answer is returned as it was otherwise, and as it was when it cannot be read.
         /// </summary>
-        private static string AttachVariableIdRemap(string written, GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap)
+        internal static string AttachVariableIdRemap(string written, GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap)
         {
-            if (remap == null || (remap.Remapped == 0 && remap.Skipped == null)) return written;
+            if (remap == null || !ReportsRebinding(remap)) return written;
             try
             {
                 var answer = JObject.Parse(written);
-                answer["variableIdRemap"] = remap.Skipped != null
-                    ? new JObject { ["skipped"] = remap.Skipped }
-                    : new JObject
-                    {
-                        ["remapped"] = remap.Remapped,
-                        ["unmapped"] = new JArray(remap.Unmapped),
-                    };
+                answer["variableIdRemap"] = ReceiptOf(remap);
                 return answer.ToString(Newtonsoft.Json.Formatting.None);
             }
             catch { return written; }
+        }
+
+        private static bool ReportsRebinding(GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap)
+        {
+            return remap.Skipped != null || remap.Remapped > 0 || remap.Unmapped.Count > 0 || remap.OtherReferences.Count > 0;
+        }
+
+        private static JObject ReceiptOf(GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap)
+        {
+            if (remap.Skipped != null) return new JObject { ["skipped"] = remap.Skipped };
+
+            var receipt = new JObject
+            {
+                ["remapped"] = remap.Remapped,
+                ["unmapped"] = new JArray(remap.Unmapped),
+            };
+            if (remap.OtherReferences.Count > 0) receipt["otherReferences"] = new JArray(remap.OtherReferences);
+            return receipt;
         }
 
         /// <summary>
