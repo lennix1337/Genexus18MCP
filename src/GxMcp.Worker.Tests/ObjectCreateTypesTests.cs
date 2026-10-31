@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using GxMcp.TestSupport;
 using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
@@ -9,9 +8,9 @@ using Xunit;
 namespace GxMcp.Worker.Tests
 {
     /// <summary>
-    /// genexus_create refuses a WorkWithPlus template by name, before the type lookup, and the refusal sends the caller
-    /// to the GeneXus IDE. The predicate and the hint are checked directly. The source-order guards keep both create
-    /// paths refusing the template before the lookup, because the lookup itself needs an open Knowledge Base.
+    /// genexus_create refuses a WorkWithPlus template by name. These pin the predicate that decides the refusal, the hint
+    /// that sends the caller to the IDE, the atomic spec refusal in every mode, and the supported-type list against the SDK
+    /// lookup. The two create methods are exercised for real in ObjectServiceCreateEnvelopeTests.
     /// </summary>
     public class ObjectCreateTypesTests
     {
@@ -21,6 +20,14 @@ namespace GxMcp.Worker.Tests
         [InlineData("workwithplus for web template")]
         [InlineData("WorkWithPlus Template")]
         [InlineData("  WorkWithPlus   for Web Template  ")]
+        [InlineData("WorkWithPlus for Web Template")]
+        [InlineData("WorkWithPlus\tfor Web Template")]
+        [InlineData("Work With\tPlus Template")]
+        [InlineData("WorkWithPlus_for_Web_Template")]
+        [InlineData("WorkWithPlus for Smart Devices Template")]
+        [InlineData("WWPTemplate")]
+        [InlineData("WWP Template")]
+        [InlineData("DVelop.Extensions.WWPPackagesCommon.Model.WWPTemplate")]
         public void WorkWithPlusTemplate_IsRefusedUnderEverySpelling(string type)
         {
             Assert.True(ObjectCreateTypes.IsWorkWithPlusTemplate(type));
@@ -28,10 +35,13 @@ namespace GxMcp.Worker.Tests
 
         [Theory]
         [InlineData("WorkWithPlus")]
+        [InlineData("WorkWithPlusDS")]
         [InlineData("WorkWithWeb")]
         [InlineData("WebPanel")]
         [InlineData("DesignSystem")]
         [InlineData("Template")]
+        [InlineData("WWP")]
+        [InlineData("   ")]
         [InlineData("")]
         [InlineData(null)]
         public void OtherTypes_AreNotRefusedAsTemplates(string type)
@@ -44,65 +54,80 @@ namespace GxMcp.Worker.Tests
         {
             string hint = ObjectCreateTypes.WorkWithPlusTemplateHint;
 
-            Assert.Contains("GeneXus IDE", hint);
-            Assert.Contains(ObjectCreateTypes.SupportedTypesHint, hint);
+            Assert.Contains("WorkWithPlus Settings Editor", hint);
+            Assert.Contains("genexus_create neither creates nor updates it", hint);
+            Assert.EndsWith(ObjectCreateTypes.SupportedTypesHint, hint, StringComparison.Ordinal);
             Assert.StartsWith("Supported types: Transaction, Procedure, WebPanel", ObjectCreateTypes.SupportedTypesHint, StringComparison.Ordinal);
         }
 
-        [Fact]
-        public void CreateObject_RefusesTheTemplateBeforeTheTypeLookup()
-        {
-            string body = SourceAssert.MethodBody(
-                RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "ObjectService.cs"),
-                "public string CreateObject(string type, string name, JObject options)");
-
-            AssertRefusalComesBeforeLookup(body);
-        }
-
-        [Fact]
-        public void CreateObjectInstance_RefusesTheTemplateBeforeTheTypeLookup()
-        {
-            // The atomic create path reaches the same template through this method.
-            string body = SourceAssert.MethodBody(
-                RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "ObjectService.cs"),
-                "public KBObject CreateObjectInstance(");
-
-            AssertRefusalComesBeforeLookup(body);
-        }
-
-        [Fact]
-        public void AtomicCreate_RefusesTheTemplateInItsSpec_SoADryRunCannotPreviewIt()
+        [Theory]
+        [InlineData("create")]
+        [InlineData("update")]
+        [InlineData("auto")]
+        public void AtomicSpec_RefusesTheTemplateInEveryMode(string mode)
         {
             AtomicCreateService.ParsedSpec spec = AtomicCreateService.ParseAndValidate(new JObject
             {
                 ["type"] = "WorkWithPlus for Web Template",
                 ["name"] = "SynthTemplate",
+                ["mode"] = mode,
             });
 
-            JObject typeError = spec.Errors.OfType<JObject>().FirstOrDefault(e => (string)e["field"] == "type");
+            JObject typeError = TypeErrorOf(spec);
             Assert.NotNull(typeError);
-            Assert.Contains("GeneXus IDE", typeError.ToString());
+            Assert.Equal(ObjectCreateTypes.WorkWithPlusTemplateHint, (string)typeError["errors"][0]);
         }
 
-        [Fact]
-        public void AtomicCreate_DoesNotRefuseAnOrdinaryType()
+        [Theory]
+        [InlineData("create")]
+        [InlineData("update")]
+        [InlineData("auto")]
+        public void AtomicSpec_DoesNotRefuseAnOrdinaryTypeInAnyMode(string mode)
         {
             AtomicCreateService.ParsedSpec spec = AtomicCreateService.ParseAndValidate(new JObject
             {
                 ["type"] = "Procedure",
                 ["name"] = "SynthProcedure",
+                ["mode"] = mode,
             });
 
-            Assert.DoesNotContain(spec.Errors.OfType<JObject>(), e => (string)e["field"] == "type");
+            Assert.Null(TypeErrorOf(spec));
         }
 
-        private static void AssertRefusalComesBeforeLookup(string body)
+        [Fact]
+        public void SupportedTypes_CoverTheResolverTable_AndEveryOtherNameResolvesThroughObjClass()
         {
-            int refusal = body.IndexOf("ObjectCreateTypes.IsWorkWithPlusTemplate(type)", StringComparison.Ordinal);
-            int lookup = body.IndexOf("ResolveObjectTypeGuid(type)", StringComparison.Ordinal);
+            // Loading the SDK assembly first lets the ObjClass lookup see it. The typed descriptors themselves need a
+            // live SDK state, which a unit test does not have, so only their names are pinned here.
+            _ = typeof(Artech.Genexus.Common.Objects.Procedure);
+            string[] listed = ObjectCreateTypes.SupportedTypes.Split(new[] { ", " }, StringSplitOptions.None);
 
-            Assert.True(refusal >= 0, "The WorkWithPlus template refusal is missing.");
-            Assert.True(lookup < 0 || refusal < lookup, "The template refusal must come before the SDK type lookup.");
+            var missingFromList = ObjectService.TypedDescriptorIds.Keys
+                .Where(name => !listed.Contains(name, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+            Assert.Empty(missingFromList);
+
+            var unresolved = listed
+                .Where(name => !ObjectService.TypedDescriptorIds.ContainsKey(name))
+                .Where(name => ObjectService.ResolveObjectTypeGuid(name) == Guid.Empty)
+                .ToList();
+            Assert.Empty(unresolved);
+        }
+
+        [Fact]
+        public void SupportedTypes_NamesEveryTypeTheSchemaNames_AndNoneTwice()
+        {
+            // The genexus_create schema names these types in its summary and in its type property.
+            string[] schemaNames = { "Transaction", "Procedure", "WebPanel", "SDT", "API", "Domain", "DesignSystem", "Dashboard", "Folder", "Module" };
+            string[] listed = ObjectCreateTypes.SupportedTypes.Split(new[] { ", " }, StringSplitOptions.None);
+
+            Assert.Empty(schemaNames.Except(listed));
+            Assert.Equal(listed.Length, listed.Distinct().Count());
+        }
+
+        private static JObject TypeErrorOf(AtomicCreateService.ParsedSpec spec)
+        {
+            return spec.Errors.OfType<JObject>().FirstOrDefault(e => (string)e["field"] == "type");
         }
     }
 }
