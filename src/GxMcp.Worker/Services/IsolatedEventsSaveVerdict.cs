@@ -31,10 +31,19 @@ namespace GxMcp.Worker.Services
         /// from it. The <c>preCommit</c> fields are never rewritten, so the refusal keeps naming the object that caused
         /// it; <c>unexpectedChangedObjects</c> is set here too only for a save that ends before the verdict runs.
         /// </summary>
-        internal static void RecordPreCommitOthers(JObject receipt, EventsOtherObjectChanges others)
+        internal static void RecordPreCommitOthers(JObject receipt, EventsOtherObjectChanges others, EventsSaveWindow window)
         {
             receipt["unexpectedChangedObjects"] = others.BlockingGuids();
             receipt["preCommitUnexpectedChangedObjects"] = others.BlockingGuids();
+            // The window the pre-commit check used, and the changes another process made outside it, sit beside the causes.
+            receipt["preCommitSaveWindow"] = window.Describe();
+            if (others.Concurrent.Count > 0)
+            {
+                receipt["preCommitConcurrentChanges"] = others.ConcurrentDetails();
+                receipt["preCommitConcurrentChangeCount"] = others.Concurrent.Count;
+                if (others.Concurrent.Count > EventsOtherObjectChanges.MaxDescribed)
+                    receipt["preCommitConcurrentChangesTruncated"] = true;
+            }
             if (others.Blocking.Count == 0) return;
             receipt["preCommitUnexpectedChangedObjectDetails"] = others.BlockingDetails();
             if (others.Blocking.Count > EventsOtherObjectChanges.MaxDescribed)
@@ -81,8 +90,12 @@ namespace GxMcp.Worker.Services
             {
                 receipt["reasonCode"] = OtherObjectsChangedCode;
                 receipt["retrySafe"] = false;
+                // Only a calibrated window can say that a change lay outside it; without one the change could not be classified.
+                string placement = window.Calibrated
+                    ? "could not be placed outside its window"
+                    : "could not be classified, because the save window is unavailable (saveWindow.reason is " + window.Reason + ")";
                 unconfirmedMessage = "The Events source was committed and read back, and the other parts of the object are intact, but "
-                    + others.Blocking.Count + " other object(s) changed while the save ran and could not be placed outside its window"
+                    + others.Blocking.Count + " other object(s) changed while the save ran and " + placement
                     + " (see unexpectedChangedObjectDetails). The write is verified for the target only: compare those objects"
                     + " with the IDE before relying on this save, and do not repeat the edit.";
             }

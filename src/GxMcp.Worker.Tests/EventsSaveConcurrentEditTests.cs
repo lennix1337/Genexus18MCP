@@ -107,9 +107,9 @@ namespace GxMcp.Worker.Tests
             public void VerifyPreCommit()
             {
                 Calls.Add("VerifyPreCommit");
-                var others = EventsOtherObjectChanges.Classify(_baseline, _preCommit, Target,
-                    EventsSaveWindow.FromSaveEvidence(_preCommitEvidence, transactionClosed: false));
-                IsolatedEventsSaveVerdict.RecordPreCommitOthers(_receipt, others);
+                var window = EventsSaveWindow.FromSaveEvidence(_preCommitEvidence, transactionClosed: false);
+                var others = EventsOtherObjectChanges.Classify(_baseline, _preCommit, Target, window);
+                IsolatedEventsSaveVerdict.RecordPreCommitOthers(_receipt, others, window);
                 if (FailPreCommit) throw new InvalidOperationException("pre-commit refused");
                 string mismatch = IsolatedEventsSaveDiagnostics.DescribePreCommitMismatch(
                     eventsSourceMatches: true, changedParts: null, partChangesAllowed: true,

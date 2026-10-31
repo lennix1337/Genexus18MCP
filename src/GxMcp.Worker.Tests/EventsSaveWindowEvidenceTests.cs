@@ -1,5 +1,6 @@
 using System;
 using GxMcp.Worker.Helpers;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GxMcp.Worker.Tests
@@ -154,6 +155,32 @@ namespace GxMcp.Worker.Tests
             var window = EventsSaveWindow.ConfirmPersistedStamp(calibrated, committed: true, persistedStampTicks: At(102), saveStampTicks: null);
 
             Assert.Equal("PersistedStampDiffersFromSaveStamp", window.Reason);
+        }
+
+        [Fact]
+        public void TheDescribedWindow_CarriesTheAnchorAgainstTheWriteStart()
+        {
+            var evidence = Evidence(At(102), At(50), At(160));
+            evidence.AnchorKind = "Utc";
+
+            var described = EventsSaveWindow.FromSaveEvidence(evidence, transactionClosed: true).Describe();
+
+            Assert.Equal(EventsSaveWindow.Iso(At(102)), described["anchorStampUtc"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(101)), described["writeStartUtc"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(103)), described["objectSavedUtc"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(50)), described["lastUpdateBeforeUtc"]!.ToString());
+            Assert.Equal(1d, described["anchorMinusWriteStartSeconds"]!.Value<double>());
+            Assert.Equal("Utc", described["anchorKind"]!.ToString());
+        }
+
+        [Fact]
+        public void AnUnavailableWindowFromASave_StillCarriesTheAnchorThatMadeItUnavailable()
+        {
+            var described = EventsSaveWindow.FromSaveEvidence(Evidence(At(50), At(50), At(160)), transactionClosed: true).Describe();
+
+            Assert.False(described["calibrated"]!.Value<bool>());
+            Assert.Equal("TargetStampNotAdvanced", described["reason"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(50)), described["anchorStampUtc"]!.ToString());
         }
     }
 }

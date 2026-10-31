@@ -50,6 +50,7 @@ namespace GxMcp.Worker.Services
             private DateTime _writeStartUtc;
             private DateTime _objectSavedUtc;
             private long? _stampAfterObjectSave;
+            private string _anchorKind;
             private string _unconfirmedMessage;
 
             internal SdkIsolatedEventsSaveSteps(
@@ -169,6 +170,7 @@ namespace GxMcp.Worker.Services
                 // The SDK stamps the object while it saves it; this stamp is what ties the SDK's clock to the Worker's.
                 _objectSavedUtc = DateTime.UtcNow;
                 _stampAfterObjectSave = SdkTimestampNormalizer.NormalizeUtc(_current.LastUpdate).Ticks;
+                _anchorKind = _current.LastUpdate.Kind.ToString();
                 string sourceAfterObjectSave = EventsSaveIsolation.Source(_current);
                 _receipt["preCommitPartSourceMatch"] = EventsSaveIsolation.SourceEquivalent(_sourceAfterPartSave, _source);
                 _receipt["preCommitObjectSourceMatch"] = EventsSaveIsolation.SourceEquivalent(sourceAfterObjectSave, _source);
@@ -196,9 +198,12 @@ namespace GxMcp.Worker.Services
                 var comparison = _snapshot.Compare(_current, new[] { "Events" });
                 var inventoryWatch = Stopwatch.StartNew();
                 // The transaction is still open: only a stamp from before it shows that someone else wrote an object.
-                var changedOthers = EventsOtherObjectChanges.Classify(
-                    _inventory, EventsSaveIsolation.Inventory(_kb), _guid, BuildSaveWindow(transactionClosed: false));
+                // The inventory is read before the window, so the local offset is read after it, as before.
+                var preCommitInventory = EventsSaveIsolation.Inventory(_kb);
+                var preCommitWindow = BuildSaveWindow(transactionClosed: false);
+                var changedOthers = EventsOtherObjectChanges.Classify(_inventory, preCommitInventory, _guid, preCommitWindow);
                 _timings["inventoryPreCommitMs"] = inventoryWatch.ElapsedMilliseconds;
+                RecordFreshStampAtPreCommit();
                 _receipt["preCommitObjectStateVerified"] = true;
                 _receipt["preCommitFreshReadDeferred"] = true;
                 _receipt["preCommitSourceMatch"] = _receipt["preCommitObjectSourceMatch"]?.Value<bool>() == true;
@@ -216,7 +221,7 @@ namespace GxMcp.Worker.Services
                 _receipt["preCommitChangedPartDeltas"] = _snapshot.DescribeDifferences(_current, "Events");
                 _receipt["unexpectedChangedParts"] = comparison.ChangedParts;
                 // Apart from the final verdict: the rollback this refusal triggers can undo the change it names.
-                IsolatedEventsSaveVerdict.RecordPreCommitOthers(_receipt, changedOthers);
+                IsolatedEventsSaveVerdict.RecordPreCommitOthers(_receipt, changedOthers, preCommitWindow);
                 string changedParts = comparison.ChangedParts is JArray changedList
                     ? string.Join(", ", changedList.Select(part => part.ToString()))
                     : comparison.ChangedParts?.ToString();
@@ -227,6 +232,22 @@ namespace GxMcp.Worker.Services
                     changedOthers.Blocking.Count,
                     EventsSaveIsolation.Placement(_current) == _originalPlacement);
                 if (mismatch != null) throw new InvalidOperationException(mismatch);
+            }
+
+            // Diagnostic only: the target as the open transaction reads it after the object save. The window does not use it
+            // yet; its relation to the anchor is what the measurement in U16 reads (the guard is decided separately).
+            private void RecordFreshStampAtPreCommit()
+            {
+                try
+                {
+                    KBObject fresh = EventsSaveIsolation.Fresh(_kb, _guid);
+                    _receipt["freshStampAtPreCommit"] = EventsSaveWindow.Iso(SdkTimestampNormalizer.NormalizeUtc(fresh.LastUpdate).Ticks);
+                    _receipt["freshStampAtPreCommitKind"] = fresh.LastUpdate.Kind.ToString();
+                }
+                catch (Exception ex)
+                {
+                    _receipt["freshStampError"] = IsolatedEventsSaveDiagnostics.Sanitize(ex.Message);
+                }
             }
 
             public void Commit() => _commit();
@@ -257,7 +278,8 @@ namespace GxMcp.Worker.Services
                     ObjectSavedTicks = _objectSavedUtc.Ticks,
                     StampAfterObjectSave = _stampAfterObjectSave,
                     LastUpdateBeforeTicks = SdkTimestampNormalizer.NormalizeUtc(_lastUpdateBefore).Ticks,
-                    LocalUtcOffsetTicks = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).Ticks
+                    LocalUtcOffsetTicks = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).Ticks,
+                    AnchorKind = _anchorKind
                 }, transactionClosed);
 
             public void RereadAfterCommit()

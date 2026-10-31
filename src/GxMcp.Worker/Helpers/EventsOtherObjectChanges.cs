@@ -84,6 +84,9 @@ namespace GxMcp.Worker.Helpers
         /// <summary>The middle of the measured offset between the stamp clock and the Worker's UTC clock.</summary>
         internal long OffsetTicks { get; }
 
+        /// <summary>The evidence the window was made from, when a save made it; null for a window built from plain values.</summary>
+        internal SaveEvidence Evidence { get; private set; }
+
         internal static EventsSaveWindow Unavailable(string reason) => new EventsSaveWindow(false, reason, 0, null, 0);
 
         /// <param name="transactionStartTicks">Worker UTC clock when the transaction opened.</param>
@@ -152,6 +155,9 @@ namespace GxMcp.Worker.Helpers
 
             /// <summary>The Worker's local offset from UTC.</summary>
             internal long LocalUtcOffsetTicks { get; set; }
+
+            /// <summary>The Kind the SDK gave the target's stamp after the save (diagnostic only; the window never reads it).</summary>
+            internal string AnchorKind { get; set; }
         }
 
         /// <summary>
@@ -159,6 +165,13 @@ namespace GxMcp.Worker.Helpers
         /// stamp that did not advance, a closed transaction whose end was not recorded. Anything else is <see cref="Calibrate"/>.
         /// </summary>
         internal static EventsSaveWindow FromSaveEvidence(SaveEvidence evidence, bool transactionClosed)
+        {
+            EventsSaveWindow window = Decide(evidence, transactionClosed);
+            window.Evidence = evidence;
+            return window;
+        }
+
+        private static EventsSaveWindow Decide(SaveEvidence evidence, bool transactionClosed)
         {
             if (evidence.StampAfterObjectSave == null) return Unavailable("TargetNotSaved");
             if (evidence.StampAfterObjectSave.Value <= evidence.LastUpdateBeforeTicks) return Unavailable("TargetStampNotAdvanced");
@@ -177,7 +190,11 @@ namespace GxMcp.Worker.Helpers
             EventsSaveWindow window, bool committed, long persistedStampTicks, long? saveStampTicks)
         {
             if (window.Calibrated && committed && persistedStampTicks != saveStampTicks)
-                return Unavailable("PersistedStampDiffersFromSaveStamp");
+            {
+                EventsSaveWindow unavailable = Unavailable("PersistedStampDiffersFromSaveStamp");
+                unavailable.Evidence = window.Evidence;
+                return unavailable;
+            }
             return window;
         }
 
@@ -187,11 +204,9 @@ namespace GxMcp.Worker.Helpers
         internal JObject Describe()
         {
             var window = new JObject { ["calibrated"] = Calibrated };
-            if (!Calibrated)
-            {
-                window["reason"] = Reason;
-                return window;
-            }
+            if (!Calibrated) window["reason"] = Reason;
+            DescribeAnchor(window);
+            if (!Calibrated) return window;
             window["stampClockOffsetSeconds"] = Math.Round(TimeSpan.FromTicks(OffsetTicks).TotalSeconds, 1);
             window["from"] = Iso(LowTicks);
             if (HighTicks.HasValue)
@@ -201,6 +216,24 @@ namespace GxMcp.Worker.Helpers
             }
             else window["open"] = true;
             return window;
+        }
+
+        /// <summary>
+        /// The stamps the window was made from: the anchor (the target's stamp after the object save) against the start of the
+        /// write span, so a misplaced anchor shows in the receipt. Written only when a save made the window.
+        /// </summary>
+        private void DescribeAnchor(JObject window)
+        {
+            if (Evidence == null) return;
+            window["writeStartUtc"] = Iso(Evidence.WriteSpanStartTicks);
+            window["objectSavedUtc"] = Iso(Evidence.ObjectSavedTicks);
+            window["lastUpdateBeforeUtc"] = Iso(Evidence.LastUpdateBeforeTicks);
+            if (Evidence.AnchorKind != null) window["anchorKind"] = Evidence.AnchorKind;
+            if (Evidence.StampAfterObjectSave is long anchor)
+            {
+                window["anchorStampUtc"] = Iso(anchor);
+                window["anchorMinusWriteStartSeconds"] = Math.Round(TimeSpan.FromTicks(anchor - Evidence.WriteSpanStartTicks).TotalSeconds, 3);
+            }
         }
 
         internal static string Iso(long ticks)
