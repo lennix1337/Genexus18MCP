@@ -1379,6 +1379,34 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        /// <summary>
+        /// Types the generic delete path refuses: the SDK deletes a WorkWithPlus template only through the
+        /// WorkWithPlus Settings Editor. Only the template type is listed today.
+        /// </summary>
+        internal static bool IsDeleteRefusedForType(string typeName)
+        {
+            return string.Equals(typeName, "WorkWithPlus for Web Template", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// The refusal for a type <see cref="IsDeleteRefusedForType"/> lists. It is the same for dryRun and for
+        /// the real call: nothing is written, so <c>wouldDelete</c> and <c>persisted</c> are both false.
+        /// </summary>
+        internal static string DeleteNotSupportedForTypeResponse(string target, string typeName)
+        {
+            return McpResponse.Err(
+                code: "DeleteNotSupportedForType",
+                message: "WorkWithPlus templates cannot be deleted with genexus_delete_object: the SDK refuses them, and only the WorkWithPlus Settings Editor deletes them. Nothing was deleted.",
+                hint: "Delete the template in the IDE with the WorkWithPlus Settings Editor (Settings > Templates). genexus_delete_object does not remove WorkWithPlus templates.",
+                target: target,
+                extra: new JObject
+                {
+                    ["type"] = typeName,
+                    ["wouldDelete"] = false,
+                    ["persisted"] = false
+                });
+        }
+
         public string DeleteObject(string target, string typeFilter, bool confirm, bool dryRun = false, string expectedVersion = null)
         {
             Guid objGuid = Guid.Empty;
@@ -1390,6 +1418,10 @@ namespace GxMcp.Worker.Services
             IReadOnlyList<Guid> candidateGuids = new Guid[0];
             try
             {
+                // A WorkWithPlus template is refused by its type alone: the KB is not read and no transaction starts.
+                if (IsDeleteRefusedForType(typeFilter))
+                    return DeleteNotSupportedForTypeResponse(target, typeFilter);
+
                 var kb = _kbService.GetKB();
                 if (kb == null)
                     return Models.McpResponse.Err(code: "KbNotOpen", message: "No KB open.",
@@ -1446,6 +1478,9 @@ namespace GxMcp.Worker.Services
                 objName = obj.Name;
                 objType = obj.TypeDescriptor?.Name ?? "Unknown";
                 objGuid = obj.Guid;
+                // Also refuses a template found without a type filter, before the version check and any transaction.
+                if (IsDeleteRefusedForType(objType))
+                    return DeleteNotSupportedForTypeResponse(objName, objType);
                 string qualifiedName = GetQualifiedObjectName(obj);
                 string versionBefore = WriteService.ComputeVersionToken(obj);
                 if (!string.IsNullOrWhiteSpace(expectedVersion)
