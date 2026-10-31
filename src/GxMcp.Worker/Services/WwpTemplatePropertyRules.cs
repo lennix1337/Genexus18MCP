@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Xml;
+using System.Xml.Linq;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Services
@@ -73,5 +75,68 @@ namespace GxMcp.Worker.Services
                 props.Add(item);
             }
         }
+
+        // The root element each known template type carries. Every template of the evidence (a WorkWithPlus 16.2 export
+        // of 124 templates) has the same root for its type. Canonical roots such as selection or transaction have no Name
+        // attribute, and the other types name the root after the template, so the Name attribute is not checked.
+        internal static readonly IReadOnlyDictionary<string, string> RootByType =
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Component"] = "component",
+                ["Regular"] = "template",
+                ["Report"] = "template",
+                ["Wizard"] = "template",
+                ["WizardStep"] = "step",
+                ["Trn.Selection"] = "selection",
+                ["Trn.Transaction"] = "transaction",
+                ["Trn.View"] = "view",
+                ["Trn.Association"] = "association",
+                ["Trn.AssociationSelection"] = "associationSelection",
+                ["Trn.Prompt"] = "prompt",
+                ["Trn.PromptMultiple"] = "promptMultiple"
+            };
+
+        // Whether a property of the call is one of the two values that make a template readable: its type and its XML.
+        internal static bool TouchesFinalState(string nativeName)
+            => string.Equals(nativeName, TypeProperty, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(nativeName, XmlProperty, StringComparison.OrdinalIgnoreCase);
+
+        // The type and XML a template has once the call is applied: a value the call sends wins, and a value it does not
+        // send is the stored one. The keys of sent are SDK names, compared without case.
+        internal static (string Type, string Xml) FinalState(IDictionary<string, string> sent, Func<string, string> readStored)
+            => (sent.TryGetValue(TypeProperty, out string type) ? type : readStored(TypeProperty),
+                sent.TryGetValue(XmlProperty, out string xml) ? xml : readStored(XmlProperty));
+
+        // The checks that decide whether WorkWithPlus can list and open a template: a known type, and XML that parses
+        // with the root of that type. Returns one entry per failed check, with its name and message; empty when valid.
+        internal static JArray Check(string type, string xml)
+        {
+            var violations = new JArray();
+            if (string.IsNullOrWhiteSpace(type))
+                violations.Add(Violation("TypeEmpty", "WWPTemplate_Type is empty. WorkWithPlus cannot list a template without a type (Unknown TemplateType)."));
+            else if (!RootByType.ContainsKey(type))
+                violations.Add(Violation("TypeUnknown", $"'{type}' is not a WorkWithPlus template type. Known types: {string.Join(", ", RootByType.Keys)}."));
+
+            if (string.IsNullOrWhiteSpace(xml))
+            {
+                violations.Add(Violation("XmlEmpty", "WWPTemplate_TemplateXml is empty."));
+                return violations;
+            }
+            XElement root;
+            try
+            {
+                root = WwpTemplateXml.Parse(xml).Root;
+            }
+            catch (XmlException ex)
+            {
+                violations.Add(Violation("XmlMalformed", "WWPTemplate_TemplateXml is not well-formed XML: " + ex.Message));
+                return violations;
+            }
+            if (RootByType.TryGetValue(type ?? string.Empty, out string expectedRoot) && root.Name.LocalName != expectedRoot)
+                violations.Add(Violation("RootMismatch", $"The root of a '{type}' template must be <{expectedRoot}>, found <{root.Name.LocalName}>."));
+            return violations;
+        }
+
+        private static JObject Violation(string check, string message) => new JObject { ["check"] = check, ["message"] = message };
     }
 }

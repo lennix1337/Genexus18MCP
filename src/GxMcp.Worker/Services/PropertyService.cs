@@ -862,6 +862,13 @@ namespace GxMcp.Worker.Services
                 string requestedName = propName;
                 if (string.IsNullOrEmpty(controlName))
                     propName = WwpTemplatePropertyRules.NativeName(ObjectTypeOf(obj), propName);
+                if (string.IsNullOrEmpty(controlName) && ObjectTypeOf(obj) == WwpTemplateXml.ObjectType
+                    && WwpTemplatePropertyRules.TouchesFinalState(propName))
+                {
+                    string refusal = WwpTemplateRefusal(obj, target,
+                        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [propName] = value ?? string.Empty });
+                    if (refusal != null) return refusal;
+                }
 
                 // Folder/module placement is not a scalar property write — it's a parent
                 // move. Route it to ObjectService.MoveObject (create-in-Root then reparent
@@ -1115,6 +1122,18 @@ namespace GxMcp.Worker.Services
                     string previousValue = ReadPropertyValueAt(obj, nativeName, controlName);
                     previousValues[propName] = previousValue;
                     beforeValues[propName] = previousValue ?? string.Empty;
+                }
+
+                // A WorkWithPlus template is refused before anything is written when the type and the XML it would be saved
+                // with cannot be listed and opened by the editor. The stored value of the one the call leaves alone is read.
+                if (objectTypeId == WwpTemplateXml.ObjectType && string.IsNullOrEmpty(controlName)
+                    && nativeNames.Values.Any(WwpTemplatePropertyRules.TouchesFinalState))
+                {
+                    var sent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var p in properties.Properties())
+                        sent[nativeNames[p.Name]] = p.Value?.ToString() ?? string.Empty;
+                    string refusal = WwpTemplateRefusal(obj, target, sent);
+                    if (refusal != null) return refusal;
                 }
 
                 ObjectMoveSnapshot snapshot;
@@ -1720,6 +1739,19 @@ namespace GxMcp.Worker.Services
 
         // The SDK names a call used for a requested name, when they differ, so the caller reads both. Only WorkWithPlus
         // template objects have such names.
+        // The refusal for a WorkWithPlus template whose type and XML the editor could not list and open, or null when
+        // they are fine. sent holds the SDK names the call writes; the one it leaves alone is read from the object.
+        private string WwpTemplateRefusal(KBObject obj, string target, IDictionary<string, string> sent)
+        {
+            var (type, xml) = WwpTemplatePropertyRules.FinalState(sent, name => ReadPropertyValueAt(obj, name, null));
+            JArray violations = WwpTemplatePropertyRules.Check(type, xml);
+            if (violations.Count == 0) return null;
+            return Models.McpResponse.Err(code: "WwpTemplateInvalid", target: target,
+                message: "The WorkWithPlus template was not saved. " + string.Join(" ", violations.Select(v => v["message"]?.ToString())),
+                hint: "WWPTemplate_Type (TemplateType) must be a known template type, and WWPTemplate_TemplateXml (TemplateXml) must parse with the root of that type. Nothing was written.",
+                extra: new JObject { ["violations"] = violations });
+        }
+
         private static void NoteNativeNames(JObject result, Guid objectType, JObject properties, IDictionary<string, string> nativeNames)
         {
             if (objectType != WwpTemplateXml.ObjectType) return;

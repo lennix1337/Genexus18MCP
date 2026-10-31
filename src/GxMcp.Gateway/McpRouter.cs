@@ -2106,6 +2106,13 @@ namespace GxMcp.Gateway
                     if (value != null) trimmed[key] = value;
                 }
             }
+            if (code?.ToString().StartsWith("WwpTemplate", StringComparison.Ordinal) == true)
+            {
+                // genexus_properties WorkWithPlus template refusal: each check the type or the XML failed, so the caller
+                // corrects the template and sends it again.
+                JToken? violations = ResolveErrorField(error, "violations");
+                if (violations != null) trimmed["violations"] = violations;
+            }
             string receiptCode = code?.ToString() ?? string.Empty;
             if ((receiptCode.StartsWith("Pattern", StringComparison.Ordinal)
                     || receiptCode.StartsWith("WwpLayout", StringComparison.Ordinal)
