@@ -32,26 +32,33 @@ namespace GxMcp.Worker.Services
             bool stopOnError)
         {
             var modules = new Dictionary<string, ModuleMetadataPlan>(StringComparer.OrdinalIgnoreCase);
+            var moduleEntries = new Dictionary<string, SearchIndex.IndexEntry>(StringComparer.OrdinalIgnoreCase);
             SearchIndex index = _indexCacheService?.TryGetLoadedIndex();
             foreach (ExportPlan item in plan)
             {
                 string module = item.Entry?.Module;
                 if (string.IsNullOrWhiteSpace(module)
                     || string.Equals(module, "Root Module", StringComparison.OrdinalIgnoreCase)) continue;
-                string directory = BuildModuleDirectory(item.Entry, module);
+                // The index entry of a module is looked up once per module, not once per object.
+                if (!moduleEntries.TryGetValue(module, out SearchIndex.IndexEntry moduleEntry))
+                {
+                    moduleEntry = index?.Objects?.Values.FirstOrDefault(candidate =>
+                        candidate != null
+                        && string.Equals(candidate.Type, "Module", StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(candidate.Name, module, StringComparison.OrdinalIgnoreCase));
+                    moduleEntries[module] = moduleEntry;
+                }
+                string directory = BuildModuleDirectory(item.Entry, module, moduleEntry);
                 if (string.IsNullOrWhiteSpace(directory)) continue;
                 string relativeFile = NormalizePath(Path.Combine(item.Role, directory, "module.toml"));
                 if (modules.ContainsKey(relativeFile)) continue;
-                SearchIndex.IndexEntry moduleEntry = index?.Objects?.Values.FirstOrDefault(candidate =>
-                    candidate != null
-                    && string.Equals(candidate.Type, "Module", StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(candidate.Name, module, StringComparison.OrdinalIgnoreCase));
+                string identifier = ResolveModuleIdentifier(moduleEntry, module);
                 modules[relativeFile] = new ModuleMetadataPlan
                 {
                     Module = module,
                     RelativeFile = relativeFile,
-                    Identifier = moduleEntry?.Guid ?? moduleEntry?.EntityKey ?? string.Empty,
-                    Content = BuildModuleMetadataDocument(module, moduleEntry?.Guid ?? moduleEntry?.EntityKey)
+                    Identifier = identifier,
+                    Content = BuildModuleMetadataDocument(module, identifier)
                 };
             }
 
@@ -59,6 +66,16 @@ namespace GxMcp.Worker.Services
             {
                 string fullPath = Path.Combine(root, item.RelativeFile.Replace('/', Path.DirectorySeparatorChar));
                 JObject old = previous.TryGetValue(item.RelativeFile, out JObject prior) ? prior : null;
+                if (string.IsNullOrWhiteSpace(item.Identifier))
+                {
+                    // A module.toml without the module's identity is never written. An earlier file is kept as it is.
+                    if (File.Exists(fullPath))
+                    {
+                        metadataItems.Add(old ?? BuildMetadataItem(item, File.ReadAllText(fullPath)));
+                        emitted.Add(item.RelativeFile);
+                    }
+                    continue;
+                }
                 if (File.Exists(fullPath) && mode != "all")
                 {
                     metadataItems.Add(old ?? BuildMetadataItem(item, File.ReadAllText(fullPath)));
@@ -120,6 +137,39 @@ namespace GxMcp.Worker.Services
             if (parts.Count == 0 && !string.IsNullOrWhiteSpace(module))
                 parts.Add(ObjectTextService.SanitizeFilePart(module));
             return parts.Count == 0 ? string.Empty : Path.Combine(parts.ToArray());
+        }
+
+        // The folder of a module is the path its own index entry holds. The path of an object does not decide it: a
+        // folder above the module can carry the module's name. Without the module entry, the object's path decides.
+        internal static string BuildModuleDirectory(SearchIndex.IndexEntry entry, string module, SearchIndex.IndexEntry moduleEntry)
+        {
+            if (string.IsNullOrWhiteSpace(module) || string.IsNullOrWhiteSpace(moduleEntry?.Path)) return BuildModuleDirectory(entry, module);
+            List<string> parts = moduleEntry.Path.Replace('\\', '/').Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(value => !string.Equals(value, "Root Module", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(value, "Root", StringComparison.OrdinalIgnoreCase))
+                .Select(ObjectTextService.SanitizeFilePart)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .ToList();
+            if (parts.Count == 0
+                || !string.Equals(parts[parts.Count - 1], ObjectTextService.SanitizeFilePart(module), StringComparison.OrdinalIgnoreCase))
+                return BuildModuleDirectory(entry, module);
+            return Path.Combine(parts.ToArray());
+        }
+
+        // The identifier written to module.toml is the module's GUID, or its EntityKey. The index may not hold the module,
+        // so the SDK names it by its own name, as genexus_read does. Empty when neither gives one: no file is written then.
+        private string ResolveModuleIdentifier(SearchIndex.IndexEntry moduleEntry, string module)
+        {
+            string identifier = moduleEntry?.Guid ?? moduleEntry?.EntityKey;
+            if (!string.IsNullOrWhiteSpace(identifier)) return identifier;
+            try
+            {
+                return _objectService?.FindObject(module, "Module")?.Guid.ToString() ?? string.Empty;
+            }
+            catch (Exception)
+            {
+                return string.Empty;
+            }
         }
 
         internal static string BuildModuleMetadataDocument(string module, string identifier)

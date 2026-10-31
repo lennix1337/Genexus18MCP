@@ -159,8 +159,60 @@ namespace GxMcp.Worker.Tests
                 JObject response = JObject.Parse(ObjectTextService.ValidateInMemory(
                     new JObject { ["inputPath"] = root }, CancellationToken.None));
 
-                Assert.Null(response["error"]);
-                Assert.NotEqual("error", (string)response["status"]);
+                // A tree written before the change is valid: the validation completes with every file valid.
+                Assert.Equal("ObjectTextMemoryValidationCompleted", (string)response["code"]);
+                Assert.True((bool?)response["result"]?["valid"] == true, response.ToString());
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_folder_above_the_module_with_the_module_name_does_not_move_the_module_root()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                // The module sits under a folder of the same name. Its own index entry gives the root, not the first segment.
+                Export(root, Entry("Root Module/SynthCore/SynthCore/Folder", "SynthCore"), modulePath: "SynthCore/SynthCore");
+
+                string expected = Path.Combine(root, "src", "SynthCore", "SynthCore", "module.toml");
+                Assert.Equal(expected, Assert.Single(Directory.GetFiles(root, "module.toml", SearchOption.AllDirectories)));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void The_module_toml_names_the_module_by_the_GUID_of_its_index_entry()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                Export(root, Entry("Root Module/SynthCore/Folder", "SynthCore"));
+
+                string text = File.ReadAllText(Assert.Single(Directory.GetFiles(root, "module.toml", SearchOption.AllDirectories)));
+                Assert.Contains("ModuleIdentifier = \"5d2c7a10-7d3e-4b1f-9a55-0c4e8b3f2a11\"", text);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_module_the_index_does_not_hold_gets_no_module_toml_with_an_empty_identifier()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                Export(root, Entry("Root Module/SynthCore/Folder", "SynthCore"), indexesModule: false);
+
+                Assert.Empty(Directory.GetFiles(root, "module.toml", SearchOption.AllDirectories));
             }
             finally
             {
@@ -183,12 +235,31 @@ namespace GxMcp.Worker.Tests
             };
         }
 
-        // Exports one object through the production export; only the SDK read is replaced.
-        private static void Export(string root, SearchIndex.IndexEntry entry, bool fullSelection = false)
+        // Exports one object through the production export; only the SDK read is replaced. The index holds the object's
+        // module as an entry, with the path it is given, unless the test says the index does not hold it.
+        private static void Export(
+            string root,
+            SearchIndex.IndexEntry entry,
+            bool fullSelection = false,
+            string modulePath = null,
+            bool indexesModule = true)
         {
             var cache = new IndexCacheService();
-            cache.LoadFromEntries(new[] { entry });
-            cache.MarkIndexComplete(1);
+            var loaded = new List<SearchIndex.IndexEntry> { entry };
+            if (indexesModule && !string.IsNullOrWhiteSpace(entry.Module))
+            {
+                loaded.Add(new SearchIndex.IndexEntry
+                {
+                    Type = "Module",
+                    Name = entry.Module,
+                    Module = entry.Module,
+                    Path = modulePath ?? entry.Module,
+                    Guid = "5d2c7a10-7d3e-4b1f-9a55-0c4e8b3f2a11",
+                    EntityKey = "5d2c7a10-7d3e-4b1f-9a55-0c4e8b3f2a11-module"
+                });
+            }
+            cache.LoadFromEntries(loaded);
+            cache.MarkIndexComplete(loaded.Count);
             var service = new SdkTextTreeService(
                 new TextTreeSelectionService(cache),
                 new ObjectService(null, null),
