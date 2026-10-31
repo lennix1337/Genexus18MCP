@@ -329,9 +329,9 @@ namespace GxMcp.Worker.Services
                 return;
             }
 
-            if (!TryBuildNativeDocument(item, args, out string document, out string error))
+            if (!TryBuildNativeDocument(item, args, out string document, out ReadFailure failure))
             {
-                RegisterNativeExportError(state, item, error);
+                RegisterNativeExportError(state, item, failure);
                 return;
             }
             try
@@ -355,20 +355,20 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private bool TryBuildNativeDocument(ExportPlan item, JObject args, out string document, out string error)
+        private bool TryBuildNativeDocument(ExportPlan item, JObject args, out string document, out ReadFailure failure)
         {
             document = null;
-            error = null;
+            failure = null;
             try
             {
                 Dictionary<string, string> parts;
                 if (item.Parts != null && item.Parts.Count > 1)
                 {
-                    if (!TryReadParts(item.ReadEntry ?? item.Entry, item.Parts, out parts, out error)) return false;
+                    if (!TryReadParts(item.ReadEntry ?? item.Entry, item.Parts, out parts, out failure)) return false;
                 }
                 else
                 {
-                    if (!TryReadPart(item.ReadEntry ?? item.Entry, item.Part, out string source, out error)) return false;
+                    if (!TryReadPart(item.ReadEntry ?? item.Entry, item.Part, out string source, out failure)) return false;
                     parts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                     {
                         [item.Part] = source
@@ -383,15 +383,20 @@ namespace GxMcp.Worker.Services
             }
             catch (Exception ex)
             {
-                error = ex.Message;
+                failure = new ReadFailure { Message = ex.Message };
                 return false;
             }
         }
 
         private static void RegisterNativeExportError(NativeExportState state, ExportPlan item, string message)
         {
+            RegisterNativeExportError(state, item, new ReadFailure { Message = message });
+        }
+
+        private static void RegisterNativeExportError(NativeExportState state, ExportPlan item, ReadFailure failure)
+        {
             state.Failed++;
-            state.Results.Add(BuildResult(item, "error", 0, message));
+            state.Results.Add(BuildResult(item, "error", 0, failure.Message, failure.Code, failure.Hint));
             if (state.Options.StopOnError) state.StoppedOnError = true;
         }
 

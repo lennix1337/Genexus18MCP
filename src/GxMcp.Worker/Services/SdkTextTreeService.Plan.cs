@@ -171,20 +171,31 @@ namespace GxMcp.Worker.Services
             if (seen.Add(key)) entries.Add(Tuple.Create(entry, role));
         }
 
-        private bool TryReadParts(SearchIndex.IndexEntry entry, IEnumerable<string> requestedParts, out Dictionary<string, string> parts, out string error)
+        // What the export reports for one object that could not be read: a code, a plain message and a hint. The
+        // export writes them as fields of the object's result, so a client branches on the code without parsing text.
+        private sealed class ReadFailure
+        {
+            public string Code { get; set; }
+            public string Message { get; set; }
+            public string Hint { get; set; }
+        }
+
+        private const string StaleIndexHint = "The index is out of date: run genexus_lifecycle action=index, then export again.";
+
+        private bool TryReadParts(SearchIndex.IndexEntry entry, IEnumerable<string> requestedParts, out Dictionary<string, string> parts, out ReadFailure failure)
         {
             parts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            error = null;
+            failure = null;
             if (entry == null)
             {
-                error = "The index entry is empty.";
+                failure = new ReadFailure { Message = "The index entry is empty." };
                 return false;
             }
             try
             {
                 string typedName = (entry.Type ?? string.Empty) + ":" + entry.Name;
-                string raw = _objectService.ReadObjectSourceParts(typedName, requestedParts, entry.Type, entry.Guid, entry.EntityKey, entry.Path);
-                JObject response = ParseEnvelope(raw);
+                JObject response = ParseEnvelope(_readPartsText(typedName, requestedParts, entry.Type, entry.Guid, entry.EntityKey, entry.Path));
+                if (!IsSameObject(entry, response, out failure)) return false;
                 JObject values = response["parts"] as JObject;
                 if (values != null)
                 {
@@ -197,12 +208,14 @@ namespace GxMcp.Worker.Services
                     }
                 }
                 if (parts.Count > 0) return true;
-                error = response["error"]?.ToString() ?? response["message"]?.ToString() ?? "The SDK returned no textual parts.";
+                failure = values != null && IsNoTextPartsEnvelope(response)
+                    ? NoTextPartsFailure(entry)
+                    : FailureOf(entry, response, "The SDK returned no textual parts.");
                 return false;
             }
             catch (Exception ex)
             {
-                error = "SDK part read failed: " + ex.Message;
+                failure = new ReadFailure { Message = "SDK part read failed: " + ex.Message };
                 return false;
             }
         }
@@ -215,13 +228,13 @@ namespace GxMcp.Worker.Services
             return !(response["availableParts"] is JArray available) || available.Count == 0;
         }
 
-        private bool TryReadPart(SearchIndex.IndexEntry entry, string part, out string source, out string error)
+        private bool TryReadPart(SearchIndex.IndexEntry entry, string part, out string source, out ReadFailure failure)
         {
             source = null;
-            error = null;
+            failure = null;
             if (entry == null)
             {
-                error = "The index entry is empty.";
+                failure = new ReadFailure { Message = "The index entry is empty." };
                 return false;
             }
             try
@@ -229,30 +242,79 @@ namespace GxMcp.Worker.Services
                 // The index identity (GUID, EntityKey, path) travels with the name, as it does in the
                 // multi-part read and in genexus_read.
                 JObject response = ParseEnvelope(_readPartText(entry.Name, part, entry.Type, entry.Guid, entry.EntityKey, entry.Path));
+                if (!IsSameObject(entry, response, out failure)) return false;
                 JToken sourceToken = response["source"] ?? response["result"]?["source"];
                 if (sourceToken != null)
                 {
                     source = sourceToken.ToString();
                     return true;
                 }
-                if (IsNoTextPartsReply(response))
-                {
-                    error = McpResponse.Err(
-                        code: "ObjectHasNoTextParts",
-                        message: "'" + entry.Name + "' (" + entry.Type + ") has no text parts to export: its data are SDK properties "
-                            + "(WorkWithPlus templates keep them in WWPTemplate_* properties, for example).",
-                        hint: "Read the properties with genexus_properties action=get and change them with action=set. The native export does not write them.",
-                        target: entry.Name);
-                    return false;
-                }
-                error = response["error"]?.ToString() ?? response["message"]?.ToString() ?? "The SDK part did not return text content.";
+                failure = IsNoTextPartsReply(response)
+                    ? NoTextPartsFailure(entry)
+                    : FailureOf(entry, response, "The SDK part did not return text content.");
                 return false;
             }
             catch (Exception ex)
             {
-                error = "SDK part read failed: " + ex.Message;
+                failure = new ReadFailure { Message = "SDK part read failed: " + ex.Message };
                 return false;
             }
+        }
+
+        // A read resolves its object by GUID or EntityKey before the name. After a rename, or after the object was
+        // deleted and created again, the object it returns can differ from the index entry, and the export writes the
+        // entry's name. A reply that names another object is therefore a stale index, not a part to export.
+        private static bool IsSameObject(SearchIndex.IndexEntry entry, JObject response, out ReadFailure failure)
+        {
+            failure = null;
+            string name = response["objectName"]?.ToString() ?? response["name"]?.ToString();
+            string type = response["objectType"]?.ToString() ?? response["type"]?.ToString();
+            bool sameName = name == null || string.Equals(name, entry.Name, StringComparison.OrdinalIgnoreCase);
+            bool sameType = type == null || string.Equals(type, entry.Type, StringComparison.OrdinalIgnoreCase);
+            if (sameName && sameType) return true;
+            failure = new ReadFailure
+            {
+                Code = "IndexEntryStale",
+                Message = "The index names '" + entry.Name + "' (" + entry.Type + "), but its GUID or EntityKey resolves to '"
+                    + name + "' (" + type + ").",
+                Hint = StaleIndexHint
+            };
+            return false;
+        }
+
+        // A multi-part read that returned no part and no error. The object has no text part when it lists none.
+        internal static bool IsNoTextPartsEnvelope(JObject response)
+        {
+            if (response == null || response["code"] != null || response["error"] != null) return false;
+            return !(response["availableParts"] is JArray available) || available.Count == 0;
+        }
+
+        private static ReadFailure NoTextPartsFailure(SearchIndex.IndexEntry entry)
+        {
+            return new ReadFailure
+            {
+                Code = "ObjectHasNoTextParts",
+                Message = "'" + entry.Name + "' (" + entry.Type + ") has no text parts to export: its data are SDK properties "
+                    + "(WorkWithPlus templates keep them in WWPTemplate_* properties, for example).",
+                Hint = "Read the properties with genexus_properties action=get and change them with action=set. The native export does not write them."
+            };
+        }
+
+        // The read's own error. An object the index lists and the read cannot find means the index is out of date.
+        private static ReadFailure FailureOf(SearchIndex.IndexEntry entry, JObject response, string fallbackMessage)
+        {
+            // McpResponse.Err puts code, message and hint under "error"; a missing part replies with them at the top.
+            ReadFailure failure = response["error"] is JObject error
+                ? new ReadFailure { Code = error["code"]?.ToString(), Message = error["message"]?.ToString(), Hint = error["hint"]?.ToString() }
+                : new ReadFailure { Code = response["code"]?.ToString(), Message = response["error"]?.ToString() ?? response["message"]?.ToString(), Hint = response["hint"]?.ToString() };
+            failure.Message = failure.Message ?? fallbackMessage;
+            if (!string.Equals(failure.Code, "ObjectNotFound", StringComparison.Ordinal)) return failure;
+            return new ReadFailure
+            {
+                Code = "IndexEntryStale",
+                Message = "The index lists '" + entry.Name + "' (" + entry.Type + "), but the KB does not hold that object.",
+                Hint = StaleIndexHint
+            };
         }
 
     }

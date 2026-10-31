@@ -28,7 +28,7 @@ namespace GxMcp.Worker.Services
                 && response?["result"] != null;
         }
 
-        private static JObject BuildResult(ExportPlan item, string status, long bytes, string message)
+        private static JObject BuildResult(ExportPlan item, string status, long bytes, string message, string code = null, string hint = null)
         {
             var result = new JObject
             {
@@ -44,7 +44,10 @@ namespace GxMcp.Worker.Services
             };
             if (item.IsTableProjection && item.ReadEntry != null)
                 result["sourceObject"] = new JObject { ["name"] = item.ReadEntry.Name, ["type"] = item.ReadEntry.Type };
+            // The message is plain text; the code and the hint are fields, so a client branches on them directly.
             if (message != null) result["message"] = message;
+            if (code != null) result["code"] = code;
+            if (hint != null) result["hint"] = hint;
             return result;
         }
 

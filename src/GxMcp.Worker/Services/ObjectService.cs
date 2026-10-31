@@ -4372,6 +4372,12 @@ namespace GxMcp.Worker.Services
                     ["parts"] = partsObj
                 };
                 if (variablesProjection != null) result["variables"] = variablesProjection;
+                if (partsObj.Count == 0)
+                {
+                    // With no part read, the parts the object lists tell a type without text parts from a failed read.
+                    try { result["availableParts"] = new JArray(GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj)); }
+                    catch { }
+                }
                 return result.ToString();
             }
             catch (Exception ex)
@@ -5335,17 +5341,33 @@ namespace GxMcp.Worker.Services
                 // Resolves like ReadObjectSourceParts (identity included) and reports a miss the same way.
                 var obj = FindObject(target, typeFilter, guid, entityKey, path);
                 if (obj == null) return FormatReadNotFound(target);
-                return ReadObjectSourceInternal(
+                return WithObjectIdentity(ReadObjectSourceInternal(
                     obj,
                     string.IsNullOrWhiteSpace(partName) ? "Source" : partName,
                     0,
                     int.MaxValue,
                     "mcp",
-                    false);
+                    false), obj);
             }
             catch (Exception ex)
             {
                 return McpResponse.Err(code: "ReadPartFailed", message: "Part read failed: " + ex.Message, target: target);
+            }
+        }
+
+        // The export compares the object a read resolved with its index entry, so the reply names that object.
+        private static string WithObjectIdentity(string reply, KBObject obj)
+        {
+            try
+            {
+                JObject response = JObject.Parse(reply);
+                response["objectName"] = obj.Name;
+                response["objectType"] = obj.TypeDescriptor?.Name;
+                return response.ToString();
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return reply;
             }
         }
 

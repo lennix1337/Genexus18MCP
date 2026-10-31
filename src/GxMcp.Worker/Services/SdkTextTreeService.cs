@@ -26,6 +26,8 @@ namespace GxMcp.Worker.Services
         // Part reads cross this delegate (ObjectService.ReadObjectPartText in production). Unit tests
         // replace it at this boundary to check the identity every read receives.
         private readonly Func<string, string, string, string, string, string, string> _readPartText;
+        // Multi-part reads cross this delegate in the same way (ObjectService.ReadObjectSourceParts in production).
+        private readonly Func<string, IEnumerable<string>, string, string, string, string, string> _readPartsText;
         // An explicit target that the index does not hold is looked up here (the SDK in production).
         private readonly Func<TextSelector, SearchIndex.IndexEntry> _sdkEntryLookup;
 
@@ -33,7 +35,7 @@ namespace GxMcp.Worker.Services
             TextTreeSelectionService selector,
             ObjectService objectService,
             IndexCacheService indexCacheService)
-            : this(selector, objectService, indexCacheService, null, null)
+            : this(selector, objectService, indexCacheService, null, null, null)
         {
         }
 
@@ -42,7 +44,7 @@ namespace GxMcp.Worker.Services
             ObjectService objectService,
             IndexCacheService indexCacheService,
             Func<string, string, string, string, string, string, string> readPartText)
-            : this(selector, objectService, indexCacheService, readPartText, null)
+            : this(selector, objectService, indexCacheService, readPartText, null, null)
         {
         }
 
@@ -52,12 +54,25 @@ namespace GxMcp.Worker.Services
             IndexCacheService indexCacheService,
             Func<string, string, string, string, string, string, string> readPartText,
             Func<TextSelector, SearchIndex.IndexEntry> sdkEntryLookup)
+            : this(selector, objectService, indexCacheService, readPartText, sdkEntryLookup, null)
+        {
+        }
+
+        internal SdkTextTreeService(
+            TextTreeSelectionService selector,
+            ObjectService objectService,
+            IndexCacheService indexCacheService,
+            Func<string, string, string, string, string, string, string> readPartText,
+            Func<TextSelector, SearchIndex.IndexEntry> sdkEntryLookup,
+            Func<string, IEnumerable<string>, string, string, string, string, string> readPartsText)
         {
             _selector = selector;
             _objectService = objectService;
             _indexCacheService = indexCacheService;
             _readPartText = readPartText
                 ?? ((target, part, type, guid, entityKey, path) => _objectService.ReadObjectPartText(target, part, type, guid, entityKey, path));
+            _readPartsText = readPartsText
+                ?? ((target, parts, type, guid, entityKey, path) => _objectService.ReadObjectSourceParts(target, parts, type, guid, entityKey, path));
             _sdkEntryLookup = sdkEntryLookup ?? (explicitTarget => LookupSdkEntry(explicitTarget));
         }
 

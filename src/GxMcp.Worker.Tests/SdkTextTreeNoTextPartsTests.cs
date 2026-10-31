@@ -37,12 +37,14 @@ namespace GxMcp.Worker.Tests
 
                 Assert.Equal("partial", (string)response["status"]);
                 Assert.Equal(1, (int)response["result"]!["failed"]!);
-                JObject envelope = JObject.Parse((string)ObjectReply(response, "SynthTemplate")["message"]!);
-                Assert.Equal("ObjectHasNoTextParts", (string)envelope["error"]!["code"]!);
-                Assert.Contains("SynthTemplate", (string)envelope["error"]!["message"]!);
-                Assert.Contains("action=get", (string)envelope["error"]!["hint"]!);
-                Assert.Contains("action=set", (string)envelope["error"]!["hint"]!);
-                string message = (string)ObjectReply(response, "SynthTemplate")["message"]!;
+                JObject reply = ObjectReply(response, "SynthTemplate");
+                Assert.Equal("error", (string)reply["status"]);
+                Assert.Equal("ObjectHasNoTextParts", (string)reply["code"]!);
+                Assert.Contains("action=get", (string)reply["hint"]!);
+                Assert.Contains("action=set", (string)reply["hint"]!);
+                string message = (string)reply["message"]!;
+                Assert.Contains("SynthTemplate", message);
+                Assert.DoesNotContain("{", message);
                 Assert.DoesNotContain("ObjectNotFound", message);
                 Assert.DoesNotContain("IndexedObjectUnavailable", message);
                 Assert.DoesNotContain("ObjectNotFoundIndexWarming", message);
@@ -80,8 +82,8 @@ namespace GxMcp.Worker.Tests
             SdkTextTreeService service = BuildService(
                 new[] { SynthEntry("SynthAlpha"), SynthEntry("SynthZulu") },
                 (target, part, type, guid, entityKey, path) => target == "SynthAlpha"
-                    ? Reply("PartNotFound").ToString()
-                    : new JObject { ["source"] = "Synth text" }.ToString());
+                    ? Reply("PartNotFound", null, target).ToString()
+                    : new JObject { ["source"] = "Synth text", ["objectName"] = target, ["objectType"] = "WorkWithPlus for Web Template" }.ToString());
             string root = NewTempDirectory();
             try
             {
@@ -90,10 +92,43 @@ namespace GxMcp.Worker.Tests
                 Assert.Equal("partial", (string)response["status"]);
                 Assert.Equal(1, (int)response["result"]!["exported"]!);
                 Assert.Equal(1, (int)response["result"]!["failed"]!);
-                JObject envelope = JObject.Parse((string)ObjectReply(response, "SynthAlpha")["message"]!);
-                Assert.Equal("ObjectHasNoTextParts", (string)envelope["error"]!["code"]!);
+                Assert.Equal("ObjectHasNoTextParts", (string)ObjectReply(response, "SynthAlpha")["code"]!);
                 Assert.Equal("ok", (string)ObjectReply(response, "SynthZulu")["status"]!);
                 Assert.Single(Directory.GetFiles(root, "SynthZulu.gx", SearchOption.AllDirectories));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_multi_part_export_of_an_object_without_text_parts_gives_the_same_code_and_hint()
+        {
+            // part=all reads the parts together. An object that lists no part answers as the single-part read does.
+            var noParts = new JObject
+            {
+                ["name"] = "SynthTemplate",
+                ["type"] = "WorkWithPlus for Web Template",
+                ["parts"] = new JObject(),
+                ["availableParts"] = new JArray()
+            };
+            SdkTextTreeService service = BuildService(
+                new[] { SynthEntry("SynthTemplate") },
+                (target, part, type, guid, entityKey, path) => throw new InvalidOperationException("part=all reads every part at once"),
+                (target, parts, type, guid, entityKey, path) => noParts.ToString());
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = Export(service, root, new JObject { ["part"] = "all" }, "SynthTemplate");
+
+                Assert.Equal("partial", (string)response["status"]);
+                JObject reply = ObjectReply(response, "SynthTemplate");
+                Assert.Equal("ObjectHasNoTextParts", (string)reply["code"]!);
+                Assert.Contains("action=get", (string)reply["hint"]!);
+                Assert.Contains("action=set", (string)reply["hint"]!);
+                Assert.DoesNotContain("{", (string)reply["message"]!);
+                Assert.Empty(Directory.GetFiles(root, "*.gx", SearchOption.AllDirectories));
             }
             finally
             {
@@ -106,13 +141,13 @@ namespace GxMcp.Worker.Tests
             return response["result"]!["objects"]!.Cast<JObject>().Single(item => (string)item["name"]! == name);
         }
 
-        private static JObject Reply(string code, JArray availableParts = null)
+        private static JObject Reply(string code, JArray availableParts = null, string objectName = "SynthTemplate")
         {
             var reply = new JObject
             {
                 ["code"] = code,
-                ["error"] = "Part 'Source' not found in SynthTemplate",
-                ["objectName"] = "SynthTemplate",
+                ["error"] = "Part 'Source' not found in " + objectName,
+                ["objectName"] = objectName,
                 ["objectType"] = "WorkWithPlus for Web Template"
             };
             if (availableParts != null) reply["availableParts"] = availableParts;
@@ -136,7 +171,8 @@ namespace GxMcp.Worker.Tests
 
         private static SdkTextTreeService BuildService(
             IEnumerable<SearchIndex.IndexEntry> entries,
-            Func<string, string, string, string, string, string, string> readPartText)
+            Func<string, string, string, string, string, string, string> readPartText,
+            Func<string, IEnumerable<string>, string, string, string, string, string> readPartsText = null)
         {
             var cache = new IndexCacheService();
             List<SearchIndex.IndexEntry> loaded = entries.ToList();
@@ -146,10 +182,17 @@ namespace GxMcp.Worker.Tests
                 new TextTreeSelectionService(cache),
                 new ObjectService(null, null),
                 cache,
-                readPartText);
+                readPartText,
+                null,
+                readPartsText);
         }
 
         private static JObject Export(SdkTextTreeService service, string root, params string[] targets)
+        {
+            return Export(service, root, new JObject(), targets);
+        }
+
+        private static JObject Export(SdkTextTreeService service, string root, JObject options, params string[] targets)
         {
             var args = new JObject
             {
@@ -157,6 +200,7 @@ namespace GxMcp.Worker.Tests
                 ["mode"] = "all",
                 ["targets"] = new JArray(targets)
             };
+            foreach (JProperty option in options.Properties()) args[option.Name] = option.Value;
             return JObject.Parse(service.Execute("export_kb_to_text", null, args, CancellationToken.None));
         }
 
