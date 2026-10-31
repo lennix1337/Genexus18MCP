@@ -133,6 +133,19 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void LayoutDifference_WhenTheControlHadNoConditionsBefore_IgnoresTheNewConditions_ButSeesAnyOtherChange()
+        {
+            // Live KBTeste (#770): the first Conditions written to a Dynamic Combo Box that had none
+            // was rolled back because only the saved side carried a ControlWhere to mask.
+            string before = Form(null, null, wucpBag: false);
+            string after = Form(Expression, null, wucpBag: false);
+            Assert.Null(ControlConditionsService.DescribeLayoutDifference(before, after));
+
+            string otherChange = after.Replace("controlName=\"MainTable\"", "controlName=\"Renamed\"");
+            Assert.NotNull(ControlConditionsService.DescribeLayoutDifference(before, otherChange));
+        }
+
+        [Fact]
         public void LayoutDifference_OfAnUnreadableSave_IsReported()
         {
             Assert.NotNull(ControlConditionsService.DescribeLayoutDifference(Form("a", null, false), ""));

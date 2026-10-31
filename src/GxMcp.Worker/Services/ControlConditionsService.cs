@@ -390,7 +390,8 @@ namespace GxMcp.Worker.Services
                         var attribute = element.Attributes().FirstOrDefault(a => string.Equals(a.Name.LocalName, carrier, StringComparison.Ordinal));
                         if (attribute == null) continue;
                         if (!CustomPropertiesPayload.TryParse(attribute.Value, out var payload) || payload == null) continue;
-                        if (!payload.TryGet(PropertyName, out _)) continue;
+                        // Masked whether or not the property is present: the first Conditions a control gets
+                        // appear only in the saved form, and a one-sided mask reported them as a layout change.
                         attribute.Value = payload.ToAttributeValue(PropertyName, "(masked)");
                     }
                 }
