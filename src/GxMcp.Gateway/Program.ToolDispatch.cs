@@ -381,10 +381,10 @@ namespace GxMcp.Gateway
             // therefore benefit from the short-circuit. Gateway-served tools
             // (whoami, recipe, kb_diff, sandbox, etc.) bypass naturally because they
             // never hit the worker dispatcher. genexus_doctor is deliberately NOT
-            // listed: it runs off the STA thread (worker "health" method) and reads
-            // the on-disk snapshot, returning its own SearchIndexMissing/Empty report
-            // with retry hints — far more useful than a generic IndexNotReady while
-            // indexing, and it doubles as an escape hatch when the mirror is wrong.
+            // listed: the Gateway answers it with its own SearchIndexMissing/Empty
+            // report and retry hints, far more useful than a generic IndexNotReady
+            // while indexing. Its one Worker read, the WorkWithPlus template block,
+            // does not go through the index.
             if (IsIndexDependentTool(tName, tArgs))
             {
                 IndexStateSnapshot idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
@@ -1068,11 +1068,10 @@ namespace GxMcp.Gateway
                 return BuildToolResultContent(whoami, false, tName, tArgs);
             }
 
-            // Doctor is a Gateway-owned health snapshot. Calling the Worker
-            // version here made the result stale after a reload because the
-            // health payload was tied to the old process and its counters.
-            // The Gateway already has the current pool PID, index mirror and
-            // operation tracker, and can answer even when startup failed.
+            // Doctor is answered by the Gateway from its own state (pool PID, index
+            // mirror, operation tracker), so it still answers when startup failed.
+            // Its one Worker read, the WorkWithPlus template block, is asked only of
+            // a Worker that is already running; see ProbeDoctorWwpTemplatesAsync.
             if (string.Equals(tName, "genexus_doctor", StringComparison.OrdinalIgnoreCase))
             {
                 string? doctorSessionId = sessionContextEnabled ? sessionId : null;

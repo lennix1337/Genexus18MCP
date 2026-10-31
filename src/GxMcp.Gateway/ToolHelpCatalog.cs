@@ -829,6 +829,16 @@ namespace GxMcp.Gateway
                 "- `remove` — remove the named sandbox after path validation.\n\n" +
                 "Both actions mutate filesystem state and require an explicit target; no active KB fallback is used.\n",
 
+            ["genexus_doctor"] =
+                "# genexus_doctor\n\n" +
+                "Health and triage envelope, answered by the Gateway: version, GeneXus SDK, KB, Worker, cache, telemetry, warnings and engine status. It accepts the common `kb` argument.\n\n" +
+                "## WorkWithPlus templates (`wwpTemplates`)\n\n" +
+                "The doctor reports a WorkWithPlus template as broken when its `WWPTemplate_Type` is empty, or when its `WWPTemplate_TemplateXml` is empty or malformed. The block describes the KB of the current session:\n" +
+                "- `available: true`: `read` counts the templates read, `invalid` the broken ones, and `unreadable` the templates whose properties could not be read. `listed` holds up to `listLimit` broken templates, each with `name` and `problem` (`emptyType`, `emptyTemplateXml` or `malformedTemplateXml`). When `invalid` is above zero, `severity` is `high`, `hint` says how to fix them, and the doctor adds one warning.\n" +
+                "- `available: false` with `reason`: `KbNotOpen`; `WorkerNotRunning` or `WorkerNotReady` (no Worker serves the KB, so nothing was read, and the doctor does not start one); `WorkerBusy` (the Worker's SDK thread refused the command in time); `Timeout` (no answer within `timeoutMs`); `WorkerError`, with `errorCode` when the Worker gave one, or `UnexpectedReply` when its answer is not the block; `ReadFailed`; `UnsupportedDriver` (the KB is open through a driver that does not expose the SDK model); `WorkWithPlusNotInstalled`. None of these is an error, and the other doctor blocks stay as they are.\n" +
+                "- `NotProbed` only when the envelope is built without a probe.\n\n" +
+                "Fix a listed template with `genexus_properties set` on its `WWPTemplate_*` properties. Delete a WorkWithPlus template only with the WorkWithPlus Settings Editor.\n",
+
             ["genexus_worker_pool"] =
                 "# genexus_worker_pool\n\n" +
                 "Manage gateway-side warm spare Workers.\n\n" +

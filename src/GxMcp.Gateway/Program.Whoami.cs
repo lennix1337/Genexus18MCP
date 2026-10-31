@@ -1389,8 +1389,8 @@ namespace GxMcp.Gateway
                     + ".");
             }
 
-            // A WorkWithPlus template with an empty type or a malformed template XML breaks the editor for every
-            // instance, so each such template is a high-severity warning. An unavailable block adds none.
+            // A WorkWithPlus template with an empty type or a malformed template XML is a high-severity finding. The
+            // doctor raises one warning that counts them; an unavailable block adds none.
             var templates = wwpTemplates ?? UnavailableWwpTemplatesBlock("NotProbed");
             int brokenTemplates = templates["invalid"]?.Value<int?>() ?? 0;
             if (brokenTemplates > 0)

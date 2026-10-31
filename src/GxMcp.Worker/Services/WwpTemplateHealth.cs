@@ -7,10 +7,9 @@ using Newtonsoft.Json.Linq;
 namespace GxMcp.Worker.Services
 {
     /// <summary>
-    /// Finds the WorkWithPlus templates that break the WorkWithPlus editor. The editor reads WWPTemplate_Type of every
-    /// template in the KB when it builds its template list, so one template with an empty type, or with an empty or
-    /// malformed WWPTemplate_TemplateXml, makes the editor fail for every instance ("Unknown TemplateType").
-    /// Pure: the caller reads the properties through the SDK and passes them in.
+    /// Finds the WorkWithPlus templates the doctor reports as broken: a template whose WWPTemplate_Type is empty, or
+    /// whose WWPTemplate_TemplateXml is empty or malformed. Pure: the caller reads the properties through the SDK and
+    /// passes them in.
     /// </summary>
     internal static class WwpTemplateHealth
     {
