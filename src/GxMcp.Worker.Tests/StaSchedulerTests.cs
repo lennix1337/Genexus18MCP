@@ -209,6 +209,14 @@ namespace GxMcp.Worker.Tests
                 Assert.True(File.Exists(file), "Expected file must exist at: " + file);
                 Assert.DoesNotContain("busyWaitMs", File.ReadAllText(file));
             }
+
+            // The doctor's template probe is the one internal request that sets the knob. It takes the value from its own
+            // budget, never from a tool argument, so it is the single occurrence the guard allows.
+            string probe = Path.Combine(repoRoot, "src", "GxMcp.Gateway", "Program.DoctorWwpTemplates.cs");
+            Assert.True(File.Exists(probe), "Expected file must exist at: " + probe);
+            string probeSource = File.ReadAllText(probe);
+            Assert.Equal(1, probeSource.Split(new[] { "busyWaitMs" }, StringSplitOptions.None).Length - 1);
+            Assert.Contains("[\"busyWaitMs\"] = Math.Max(0, (int)budget.TotalMilliseconds - DoctorWwpTemplatesBusySlackMs)", probeSource);
         }
 
         // Issue #321: the STA scheduler section must describe the environment
