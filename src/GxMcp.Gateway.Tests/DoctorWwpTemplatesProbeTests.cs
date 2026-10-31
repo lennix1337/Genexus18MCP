@@ -258,7 +258,7 @@ namespace GxMcp.Gateway.Tests
 
             Assert.Equal("ok", doctor["status"]!.ToString());
             Assert.Equal(1, result["wwpTemplates"]!["invalid"]!.Value<int>());
-            Assert.Single(result["warnings"]!.Select(w => w.ToString()).Where(w => w.Contains("WorkWithPlus template(s)")));
+            Assert.Single(result["warnings"]!.Select(w => w.ToString()), w => w.Contains("WorkWithPlus template(s)"));
             Assert.NotNull(result["kb"]);
             Assert.NotNull(result["worker"]);
             Assert.NotNull(result["engine"]);
@@ -308,5 +308,64 @@ namespace GxMcp.Gateway.Tests
 
             Assert.Equal("NotProbed", doctor["result"]!["wwpTemplates"]!["reason"]!.ToString());
         }
+
+        [Fact]
+        public async Task The_doctor_tool_call_asks_the_probe_and_answers_WorkerNotRunning()
+        {
+            // The tool call goes through the probe: with no Worker serving the session's KB, the block says so.
+            var currentKb = CurrentKbCell();
+            var previousPool = GetWorkerPool();
+            SetWorkerPool(null);
+            currentKb.Value = new KbHandle("synthkb", "C:\\SynthKb");
+            try
+            {
+                var toolCall = (Task<JObject?>)typeof(Program)
+                    .GetMethod("TryDispatchGatewayToolAsync", BindingFlags.NonPublic | BindingFlags.Static)!
+                    .Invoke(null, new object?[] { "genexus_doctor", new JObject(), null, false })!;
+
+                var content = await toolCall;
+                var doctor = JObject.Parse(content!["content"]![0]!["text"]!.ToString());
+
+                Assert.Equal("WorkerNotRunning", doctor["result"]!["wwpTemplates"]!["reason"]!.ToString());
+            }
+            finally
+            {
+                currentKb.Value = null;
+                SetWorkerPool(previousPool);
+            }
+        }
+
+        [Fact]
+        public async Task A_Worker_that_has_not_reported_its_SDK_answers_WorkerNotReady_and_is_not_reserved()
+        {
+            var kb = new KbHandle("synthkb", "C:\\SynthKb");
+            var pool = new WorkerPool(new Configuration());
+            pool.RegisterForTest(kb, worker: new WorkerProcess(new Configuration(), kb));
+            var currentKb = CurrentKbCell();
+            var previousPool = GetWorkerPool();
+            SetWorkerPool(pool);
+            currentKb.Value = kb;
+            try
+            {
+                var block = await Program.ProbeDoctorWwpTemplatesAsync(null);
+
+                Assert.Equal("WorkerNotReady", block["reason"]!.ToString());
+                Assert.Equal(0, pool.InFlightCommandsForTest("synthkb"));
+            }
+            finally
+            {
+                currentKb.Value = null;
+                SetWorkerPool(previousPool);
+            }
+        }
+
+        private static AsyncLocal<KbHandle?> CurrentKbCell() =>
+            (AsyncLocal<KbHandle?>)typeof(Program).GetField("_currentKb", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+
+        private static WorkerPool? GetWorkerPool() =>
+            (WorkerPool?)typeof(Program).GetField("_workerPool", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null);
+
+        private static void SetWorkerPool(WorkerPool? pool) =>
+            typeof(Program).GetField("_workerPool", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, pool);
     }
 }
