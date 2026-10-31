@@ -3183,7 +3183,7 @@ namespace GxMcp.Worker.Services
                 entityKey = value;
                 return true;
             }
-            return string.Equals(entityKey.Trim(), value, StringComparison.OrdinalIgnoreCase);
+            return TextSelectorParser.SameEntityKey(entityKey, value);
         }
 
         internal static bool NormalizeResolutionTarget(ref string target, ref string type, ref string guid)

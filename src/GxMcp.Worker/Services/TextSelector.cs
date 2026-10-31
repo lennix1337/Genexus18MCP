@@ -28,12 +28,31 @@ namespace GxMcp.Worker.Services
                 return selectors;
             }
 
-            foreach (string value in token.ToString().Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+            foreach (string value in SplitSelectors(token.ToString()))
             {
                 TextSelector selector = ParseOne(value.Trim());
                 if (selector != null) selectors.Add(selector);
             }
             return selectors;
+        }
+
+        // The separators of a selector list, except inside parentheses: EntityKey(guid, id) holds a comma.
+        private static IEnumerable<string> SplitSelectors(string text)
+        {
+            int depth = 0;
+            int start = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '(') depth++;
+                else if (c == ')' && depth > 0) depth--;
+                else if (depth == 0 && (c == ',' || c == ';'))
+                {
+                    yield return text.Substring(start, i - start);
+                    start = i + 1;
+                }
+            }
+            yield return text.Substring(start);
         }
 
         internal static TextSelector ParseOne(JToken token)
@@ -49,6 +68,8 @@ namespace GxMcp.Worker.Services
 
             string raw = token.ToString().Trim();
             if (raw.Length == 0) return null;
+            // guid:id is an EntityKey, not a Type:Name pair.
+            if (ObjectService.TryParseEntityKey(raw, out _, out _)) return new TextSelector { Name = raw };
             int colon = raw.IndexOf(':');
             if (colon > 0 && colon < raw.Length - 1)
                 return new TextSelector { Type = raw.Substring(0, colon), Name = raw.Substring(colon + 1) };
@@ -74,7 +95,18 @@ namespace GxMcp.Worker.Services
                 && !string.IsNullOrWhiteSpace(selector.Name)
                 && (string.IsNullOrWhiteSpace(selector.Type) || string.Equals(selector.Type, entry.Type, StringComparison.OrdinalIgnoreCase))
                 && (string.Equals(selector.Name, entry.Guid, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(selector.Name, entry.EntityKey, StringComparison.OrdinalIgnoreCase));
+                    || SameEntityKey(selector.Name, entry.EntityKey));
+        }
+
+        // Two EntityKeys name the same object when their parsed identities match, whatever form each one is written in.
+        internal static bool SameEntityKey(string left, string right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
+            if (string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            return ObjectService.TryParseEntityKey(left, out Guid leftType, out int leftId)
+                && ObjectService.TryParseEntityKey(right, out Guid rightType, out int rightId)
+                && leftType == rightType
+                && leftId == rightId;
         }
 
         internal static bool IsContainer(SearchIndex.IndexEntry entry)

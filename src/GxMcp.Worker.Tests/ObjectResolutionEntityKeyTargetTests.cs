@@ -55,5 +55,32 @@ namespace GxMcp.Worker.Tests
             Assert.True(ObjectService.NormalizeEntityKeyTarget(Guid, ref entityKey));
             Assert.Null(entityKey);
         }
+
+        [Fact]
+        public void An_EntityKey_target_in_colon_form_agreeing_with_the_entity_key_is_accepted()
+        {
+            string entityKey = EntityKey;
+
+            Assert.True(ObjectService.NormalizeEntityKeyTarget(EntityKey.Replace("-9001", ":9001"), ref entityKey));
+            Assert.Equal(EntityKey, entityKey);
+        }
+
+        [Fact]
+        public void An_EntityKey_target_in_wrapped_form_agreeing_with_the_entity_key_is_accepted()
+        {
+            string entityKey = EntityKey;
+
+            Assert.True(ObjectService.NormalizeEntityKeyTarget("EntityKey(083f1b21-5715-45e1-8a8d-ceadef141e02, 9001)", ref entityKey));
+            Assert.Equal(EntityKey, entityKey);
+        }
+
+        [Fact]
+        public void An_EntityKey_target_in_colon_form_contradicting_the_entity_key_is_refused()
+        {
+            string entityKey = EntityKey;
+
+            Assert.False(ObjectService.NormalizeEntityKeyTarget(OtherEntityKey.Replace("-9002", ":9002"), ref entityKey));
+            Assert.Equal(EntityKey, entityKey);
+        }
     }
 }
