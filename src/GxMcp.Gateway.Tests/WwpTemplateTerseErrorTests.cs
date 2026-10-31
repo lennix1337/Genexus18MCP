@@ -26,6 +26,21 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void TheAliasConflictKeepsItsCodeMessageAndHintInTheTerseEnvelope()
+        {
+            const string conflict = @"{status:'error',target:'SynthTemplate',
+                error:{code:'PropertyAliasConflict',message:'TemplateType and WWPTemplate_Type name the same WorkWithPlus template property (WWPTemplate_Type); send only one of them.',
+                hint:'Send each property once, under its alias or under its SDK name.'}}";
+
+            var output = McpRouter.TrimErrorEnvelope(JObject.Parse(conflict), verbose: false);
+
+            Assert.Equal("PropertyAliasConflict", (string?)output["code"]);
+            Assert.Equal("TemplateType and WWPTemplate_Type name the same WorkWithPlus template property (WWPTemplate_Type); send only one of them.", (string?)output["message"]);
+            Assert.Equal("Send each property once, under its alias or under its SDK name.", (string?)output["hint"]);
+            Assert.Null(output["violations"]);
+        }
+
+        [Fact]
         public void ANonTemplateErrorDoesNotCarryTheViolationList()
         {
             var output = McpRouter.TrimErrorEnvelope(JObject.Parse(Refusal.Replace("WwpTemplateInvalid", "PropertyNotFound")), verbose: false);

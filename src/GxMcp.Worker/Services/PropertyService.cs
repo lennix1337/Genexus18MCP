@@ -142,12 +142,12 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                var obj = _objectService.FindObject(target, typeFilter);
+                var obj = FindTarget(target, typeFilter);
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
 
                 if (reconcileTimedOutWrite)
                 {
-                    obj = _objectService.FindObjectFreshByIdentity(obj);
+                    obj = FindFreshTarget(obj);
                     if (obj == null)
                         return FreshReadUnavailableEnvelope(target,
                             "The persisted object could not be read independently, so no pending timeout recovery fence was cleared"
@@ -155,7 +155,7 @@ namespace GxMcp.Worker.Services
                             _objectService.GetLastResolutionDiagnostic());
                 }
 
-                string ck = CacheKey(obj, controlName);
+                string ck = TargetKey(obj, controlName);
                 JObject fullPropsResult = null;
                 if (!reconcileTimedOutWrite) lock (_propertyCacheLock)
                 {
@@ -177,15 +177,13 @@ namespace GxMcp.Worker.Services
                             .Concat((propertyName ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
                             .Select(name => name.Trim())
                             .Where(name => name.Length > 0)
+                            .Select(name => WwpTemplatePropertyRules.NativeName(string.IsNullOrEmpty(controlName) ? TargetTypeOf(obj) : Guid.Empty, name))
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToArray()
                         : Array.Empty<string>();
-                    fullPropsResult = selectedRecoveryNames.Length > 0
-                        ? SerializeSelectedProperties(container, obj.Model, selectedRecoveryNames,
-                            string.IsNullOrEmpty(controlName) && IsWebPanel(obj))
-                        : SerializeProperties(container, obj.Model);
+                    fullPropsResult = SerializeTarget(obj, (object)container, selectedRecoveryNames, controlName);
                     if (reconcileTimedOutWrite && string.IsNullOrEmpty(controlName)
-                        && IsWebPanel(obj)
+                        && IsWebPanelTarget(obj)
                         && !((JArray)fullPropsResult["properties"]).OfType<JObject>().Any(p =>
                             string.Equals(p["name"]?.ToString(), "MainProgram", StringComparison.OrdinalIgnoreCase)))
                     {
@@ -220,8 +218,7 @@ namespace GxMcp.Worker.Services
                     }
                     if (string.IsNullOrEmpty(controlName))
                     {
-                        var reportContainer = ResolveReportPropertyContainer(obj, ReportLayoutHelper.TextModeProperty, null);
-                        var textMode = ReflectionHelper.TryGetPropertyBagValue(reportContainer, ReportLayoutHelper.TextModeProperty);
+                        var textMode = ReadTextMode(obj);
                         if (textMode != null)
                             ((JArray)fullPropsResult["properties"]).Add(new JObject
                             {
@@ -236,7 +233,7 @@ namespace GxMcp.Worker.Services
                 }
 
                 if (string.IsNullOrEmpty(controlName))
-                    WwpTemplatePropertyRules.AddAliasReadItems(ObjectTypeOf(obj), fullPropsResult,
+                    WwpTemplateWiring.ApplyReadAliases(TargetTypeOf(obj), fullPropsResult,
                         (propertyName ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
                             .Concat(propertyNames ?? Enumerable.Empty<string>()));
 
@@ -854,20 +851,20 @@ namespace GxMcp.Worker.Services
                 if (string.IsNullOrEmpty(controlName) && string.Equals(propName?.Trim(), "Formula", StringComparison.OrdinalIgnoreCase))
                     return FormulaWriteUnsupported(target);
 
-                var obj = _objectService.FindObject(target, typeFilter);
+                var obj = FindTarget(target, typeFilter);
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
 
-                // A WorkWithPlus template alias is written and checked under the SDK name it stands for; the response keeps
+                // A WorkWithPlus template name is written and checked under the SDK name it stands for; the response keeps
                 // the name asked for, so both names show.
                 string requestedName = propName;
-                if (string.IsNullOrEmpty(controlName))
-                    propName = WwpTemplatePropertyRules.NativeName(ObjectTypeOf(obj), propName);
-                if (string.IsNullOrEmpty(controlName) && ObjectTypeOf(obj) == WwpTemplateXml.ObjectType
-                    && WwpTemplatePropertyRules.TouchesFinalState(propName))
+                if (string.IsNullOrEmpty(controlName) && !string.IsNullOrEmpty(propName))
                 {
-                    string refusal = WwpTemplateRefusal(obj, target,
-                        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [propName] = value ?? string.Empty });
-                    if (refusal != null) return refusal;
+                    var singleWiring = WwpTemplateWiring.Write(TargetTypeOf(obj),
+                        new[] { new KeyValuePair<string, string>(propName, value ?? string.Empty) },
+                        name => ReadStoredProperty(obj, name, null));
+                    string refusedWrite = WiringRefusal(singleWiring, target);
+                    if (refusedWrite != null) return refusedWrite;
+                    propName = singleWiring.NativeNames[propName];
                 }
 
                 // Folder/module placement is not a scalar property write — it's a parent
@@ -1050,20 +1047,14 @@ namespace GxMcp.Worker.Services
                 if (string.IsNullOrEmpty(controlName) && properties.Properties().Any(p => string.Equals(p.Name.Trim(), "Formula", StringComparison.OrdinalIgnoreCase)))
                     return FormulaWriteUnsupported(target);
 
-                var obj = _objectService.FindObject(target, typeFilter);
+                var obj = FindTarget(target, typeFilter);
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
-
-                var objectTypeId = ObjectTypeOf(obj);
-                string aliasConflict = string.IsNullOrEmpty(controlName)
-                    ? WwpTemplatePropertyRules.FindConflict(objectTypeId, properties.Properties().Select(p => p.Name)) : null;
-                if (aliasConflict != null)
-                    return Models.McpResponse.Err(code: "PropertyAliasConflict", target: target, message: aliasConflict);
 
                 // The write reads the persisted object independently inside its transaction. A preview
                 // needs the same read, or it would promise a write that cannot be verified.
                 if (dryRun || !string.IsNullOrWhiteSpace(expectedVersion))
                 {
-                    obj = _objectService.FindObjectFreshByIdentity(obj);
+                    obj = FindFreshTarget(obj);
                     if (obj == null)
                         return FreshReadUnavailableEnvelope(target,
                             "The current persisted version could not be read; no property write was attempted.",
@@ -1077,6 +1068,15 @@ namespace GxMcp.Worker.Services
                     if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
                     if (IsLayoutControlContainer((object)container)) return LayoutControlWriteUnsupported(target, controlName, string.Join(", ", properties.Properties().Select(p => p.Name)));
                 }
+
+                // The template decision (aliases, conflicts and the checks of a WorkWithPlus template) is the same for a dry run
+                // and for a write, and it is taken before any value is read for the write.
+                var objectTypeId = string.IsNullOrEmpty(controlName) ? TargetTypeOf(obj) : Guid.Empty;
+                var wiring = WwpTemplateWiring.Write(objectTypeId,
+                    properties.Properties().Select(p => new KeyValuePair<string, string>(p.Name, p.Value?.ToString() ?? string.Empty)),
+                    name => ReadStoredProperty(obj, name, null));
+                string refusedWrite = WiringRefusal(wiring, target);
+                if (refusedWrite != null) return refusedWrite;
 
                 var beforeValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 // Unlike beforeValues, keeps null for a value that could not be read: the rollback never writes back an unread value.
@@ -1093,7 +1093,7 @@ namespace GxMcp.Worker.Services
                 foreach (var p in properties.Properties())
                 {
                     string propName = p.Name;
-                    string aliasedName = string.IsNullOrEmpty(controlName) ? WwpTemplatePropertyRules.NativeName(objectTypeId, propName) : propName;
+                    string aliasedName = wiring.NativeNames[propName];
                     string nativeName = NativeWebPanelPropertyName(obj, controlName, aliasedName);
                     nativeNames[propName] = nativeName;
                     string val = p.Value?.ToString() ?? string.Empty;
@@ -1122,18 +1122,6 @@ namespace GxMcp.Worker.Services
                     string previousValue = ReadPropertyValueAt(obj, nativeName, controlName);
                     previousValues[propName] = previousValue;
                     beforeValues[propName] = previousValue ?? string.Empty;
-                }
-
-                // A WorkWithPlus template is refused before anything is written when the type and the XML it would be saved
-                // with cannot be listed and opened by the editor. The stored value of the one the call leaves alone is read.
-                if (objectTypeId == WwpTemplateXml.ObjectType && string.IsNullOrEmpty(controlName)
-                    && nativeNames.Values.Any(WwpTemplatePropertyRules.TouchesFinalState))
-                {
-                    var sent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var p in properties.Properties())
-                        sent[nativeNames[p.Name]] = p.Value?.ToString() ?? string.Empty;
-                    string refusal = WwpTemplateRefusal(obj, target, sent);
-                    if (refusal != null) return refusal;
                 }
 
                 ObjectMoveSnapshot snapshot;
@@ -1737,21 +1725,38 @@ namespace GxMcp.Worker.Services
 
         private static Guid ObjectTypeOf(KBObject obj) => obj?.TypeDescriptor?.Id ?? Guid.Empty;
 
+        // The error for a write that WwpTemplateWiring refused, or null when the write may go on.
+        private static string WiringRefusal(WriteWiring wiring, string target)
+            => wiring.RefusalCode == null ? null
+                : Models.McpResponse.Err(code: wiring.RefusalCode, message: wiring.RefusalMessage, hint: wiring.RefusalHint, target: target,
+                    errorExtra: wiring.Violations == null ? null : new JObject { ["violations"] = wiring.Violations });
+
+        // The steps of a property call that touch the SDK. Production answers them from the knowledge base; a test answers
+        // them with a fake target, so the template decision runs through these paths without a knowledge base.
+        protected internal virtual KBObject FindTarget(string target, string typeFilter) => _objectService.FindObject(target, typeFilter);
+
+        protected internal virtual KBObject FindFreshTarget(KBObject obj) => _objectService.FindObjectFreshByIdentity(obj);
+
+        protected internal virtual Guid TargetTypeOf(KBObject obj) => ObjectTypeOf(obj);
+
+        // The key of a target's cached properties. Production derives it from the object's identity.
+        protected internal virtual string TargetKey(KBObject obj, string controlName) => CacheKey(obj, controlName);
+
+        protected internal virtual bool IsWebPanelTarget(KBObject obj) => IsWebPanel(obj);
+
+        protected internal virtual string ReadStoredProperty(KBObject obj, string nativeName, string controlName)
+            => ReadPropertyValueAt(obj, nativeName, controlName);
+
+        protected internal virtual JObject SerializeTarget(KBObject obj, object container, string[] selectedNames, string controlName)
+            => selectedNames.Length > 0
+                ? SerializeSelectedProperties(container, obj.Model, selectedNames, string.IsNullOrEmpty(controlName) && IsWebPanel(obj))
+                : SerializeProperties(container, obj.Model);
+
+        protected internal virtual object ReadTextMode(KBObject obj)
+            => ReflectionHelper.TryGetPropertyBagValue(ResolveReportPropertyContainer(obj, ReportLayoutHelper.TextModeProperty, null), ReportLayoutHelper.TextModeProperty);
+
         // The SDK names a call used for a requested name, when they differ, so the caller reads both. Only WorkWithPlus
         // template objects have such names.
-        // The refusal for a WorkWithPlus template whose type and XML the editor could not list and open, or null when
-        // they are fine. sent holds the SDK names the call writes; the one it leaves alone is read from the object.
-        private string WwpTemplateRefusal(KBObject obj, string target, IDictionary<string, string> sent)
-        {
-            var (type, xml) = WwpTemplatePropertyRules.FinalState(sent, name => ReadPropertyValueAt(obj, name, null));
-            JArray violations = WwpTemplatePropertyRules.Check(type, xml);
-            if (violations.Count == 0) return null;
-            return Models.McpResponse.Err(code: "WwpTemplateInvalid", target: target,
-                message: "The WorkWithPlus template was not saved. " + string.Join(" ", violations.Select(v => v["message"]?.ToString())),
-                hint: "WWPTemplate_Type (TemplateType) must be a known template type, and WWPTemplate_TemplateXml (TemplateXml) must parse with the root of that type. Nothing was written.",
-                extra: new JObject { ["violations"] = violations });
-        }
-
         private static void NoteNativeNames(JObject result, Guid objectType, JObject properties, IDictionary<string, string> nativeNames)
         {
             if (objectType != WwpTemplateXml.ObjectType) return;

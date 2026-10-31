@@ -115,7 +115,7 @@ namespace GxMcp.Worker.Services
             if (string.IsNullOrWhiteSpace(type))
                 violations.Add(Violation("TypeEmpty", "WWPTemplate_Type is empty. WorkWithPlus cannot list a template without a type (Unknown TemplateType)."));
             else if (!RootByType.ContainsKey(type))
-                violations.Add(Violation("TypeUnknown", $"'{type}' is not a WorkWithPlus template type. Known types: {string.Join(", ", RootByType.Keys)}."));
+                violations.Add(Violation("TypeUnknown", $"'{type}' is not one of the template types known for WorkWithPlus 16.2. Known WorkWithPlus 16.2 types: {string.Join(", ", RootByType.Keys)}."));
 
             if (string.IsNullOrWhiteSpace(xml))
             {

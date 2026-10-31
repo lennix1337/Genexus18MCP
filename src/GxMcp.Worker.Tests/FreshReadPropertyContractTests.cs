@@ -83,7 +83,7 @@ namespace GxMcp.Worker.Tests
             int precondition = body.IndexOf("if (dryRun || !string.IsNullOrWhiteSpace(expectedVersion))", StringComparison.Ordinal);
             Assert.True(precondition >= 0, "the independent read must cover dryRun as well as expectedVersion");
 
-            int firstRead = body.IndexOf("_objectService.FindObjectFreshByIdentity(obj)", StringComparison.Ordinal);
+            int firstRead = body.IndexOf("FindFreshTarget(obj)", StringComparison.Ordinal);
             int preview = body.IndexOf("if (dryRun)", StringComparison.Ordinal);
             int transaction = body.IndexOf("BeginTransaction()", StringComparison.Ordinal);
             Assert.True(precondition < firstRead, "the read belongs inside the precondition");
