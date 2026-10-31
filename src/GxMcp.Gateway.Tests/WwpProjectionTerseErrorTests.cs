@@ -83,6 +83,32 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void AListOfExactlyTheLimitGainsNoTotal()
+        {
+            var input = JObject.Parse(Refusal);
+            input["webFormProjection"]!["webFormGrids"] = GridNames(50);
+
+            var projection = (JObject)McpRouter.TrimErrorEnvelope(input, verbose: false)["webFormProjection"]!;
+
+            Assert.Equal(50, ((JArray)projection["webFormGrids"]!).Count);
+            Assert.Null(projection["webFormGridsTotal"]);
+        }
+
+        [Fact]
+        public void AListOneOverTheLimitIsCutToTheLimitWithItsTotal()
+        {
+            var input = JObject.Parse(Refusal);
+            input["webFormProjection"]!["webFormGrids"] = GridNames(51);
+
+            var projection = (JObject)McpRouter.TrimErrorEnvelope(input, verbose: false)["webFormProjection"]!;
+
+            var kept = (JArray)projection["webFormGrids"]!;
+            Assert.Equal(50, kept.Count);
+            Assert.Equal("Grid49", (string?)kept[49]);
+            Assert.Equal(51, (int)projection["webFormGridsTotal"]!);
+        }
+
+        [Fact]
         public void TheVerboseEnvelopeKeepsTheWholeProjection()
         {
             var input = JObject.Parse(Refusal);
