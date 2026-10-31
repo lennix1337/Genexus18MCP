@@ -280,7 +280,7 @@ Worker with that single hash comparison relaxed. The shipped Worker was not chan
 The save proves that it wrote no object other than the target by comparing three whole-KB inventories: one before
 the transaction opens, one inside it before the commit, and one after the commit. An entry is the object's version,
 `LastUpdate`, placement, name and type. On a KB with tens of thousands of objects each inventory takes about a
-minute, so a developer with the IDE open will often save another object while a protected save runs. That edit is
+minute (an estimate, not measured in this change), so a developer with the IDE open will often save another object while a protected save runs. That edit is
 not an effect of the save, and it used to fail the operation with `ObjectSaveIncomplete` even though the Events
 source had been written and read back.
 
@@ -289,7 +289,9 @@ An object that differs between two inventories is now judged by its SDK stamp ag
 - The SDK stamps an object when it saves it. The target's own new stamp, read right after the object save, was
   assigned by this Worker somewhere between its first write call and that read, so it fixes the offset between the
   SDK's clock and the Worker's. The window is the interval, in the SDK's clock, from the opening of the transaction
-  to its closing, widened by that span and by a 2 s margin on both ends. Every write the save makes carries a stamp
+  to its closing, widened by that span and by a 2 s margin on both ends. The measured offset is also widened to the 5 s tolerance around the
+  clock it matched (the SDK's UTC or the Worker's local clock), so an anchor stamped a little before the write span, or a
+  small clock step inside it, cannot close the window before the writes of the save. Every write the save makes carries a stamp
   inside it.
 - The window is trusted only when the offset is one the Worker knows (its UTC clock or its local clock, within
   5 s). When the target's stamp did not advance, the persisted stamp differs from the one read after the object save,
@@ -325,11 +327,21 @@ the rollback undoes it, so the inventory read afterwards shows nothing. The rece
 inventory showed in fields the final verdict never rewrites: `preCommitUnexpectedChangedObjects` (GUIDs) and
 `preCommitUnexpectedChangedObjectDetails[]` (the same members as `unexpectedChangedObjectDetails[]`, plus
 `preCommitUnexpectedChangedObjectDetailsTruncated` when more than 50 were found). `unexpectedChangedObjects` and
-`unexpectedChangedObjectDetails[]` describe the final inventory only: a refusal whose rollback was verified reports
-them empty and still names its cause in the `preCommit` ones. The default (terse) error projection keeps both sets.
+`unexpectedChangedObjectDetails[]` describe the final inventory only: a refusal whose rollback was verified leaves
+`unexpectedChangedObjects` empty, omits `unexpectedChangedObjectDetails[]`, and still names its cause in the `preCommit` ones. The default (terse) error projection keeps both sets.
 
 `otherObjectMetadataIntact` now means that no object is blocking. `rollbackVerified` follows the same rule, so an
-edit by another process outside the window no longer turns a verified rollback into an unverified one.
+edit by another process outside the window no longer turns a verified rollback into an unverified one, once the save has
+reached the object save. Before that the target has no stamp, no window exists (`saveWindow.reason` is `TargetNotSaved`),
+and an edit of another object blocks the rollback as it did before.
+
+Before the commit, the pre-commit window is also checked against the target's stamp as the open transaction reads it
+after the object save (`freshStampAtPreCommit`, with its `freshStampAtPreCommitKind`). A reading equal to the save's own
+stamp keeps the window. A reading that differs but is later than the stamp the target carried before the save means the
+two readings use different representations of the clock, and the pre-commit window becomes unavailable
+(`saveWindow.reason` is `PreCommitStampRepresentationMismatch`). A reading that failed makes it unavailable too
+(`PreCommitStampNotRead`). In both cases an edit of another object blocks the save; nothing is cleared. The receipt also
+keeps `preCommitSaveWindow` and the changes another process made outside the window (`preCommitConcurrentChanges`).
 
 What does not change: the target checks (`baseVersion` and the in-transaction token, pins, audited bundle,
 callbacks), the comparison of the target's other parts and placement, the explicit rollback, the single-writer gate,
@@ -348,6 +360,15 @@ Limits:
   on its own after the transaction closed (a background task) would be taken for another process's.
 - Metadata equality is still not byte equality: an independent writer that persists an object's parts without
   advancing its metadata is not detected, with or without this classification.
+- A change of the local offset of one hour between a side effect and the target's stamp (for example a daylight-saving
+  change on a machine whose local clock the SDK stamps) is not covered by the 5 s tolerance: such a side effect still
+  reads as concurrent. This is a known limit, pinned by a test, and it is not fixed by this change.
+- The window assumes that the SDK assigns the target's stamp during the save, between the first write call and the read
+  after the object save. A stamp assigned earlier is covered only by the 5 s tolerance around the matched clock.
+- A step of the Worker's clock inside the save, larger than that tolerance, can leave one of the save's own writes outside
+  the window; a smaller step is covered.
+- A write that the SDK makes on its own, in the background, after the transaction has closed is taken for another
+  process's write: the window does not cover it.
 
 ## SDK audit and limitations
 

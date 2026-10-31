@@ -12,7 +12,7 @@ namespace GxMcp.Worker.Tests
     // open, saves a DIFFERENT object while the save runs. The real flow runs over a double of the SDK half; the
     // classification and the verdict are the production ones. Every instant is a number of seconds from a fixed
     // origin: the transaction is open from 100 s to 160 s and the target is stamped 102 s, so the save window is
-    // 97 s to 163 s (see EventsOtherObjectChangesTests).
+    // 93 s to 167 s (see EventsOtherObjectChangesTests).
     public sealed class EventsSaveConcurrentEditTests
     {
         private static readonly long Origin = new DateTime(2026, 10, 28, 12, 0, 0, DateTimeKind.Utc).Ticks;
@@ -35,11 +35,21 @@ namespace GxMcp.Worker.Tests
         private static readonly EventsInventoryEntry TargetAfter = Entry(8, At(102), "Panel");
         private static readonly EventsInventoryEntry OtherUntouched = Entry(3, At(10));
 
-        private static EventsSaveWindow OpenWindow()
-            => EventsSaveWindow.Calibrate(At(100), null, At(101), At(103), At(102), TimeSpan.FromHours(-3).Ticks);
+        // The save's evidence as the SDK half records it: the transaction opens at 100 s and the write span runs from 101 s to
+        // 103 s. The stamp after the object save comes from the run, and the transaction end is set only when it closes.
+        private static EventsSaveWindow.SaveEvidence Evidence(long? transactionEnd) => new EventsSaveWindow.SaveEvidence
+        {
+            TransactionStartTicks = At(100),
+            TransactionEndTicks = transactionEnd,
+            WriteSpanStartTicks = At(101),
+            ObjectSavedTicks = At(103),
+            LastUpdateBeforeTicks = TargetBefore.StampTicks,
+            LocalUtcOffsetTicks = TimeSpan.FromHours(-3).Ticks
+        };
 
-        private static EventsSaveWindow ClosedWindow()
-            => EventsSaveWindow.Calibrate(At(100), At(160), At(101), At(103), At(102), TimeSpan.FromHours(-3).Ticks);
+        private static EventsSaveWindow.SaveEvidence OpenWindow() => Evidence(transactionEnd: null);
+
+        private static EventsSaveWindow.SaveEvidence ClosedWindow() => Evidence(transactionEnd: At(160));
 
         // The SDK half of the save cannot run offline. This double reads three inventories it was given and turns
         // them into the receipt through the production classification and verdict; only the glue is its own.
@@ -49,22 +59,25 @@ namespace GxMcp.Worker.Tests
             private readonly Dictionary<Guid, EventsInventoryEntry> _baseline;
             private readonly Dictionary<Guid, EventsInventoryEntry> _preCommit;
             private readonly Dictionary<Guid, EventsInventoryEntry> _final;
-            private readonly EventsSaveWindow _preCommitWindow;
-            private readonly EventsSaveWindow _finalWindow;
+            private readonly EventsSaveWindow.SaveEvidence _preCommitEvidence;
+            private readonly EventsSaveWindow.SaveEvidence _finalEvidence;
+            private readonly long? _stampAfterObjectSave;
 
             internal readonly List<string> Calls = new List<string>();
             internal bool FailObjectSave;
+            internal bool FailPreCommit;
 
             internal InventoryAuditedSteps(JObject receipt, Dictionary<Guid, EventsInventoryEntry> baseline,
                 Dictionary<Guid, EventsInventoryEntry> preCommit, Dictionary<Guid, EventsInventoryEntry> final,
-                EventsSaveWindow preCommitWindow, EventsSaveWindow finalWindow)
+                EventsSaveWindow.SaveEvidence preCommitEvidence, EventsSaveWindow.SaveEvidence finalEvidence, long? stampAfterObjectSave)
             {
                 _receipt = receipt;
                 _baseline = baseline;
                 _preCommit = preCommit;
                 _final = final;
-                _preCommitWindow = preCommitWindow;
-                _finalWindow = finalWindow;
+                _preCommitEvidence = preCommitEvidence;
+                _finalEvidence = finalEvidence;
+                _stampAfterObjectSave = stampAfterObjectSave;
             }
 
             public string OriginalToken => "token-1";
@@ -84,6 +97,9 @@ namespace GxMcp.Worker.Tests
             {
                 Calls.Add("SaveObject");
                 if (FailObjectSave) throw new InvalidOperationException("object save refused");
+                // As the SDK half does: the target has a stamp only once the object save has returned.
+                _preCommitEvidence.StampAfterObjectSave = _stampAfterObjectSave;
+                _finalEvidence.StampAfterObjectSave = _stampAfterObjectSave;
             }
 
             public void EndSaveIsolation() => Calls.Add("EndSaveIsolation");
@@ -91,8 +107,10 @@ namespace GxMcp.Worker.Tests
             public void VerifyPreCommit()
             {
                 Calls.Add("VerifyPreCommit");
-                var others = EventsOtherObjectChanges.Classify(_baseline, _preCommit, Target, _preCommitWindow);
-                IsolatedEventsSaveVerdict.RecordPreCommitOthers(_receipt, others);
+                var window = EventsSaveWindow.FromSaveEvidence(_preCommitEvidence, transactionClosed: false);
+                var others = EventsOtherObjectChanges.Classify(_baseline, _preCommit, Target, window);
+                IsolatedEventsSaveVerdict.RecordPreCommitOthers(_receipt, others, window);
+                if (FailPreCommit) throw new InvalidOperationException("pre-commit refused");
                 string mismatch = IsolatedEventsSaveDiagnostics.DescribePreCommitMismatch(
                     eventsSourceMatches: true, changedParts: null, partChangesAllowed: true,
                     otherObjectsChanged: others.Blocking.Count, placementMatches: true);
@@ -107,7 +125,10 @@ namespace GxMcp.Worker.Tests
             public void VerifyAfterCommit(bool committed)
             {
                 Calls.Add("VerifyAfterCommit");
-                var others = EventsOtherObjectChanges.Classify(_baseline, _final, Target, _finalWindow);
+                var window = EventsSaveWindow.ConfirmPersistedStamp(
+                    EventsSaveWindow.FromSaveEvidence(_finalEvidence, transactionClosed: true), committed,
+                    _final[Target].StampTicks, _finalEvidence.StampAfterObjectSave);
+                var others = EventsOtherObjectChanges.Classify(_baseline, _final, Target, window);
                 _receipt["persisted"] = committed;
                 _receipt["saved"] = committed;
                 _receipt["verificationCompleted"] = true;
@@ -118,7 +139,7 @@ namespace GxMcp.Worker.Tests
                         Committed = committed, PartPersisted = committed, MetadataAdvanced = committed,
                         OtherPartsIntact = true, RestoredToOriginal = !committed
                     },
-                    others, _finalWindow, out string message);
+                    others, window, out string message);
                 UnconfirmedMessage = message;
             }
 
@@ -134,13 +155,17 @@ namespace GxMcp.Worker.Tests
 
             // preCommit and final describe the other object as the pre-commit and the post-commit inventories read it.
             internal Run(EventsInventoryEntry otherAtPreCommit, EventsInventoryEntry otherAtFinal,
-                EventsSaveWindow preCommitWindow, EventsSaveWindow finalWindow, bool failObjectSave = false)
+                EventsSaveWindow.SaveEvidence preCommitEvidence, EventsSaveWindow.SaveEvidence finalEvidence,
+                bool failObjectSave = false, bool failPreCommit = false, long? stampAfterObjectSave = null)
             {
                 Steps = new InventoryAuditedSteps(Receipt,
                     Inventory(TargetBefore, OtherUntouched),
                     Inventory(TargetAfter, otherAtPreCommit),
                     Inventory(failObjectSave ? TargetBefore : TargetAfter, otherAtFinal),
-                    preCommitWindow, finalWindow) { FailObjectSave = failObjectSave };
+                    preCommitEvidence, finalEvidence, stampAfterObjectSave ?? TargetAfter.StampTicks)
+                {
+                    FailObjectSave = failObjectSave, FailPreCommit = failPreCommit
+                };
                 var trace = new IsolatedEventsSaveTrace(Receipt, "SamplePanel");
                 Outcome = IsolatedEventsSaveFlow.Run(Steps, trace, "token-1", () => new NoopGate());
             }
@@ -275,11 +300,12 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void WithoutACalibratedWindow_AnEditAfterTheSaveStillFailsTheOperation_AsItAlwaysDid()
         {
-            var unavailable = EventsSaveWindow.Unavailable("TargetStampNotAdvanced");
-            var run = new Run(OtherUntouched, Entry(4, At(190)), unavailable, unavailable);
+            // The target's stamp did not advance: production makes the window unavailable at both checks, with that reason.
+            var run = new Run(OtherUntouched, Entry(4, At(190)), OpenWindow(), ClosedWindow(), stampAfterObjectSave: TargetBefore.StampTicks);
 
             Assert.Equal(IsolatedEventsSaveOutcomeKind.NotConfirmed, run.Outcome.Kind);
             Assert.Equal("post-commit-verification", run.Outcome.Phase);
+            Assert.Equal("TargetStampNotAdvanced", run.Receipt["saveWindow"]!["reason"]!.ToString());
             Assert.False(run.Receipt["otherObjectMetadataIntact"]!.Value<bool>());
             Assert.Equal("SaveWindowUnavailable", run.Receipt["unexpectedChangedObjectDetails"]![0]!["reason"]!.ToString());
             Assert.Null(run.Receipt["concurrentChanges"]);
@@ -292,7 +318,8 @@ namespace GxMcp.Worker.Tests
             var baseline = Inventory(TargetBefore, OtherUntouched);
             var final = Inventory(TargetAfter, OtherUntouched);
             final[Guid.Parse("00000000-0000-0000-0000-0000000000d4")] = Entry(1, At(190), "Created01");
-            var fake = new InventoryAuditedSteps(steps, baseline, Inventory(TargetAfter, OtherUntouched), final, OpenWindow(), ClosedWindow());
+            var fake = new InventoryAuditedSteps(steps, baseline, Inventory(TargetAfter, OtherUntouched), final,
+                OpenWindow(), ClosedWindow(), TargetAfter.StampTicks);
 
             var outcome = IsolatedEventsSaveFlow.Run(fake, new IsolatedEventsSaveTrace(steps, "SamplePanel"), "token-1", () => new NoopGate());
 
@@ -304,15 +331,38 @@ namespace GxMcp.Worker.Tests
         private sealed class NoopGate : IDisposable { public void Dispose() { } }
 
         [Fact]
-        public void RolledBackSave_WhileAnotherProcessEditedOutsideTheWindow_StillHasAVerifiedRollback()
+        public void RolledBackSave_WhenTheObjectSaveFails_HasNoVerifiedRollbackWhileAnotherProcessEdited()
         {
+            // The object save never returned, so the target has no stamp and no window exists (TargetNotSaved). Even an edit
+            // that would be outside any window cannot be placed, so it blocks the rollback and the target stays dirty.
             var run = new Run(Entry(4, At(60)), Entry(4, At(60)), OpenWindow(), ClosedWindow(), failObjectSave: true);
 
             Assert.Equal(IsolatedEventsSaveOutcomeKind.NotConfirmed, run.Outcome.Kind);
             Assert.Equal("object-save", run.Outcome.Phase);
             Assert.DoesNotContain("Commit", run.Steps.Calls);
             Assert.False(run.Receipt["persisted"]!.Value<bool>());
+            Assert.Equal("TargetNotSaved", run.Receipt["saveWindow"]!["reason"]!.ToString());
+            Assert.False(run.Receipt["rollbackVerified"]!.Value<bool>());
+            Assert.True(WriteService.ShouldMarkIsolatedEventsDirty(run.Receipt));
+        }
+
+        [Fact]
+        public void RolledBackSave_AfterTheObjectSave_KeepsAVerifiedRollbackWhileAnotherProcessEditedOutsideTheWindow()
+        {
+            // The object save returned, so the window exists. The pre-commit check refuses the save, the rollback restores the
+            // target, and an edit after the window is concurrent: the rollback is verified and the target is not dirty.
+            var run = new Run(OtherUntouched, Entry(4, At(190)), OpenWindow(), ClosedWindow(), failPreCommit: true);
+
+            Assert.Equal(IsolatedEventsSaveOutcomeKind.NotConfirmed, run.Outcome.Kind);
+            Assert.Equal("pre-commit-verification", run.Outcome.Phase);
+            Assert.DoesNotContain("Commit", run.Steps.Calls);
+            Assert.Contains("Rollback", run.Steps.Calls);
+            Assert.False(run.Receipt["persisted"]!.Value<bool>());
+            Assert.True(run.Receipt["saveWindow"]!["calibrated"]!.Value<bool>());
+            Assert.NotNull(run.Receipt["saveWindow"]!["to"]);
             Assert.True(run.Receipt["rollbackVerified"]!.Value<bool>());
+            Assert.True(run.Receipt["otherObjectMetadataIntact"]!.Value<bool>());
+            Assert.Equal("AfterSaveWindow", run.Receipt["concurrentChanges"]![0]!["reason"]!.ToString());
             Assert.False(WriteService.ShouldMarkIsolatedEventsDirty(run.Receipt));
         }
 
