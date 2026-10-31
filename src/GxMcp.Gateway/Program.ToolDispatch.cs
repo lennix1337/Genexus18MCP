@@ -1075,8 +1075,9 @@ namespace GxMcp.Gateway
             // operation tracker, and can answer even when startup failed.
             if (string.Equals(tName, "genexus_doctor", StringComparison.OrdinalIgnoreCase))
             {
-                JObject doctor = BuildGatewayDoctorEnvelope(
-                    sessionContextEnabled ? sessionId : null);
+                string? doctorSessionId = sessionContextEnabled ? sessionId : null;
+                JObject wwpTemplates = await ProbeDoctorWwpTemplatesAsync(doctorSessionId);
+                JObject doctor = BuildGatewayDoctorEnvelope(doctorSessionId, wwpTemplates);
                 return BuildToolResultContent(doctor, false, tName, tArgs);
             }
 

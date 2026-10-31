@@ -1344,7 +1344,7 @@ namespace GxMcp.Gateway
             return health;
         }
 
-        internal static JObject BuildGatewayDoctorEnvelope(string? sessionId = null)
+        internal static JObject BuildGatewayDoctorEnvelope(string? sessionId = null, JObject? wwpTemplates = null)
         {
             var whoami = BuildWhoamiPayload(false, sessionId);
             var geneXus = whoami["geneXus"] is JObject gx
@@ -1389,6 +1389,13 @@ namespace GxMcp.Gateway
                     + ".");
             }
 
+            // A WorkWithPlus template with an empty type or a malformed template XML breaks the editor for every
+            // instance, so each such template is a high-severity warning. An unavailable block adds none.
+            var templates = wwpTemplates ?? UnavailableWwpTemplatesBlock("NotProbed");
+            int brokenTemplates = templates["invalid"]?.Value<int?>() ?? 0;
+            if (brokenTemplates > 0)
+                warnings.Add(brokenTemplates + " WorkWithPlus template(s) have an empty type or a malformed template XML, which breaks the WorkWithPlus editor (see wwpTemplates).");
+
             var index = whoami["index"] as JObject;
             var metrics = _operationTracker.BuildMetricsSummary();
             metrics["source"] = "gateway";
@@ -1416,6 +1423,7 @@ namespace GxMcp.Gateway
                 ["telemetry"] = metrics,
                 ["buildQueue"] = JobRegistry.BuildLifecycleQueueSnapshot(sessionId),
                 ["engine"] = engine,
+                ["wwpTemplates"] = templates,
                 ["warnings"] = warnings,
                 ["hint"] = warnings.Count > 0 ? warnings[0] : JValue.CreateNull()
             };
