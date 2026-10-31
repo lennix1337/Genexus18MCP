@@ -295,7 +295,7 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void RecordPreCommitOthers_DescribesAtMostTheConcurrentChangesTheLimitAllows_AndKeepsTheCountAndTheFlag()
         {
-            int limit = IsolatedEventsSaveVerdict.MaxPreCommitConcurrentDescribed;
+            const int limit = 10; // the receipt's budget, written as a number so that a change of the constant fails here
             var before = new Dictionary<Guid, EventsInventoryEntry>();
             var after = new Dictionary<Guid, EventsInventoryEntry>();
             for (int i = 0; i < limit + 3; i++)
@@ -317,7 +317,7 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void RecordPreCommitOthers_WithTheLimitExactlyConcurrent_IsNotTruncated()
         {
-            int limit = IsolatedEventsSaveVerdict.MaxPreCommitConcurrentDescribed;
+            const int limit = 10; // the receipt's budget, written as a number so that a change of the constant fails here
             var before = new Dictionary<Guid, EventsInventoryEntry>();
             var after = new Dictionary<Guid, EventsInventoryEntry>();
             for (int i = 0; i < limit; i++)
