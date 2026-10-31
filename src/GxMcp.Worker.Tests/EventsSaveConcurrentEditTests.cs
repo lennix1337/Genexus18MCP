@@ -16,6 +16,7 @@ namespace GxMcp.Worker.Tests
     public sealed class EventsSaveConcurrentEditTests
     {
         private static readonly long Origin = new DateTime(2026, 10, 28, 12, 0, 0, DateTimeKind.Utc).Ticks;
+        private static readonly long LocalOffset = TimeSpan.FromHours(-3).Ticks;
         private static readonly Guid Target = Guid.Parse("00000000-0000-0000-0000-0000000000a1");
         private static readonly Guid Other = Guid.Parse("00000000-0000-0000-0000-0000000000b2");
         private static readonly Guid Bystander = Guid.Parse("00000000-0000-0000-0000-0000000000c3");
@@ -62,14 +63,18 @@ namespace GxMcp.Worker.Tests
             private readonly EventsSaveWindow.SaveEvidence _preCommitEvidence;
             private readonly EventsSaveWindow.SaveEvidence _finalEvidence;
             private readonly long? _stampAfterObjectSave;
+            private readonly Func<long?> _freshReadAtPreCommit;
+            private string _preCommitReason;
 
             internal readonly List<string> Calls = new List<string>();
             internal bool FailObjectSave;
             internal bool FailPreCommit;
 
+            // freshReadAtPreCommit is the target's stamp as the open transaction reads it after the object save; null is a failed read.
             internal InventoryAuditedSteps(JObject receipt, Dictionary<Guid, EventsInventoryEntry> baseline,
                 Dictionary<Guid, EventsInventoryEntry> preCommit, Dictionary<Guid, EventsInventoryEntry> final,
-                EventsSaveWindow.SaveEvidence preCommitEvidence, EventsSaveWindow.SaveEvidence finalEvidence, long? stampAfterObjectSave)
+                EventsSaveWindow.SaveEvidence preCommitEvidence, EventsSaveWindow.SaveEvidence finalEvidence, long? stampAfterObjectSave,
+                Func<long?> freshReadAtPreCommit)
             {
                 _receipt = receipt;
                 _baseline = baseline;
@@ -78,6 +83,7 @@ namespace GxMcp.Worker.Tests
                 _preCommitEvidence = preCommitEvidence;
                 _finalEvidence = finalEvidence;
                 _stampAfterObjectSave = stampAfterObjectSave;
+                _freshReadAtPreCommit = freshReadAtPreCommit;
             }
 
             public string OriginalToken => "token-1";
@@ -107,7 +113,9 @@ namespace GxMcp.Worker.Tests
             public void VerifyPreCommit()
             {
                 Calls.Add("VerifyPreCommit");
-                var window = EventsSaveWindow.FromSaveEvidence(_preCommitEvidence, transactionClosed: false);
+                // The same composed decision the production steps make, on the reading the double was given.
+                var window = EventsSaveWindow.ForPreCommit(_preCommitEvidence, _stampAfterObjectSave, _freshReadAtPreCommit());
+                _preCommitReason = window.Reason;
                 var others = EventsOtherObjectChanges.Classify(_baseline, _preCommit, Target, window);
                 IsolatedEventsSaveVerdict.RecordPreCommitOthers(_receipt, others, window);
                 if (FailPreCommit) throw new InvalidOperationException("pre-commit refused");
@@ -125,9 +133,8 @@ namespace GxMcp.Worker.Tests
             public void VerifyAfterCommit(bool committed)
             {
                 Calls.Add("VerifyAfterCommit");
-                var window = EventsSaveWindow.ConfirmPersistedStamp(
-                    EventsSaveWindow.FromSaveEvidence(_finalEvidence, transactionClosed: true), committed,
-                    _final[Target].StampTicks, _finalEvidence.StampAfterObjectSave);
+                var window = EventsSaveWindow.ForFinal(
+                    _finalEvidence, committed, _final[Target].StampTicks, _finalEvidence.StampAfterObjectSave, _preCommitReason);
                 var others = EventsOtherObjectChanges.Classify(_baseline, _final, Target, window);
                 _receipt["persisted"] = committed;
                 _receipt["saved"] = committed;
@@ -154,15 +161,18 @@ namespace GxMcp.Worker.Tests
             internal readonly IsolatedEventsSaveOutcome Outcome;
 
             // preCommit and final describe the other object as the pre-commit and the post-commit inventories read it.
+            // freshReadAtPreCommit is the target's stamp read inside the transaction; by default it is the save's own stamp.
             internal Run(EventsInventoryEntry otherAtPreCommit, EventsInventoryEntry otherAtFinal,
                 EventsSaveWindow.SaveEvidence preCommitEvidence, EventsSaveWindow.SaveEvidence finalEvidence,
-                bool failObjectSave = false, bool failPreCommit = false, long? stampAfterObjectSave = null)
+                bool failObjectSave = false, bool failPreCommit = false, long? stampAfterObjectSave = null,
+                Func<long?> freshReadAtPreCommit = null)
             {
+                long? stamp = stampAfterObjectSave ?? TargetAfter.StampTicks;
                 Steps = new InventoryAuditedSteps(Receipt,
                     Inventory(TargetBefore, OtherUntouched),
                     Inventory(TargetAfter, otherAtPreCommit),
                     Inventory(failObjectSave ? TargetBefore : TargetAfter, otherAtFinal),
-                    preCommitEvidence, finalEvidence, stampAfterObjectSave ?? TargetAfter.StampTicks)
+                    preCommitEvidence, finalEvidence, stamp, freshReadAtPreCommit ?? (() => stamp))
                 {
                     FailObjectSave = failObjectSave, FailPreCommit = failPreCommit
                 };
@@ -319,7 +329,7 @@ namespace GxMcp.Worker.Tests
             var final = Inventory(TargetAfter, OtherUntouched);
             final[Guid.Parse("00000000-0000-0000-0000-0000000000d4")] = Entry(1, At(190), "Created01");
             var fake = new InventoryAuditedSteps(steps, baseline, Inventory(TargetAfter, OtherUntouched), final,
-                OpenWindow(), ClosedWindow(), TargetAfter.StampTicks);
+                OpenWindow(), ClosedWindow(), TargetAfter.StampTicks, () => TargetAfter.StampTicks);
 
             var outcome = IsolatedEventsSaveFlow.Run(fake, new IsolatedEventsSaveTrace(steps, "SamplePanel"), "token-1", () => new NoopGate());
 
@@ -375,6 +385,69 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("object-save", run.Outcome.Phase);
             Assert.False(run.Receipt["rollbackVerified"]!.Value<bool>());
             Assert.True(WriteService.ShouldMarkIsolatedEventsDirty(run.Receipt));
+        }
+
+        // The pre-commit stamp check (EventsSaveWindow.ForPreCommit) reads the target inside the transaction. A reading that is
+        // neither the save's stamp nor the stamp before it makes the pre-commit window unavailable, so an edit of another object
+        // that the calibrated window would have cleared blocks the save. The save's stamp is read through the local clock below.
+        [Fact]
+        public void AReadingLaterThanTheStampBeforeTheSave_InAnotherRepresentation_RefusesTheSaveAndNamesTheGuard()
+        {
+            // Another process edited the other object before the window, and the rollback removed that edit again.
+            var run = new Run(Entry(4, At(60)), OtherUntouched, OpenWindow(), ClosedWindow(),
+                freshReadAtPreCommit: () => TargetBefore.StampTicks + TimeSpan.FromHours(1).Ticks);
+
+            Assert.Equal(IsolatedEventsSaveOutcomeKind.NotConfirmed, run.Outcome.Kind);
+            Assert.Equal("pre-commit-verification", run.Outcome.Phase);
+            Assert.DoesNotContain("Commit", run.Steps.Calls);
+            Assert.Contains("Rollback", run.Steps.Calls);
+            Assert.Equal("PreCommitStampRepresentationMismatch", run.Receipt["preCommitSaveWindow"]!["reason"]!.ToString());
+            Assert.Equal(new[] { Other.ToString() }, run.Receipt["preCommitUnexpectedChangedObjects"]!.ToObject<string[]>());
+            Assert.True(run.Receipt["rollbackVerified"]!.Value<bool>());
+        }
+
+        [Fact]
+        public void TheSameRefusal_WhenTheEditSurvivesTheRollback_LeavesTheRollbackUnverified_WithTheGuardReason()
+        {
+            // The edit is still in the Knowledge Base after the rollback. A calibrated final window would clear it and vouch for
+            // the rollback; the guard reason keeps the final window unavailable, so the edit blocks the rollback.
+            var run = new Run(Entry(4, At(60)), Entry(4, At(60)), OpenWindow(), ClosedWindow(),
+                freshReadAtPreCommit: () => TargetBefore.StampTicks + TimeSpan.FromHours(1).Ticks);
+
+            Assert.Equal("pre-commit-verification", run.Outcome.Phase);
+            Assert.Contains("Rollback", run.Steps.Calls);
+            Assert.False(run.Receipt["saveWindow"]!["calibrated"]!.Value<bool>());
+            Assert.Equal("PreCommitStampRepresentationMismatch", run.Receipt["saveWindow"]!["reason"]!.ToString());
+            Assert.False(run.Receipt["rollbackVerified"]!.Value<bool>());
+            Assert.True(WriteService.ShouldMarkIsolatedEventsDirty(run.Receipt));
+        }
+
+        [Fact]
+        public void AReadingBelowTheStampBeforeTheSave_IsNotTakenForAProofOfTheWindow_AndTheEditIsNotCleared()
+        {
+            // The save's stamp read through the local clock lies three hours behind it, below the stamp before the save. An edit
+            // before the window would have been cleared by the window of an earlier check, and the save would have committed.
+            var run = new Run(Entry(4, At(60)), OtherUntouched, OpenWindow(), ClosedWindow(),
+                freshReadAtPreCommit: () => TargetAfter.StampTicks + LocalOffset);
+
+            Assert.Equal("pre-commit-verification", run.Outcome.Phase);
+            Assert.DoesNotContain("Commit", run.Steps.Calls);
+            Assert.Equal("PreCommitStampRepresentationMismatch", run.Receipt["preCommitSaveWindow"]!["reason"]!.ToString());
+            Assert.Equal(new[] { Other.ToString() }, run.Receipt["preCommitUnexpectedChangedObjects"]!.ToObject<string[]>());
+        }
+
+        [Fact]
+        public void AGuardWithoutAConcurrentEdit_DoesNotRefuseTheSave()
+        {
+            // The guard decides only about the other objects: a clean save with the same reading still commits and is verified.
+            var run = new Run(OtherUntouched, OtherUntouched, OpenWindow(), ClosedWindow(),
+                freshReadAtPreCommit: () => TargetAfter.StampTicks + LocalOffset);
+
+            Assert.Equal(IsolatedEventsSaveOutcomeKind.Verified, run.Outcome.Kind);
+            Assert.Contains("Commit", run.Steps.Calls);
+            Assert.DoesNotContain("Rollback", run.Steps.Calls);
+            Assert.Equal("PreCommitStampRepresentationMismatch", run.Receipt["preCommitSaveWindow"]!["reason"]!.ToString());
+            Assert.True(run.Receipt["saveWindow"]!["calibrated"]!.Value<bool>());
         }
 
         [Fact]

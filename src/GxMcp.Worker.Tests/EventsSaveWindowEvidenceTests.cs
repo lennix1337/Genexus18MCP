@@ -239,5 +239,56 @@ namespace GxMcp.Worker.Tests
 
             Assert.Equal("TargetNotSaved", window.Reason);
         }
+
+        // The pre-commit check as the production steps and the double both make it (ForPreCommit): a reading equal to the save's
+        // stamp (102 s) or to the stamp before the save (50 s) keeps the window; any other reading is a mismatch.
+        [Theory]
+        [InlineData(102, null)]
+        [InlineData(50, null)]
+        [InlineData(200, "PreCommitStampRepresentationMismatch")]
+        [InlineData(-10698, "PreCommitStampRepresentationMismatch")] // the save's stamp three hours behind, as a local clock reads it
+        public void ThePreCommitCheck_DecidesEachReadingAgainstTheSaveStampAndTheStampBeforeIt(double readingSeconds, string reason)
+        {
+            var window = EventsSaveWindow.ForPreCommit(Evidence(At(102), At(50), null), At(102), At(readingSeconds));
+
+            Assert.Equal(reason, window.Reason);
+            Assert.Equal(reason == null, window.Calibrated);
+        }
+
+        [Fact]
+        public void ThePreCommitCheck_AFailedReading_IsUnavailable()
+        {
+            var window = EventsSaveWindow.ForPreCommit(Evidence(At(102), At(50), null), At(102), null);
+
+            Assert.False(window.Calibrated);
+            Assert.Equal("PreCommitStampNotRead", window.Reason);
+        }
+
+        // The final window after a rollback keeps the pre-commit guard's reason; any other save keeps the window it always had.
+        [Fact]
+        public void AFinalWindow_AfterARollbackThatTheGuardRefused_KeepsTheGuardReasonAndItsEvidence()
+        {
+            var window = EventsSaveWindow.ForFinal(Evidence(At(102), At(50), At(160)), committed: false,
+                persistedStampTicks: At(50), saveStampTicks: At(102), preCommitReason: "PreCommitStampRepresentationMismatch");
+
+            Assert.False(window.Calibrated);
+            Assert.Equal("PreCommitStampRepresentationMismatch", window.Reason);
+            Assert.Equal(EventsSaveWindow.Iso(At(102)), window.Describe()["anchorStampUtc"]!.ToString());
+        }
+
+        [Fact]
+        public void AFinalWindow_WithoutARefusingGuard_IsTheCalibratedWindowOfTheSave()
+        {
+            var rolledBack = EventsSaveWindow.ForFinal(Evidence(At(102), At(50), At(160)), committed: false,
+                persistedStampTicks: At(50), saveStampTicks: At(102), preCommitReason: null);
+            var committed = EventsSaveWindow.ForFinal(Evidence(At(102), At(50), At(160)), committed: true,
+                persistedStampTicks: At(102), saveStampTicks: At(102), preCommitReason: "PreCommitStampRepresentationMismatch");
+            var otherReason = EventsSaveWindow.ForFinal(Evidence(At(102), At(50), At(160)), committed: false,
+                persistedStampTicks: At(50), saveStampTicks: At(102), preCommitReason: "TargetNotSaved");
+
+            Assert.True(rolledBack.Calibrated);
+            Assert.True(committed.Calibrated);
+            Assert.True(otherReason.Calibrated);
+        }
     }
 }

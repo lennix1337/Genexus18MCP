@@ -199,11 +199,37 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
-        /// The pre-commit check on the target's stamp read inside the open transaction after the object save (contract item 5).
-        /// A read that shows the save's own stamp keeps the window. A read that differs from it but is later than the stamp the
-        /// target carried before the save uses another representation of the same clock than the save's stamp does, so the
-        /// pre-commit window is unavailable (fail closed). A read that failed leaves the window unavailable too. Any other
-        /// reading is not decided here.
+        /// The window the pre-commit check uses: the save's own window, checked against the target's stamp as the open transaction
+        /// reads it after the object save (see <see cref="ConfirmPreCommitStamp"/>). The production steps and the offline double
+        /// both decide through this function.
+        /// </summary>
+        internal static EventsSaveWindow ForPreCommit(SaveEvidence evidence, long? saveStampTicks, long? freshStampTicks)
+            => ConfirmPreCommitStamp(
+                FromSaveEvidence(evidence, transactionClosed: false), saveStampTicks, freshStampTicks, evidence.LastUpdateBeforeTicks);
+
+        /// <summary>
+        /// The window of the final verdict. A save rolled back after the pre-commit check made its window unavailable keeps that
+        /// reason and its evidence: the final window is calibrated from the same evidence, so it would otherwise vouch for a
+        /// rollback the check had refused to trust. Every other save gets the window and the persisted-stamp check it always had.
+        /// </summary>
+        internal static EventsSaveWindow ForFinal(
+            SaveEvidence evidence, bool committed, long persistedStampTicks, long? saveStampTicks, string preCommitReason)
+        {
+            if (!committed && IsPreCommitGuardReason(preCommitReason))
+            {
+                EventsSaveWindow guarded = Unavailable(preCommitReason);
+                guarded.Evidence = evidence;
+                return guarded;
+            }
+            return ConfirmPersistedStamp(FromSaveEvidence(evidence, transactionClosed: true), committed, persistedStampTicks, saveStampTicks);
+        }
+
+        /// <summary>
+        /// The pre-commit check on the target's stamp read inside the open transaction after the object save. A reading equal to
+        /// the save's own stamp keeps the window. A reading equal to the stamp the target carried before the save proves neither
+        /// clock representation, so it decides nothing and keeps the window too. Any other reading, earlier or later than that
+        /// stamp, is not in the representation of the save's stamp, so the pre-commit window is unavailable (fail closed). So is
+        /// a reading that failed.
         /// </summary>
         internal static EventsSaveWindow ConfirmPreCommitStamp(
             EventsSaveWindow window, long? saveStampTicks, long? freshStampTicks, long lastUpdateBeforeTicks)
@@ -215,15 +241,14 @@ namespace GxMcp.Worker.Helpers
                 notRead.Evidence = window.Evidence;
                 return notRead;
             }
-            if (freshStampTicks.Value == saveStampTicks.Value) return window;
-            if (freshStampTicks.Value > lastUpdateBeforeTicks)
-            {
-                EventsSaveWindow unavailable = Unavailable("PreCommitStampRepresentationMismatch");
-                unavailable.Evidence = window.Evidence;
-                return unavailable;
-            }
-            return window;
+            if (freshStampTicks.Value == saveStampTicks.Value || freshStampTicks.Value == lastUpdateBeforeTicks) return window;
+            EventsSaveWindow unavailable = Unavailable("PreCommitStampRepresentationMismatch");
+            unavailable.Evidence = window.Evidence;
+            return unavailable;
         }
+
+        private static bool IsPreCommitGuardReason(string reason)
+            => reason == "PreCommitStampNotRead" || reason == "PreCommitStampRepresentationMismatch";
 
         private static bool Covers(long offsetLow, long offsetHigh, long clockOffset, long tolerance)
             => offsetLow - tolerance <= clockOffset && clockOffset <= offsetHigh + tolerance;
