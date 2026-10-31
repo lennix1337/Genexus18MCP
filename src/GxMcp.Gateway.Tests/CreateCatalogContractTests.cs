@@ -25,20 +25,22 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
-        public void Help_NamesDesignSystemAsCreatedEmpty()
+        public void Help_NamesDesignSystemWithItsPartsEmpty()
         {
             string help = ToolHelpCatalog.Get("genexus_create");
 
-            Assert.Contains("`DesignSystem` — created empty", help);
+            Assert.Contains("`DesignSystem` — created with its parts empty (Documentation, Source, Styles, Tokens).", help);
         }
 
         [Fact]
-        public void Help_RefusesWorkWithPlusTemplatesWithTheirErrorCodeAndTheIde()
+        public void Help_RefusesWorkWithPlusTemplatesInEveryModeWithTheirErrorCodesAndTheIde()
         {
             string help = ToolHelpCatalog.Get("genexus_create");
 
             Assert.Contains("WorkWithPlus for Web Template", help);
             Assert.Contains("UnsupportedObjectType", help);
+            Assert.Contains("AtomicCreateValidationFailed", help);
+            Assert.Contains("mode=update", help);
             Assert.Contains("GeneXus IDE", help);
         }
 
