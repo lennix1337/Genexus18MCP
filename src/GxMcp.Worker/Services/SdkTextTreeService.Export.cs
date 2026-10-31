@@ -99,7 +99,10 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private static string BuildModuleDirectory(SearchIndex.IndexEntry entry, string module)
+        // module.toml belongs to the module root. The directory ends at the module's own segment, so the
+        // folders under it (WWPTemplates/Selection under WWPBaseObjects) never become modules. A path that
+        // does not show the module keeps its whole folder path, as it did before.
+        internal static string BuildModuleDirectory(SearchIndex.IndexEntry entry, string module)
         {
             string raw = entry?.ParentFolderPath ?? entry?.ParentPath;
             var parts = string.IsNullOrWhiteSpace(raw)
@@ -110,6 +113,10 @@ namespace GxMcp.Worker.Services
                     .Select(ObjectTextService.SanitizeFilePart)
                     .Where(value => !string.IsNullOrWhiteSpace(value))
                     .ToList();
+            int moduleSegment = string.IsNullOrWhiteSpace(module)
+                ? -1
+                : parts.FindIndex(value => string.Equals(value, ObjectTextService.SanitizeFilePart(module), StringComparison.OrdinalIgnoreCase));
+            if (moduleSegment >= 0) parts = parts.Take(moduleSegment + 1).ToList();
             if (parts.Count == 0 && !string.IsNullOrWhiteSpace(module))
                 parts.Add(ObjectTextService.SanitizeFilePart(module));
             return parts.Count == 0 ? string.Empty : Path.Combine(parts.ToArray());
