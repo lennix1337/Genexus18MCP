@@ -1380,12 +1380,19 @@ namespace GxMcp.Worker.Services
         }
 
         /// <summary>
-        /// Types the generic delete path refuses: the SDK deletes a WorkWithPlus template only through the
-        /// WorkWithPlus Settings Editor. Only the template type is listed today.
+        /// Types the generic delete path refuses: a WorkWithPlus template is removed only with the WorkWithPlus
+        /// Settings Editor. Only the template type is listed today; its name is matched without white space and in
+        /// any case.
         /// </summary>
         internal static bool IsDeleteRefusedForType(string typeName)
         {
-            return string.Equals(typeName, "WorkWithPlus for Web Template", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(CompactTypeName(typeName), "workwithplusforwebtemplate", StringComparison.Ordinal);
+        }
+
+        /// <summary>The type name without white space and in lower case.</summary>
+        internal static string CompactTypeName(string typeName)
+        {
+            return string.Concat((typeName ?? string.Empty).Where(c => !char.IsWhiteSpace(c))).ToLowerInvariant();
         }
 
         /// <summary>
@@ -1396,8 +1403,8 @@ namespace GxMcp.Worker.Services
         {
             return McpResponse.Err(
                 code: "DeleteNotSupportedForType",
-                message: "WorkWithPlus templates cannot be deleted with genexus_delete_object: the SDK refuses them, and only the WorkWithPlus Settings Editor deletes them. Nothing was deleted.",
-                hint: "Delete the template in the IDE with the WorkWithPlus Settings Editor (Settings > Templates). genexus_delete_object does not remove WorkWithPlus templates.",
+                message: "WorkWithPlus templates cannot be deleted with genexus_delete_object. Delete them with the WorkWithPlus Settings Editor. Nothing was deleted.",
+                hint: "Delete the template with the WorkWithPlus Settings Editor in the IDE. genexus_delete_object does not remove WorkWithPlus templates.",
                 target: target,
                 extra: new JObject
                 {
@@ -1405,6 +1412,69 @@ namespace GxMcp.Worker.Services
                     ["wouldDelete"] = false,
                     ["persisted"] = false
                 });
+        }
+
+        /// <summary>
+        /// What a delete learns from the KB before it writes anything: the envelope that ends the call (KB not open,
+        /// or confirm missing), or whether the target was found and the identity of what was found.
+        /// </summary>
+        internal sealed class DeleteResolution
+        {
+            public string Error { get; set; }
+            public bool Found { get; set; }
+            public dynamic Kb { get; set; }
+            public KBObject Object { get; set; }
+            public string Name { get; set; }
+            public string TypeName { get; set; }
+            public Guid Guid { get; set; }
+        }
+
+        private Func<string, string, bool, bool, DeleteResolution> _deleteTargetResolver;
+
+        /// <summary>Test seam: replaces the KB lookup and the target resolution that <see cref="DeleteObject"/> makes.</summary>
+        internal void SetDeleteTargetResolverForTest(Func<string, string, bool, bool, DeleteResolution> resolver)
+        {
+            _deleteTargetResolver = resolver;
+        }
+
+        /// <summary>
+        /// Reads what a delete needs before it writes: the KB, then the confirm rule, then the target. The order and
+        /// the envelopes are the ones DeleteObject has always returned.
+        /// </summary>
+        internal DeleteResolution ResolveDeleteTarget(string target, string typeFilter, bool dryRun, bool confirm)
+        {
+            var kb = _kbService.GetKB();
+            if (kb == null)
+                return new DeleteResolution
+                {
+                    Error = Models.McpResponse.Err(code: "KbNotOpen", message: "No KB open.",
+                        hint: "Open a KB first with genexus_kb action=open.",
+                        nextSteps: new JArray(KbOpenNextStep.Step("Open the target KB before deleting.")))
+                };
+
+            if (!dryRun && !confirm)
+                return new DeleteResolution
+                {
+                    Error = Models.McpResponse.Err(code: "ConfirmRequired",
+                        message: "Delete requires explicit confirm=true (irreversible operation).",
+                        hint: "Re-issue genexus_delete_object with confirm=true. Consider dryRun=true first to preview the impact.",
+                        nextSteps: new JArray(Models.McpResponse.NextStep("genexus_delete_object", new JObject { ["name"] = target, ["confirm"] = true }, "Re-issue with confirm=true to perform the irreversible delete.")),
+                        target: target)
+                };
+
+            var obj = FindObject(target, typeFilter);
+            if (obj == null)
+                return new DeleteResolution { Kb = kb };
+
+            return new DeleteResolution
+            {
+                Found = true,
+                Kb = kb,
+                Object = obj,
+                Name = obj.Name,
+                TypeName = obj.TypeDescriptor?.Name ?? "Unknown",
+                Guid = obj.Guid
+            };
         }
 
         public string DeleteObject(string target, string typeFilter, bool confirm, bool dryRun = false, string expectedVersion = null)
@@ -1418,27 +1488,17 @@ namespace GxMcp.Worker.Services
             IReadOnlyList<Guid> candidateGuids = new Guid[0];
             try
             {
-                // A WorkWithPlus template is refused by its type alone: the KB is not read and no transaction starts.
+                // A WorkWithPlus template named by its type is refused before the KB is read and before any transaction.
                 if (IsDeleteRefusedForType(typeFilter))
                     return DeleteNotSupportedForTypeResponse(target, typeFilter);
 
-                var kb = _kbService.GetKB();
-                if (kb == null)
-                    return Models.McpResponse.Err(code: "KbNotOpen", message: "No KB open.",
-                        hint: "Open a KB first with genexus_kb action=open.",
-                        nextSteps: new JArray(KbOpenNextStep.Step("Open the target KB before deleting.")));
+                var resolution = _deleteTargetResolver != null
+                    ? _deleteTargetResolver(target, typeFilter, dryRun, confirm)
+                    : ResolveDeleteTarget(target, typeFilter, dryRun, confirm);
+                if (resolution.Error != null)
+                    return resolution.Error;
 
-                if (!dryRun && !confirm)
-                {
-                    return Models.McpResponse.Err(code: "ConfirmRequired",
-                        message: "Delete requires explicit confirm=true (irreversible operation).",
-                        hint: "Re-issue genexus_delete_object with confirm=true. Consider dryRun=true first to preview the impact.",
-                        nextSteps: new JArray(Models.McpResponse.NextStep("genexus_delete_object", new JObject { ["name"] = target, ["confirm"] = true }, "Re-issue with confirm=true to perform the irreversible delete.")),
-                        target: target);
-                }
-
-                var obj = FindObject(target, typeFilter);
-                if (obj == null)
+                if (!resolution.Found)
                 {
                     // A prior delete_object call may have timed out at the gateway pipe
                     // while the worker's obj.Delete() completed successfully a few seconds
@@ -1475,10 +1535,13 @@ namespace GxMcp.Worker.Services
                     return HealingService.FormatNotFoundError(target, GetLoadedIndexOrNull());
                 }
 
-                objName = obj.Name;
-                objType = obj.TypeDescriptor?.Name ?? "Unknown";
-                objGuid = obj.Guid;
-                // Also refuses a template found without a type filter, before the version check and any transaction.
+                var kb = resolution.Kb;
+                var obj = resolution.Object;
+                objName = resolution.Name;
+                objType = resolution.TypeName;
+                objGuid = resolution.Guid;
+                // The type the SDK reports decides too: a template found without a type filter, or named in another
+                // spelling, is refused here, before the version check and any transaction.
                 if (IsDeleteRefusedForType(objType))
                     return DeleteNotSupportedForTypeResponse(objName, objType);
                 string qualifiedName = GetQualifiedObjectName(obj);
