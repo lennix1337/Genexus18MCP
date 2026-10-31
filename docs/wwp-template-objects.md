@@ -117,3 +117,32 @@ The offline tests cover XML and binding/planning helpers, not the full
 fresh-read/token conflicts through that service, or persistence. Those remain
 explicit validation gaps; passing the pure planner tests does not remove the
 ownership or save guards.
+
+## Writes through `genexus_properties`
+
+`genexus_properties` accepts the names of the official text export for seven properties of a template object: `TemplateType` (`WWPTemplate_Type`), `TemplateCategory` (`WWPTemplate_Category`), `TemplateCategoryOrder` (`WWPTemplate_CategoryOrder`), `TemplateXml` (`WWPTemplate_TemplateXml`), `MainTemplate` (`WWPTemplate_MainTemplate`), `InstanceType` (`WWPTemplate_InstanceType`) and `PreviewImage` (`WWPTemplate_PreviewImage`). The aliases apply only to the `WorkWithPlus for Web Template` object type. `get` returns the requested name as `name` and the SDK property as `nativeName`; `set` reports the same pairs in `nativeNames`. An alias and the SDK name it stands for in one call are refused with `PropertyAliasConflict`.
+
+A `set` that changes `WWPTemplate_Type` or `WWPTemplate_TemplateXml` reads the value the call does not send from the object, and refuses the write before anything is saved (`dryRun` too) when:
+
+- the type is empty (`TypeEmpty`), or is not one of the twelve types below (`TypeUnknown`; the comparison is exact, without case folding);
+- the XML is empty (`XmlEmpty`), is not well-formed, or declares a DTD (`XmlMalformed`; DTDs are not processed, as in the reader of `genexus_wwp`);
+- the root element is not the root of the type (`RootMismatch`).
+
+The refusal is `WwpTemplateInvalid`, with one entry in `violations` (`check` and `message`) for each failed check. The types and roots come from a read-only export of 124 templates of WorkWithPlus 16.2 on GeneXus 18 U16. Each type had one root in that export:
+
+| Type | Root |
+| :--- | :--- |
+| `Trn.Selection` | `selection` |
+| `Trn.Transaction` | `transaction` |
+| `Trn.View` | `view` |
+| `Trn.Association` | `association` |
+| `Trn.AssociationSelection` | `associationSelection` |
+| `Trn.Prompt` | `prompt` |
+| `Trn.PromptMultiple` | `promptMultiple` |
+| `Component` | `component` |
+| `Regular`, `Report`, `Wizard` | `template` |
+| `WizardStep` | `step` |
+
+The `Name` attribute of the root is not checked. In that export 23 roots have no `Name` attribute, and 2 product templates have a `Name` that differs from the object name.
+
+The check reads the XML and the type only. It does not run the validators of WorkWithPlus, so a template that passes can still be rejected by its editor for other reasons. A written value is still confirmed by an independent read after the save, as before.
