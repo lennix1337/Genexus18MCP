@@ -15,10 +15,10 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void The_permutation_of_a_webpanel_rebinds_each_control_to_the_variable_with_its_name()
         {
-            var outcome = SaveAsVariableIdRemap.Apply(
+            var outcome = SaveAsVariableIdRemap.ForClone(
                 Form(Data("var:11"), Item("var:12"), Item("var:13"), Data("var:15"), Data("var:16"), Data("var:17"), Data("var:18"), Data("var:19"), Data("var:20")),
-                SaveAsVariableIdRemap.SourceNamesById(SourceVariables()),
-                SaveAsVariableIdRemap.TargetIdsByName(TargetVariables()));
+                SourceVariables(),
+                TargetVariables());
 
             Assert.Equal(8, outcome.Remapped);
             Assert.Empty(outcome.Unmapped);

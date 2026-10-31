@@ -92,6 +92,21 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
+        /// The remap of a clone's WebForm, from the variables of the source object and of the target object as the
+        /// target holds them after its Variables were written.
+        /// </summary>
+        public static Outcome ForClone(
+            string webFormXml,
+            IEnumerable<NamedId> sourceVariables,
+            IEnumerable<NamedId> targetVariables)
+        {
+            return Apply(
+                webFormXml,
+                SourceNamesById(sourceVariables),
+                TargetIdsByName(targetVariables));
+        }
+
+        /// <summary>
         /// Replaces each <c>var:N</c> attribute value of the WebForm by <c>var:M</c>, where N is the source id and M the
         /// target id of the variable with the same name. Nothing else in the text changes.
         /// </summary>
