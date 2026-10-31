@@ -1,6 +1,9 @@
 using System;
+using System.Linq;
 using GxMcp.TestSupport;
 using GxMcp.Worker.Helpers;
+using GxMcp.Worker.Services;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GxMcp.Worker.Tests
@@ -65,6 +68,32 @@ namespace GxMcp.Worker.Tests
                 "public KBObject CreateObjectInstance(");
 
             AssertRefusalComesBeforeLookup(body);
+        }
+
+        [Fact]
+        public void AtomicCreate_RefusesTheTemplateInItsSpec_SoADryRunCannotPreviewIt()
+        {
+            AtomicCreateService.ParsedSpec spec = AtomicCreateService.ParseAndValidate(new JObject
+            {
+                ["type"] = "WorkWithPlus for Web Template",
+                ["name"] = "SynthTemplate",
+            });
+
+            JObject typeError = spec.Errors.OfType<JObject>().FirstOrDefault(e => (string)e["field"] == "type");
+            Assert.NotNull(typeError);
+            Assert.Contains("GeneXus IDE", typeError.ToString());
+        }
+
+        [Fact]
+        public void AtomicCreate_DoesNotRefuseAnOrdinaryType()
+        {
+            AtomicCreateService.ParsedSpec spec = AtomicCreateService.ParseAndValidate(new JObject
+            {
+                ["type"] = "Procedure",
+                ["name"] = "SynthProcedure",
+            });
+
+            Assert.DoesNotContain(spec.Errors.OfType<JObject>(), e => (string)e["field"] == "type");
         }
 
         private static void AssertRefusalComesBeforeLookup(string body)
