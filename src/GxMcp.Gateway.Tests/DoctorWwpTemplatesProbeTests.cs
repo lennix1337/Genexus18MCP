@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using GxMcp.Gateway;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -13,8 +14,10 @@ namespace GxMcp.Gateway.Tests
     [Collection("WorkerLifecycleSerial")]
     public class DoctorWwpTemplatesProbeTests
     {
-        // The Worker's answer to the WwpTemplates action, in the shape DoctorService.WwpTemplatesResponse returns.
-        private static string WorkerAnswer(int read, int invalid) => new JObject
+        private const string SynthTemplateName = "SynthTemplate";
+
+        // The command envelope the Worker writes for the WwpTemplates action (DoctorService.WwpTemplatesResponse).
+        private static JObject OkEnvelope(int read, int invalid) => new JObject
         {
             ["status"] = "ok",
             ["code"] = "DoctorWwpTemplatesOk",
@@ -25,17 +28,26 @@ namespace GxMcp.Gateway.Tests
                 ["invalid"] = invalid,
                 ["unreadable"] = 0,
                 ["listLimit"] = 5,
-                ["listed"] = new JArray(new JObject { ["name"] = "SynthTemplate", ["problem"] = "emptyType" }),
+                ["listed"] = new JArray(new JObject { ["name"] = SynthTemplateName, ["problem"] = "emptyType" }),
                 ["severity"] = "high",
                 ["hint"] = "Correct each listed template with genexus_properties set."
             }
-        }.ToString();
+        };
 
-        private static Task Answer(JObject rpc, string answerJson)
+        // The reply frame the Worker writes: the JSON-RPC envelope whose result is the command envelope.
+        private static string ReplyFrame(string id, JObject commandEnvelope) => new JObject
         {
-            Assert.True(Program.CompleteDoctorWwpTemplatesForTest(rpc["id"]!.ToString(), answerJson));
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["result"] = commandEnvelope
+        }.ToString(Formatting.None);
+
+        // Answers a probe the way the Worker does: the frame goes through the production reply router.
+        private static Func<JObject, Task> RouteReply(Func<string, string> frameFor) => rpc =>
+        {
+            Program.RouteWorkerReplyForTest(frameFor(rpc["id"]!.ToString()));
             return Task.CompletedTask;
-        }
+        };
 
         [Fact]
         public async Task Probe_without_an_open_kb_answers_KbNotOpen()
@@ -44,113 +56,6 @@ namespace GxMcp.Gateway.Tests
 
             Assert.False(block["available"]!.Value<bool>());
             Assert.Equal("KbNotOpen", block["reason"]!.ToString());
-        }
-
-        [Fact]
-        public async Task Exchange_sends_the_template_action_and_returns_the_block_the_worker_answers()
-        {
-            JObject sent = null;
-
-            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
-                rpc => { sent = rpc; return Answer(rpc, WorkerAnswer(read: 3, invalid: 1)); },
-                TimeSpan.FromSeconds(5),
-                sessionId: null);
-
-            Assert.Equal("Doctor", sent["method"]!.ToString());
-            Assert.Equal("WwpTemplates", sent["action"]!.ToString());
-            Assert.True(block["available"]!.Value<bool>());
-            Assert.Equal(3, block["read"]!.Value<int>());
-            Assert.Equal(1, block["invalid"]!.Value<int>());
-            Assert.Equal("high", block["severity"]!.ToString());
-            Assert.Equal(0, Program.PendingRequestCountForTest);
-        }
-
-        [Fact]
-        public async Task Exchange_answers_Timeout_and_forgets_the_request_when_the_worker_stays_silent()
-        {
-            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
-                rpc => Task.CompletedTask,
-                TimeSpan.FromMilliseconds(50),
-                sessionId: null);
-
-            Assert.False(block["available"]!.Value<bool>());
-            Assert.Equal("Timeout", block["reason"]!.ToString());
-            Assert.Equal(50L, block["timeoutMs"]!.Value<long>());
-            Assert.Equal(0, Program.PendingRequestCountForTest);
-        }
-
-        [Fact]
-        public async Task Exchange_answers_WorkerError_and_forgets_the_request_when_the_send_throws()
-        {
-            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
-                rpc => throw new InvalidOperationException("pipe closed"),
-                TimeSpan.FromSeconds(5),
-                sessionId: null);
-
-            Assert.False(block["available"]!.Value<bool>());
-            Assert.Equal("WorkerError", block["reason"]!.ToString());
-            Assert.Equal(0, Program.PendingRequestCountForTest);
-        }
-
-        [Fact]
-        public async Task Exchange_answers_WorkerError_with_the_error_code_of_an_error_envelope()
-        {
-            var error = new JObject
-            {
-                ["status"] = "error",
-                ["error"] = new JObject { ["code"] = "KbOpenFailed", ["message"] = "The KB could not be read." }
-            }.ToString();
-
-            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
-                rpc => Answer(rpc, error),
-                TimeSpan.FromSeconds(5),
-                sessionId: null);
-
-            Assert.Equal("WorkerError", block["reason"]!.ToString());
-            Assert.Equal("KbOpenFailed", block["errorCode"]!.ToString());
-        }
-
-        [Fact]
-        public void Doctor_envelope_carries_the_template_block_and_warns_about_broken_templates()
-        {
-            var templates = Program.ParseWwpTemplatesAnswer(WorkerAnswer(read: 3, invalid: 1));
-
-            var doctor = Program.BuildGatewayDoctorEnvelope(null, templates);
-            var result = doctor["result"]!;
-
-            Assert.Equal("ok", doctor["status"]!.ToString());
-            Assert.Equal(1, result["wwpTemplates"]!["invalid"]!.Value<int>());
-            Assert.Contains(result["warnings"]!.Select(w => w.ToString()), w => w.Contains("WorkWithPlus template(s)"));
-            Assert.NotNull(result["kb"]);
-            Assert.NotNull(result["worker"]);
-            Assert.NotNull(result["engine"]);
-        }
-
-        [Fact]
-        public void Doctor_envelope_with_an_unavailable_block_keeps_the_other_blocks_and_adds_no_template_warning()
-        {
-            var doctor = Program.BuildGatewayDoctorEnvelope(null, Program.UnavailableWwpTemplatesBlock("WorkerNotRunning"));
-            var result = doctor["result"]!;
-
-            Assert.Equal("WorkerNotRunning", result["wwpTemplates"]!["reason"]!.ToString());
-            Assert.DoesNotContain(result["warnings"]!.Select(w => w.ToString()), w => w.Contains("WorkWithPlus template(s)"));
-            Assert.NotNull(result["kb"]);
-            Assert.NotNull(result["worker"]);
-            Assert.NotNull(result["engine"]);
-        }
-
-        [Fact]
-        public void The_tool_result_handed_to_the_client_keeps_the_template_block()
-        {
-            var doctor = Program.BuildGatewayDoctorEnvelope(null, Program.ParseWwpTemplatesAnswer(WorkerAnswer(read: 3, invalid: 1)));
-
-            var content = Program.BuildToolResultContent(doctor, false, "genexus_doctor", new JObject());
-            var payload = JObject.Parse(content["content"]![0]!["text"]!.ToString());
-
-            var block = payload["result"]!["wwpTemplates"]!;
-            Assert.Equal(1, block["invalid"]!.Value<int>());
-            Assert.Equal("high", block["severity"]!.ToString());
-            Assert.Equal(1, ((JArray)block["listed"]!).Count);
         }
 
         [Fact]
@@ -180,13 +85,220 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
-        public void Doctor_envelope_keeps_the_kb_and_engine_blocks_whatever_the_template_answer()
+        public async Task The_command_is_the_template_action_with_a_busy_wait_below_the_budget()
+        {
+            JObject? sent = null;
+
+            await Program.ExchangeDoctorWwpTemplatesAsync(
+                rpc =>
+                {
+                    sent = rpc;
+                    return RouteReply(id => ReplyFrame(id, OkEnvelope(read: 0, invalid: 0)))(rpc);
+                },
+                Program.DoctorWwpTemplatesBudget,
+                sessionId: null);
+
+            Assert.Equal("Doctor", sent!["method"]!.ToString());
+            Assert.Equal("WwpTemplates", sent["params"]!["action"]!.ToString());
+            int busyWait = sent["params"]!["busyWaitMs"]!.Value<int>();
+            Assert.True(busyWait > 0 && busyWait < Program.DoctorWwpTemplatesBudget.TotalMilliseconds);
+        }
+
+        [Fact]
+        public async Task A_reply_routed_by_the_reply_router_becomes_the_template_block()
+        {
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                RouteReply(id => ReplyFrame(id, OkEnvelope(read: 3, invalid: 1))),
+                TimeSpan.FromSeconds(5),
+                sessionId: null);
+
+            Assert.True(block["available"]!.Value<bool>());
+            Assert.Equal(3, block["read"]!.Value<int>());
+            Assert.Equal(1, block["invalid"]!.Value<int>());
+            Assert.Equal("high", block["severity"]!.ToString());
+            Assert.Single((JArray)block["listed"]!);
+            Assert.Equal(0, Program.PendingRequestCountForTest);
+        }
+
+        [Fact]
+        public async Task A_busy_worker_refusal_answers_WorkerBusy()
+        {
+            var refusal = new JObject
+            {
+                ["status"] = "error",
+                ["error"] = new JObject { ["code"] = "WorkerBusy", ["message"] = "The Worker SDK thread is busy." }
+            };
+
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                RouteReply(id => ReplyFrame(id, refusal)),
+                TimeSpan.FromSeconds(5),
+                sessionId: null);
+
+            Assert.Equal("WorkerBusy", block["reason"]!.ToString());
+        }
+
+        [Fact]
+        public async Task A_command_error_keeps_its_code()
+        {
+            var error = new JObject
+            {
+                ["status"] = "error",
+                ["error"] = new JObject { ["code"] = "KbOpenFailed", ["message"] = "The KB could not be read." }
+            };
+
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                RouteReply(id => ReplyFrame(id, error)),
+                TimeSpan.FromSeconds(5),
+                sessionId: null);
+
+            Assert.Equal("WorkerError", block["reason"]!.ToString());
+            Assert.Equal("KbOpenFailed", block["errorCode"]!.ToString());
+        }
+
+        [Fact]
+        public async Task A_JSON_RPC_error_on_the_frame_answers_WorkerError_with_its_code()
+        {
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                rpc =>
+                {
+                    Program.RouteWorkerReplyForTest(new JObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = rpc["id"]!.ToString(),
+                        ["error"] = new JObject { ["code"] = -32000, ["message"] = "The Worker could not run the command." }
+                    }.ToString(Formatting.None));
+                    return Task.CompletedTask;
+                },
+                TimeSpan.FromSeconds(5),
+                sessionId: null);
+
+            Assert.Equal("WorkerError", block["reason"]!.ToString());
+            Assert.Equal("-32000", block["errorCode"]!.ToString());
+        }
+
+        [Fact]
+        public async Task A_reply_that_is_not_the_block_answers_UnexpectedReply()
+        {
+            // An older Worker ignores the action and answers the whole doctor envelope.
+            var olderDoctor = new JObject
+            {
+                ["status"] = "ok",
+                ["code"] = "DoctorOk",
+                ["result"] = new JObject { ["checkedAt"] = "2026-01-01T00:00:00Z", ["geneXus"] = new JObject() }
+            };
+
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                RouteReply(id => ReplyFrame(id, olderDoctor)),
+                TimeSpan.FromSeconds(5),
+                sessionId: null);
+
+            Assert.Equal("WorkerError", block["reason"]!.ToString());
+            Assert.Equal("UnexpectedReply", block["errorCode"]!.ToString());
+            Assert.Null(block["geneXus"]);
+        }
+
+        [Fact]
+        public async Task A_silent_worker_times_out_and_the_request_is_forgotten()
+        {
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                rpc => Task.CompletedTask,
+                TimeSpan.FromMilliseconds(50),
+                sessionId: null);
+
+            Assert.Equal("Timeout", block["reason"]!.ToString());
+            Assert.Equal(50L, block["timeoutMs"]!.Value<long>());
+            Assert.Equal(0, Program.PendingRequestCountForTest);
+        }
+
+        [Fact]
+        public async Task The_send_stays_inside_the_budget()
+        {
+            // A send that never completes must not hold the probe past its budget.
+            var exchange = Program.ExchangeDoctorWwpTemplatesAsync(
+                rpc => new TaskCompletionSource<bool>().Task,
+                TimeSpan.FromMilliseconds(100),
+                sessionId: null);
+
+            var first = await Task.WhenAny(exchange, Task.Delay(TimeSpan.FromSeconds(3)));
+
+            Assert.True(ReferenceEquals(first, exchange), "the probe must answer within its budget");
+            Assert.Equal("Timeout", (await exchange)["reason"]!.ToString());
+        }
+
+        [Fact]
+        public async Task A_failed_send_answers_WorkerError_and_the_request_is_forgotten()
+        {
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                rpc => throw new InvalidOperationException("pipe closed"),
+                TimeSpan.FromSeconds(5),
+                sessionId: null);
+
+            Assert.Equal("WorkerError", block["reason"]!.ToString());
+            Assert.Equal(0, Program.PendingRequestCountForTest);
+        }
+
+        [Fact]
+        public async Task A_full_command_queue_answers_WorkerBusy()
+        {
+            var block = await Program.ExchangeDoctorWwpTemplatesAsync(
+                rpc => throw new WorkerCommandQueueFullException("synthkb", "synth-command", "Doctor", 4, 5000),
+                TimeSpan.FromSeconds(5),
+                sessionId: null);
+
+            Assert.Equal("WorkerBusy", block["reason"]!.ToString());
+        }
+
+        [Fact]
+        public void The_envelope_carries_the_block_and_one_warning_for_the_broken_templates()
+        {
+            var block = Program.ParseWwpTemplatesAnswer(ReplyFrame("synth-id", OkEnvelope(read: 3, invalid: 1)));
+
+            var doctor = Program.BuildGatewayDoctorEnvelope(null, block);
+            var result = doctor["result"]!;
+
+            Assert.Equal("ok", doctor["status"]!.ToString());
+            Assert.Equal(1, result["wwpTemplates"]!["invalid"]!.Value<int>());
+            Assert.Single(result["warnings"]!.Select(w => w.ToString()).Where(w => w.Contains("WorkWithPlus template(s)")));
+            Assert.NotNull(result["kb"]);
+            Assert.NotNull(result["worker"]);
+            Assert.NotNull(result["engine"]);
+        }
+
+        [Fact]
+        public void An_unavailable_block_keeps_the_kb_and_engine_blocks_and_adds_no_template_warning()
+        {
+            var doctor = Program.BuildGatewayDoctorEnvelope(null, Program.UnavailableWwpTemplatesBlock("WorkerNotRunning"));
+            var result = doctor["result"]!;
+
+            Assert.Equal("WorkerNotRunning", result["wwpTemplates"]!["reason"]!.ToString());
+            Assert.DoesNotContain(result["warnings"]!.Select(w => w.ToString()), w => w.Contains("WorkWithPlus template(s)"));
+            Assert.NotNull(result["kb"]);
+            Assert.NotNull(result["worker"]);
+            Assert.NotNull(result["engine"]);
+        }
+
+        [Fact]
+        public void The_kb_and_engine_blocks_do_not_change_with_the_template_answer()
         {
             var without = Program.BuildGatewayDoctorEnvelope(null, Program.UnavailableWwpTemplatesBlock("WorkerNotRunning"))["result"]!;
-            var with = Program.BuildGatewayDoctorEnvelope(null, Program.ParseWwpTemplatesAnswer(WorkerAnswer(read: 3, invalid: 1)))["result"]!;
+            var with = Program.BuildGatewayDoctorEnvelope(null, Program.ParseWwpTemplatesAnswer(ReplyFrame("synth-id", OkEnvelope(read: 3, invalid: 1))))["result"]!;
 
             Assert.Equal(without["kb"]!.ToString(), with["kb"]!.ToString());
             Assert.Equal(without["engine"]!.ToString(), with["engine"]!.ToString());
+        }
+
+        [Fact]
+        public void The_tool_result_handed_to_the_client_keeps_the_template_block()
+        {
+            var doctor = Program.BuildGatewayDoctorEnvelope(null, Program.ParseWwpTemplatesAnswer(ReplyFrame("synth-id", OkEnvelope(read: 3, invalid: 1))));
+
+            var content = Program.BuildToolResultContent(doctor, false, "genexus_doctor", new JObject());
+            var payload = JObject.Parse(content["content"]![0]!["text"]!.ToString());
+
+            var block = payload["result"]!["wwpTemplates"]!;
+            Assert.Equal(1, block["invalid"]!.Value<int>());
+            Assert.Equal("high", block["severity"]!.ToString());
+            Assert.Single((JArray)block["listed"]!);
         }
 
         [Fact]

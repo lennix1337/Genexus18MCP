@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 
@@ -10,9 +11,15 @@ namespace GxMcp.Gateway
         internal static readonly TimeSpan DoctorWwpTemplatesBudget = TimeSpan.FromSeconds(4);
 
         /// <summary>
+        /// The Worker is asked to give up on a command it cannot start within this slack below the budget, so the
+        /// Gateway's own timeout is not the first to answer.
+        /// </summary>
+        private const int DoctorWwpTemplatesBusySlackMs = 500;
+
+        /// <summary>
         /// The WorkWithPlus template block for genexus_doctor. It asks only a Worker that is already running and serves
-        /// the session's KB: it never starts or wakes a Worker, never waits for SDK readiness, and registers no operation
-        /// or recovery fence. Every failure is an unavailable block that names its reason.
+        /// the session's KB: it never starts or wakes a Worker and registers no operation or recovery fence. Every
+        /// failure is an unavailable block that names its reason.
         /// </summary>
         internal static async Task<JObject> ProbeDoctorWwpTemplatesAsync(string? sessionId)
         {
@@ -51,9 +58,10 @@ namespace GxMcp.Gateway
         }
 
         /// <summary>
-        /// Registers the probe as a pending Worker request, sends it through <paramref name="send"/>, and waits for the
-        /// answer for at most <paramref name="budget"/>. Whatever the outcome, the pending entry is removed, so a late
-        /// answer is dropped and nothing (operation, retry, fence) follows from it.
+        /// Registers the probe as a pending Worker request and sends it inside the budget, as the engine read does, then
+        /// waits for the reply with what is left of the budget. The command carries a busy wait below the budget, so a
+        /// Worker whose SDK thread is busy refuses the command with WorkerBusy instead of running it late. Whatever the
+        /// outcome, the pending entry is removed, so a late reply is dropped.
         /// </summary>
         internal static async Task<JObject> ExchangeDoctorWwpTemplatesAsync(
             Func<JObject, Task> send,
@@ -76,29 +84,36 @@ namespace GxMcp.Gateway
                 McpSessionId = sessionId ?? "stdio"
             };
             _pendingRequests[requestId] = pending;
+            using var deadline = new CancellationTokenSource(budget);
+            Task? sendTask = null;
             try
             {
                 var command = new JObject
                 {
                     ["module"] = "Doctor",
                     ["action"] = "WwpTemplates",
-                    ["target"] = "_self"
+                    ["target"] = "_self",
+                    ["busyWaitMs"] = Math.Max(0, (int)budget.TotalMilliseconds - DoctorWwpTemplatesBusySlackMs)
                 };
-                await send(BuildWorkerRpcRequest(command, requestId, null, sessionId)).ConfigureAwait(false);
-
-                Task<string> answer = pending.CompletionSource.Task;
-                Task finished = await Task.WhenAny(answer, Task.Delay(budget)).ConfigureAwait(false);
-                if (!ReferenceEquals(finished, answer))
-                {
-                    var timedOut = UnavailableWwpTemplatesBlock("Timeout");
-                    timedOut["timeoutMs"] = (long)budget.TotalMilliseconds;
-                    return timedOut;
-                }
-                return ParseWwpTemplatesAnswer(await answer.ConfigureAwait(false));
+                sendTask = send(BuildWorkerRpcRequest(command, requestId, null, sessionId));
+                await sendTask.WaitAsync(deadline.Token).ConfigureAwait(false);
+                string reply = await pending.CompletionSource.Task.WaitAsync(deadline.Token).ConfigureAwait(false);
+                return ParseWwpTemplatesAnswer(reply);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                if (sendTask != null) ObserveAbandonedSend(sendTask, alias ?? string.Empty, Log);
+                var timedOut = UnavailableWwpTemplatesBlock("Timeout");
+                timedOut["timeoutMs"] = (long)budget.TotalMilliseconds;
+                return timedOut;
             }
             catch (WorkerCommandNotDeliveredException)
             {
                 return UnavailableWwpTemplatesBlock("WorkerNotRunning");
+            }
+            catch (WorkerCommandQueueFullException)
+            {
+                return UnavailableWwpTemplatesBlock("WorkerBusy");
             }
             catch (Exception ex)
             {
@@ -112,43 +127,54 @@ namespace GxMcp.Gateway
         }
 
         /// <summary>
-        /// The block from the Worker's answer. An error envelope, or an answer that is not JSON, is an unavailable block
-        /// that carries the Worker's error code when it has one.
+        /// The block from the Worker's reply. The reply is the JSON-RPC frame the reply router delivers, whose `result`
+        /// is the command envelope, whose `result` is the block. A JSON-RPC error, a command error (WorkerBusy keeps its
+        /// own reason), and a result that is not the block (an older Worker that ignores the action answers the whole
+        /// doctor envelope) are unavailable blocks that name why.
         /// </summary>
-        internal static JObject ParseWwpTemplatesAnswer(string answerJson)
+        internal static JObject ParseWwpTemplatesAnswer(string replyJson)
         {
-            JObject answer;
+            JObject frame;
             try
             {
-                answer = JObject.Parse(answerJson);
+                frame = JObject.Parse(replyJson);
             }
             catch (Exception)
             {
-                return UnavailableWwpTemplatesBlock("WorkerError");
+                return UnavailableWwpTemplatesBlock("WorkerError", "UnexpectedReply");
             }
 
-            if (string.Equals(answer["status"]?.ToString(), "ok", StringComparison.Ordinal)
-                && answer["result"] is JObject block)
-                return (JObject)block.DeepClone();
+            if (frame["error"] is JObject rpcError)
+                return UnavailableWwpTemplatesBlock("WorkerError", rpcError["code"]?.ToString());
 
-            var unavailable = UnavailableWwpTemplatesBlock("WorkerError");
-            string? errorCode = answer["error"]?["code"]?.ToString();
-            if (!string.IsNullOrWhiteSpace(errorCode)) unavailable["errorCode"] = errorCode;
-            return unavailable;
+            JObject response = frame["result"] as JObject ?? frame;
+            if (!string.Equals(response["status"]?.ToString(), "ok", StringComparison.Ordinal))
+            {
+                string? code = response["error"]?["code"]?.ToString();
+                return string.Equals(code, "WorkerBusy", StringComparison.Ordinal)
+                    ? UnavailableWwpTemplatesBlock("WorkerBusy")
+                    : UnavailableWwpTemplatesBlock("WorkerError", code);
+            }
+
+            if (response["result"] is JObject block && block["available"]?.Type == JTokenType.Boolean)
+                return (JObject)block.DeepClone();
+            return UnavailableWwpTemplatesBlock("WorkerError", "UnexpectedReply");
         }
 
-        internal static JObject UnavailableWwpTemplatesBlock(string reason)
-            => new JObject { ["available"] = false, ["reason"] = reason };
+        internal static JObject UnavailableWwpTemplatesBlock(string reason, string? errorCode = null)
+        {
+            var block = new JObject { ["available"] = false, ["reason"] = reason };
+            if (!string.IsNullOrWhiteSpace(errorCode)) block["errorCode"] = errorCode;
+            return block;
+        }
 
         /// <summary>
-        /// Test seam for the reply path: completes a pending template request the way the Worker's reply router does,
-        /// and reports whether that request was still pending.
+        /// Test seam: delivers a reply frame to the Worker reply router, the path every line from a Worker takes, so a
+        /// test completes a template request with the frame the Worker writes and not with a copy of it.
         /// </summary>
-        internal static bool CompleteDoctorWwpTemplatesForTest(string requestId, string answerJson)
+        internal static void RouteWorkerReplyForTest(string replyJson)
         {
-            if (!_pendingRequests.TryRemove(requestId, out var pending)) return false;
-            pending.CompletionSource.TrySetResult(answerJson);
-            return true;
+            HandleWorkerResponse(replyJson, JObject.Parse(replyJson));
         }
     }
 }
