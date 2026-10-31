@@ -1,5 +1,6 @@
 using System;
 using GxMcp.Worker.Helpers;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GxMcp.Worker.Tests
@@ -14,6 +15,16 @@ namespace GxMcp.Worker.Tests
 
         private static long At(double seconds) => Origin + TimeSpan.FromSeconds(seconds).Ticks;
 
+        // A window made from Evidence() keeps the anchor the receipt shows: the save's stamp (102 s), its kind and the start of
+        // its write span (101 s). An unavailable window that the save made must keep it too.
+        private static void AssertAnchor(EventsSaveWindow window)
+        {
+            JObject described = window.Describe();
+            Assert.Equal(EventsSaveWindow.Iso(At(102)), described["anchorStampUtc"]!.ToString());
+            Assert.Equal("Utc", described["anchorKind"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(101)), described["writeStartUtc"]!.ToString());
+        }
+
         // The nominal save: the transaction opens at 100 s, the write span runs from 101 s to 103 s, the target is stamped
         // 102 s, and before the save the target carried 50 s.
         private static EventsSaveWindow.SaveEvidence Evidence(long? stampAfterObjectSave, long lastUpdateBefore, long? transactionEnd = null)
@@ -25,7 +36,8 @@ namespace GxMcp.Worker.Tests
                 ObjectSavedTicks = At(103),
                 StampAfterObjectSave = stampAfterObjectSave,
                 LastUpdateBeforeTicks = lastUpdateBefore,
-                LocalUtcOffsetTicks = LocalOffset
+                LocalUtcOffsetTicks = LocalOffset,
+                AnchorKind = "Utc"
             };
 
         [Fact]
@@ -112,6 +124,7 @@ namespace GxMcp.Worker.Tests
 
             Assert.False(window.Calibrated);
             Assert.Equal("PersistedStampDiffersFromSaveStamp", window.Reason);
+            AssertAnchor(window);
         }
 
         [Fact]
@@ -154,6 +167,164 @@ namespace GxMcp.Worker.Tests
             var window = EventsSaveWindow.ConfirmPersistedStamp(calibrated, committed: true, persistedStampTicks: At(102), saveStampTicks: null);
 
             Assert.Equal("PersistedStampDiffersFromSaveStamp", window.Reason);
+        }
+
+        [Fact]
+        public void TheDescribedWindow_CarriesTheAnchorAgainstTheWriteStart()
+        {
+            var evidence = Evidence(At(102), At(50), At(160));
+            evidence.AnchorKind = "Utc";
+
+            var described = EventsSaveWindow.FromSaveEvidence(evidence, transactionClosed: true).Describe();
+
+            Assert.Equal(EventsSaveWindow.Iso(At(102)), described["anchorStampUtc"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(101)), described["writeStartUtc"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(103)), described["objectSavedUtc"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(50)), described["lastUpdateBeforeUtc"]!.ToString());
+            Assert.Equal(1d, described["anchorMinusWriteStartSeconds"]!.Value<double>());
+            Assert.Equal("Utc", described["anchorKind"]!.ToString());
+        }
+
+        [Fact]
+        public void AnUnavailableWindowFromASave_StillCarriesTheAnchorThatMadeItUnavailable()
+        {
+            var described = EventsSaveWindow.FromSaveEvidence(Evidence(At(50), At(50), At(160)), transactionClosed: true).Describe();
+
+            Assert.False(described["calibrated"]!.Value<bool>());
+            Assert.Equal("TargetStampNotAdvanced", described["reason"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(50)), described["anchorStampUtc"]!.ToString());
+        }
+
+        // A save that stopped before its object save records only the instants it reached (docs/events-object-save-isolation.md,
+        // the receipt): an instant that was never recorded is left out, not written as the minimum date.
+        [Theory]
+        [InlineData(false)] // stopped before the source was assigned: no write span
+        [InlineData(true)]  // stopped in the part save: the write span started, the object save never returned
+        public void ASaveThatStoppedBeforeTheObjectSave_DescribesOnlyTheInstantsItRecorded(bool writeSpanStarted)
+        {
+            var evidence = Evidence(null, At(50), null);
+            evidence.ObjectSavedTicks = 0;
+            evidence.WriteSpanStartTicks = writeSpanStarted ? At(101) : 0;
+            evidence.AnchorKind = null;
+
+            JObject described = EventsSaveWindow.FromSaveEvidence(evidence, transactionClosed: true).Describe();
+
+            Assert.Equal("TargetNotSaved", described["reason"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(50)), described["lastUpdateBeforeUtc"]!.ToString());
+            Assert.Null(described["objectSavedUtc"]);
+            Assert.Null(described["anchorStampUtc"]);
+            Assert.Null(described["anchorMinusWriteStartSeconds"]);
+            Assert.Equal(writeSpanStarted, described["writeStartUtc"] != null);
+        }
+
+        // The pre-commit stamp check is described in the pre-commit paragraph of docs/events-object-save-isolation.md.
+
+        [Fact]
+        public void APreCommitReadThatShowsTheSaveStamp_KeepsTheWindow()
+        {
+            var calibrated = EventsSaveWindow.FromSaveEvidence(Evidence(At(102), At(50), null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(calibrated, At(102), At(102), At(50));
+
+            Assert.True(window.Calibrated);
+            Assert.Equal(calibrated.LowTicks, window.LowTicks);
+        }
+
+        [Fact]
+        public void APreCommitReadInAnotherRepresentation_LaterThanTheStampBeforeTheSave_IsUnavailable()
+        {
+            // The save stamp is in the SDK's UTC representation; the reading inside the transaction and the stamp before the save
+            // both use the local wall-clock ticks, so the reading is later than the stamp before the save and differs from the save.
+            var calibrated = EventsSaveWindow.FromSaveEvidence(Evidence(At(102), At(50) + LocalOffset, null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(calibrated, At(102), At(102) + LocalOffset, At(50) + LocalOffset);
+
+            Assert.False(window.Calibrated);
+            Assert.Equal("PreCommitStampRepresentationMismatch", window.Reason);
+            AssertAnchor(window);
+        }
+
+        [Fact]
+        public void APreCommitReadThatEqualsTheStampBeforeTheSave_IsNotDecidedHere()
+        {
+            var calibrated = EventsSaveWindow.FromSaveEvidence(Evidence(At(102), At(50), null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(calibrated, At(102), At(50), At(50));
+
+            Assert.True(window.Calibrated);
+        }
+
+        [Fact]
+        public void APreCommitReadThatFailed_LeavesTheCalibratedWindowUnavailable()
+        {
+            var calibrated = EventsSaveWindow.FromSaveEvidence(Evidence(At(102), At(50), null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(calibrated, At(102), null, At(50));
+
+            Assert.False(window.Calibrated);
+            Assert.Equal("PreCommitStampNotRead", window.Reason);
+            AssertAnchor(window);
+        }
+
+        [Fact]
+        public void AnUncalibratedWindow_StaysUnavailableWithItsReason_WhateverTheReading()
+        {
+            var notSaved = EventsSaveWindow.FromSaveEvidence(Evidence(null, At(50), null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(notSaved, null, At(102) + LocalOffset, At(50) + LocalOffset);
+
+            Assert.Equal("TargetNotSaved", window.Reason);
+        }
+
+        // The pre-commit check as the production steps and the double both make it (ForPreCommit): a reading equal to the save's
+        // stamp (102 s) or to the stamp before the save (50 s) keeps the window; any other reading is a mismatch.
+        [Theory]
+        [InlineData(102, null)]
+        [InlineData(50, null)]
+        [InlineData(200, "PreCommitStampRepresentationMismatch")]
+        [InlineData(-10698, "PreCommitStampRepresentationMismatch")] // the save's stamp three hours behind, as a local clock reads it
+        public void ThePreCommitCheck_DecidesEachReadingAgainstTheSaveStampAndTheStampBeforeIt(double readingSeconds, string reason)
+        {
+            var window = EventsSaveWindow.ForPreCommit(Evidence(At(102), At(50), null), At(102), At(readingSeconds));
+
+            Assert.Equal(reason, window.Reason);
+            Assert.Equal(reason == null, window.Calibrated);
+        }
+
+        [Fact]
+        public void ThePreCommitCheck_AFailedReading_IsUnavailable()
+        {
+            var window = EventsSaveWindow.ForPreCommit(Evidence(At(102), At(50), null), At(102), null);
+
+            Assert.False(window.Calibrated);
+            Assert.Equal("PreCommitStampNotRead", window.Reason);
+        }
+
+        // The final window after a rollback keeps the pre-commit guard's reason; any other save keeps the window it always had.
+        [Fact]
+        public void AFinalWindow_AfterARollbackThatTheGuardRefused_KeepsTheGuardReasonAndItsEvidence()
+        {
+            var window = EventsSaveWindow.ForFinal(Evidence(At(102), At(50), At(160)), committed: false,
+                persistedStampTicks: At(50), saveStampTicks: At(102), preCommitReason: "PreCommitStampRepresentationMismatch");
+
+            Assert.False(window.Calibrated);
+            Assert.Equal("PreCommitStampRepresentationMismatch", window.Reason);
+            Assert.Equal(EventsSaveWindow.Iso(At(102)), window.Describe()["anchorStampUtc"]!.ToString());
+        }
+
+        [Fact]
+        public void AFinalWindow_WithoutARefusingGuard_IsTheCalibratedWindowOfTheSave()
+        {
+            var rolledBack = EventsSaveWindow.ForFinal(Evidence(At(102), At(50), At(160)), committed: false,
+                persistedStampTicks: At(50), saveStampTicks: At(102), preCommitReason: null);
+            var committed = EventsSaveWindow.ForFinal(Evidence(At(102), At(50), At(160)), committed: true,
+                persistedStampTicks: At(102), saveStampTicks: At(102), preCommitReason: "PreCommitStampRepresentationMismatch");
+            var otherReason = EventsSaveWindow.ForFinal(Evidence(At(102), At(50), At(160)), committed: false,
+                persistedStampTicks: At(50), saveStampTicks: At(102), preCommitReason: "TargetNotSaved");
+
+            Assert.True(rolledBack.Calibrated);
+            Assert.True(committed.Calibrated);
+            Assert.True(otherReason.Calibrated);
         }
     }
 }

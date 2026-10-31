@@ -2012,6 +2012,10 @@ namespace GxMcp.Gateway
                 "preCommitUnexpectedChangedObjectDetailsTruncated",
                 "concurrentChanges", "concurrentChangeCount", "concurrentChangesTruncated",
                 "saveWindow", "writeVerifiedForTarget", "retrySafe",
+                // The window the pre-commit check used, what another process changed outside it, and the fresh read of the
+                // target before commit with its Kind: a refused or committed save explains why it went the way it did.
+                "preCommitSaveWindow", "preCommitConcurrentChanges", "preCommitConcurrentChangeCount",
+                "preCommitConcurrentChangesTruncated", "freshStampAtPreCommit", "freshStampAtPreCommitKind", "freshStampError",
                 // Patch NoMatch diagnostics are nested in the worker's canonical
                 // error envelope; keep them at the response level named by the
                 // synthesized inspect_near_match hint.

@@ -89,6 +89,42 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void TrimErrorEnvelope_KeepsThePreCommitWindowAndTheFreshStampAtPreCommit()
+        {
+            var input = JObject.Parse(
+                "{code:'ObjectSaveIncomplete',message:'verification failed',otherObjectMetadataIntact:true,"
+                + "preCommitSaveWindow:{calibrated:true,stampClockOffsetSeconds:0},"
+                + "preCommitConcurrentChanges:[{guid:'00000000-0000-0000-0000-0000000000c3',name:'Procedure02',verdict:'concurrent',reason:'BeforeSaveWindow'}],"
+                + "preCommitConcurrentChangeCount:1,freshStampAtPreCommit:'2026-10-28T12:00:02.0000000Z',freshStampAtPreCommitKind:'Utc'}");
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            foreach (string key in new[]
+            {
+                "preCommitSaveWindow", "preCommitConcurrentChanges", "preCommitConcurrentChangeCount", "freshStampAtPreCommit",
+                "freshStampAtPreCommitKind"
+            })
+                Assert.True(JToken.DeepEquals(input[key], trimmed[key]), key);
+        }
+
+        [Fact]
+        public void TrimErrorEnvelope_KeepsThePreCommitTruncationFlagAndTheErrorOfAFailedFreshRead()
+        {
+            var input = JObject.Parse(
+                "{code:'ObjectSaveIncomplete',message:'verification failed',otherObjectMetadataIntact:true,"
+                + "preCommitSaveWindow:{calibrated:false,reason:'PreCommitStampNotRead'},"
+                + "preCommitConcurrentChangeCount:13,preCommitConcurrentChangesTruncated:true,freshStampError:'the read failed'}");
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            foreach (string key in new[]
+            {
+                "preCommitSaveWindow", "preCommitConcurrentChangeCount", "preCommitConcurrentChangesTruncated", "freshStampError"
+            })
+                Assert.True(JToken.DeepEquals(input[key], trimmed[key]), key);
+        }
+
+        [Fact]
         public void TrimErrorEnvelope_DoesNotInventTheFieldsWhenTheWorkerSentNone()
         {
             var trimmed = McpRouter.TrimErrorEnvelope(
@@ -97,7 +133,8 @@ namespace GxMcp.Gateway.Tests
             foreach (string key in new[]
             {
                 "unexpectedChangedObjects", "preCommitUnexpectedChangedObjects", "preCommitUnexpectedChangedObjectDetails",
-                "concurrentChanges", "saveWindow", "writeVerifiedForTarget"
+                "concurrentChanges", "saveWindow", "writeVerifiedForTarget", "preCommitSaveWindow", "preCommitConcurrentChanges",
+                "freshStampAtPreCommit", "freshStampError", "preCommitConcurrentChangesTruncated"
             })
                 Assert.False(trimmed.ContainsKey(key), key);
         }
