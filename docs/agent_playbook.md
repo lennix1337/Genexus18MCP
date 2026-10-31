@@ -426,29 +426,23 @@ The facade's empty `KBObject.Parent`/`Module` setters are misleading; runtime
 persistence goes through `Artech.Udm.Framework.EntityManager.UpdateParent` in
 `src/GxMcp.Worker/Helpers/ObjectMover.cs`, with full snapshot verification.
 
-### Text-tree formats: native export and the official text
+### Text-tree formats (native export)
 
 - `genexus_io action=export_kb_to_text format=native` (`SdkTextTreeService`) writes each
-  part as the SDK holds it, inside a `<Type> <Name> { ... }` envelope. Folder names are
-  plain (`WWPBaseObjects/WWPTemplates/Selection`). `module.toml` is written once, at each
-  module root (`WWPBaseObjects/module.toml`), never inside a folder.
-- A DesignSystem exported with `format=native` is
-  `DesignSystem <Name> { styles <Name> { ... } }`. The official GeneXus MCP server writes
-  the same object as `#DesignStyles ... #End` and `#Properties Name = ... IsDefault = ...
-  #End` blocks, and names folders `@Folder`. The two forms do not exchange: the native
-  reader recognizes only its own part names, so it does not read the official blocks. To
-  move a DesignSystem to or from the official server, use that server's export and import,
-  not `format=native`.
-- The native format is not changed to match the official text. That would need a writer
-  and a reader for the official blocks, which this repository does not have, and it would
-  change the output of trees that already exist.
-- An object type with no text parts (WorkWithPlus templates, for example) is not written by
-  `format=native`: the export answers `ObjectHasNoTextParts` for it, and the other targets of
-  the same export still export (the reply is `partial`). Its data are SDK properties (for
-  example `WWPTemplate_*`); read them with `genexus_properties action=get` and change them
-  with `action=set`. Writing them as text in the export is not implemented.
-- Without `format=native`, export takes the `ObjectTextService` path and writes the
-  `_gxmcp-object-text-manifest.json` manifest. This section does not describe that output.
+  part inside a `<Type> <Name> { ... }` envelope, with the source the SDK holds. Folder
+  names are plain (`WWPBaseObjects/WWPTemplates/Selection`). `module.toml` is written once,
+  at each module root (`WWPBaseObjects/module.toml`), never inside a folder.
+- A DesignSystem exported with `format=native` is wrapped as `DesignSystem <Name> { ... }`.
+  Reading that envelope gives the same source back. The export does not write the
+  `#DesignStyles` block of the official GeneXus text, and nothing in this repository reads it.
+  To move a DesignSystem to or from the official GeneXus MCP server, use that server's
+  export and import, not `format=native`.
+- An object type that lists no text part is not written by `format=native`: the export
+  answers `ObjectHasNoTextParts` for it, and the other targets of the same export still
+  export (the reply is `partial`). Read its properties with `genexus_properties action=get`
+  and change them with `action=set`. Writing them as text in the export is not implemented.
+- Without `format=native`, export takes the `ObjectTextService` path. This section does not
+  describe that output.
 
 ### Control-bound events
 
