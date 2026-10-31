@@ -534,9 +534,67 @@ namespace GxMcp.Worker.Services
                 && output.IndexOf("[GXMCP-BUILD-ALL] BuildAll completed", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        // The SDK refuses a reorganization under FailIfReorg with Messages.FailIfReorg, a localized
+        // resource. The refusal is matched against the sentence the running SDK resolves (read by
+        // reflection, so a localized build still matches); the English-form pattern is only the
+        // reserve for when that resource cannot be read.
+        private static readonly Regex FailIfReorgRefusalReserve = new Regex(
+            @"(?:not executed|n.o executad[ao])[^\r\n]{0,40}FailIfReorg|FailIfReorg[^\r\n]{0,40}(?:was set|foi definid[ao])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly object SdkFailIfReorgLock = new object();
+        private static System.Reflection.PropertyInfo _sdkFailIfReorgProperty;
+        private static bool _sdkFailIfReorgResolved;
+
+        internal static string SdkFailIfReorgMessage()
+        {
+            System.Reflection.PropertyInfo property;
+            lock (SdkFailIfReorgLock)
+            {
+                if (!_sdkFailIfReorgResolved)
+                {
+                    _sdkFailIfReorgResolved = true;
+                    try
+                    {
+                        Type messages = typeof(Artech.Genexus.Common.Commands.BuildCommandFactory).Assembly
+                            .GetType("Artech.Genexus.Common.Resources.Messages");
+                        _sdkFailIfReorgProperty = messages?.GetProperty("FailIfReorg",
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warn("[REORG-CLASSIFY] SDK Messages.FailIfReorg not resolved: " + ex.Message);
+                    }
+                }
+                property = _sdkFailIfReorgProperty;
+            }
+            try
+            {
+                return property?.GetValue(null) as string;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[REORG-CLASSIFY] SDK Messages.FailIfReorg not readable: " + ex.Message);
+                return null;
+            }
+        }
+
+        internal static bool IsFailIfReorgRefusal(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            string sdkText = SdkFailIfReorgMessage();
+            if (!string.IsNullOrEmpty(sdkText) && text.IndexOf(sdkText, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            return IsFailIfReorgReserveSentence(text);
+        }
+
+        internal static bool IsFailIfReorgReserveSentence(string text)
+            => !string.IsNullOrEmpty(text) && FailIfReorgRefusalReserve.IsMatch(text);
+
         internal static bool DetectBuildAllReorgRequired(string output)
         {
             if (string.IsNullOrWhiteSpace(output)) return false;
+            // The refusal sentence is explicit, not a heuristic: the exclusions below do not weaken it.
+            if (IsFailIfReorgRefusal(output)) return true;
             string text = output.ToLowerInvariant();
             bool mentionsReorg = text.Contains("reorg") || text.Contains("reorganization") || text.Contains("reorganiza");
             if (!mentionsReorg) return false;
