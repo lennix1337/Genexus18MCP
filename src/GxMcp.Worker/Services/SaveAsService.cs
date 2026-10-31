@@ -154,6 +154,7 @@ namespace GxMcp.Worker.Services
             // Step 2: clone each part. Explicitly unsupported/empty parts are skipped (issue #45),
             // but a real write failure means the target is not a functional clone. Roll it back
             // immediately instead of returning SavedAs over a partial object (issue #118).
+            JObject variableIdRemap = null;
             foreach (var part in (src.Parts ?? new List<string>()))
             {
                 string r = _cloner.ClonePart(sourceName, newName, part, typeFilter);
@@ -169,6 +170,7 @@ namespace GxMcp.Worker.Services
                 }
                 completedSteps.Add("clonePart:" + part);
                 partsCloned.Add(part);
+                if (string.Equals(part, "WebForm", StringComparison.OrdinalIgnoreCase)) variableIdRemap = VariableIdRemapOf(r);
             }
 
             // An object with no cloned part is not a clone. Remove the empty target too.
@@ -211,7 +213,18 @@ namespace GxMcp.Worker.Services
             };
             if (partsSkipped.Count > 0) ((JObject)payload["created"])["partsSkipped"] = partsSkipped;
             if (patternBlock != null) payload["patternInstance"] = patternBlock;
+            if (variableIdRemap != null) payload["variableIdRemap"] = variableIdRemap;
             return McpResponse.Ok(target: newName, code: "SavedAs", result: payload);
+        }
+
+        /// <summary>
+        /// The rebinding report that the WebForm write carried, or null when it carried none (no control changed its
+        /// variable id, or the answer is not JSON).
+        /// </summary>
+        private static JObject VariableIdRemapOf(string writeAnswer)
+        {
+            try { return JObject.Parse(writeAnswer)["variableIdRemap"] as JObject; }
+            catch { return null; }
         }
 
         private string RollbackFailedClone(string sourceName, string newName, string type,
@@ -566,7 +579,110 @@ namespace GxMcp.Worker.Services
             if (truncated != null) return truncated;
 
             string code = srcToken.ToString();
+            if (string.Equals(partName, "WebForm", StringComparison.OrdinalIgnoreCase))
+            {
+                // The controls of a WebForm are bound to variables by id, and the target has just written its
+                // Variables and numbered them in the order it read them. Each binding is rebound to the variable of
+                // the same name, from a fresh read of the target, before the WebForm is written (#746).
+                return WriteRemappedWebForm(
+                    newName,
+                    code,
+                    VariableIdsOf(_objects.FindObject(sourceName, typeFilter)),
+                    VariableIdsOf(_objects.FindObject(newName, null)),
+                    text => _writes.WriteObject(newName, partName, text, typeFilter));
+            }
+
             return _writes.WriteObject(newName, partName, code, typeFilter);
+        }
+
+        /// <summary>
+        /// The WebForm written with each binding rebound by name to the target's variables, or refused when the target
+        /// does not declare a variable the WebForm binds: a refused part writes nothing. The variables are read from the
+        /// source and from the target as the target holds them after its Variables were written, so the ids are the ones
+        /// the WebForm will meet. The answer is the write's answer, with the rebinding report attached when there is one.
+        /// </summary>
+        internal static string WriteRemappedWebForm(
+            string newName,
+            string code,
+            IEnumerable<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId> sourceVariables,
+            IEnumerable<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId> targetVariables,
+            Func<string, string> write)
+        {
+            GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap =
+                GxMcp.Worker.Helpers.SaveAsVariableIdRemap.ForClone(code, sourceVariables, targetVariables);
+            if (remap.MissingInTarget != null)
+            {
+                return McpResponse.Err(
+                    code: "WebFormVariableNotInTarget",
+                    message: "The variable '" + remap.MissingInTarget + "' of the source WebForm is not declared in the target, " +
+                        "so its controls cannot be bound to it.",
+                    hint: "The clone of the Variables part did not bring this variable: nothing was written for this part. " +
+                        "Try again, or give the object name.",
+                    target: newName);
+            }
+
+            code = remap.Xml;
+            return AttachVariableIdRemap(write(code), remap);
+        }
+
+        /// <summary>
+        /// The variables of an object with the id each one carries on its primary path, or null when the object was not
+        /// found. An id that cannot be read is -1, and a list that cannot be enumerated is one unreadable variable: either
+        /// way the remap is skipped. A position in the enumeration is never taken as an id.
+        /// </summary>
+        private static IEnumerable<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId> VariableIdsOf(global::Artech.Architecture.Common.Objects.KBObject obj)
+        {
+            if (obj == null) return null;
+            try
+            {
+                var variables = new List<GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId>();
+                foreach (object variable in GxMcp.Worker.Structure.PartAccessor.GetVariableObjects(obj))
+                {
+                    string name = GxMcp.Worker.Structure.PartAccessor.GetVariableName(variable);
+                    variables.Add(new GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId(
+                        name, GxMcp.Worker.Helpers.SaveAsVariableIdRemap.PrimaryVariableId(variable)));
+                }
+                return variables;
+            }
+            catch
+            {
+                return new[] { new GxMcp.Worker.Helpers.SaveAsVariableIdRemap.NamedId(string.Empty, -1) };
+            }
+        }
+
+        /// <summary>
+        /// The clone's WebForm write answer, with the rebinding report attached when there is something to report: a
+        /// control rebound, a binding kept as unmapped or as another reference, or a remap skipped with its reason. The
+        /// answer is returned as it was otherwise, and as it was when it cannot be read.
+        /// </summary>
+        internal static string AttachVariableIdRemap(string written, GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap)
+        {
+            if (remap == null || !ReportsRebinding(remap)) return written;
+            try
+            {
+                var answer = JObject.Parse(written);
+                answer["variableIdRemap"] = ReceiptOf(remap);
+                return answer.ToString(Newtonsoft.Json.Formatting.None);
+            }
+            catch { return written; }
+        }
+
+        private static bool ReportsRebinding(GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap)
+        {
+            return remap.Skipped != null || remap.Remapped > 0 || remap.Unmapped.Count > 0 || remap.OtherReferences.Count > 0;
+        }
+
+        private static JObject ReceiptOf(GxMcp.Worker.Helpers.SaveAsVariableIdRemap.Outcome remap)
+        {
+            if (remap.Skipped != null) return new JObject { ["skipped"] = remap.Skipped };
+
+            var receipt = new JObject
+            {
+                ["remapped"] = remap.Remapped,
+                ["unmapped"] = new JArray(remap.Unmapped),
+            };
+            if (remap.OtherReferences.Count > 0) receipt["otherReferences"] = new JArray(remap.OtherReferences);
+            return receipt;
         }
 
         /// <summary>
