@@ -1438,8 +1438,8 @@ namespace GxMcp.Worker.Services
         }
 
         /// <summary>
-        /// Reads what a delete needs before it writes: the KB, then the confirm rule, then the target. The order and
-        /// the envelopes are the ones DeleteObject has always returned.
+        /// Reads what a delete needs before it writes, in this order: the KB (KbNotOpen when none is open), the confirm
+        /// rule (ConfirmRequired when neither a dry run nor confirm is given), then the target lookup.
         /// </summary>
         internal DeleteResolution ResolveDeleteTarget(string target, string typeFilter, bool dryRun, bool confirm)
         {
