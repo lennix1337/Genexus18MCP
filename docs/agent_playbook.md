@@ -443,9 +443,10 @@ persistence goes through `Artech.Udm.Framework.EntityManager.UpdateParent` in
   and a reader for the official blocks, which this repository does not have, and it would
   change the output of trees that already exist.
 - An object type with no text parts (WorkWithPlus templates, for example) is not written by
-  `format=native`: the export answers `ObjectHasNoTextParts` for it. Its data are SDK
-  properties (`WWPTemplate_*`); read them with `genexus_properties action=get
-  projection=full`. Writing them in the export is not implemented.
+  `format=native`: the export answers `ObjectHasNoTextParts` for it, and the other targets of
+  the same export still export (the reply is `partial`). Its data are SDK properties (for
+  example `WWPTemplate_*`); read them with `genexus_properties action=get` and change them
+  with `action=set`. Writing them as text in the export is not implemented.
 - Without `format=native`, export takes the `ObjectTextService` path and writes the
   `_gxmcp-object-text-manifest.json` manifest. This section does not describe that output.
 

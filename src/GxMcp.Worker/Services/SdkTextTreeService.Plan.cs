@@ -239,8 +239,9 @@ namespace GxMcp.Worker.Services
                 {
                     error = McpResponse.Err(
                         code: "ObjectHasNoTextParts",
-                        message: "'" + entry.Name + "' (" + entry.Type + ") has no text parts to export: its data are SDK properties, not text parts.",
-                        hint: "Read the properties with genexus_properties action=get projection=full. The native export does not write them.",
+                        message: "'" + entry.Name + "' (" + entry.Type + ") has no text parts to export: its data are SDK properties "
+                            + "(WorkWithPlus templates keep them in WWPTemplate_* properties, for example).",
+                        hint: "Read the properties with genexus_properties action=get and change them with action=set. The native export does not write them.",
                         target: entry.Name);
                     return false;
                 }
