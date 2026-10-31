@@ -19,8 +19,9 @@ function Invoke-Git([string[]]$Arguments) {
     return ($result -join "`n").Trim()
 }
 
-function Invoke-Check([string]$Event, [string]$Base, [string]$Head, [string]$Repository = $repo) {
-    $output = @(& pwsh -NoProfile -File $script -EventName $Event -BaseSha $Base -HeadSha $Head -Repository $Repository 2>&1)
+function Invoke-Check([string]$Event, [string]$Base, [string]$Head, [string]$Repository = $repo, [switch]$Enforce) {
+    $extra = @(if ($Enforce) { '-Enforce' })
+    $output = @(& pwsh -NoProfile -File $script -EventName $Event -BaseSha $Base -HeadSha $Head -Repository $Repository @extra 2>&1)
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Log = ($output -join "`n") }
 }
 
@@ -50,6 +51,11 @@ try {
     Assert-Ws ($r.ExitCode -eq 0) "findings are advisory and must not fail the job: $($r.Log)"
     Assert-Ws ($r.Log -match '::warning file=a\.js,title=whitespace::line 3: trailing whitespace') "missing trailing-whitespace annotation: $($r.Log)"
     Assert-Ws ($r.Log -match 'blank line at EOF') "missing EOF blank-line annotation: $($r.Log)"
+
+    # Blocking phase: the same findings fail the job and still annotate.
+    $r = Invoke-Check 'pull_request' $base $dirty -Enforce
+    Assert-Ws ($r.ExitCode -ne 0 -and $r.Log -match '::error title=whitespace') "-Enforce must fail on findings: $($r.Log)"
+    Assert-Ws ($r.Log -match '::warning file=a\.js,title=whitespace::line 3: trailing whitespace') "-Enforce must keep the annotations: $($r.Log)"
 
     # A pre-existing blank EOF line is not charged to a PR that does not touch it.
     $r = Invoke-Check 'pull_request' $dirty $dirty
