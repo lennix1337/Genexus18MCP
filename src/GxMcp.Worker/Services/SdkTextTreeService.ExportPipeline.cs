@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -54,8 +55,8 @@ namespace GxMcp.Worker.Services
         private string RunNativeExport(string target, JObject args, CancellationToken ct)
         {
             if (!TryPrepareNativeExport(target, args, out NativeExportState state,
-                out string errorCode, out string errorMessage, out string errorHint, out string errorTarget))
-                return McpResponse.Err(code: errorCode, message: errorMessage, hint: errorHint, target: errorTarget);
+                out string errorCode, out string errorMessage, out string errorHint, out string errorTarget, out string errorResponse))
+                return errorResponse ?? McpResponse.Err(code: errorCode, message: errorMessage, hint: errorHint, target: errorTarget);
 
             if (state.Options.ListOnly) return BuildNativeExportPlan(state);
             if (!TryCreateNativeExportRoot(state, out string directoryError))
@@ -70,13 +71,14 @@ namespace GxMcp.Worker.Services
         }
 
         private bool TryPrepareNativeExport(string target, JObject args, out NativeExportState state,
-            out string errorCode, out string errorMessage, out string errorHint, out string errorTarget)
+            out string errorCode, out string errorMessage, out string errorHint, out string errorTarget, out string errorResponse)
         {
             state = null;
             errorCode = null;
             errorMessage = null;
             errorHint = null;
             errorTarget = null;
+            errorResponse = null;
             string outputPath = args["outputPath"]?.ToString() ?? args["path"]?.ToString();
             if (string.IsNullOrWhiteSpace(outputPath))
             {
@@ -118,15 +120,45 @@ namespace GxMcp.Worker.Services
                 return false;
             }
 
+            SearchIndex loadedIndex = _indexCacheService?.TryGetLoadedIndex();
+            bool indexReady = loadedIndex?.Objects != null && loadedIndex.Objects.Count > 0;
+            List<TextSelector> explicitTargets = ExplicitTargets(target, args);
             if (!_selector.TrySelectEntries(target, args, allowAll: true, out List<SearchIndex.IndexEntry> selected, out string selectionError, options.IncludeChildren))
             {
-                errorCode = "ObjectSelectionFailed";
-                errorMessage = selectionError;
-                errorTarget = target;
-                return false;
+                // Without a ready index only the explicit targets can still be answered, by the SDK.
+                if (indexReady || explicitTargets.Count == 0)
+                {
+                    errorCode = "ObjectSelectionFailed";
+                    errorMessage = selectionError;
+                    errorTarget = target;
+                    return false;
+                }
+                selected = new List<SearchIndex.IndexEntry>();
+            }
+            // An explicit target the index does not hold is looked up in the SDK, as genexus_read does.
+            var unresolved = new List<TextSelector>();
+            foreach (TextSelector explicitTarget in explicitTargets)
+            {
+                if (indexReady && loadedIndex.Objects.Values.Any(entry => TextSelectorParser.Matches(explicitTarget, entry))) continue;
+                if (selected.Any(entry => TextSelectorParser.Matches(explicitTarget, entry))) continue;
+                SearchIndex.IndexEntry found = _sdkEntryLookup(explicitTarget);
+                if (found == null)
+                {
+                    unresolved.Add(explicitTarget);
+                    continue;
+                }
+                if (!selected.Any(entry => string.Equals(entry.Type, found.Type, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(entry.Name, found.Name, StringComparison.OrdinalIgnoreCase)))
+                    selected.Add(found);
             }
             if (selected.Count == 0)
             {
+                if (unresolved.Count > 0)
+                {
+                    // The read's own not-found reply: the index-warming hint appears only while the index is not ready.
+                    errorResponse = HealingService.FormatNotFoundError(unresolved[0].Name, indexReady ? loadedIndex : null);
+                    return false;
+                }
                 errorCode = "NoObjectsMatched";
                 errorMessage = "No KB objects matched the export selector.";
                 errorHint = "Wait for the index and use targets[], name, type, module or pathPrefix.";
@@ -175,6 +207,31 @@ namespace GxMcp.Worker.Services
             };
             state.Skipped = Math.Min(options.Skip, plan.Count);
             return true;
+        }
+
+        // The named targets of the request, without the [all] and wildcard selectors.
+        private static List<TextSelector> ExplicitTargets(string target, JObject args)
+        {
+            return TextTreeSelectionService.ReadSelectors(target, args)
+                .Where(selector => !TextSelectorParser.IsAll(selector)
+                    && !string.IsNullOrWhiteSpace(selector.Name)
+                    && selector.Name.IndexOf('*') < 0)
+                .ToList();
+        }
+
+        // The SDK answers an explicit target the index does not hold: by identity when the target is a GUID or an
+        // EntityKey, by name and type otherwise. The entry it returns is built without writing to the index.
+        private SearchIndex.IndexEntry LookupSdkEntry(TextSelector explicitTarget)
+        {
+            if (_objectService == null || _indexCacheService == null) return null;
+            bool isGuid = Guid.TryParse(explicitTarget.Name, out _);
+            bool isEntityKey = !isGuid && ObjectService.TryParseEntityKey(explicitTarget.Name, out _, out _);
+            var obj = _objectService.FindObject(
+                isGuid || isEntityKey ? null : explicitTarget.Name,
+                explicitTarget.Type,
+                isGuid ? explicitTarget.Name : null,
+                isEntityKey ? explicitTarget.Name : null);
+            return obj == null ? null : _indexCacheService.BuildLookupEntry(obj);
         }
 
         private static string BuildNativeExportPlan(NativeExportState state)

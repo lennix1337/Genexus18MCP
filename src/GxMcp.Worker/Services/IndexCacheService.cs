@@ -3216,6 +3216,28 @@ namespace GxMcp.Worker.Services
         internal (string ParentName, string ParentPath, string Path, string ModuleName) ResolveHierarchyForIndex(global::Artech.Architecture.Common.Objects.KBObject obj)
             => ResolveHierarchy(obj);
 
+        // The identity and location of one KB object as an index entry, for an export target the index does
+        // not hold. Unlike UpdateEntry it writes nothing to the index and reads no source.
+        internal SearchIndex.IndexEntry BuildLookupEntry(global::Artech.Architecture.Common.Objects.KBObject obj)
+        {
+            var hierarchy = ResolveHierarchy(obj);
+            KbEntityIdentity.ReadAll(obj, out string entityKey, out string entityTypeGuid, out int? entityId);
+            return new SearchIndex.IndexEntry
+            {
+                Guid = obj.Guid.ToString(),
+                EntityKey = entityKey,
+                EntityTypeGuid = entityTypeGuid,
+                EntityId = entityId,
+                Name = obj.Name,
+                Type = obj.TypeDescriptor.Name,
+                Parent = hierarchy.ParentName,
+                ParentPath = hierarchy.ParentPath,
+                ParentFolderPath = ComposeParentFolderPath(hierarchy.ParentPath),
+                Path = hierarchy.Path,
+                Module = hierarchy.ModuleName
+            };
+        }
+
 
         // ── Copy-on-write edge lists ────────────────────────────────────────────
         // FlushToDisk serializes LIVE entries on a threadpool thread with no lock.

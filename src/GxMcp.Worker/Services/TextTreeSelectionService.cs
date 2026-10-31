@@ -93,7 +93,7 @@ namespace GxMcp.Worker.Services
             return true;
         }
 
-        private static List<TextSelector> ReadSelectors(string target, JObject args)
+        internal static List<TextSelector> ReadSelectors(string target, JObject args)
         {
             JToken token = args?["targets"] ?? args?["names"] ?? args?["objects"];
             return token != null
