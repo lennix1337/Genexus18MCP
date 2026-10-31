@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -28,6 +29,7 @@ namespace GxMcp.Worker.Tests
             public List<(string name, string pattern)> Applies { get; } = new List<(string, string)>();
 
             public string FailOnPart { get; set; }
+            public string FailOncePart { get; set; }
             public string SkipOnPart { get; set; }
             public bool FailOnCreate { get; set; }
             public bool FailOnDelete { get; set; }
@@ -52,6 +54,12 @@ namespace GxMcp.Worker.Tests
             public string ClonePart(string sourceName, string newName, string partName, string typeFilter)
             {
                 Clones.Add((sourceName, newName, partName));
+                if (FailOncePart != null &&
+                    string.Equals(FailOncePart, partName, StringComparison.OrdinalIgnoreCase))
+                {
+                    FailOncePart = null;
+                    return "{\"status\":\"Error\",\"error\":\"validator not ready\"}";
+                }
                 if (FailOnPart != null &&
                     string.Equals(FailOnPart, partName, StringComparison.OrdinalIgnoreCase))
                     return "{\"status\":\"Error\",\"error\":\"part write blew up\"}";
@@ -283,6 +291,36 @@ namespace GxMcp.Worker.Tests
             Assert.DoesNotContain("PanelACopy", cloner.Existing);
             Assert.Single(cloner.Deletes);
             Assert.Equal("PanelACopy", cloner.Deletes[0].name);
+        }
+
+        // #746: a WebForm the validator refuses while the other parts are missing is retried once after them.
+        [Fact]
+        public void WebFormRefusedFirst_IsRetriedAfterTheOtherParts()
+        {
+            var cloner = ClonerWith("PanelA", "WebPanel", "Variables", "WebForm", "Events");
+            cloner.FailOncePart = "WebForm";
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject { ["name"] = "PanelA", ["newName"] = "PanelACopy" }));
+
+            Assert.Equal("ok", json["status"]?.ToString());
+            Assert.Equal(new[] { "Variables", "Events", "WebForm" },
+                ((JArray)json["result"]["created"]["partsCloned"]).Select(t => t.ToString()).ToArray());
+            Assert.Empty(cloner.Deletes);
+        }
+
+        [Fact]
+        public void WebFormRefusedTwice_RollsBack()
+        {
+            var cloner = ClonerWith("PanelA", "WebPanel", "Variables", "WebForm", "Events");
+            cloner.FailOnPart = "WebForm";
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject { ["name"] = "PanelA", ["newName"] = "PanelACopy" }));
+
+            Assert.Equal("SaveAsPartFailed", json["error"]?["code"]?.ToString());
+            Assert.Equal(2, cloner.Clones.Count(c => c.part == "WebForm"));
+            Assert.Single(cloner.Deletes);
         }
 
         [Fact]

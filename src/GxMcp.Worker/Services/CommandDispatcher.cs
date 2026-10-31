@@ -55,6 +55,7 @@ namespace GxMcp.Worker.Services
         private readonly FormatService _formatService;
         private readonly PropertyService _propertyService;
         private readonly ControlParametersService _controlParametersService;
+        private readonly ControlConditionsService _controlConditionsService;
         // Issue #62 — atomic create/update (variables + rules + parms + properties + source in one validated op).
         private readonly AtomicCreateService _atomicCreateService;
         private readonly DataViewService _dataViewService;
@@ -242,6 +243,8 @@ namespace GxMcp.Worker.Services
             _authoringService = new Structure.AuthoringService(_objectService);
             _propertyService = new PropertyService(_objectService);
             _controlParametersService = new ControlParametersService(_objectService, _writeService);
+            _controlConditionsService = new ControlConditionsService(_objectService, _writeService, _controlParametersService);
+            _propertyService.ConditionsWriter = _controlConditionsService;
             _atomicAuthoringService = new AtomicAuthoringService(_objectService, _writeService, _propertyService, _buildService);
             _atomicCreateService = new AtomicCreateService(_objectService, _writeService, _propertyService, _saveSpecifyOrchestrator, _historyService);
             _dataViewService = new DataViewService(_kbService, _objectService);
@@ -268,7 +271,7 @@ namespace GxMcp.Worker.Services
             _explainService = new ExplainService(_kbService, _objectService);
             _generatedDiffService = new GeneratedDiffService(_kbService);
             _kbReadmeService = new KbReadmeService(_kbService, _indexCacheService);
-            _saveAsService = new SaveAsService(new SdkObjectCloner(_objectService, _writeService, _patternApplyService));
+            _saveAsService = new SaveAsService(new SdkObjectCloner(_objectService, _writeService, _patternApplyService, _propertyService));
             _ocrScreenshotService = new OcrScreenshotService();
             _prDescriptionService = new PrDescriptionService(_kbService);
             _screenshotPublishService = new ScreenshotPublishService(_kbService);
@@ -2976,6 +2979,10 @@ namespace GxMcp.Worker.Services
                         hint: "Pass expressions:[\"AttributeName\", \"&Variable\", \"'literal'\"]: the complete ordered list, which replaces the current one.");
                 if (!isSet && ControlParametersService.IsParametersProperty(requestedProperty) && !Helpers.JsonUtil.IsSupplied(args?["propertyNames"]))
                     return _controlParametersService.Get(target, args?["control"]?.ToString(), propType);
+                // Conditions (ControlWhere) of a layout-form control: the control's own expression and the form's version token.
+                if (!isSet && ControlConditionsService.IsConditionsProperty(requestedProperty) && !Helpers.JsonUtil.IsSupplied(args?["propertyNames"])
+                    && _controlConditionsService.IsLayoutControl(target, args?["control"]?.ToString(), propType))
+                    return _controlConditionsService.Get(target, args?["control"]?.ToString(), propType);
             }
 
             if (string.IsNullOrWhiteSpace(target))

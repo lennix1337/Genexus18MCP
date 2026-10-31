@@ -386,6 +386,17 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void LayoutDifference_WhenTheControlHadNoParametersBefore_IgnoresTheNewParameters()
+        {
+            // The first list written to a control whose payload never stored one appears only in the saved form.
+            string before = Form(Payload(("ControlType", "Dynamic Combo Box")));
+            string after = Form(Payload(("ControlType", "Dynamic Combo Box"), ("DataProviderParameters", Tokens)));
+
+            Assert.Null(ControlParametersService.DescribeLayoutDifference(before, after));
+            Assert.NotNull(ControlParametersService.DescribeLayoutDifference(before, after.Replace("=McpCbId.ContextualTitle", "=Other.ContextualTitle")));
+        }
+
+        [Fact]
         public void LayoutDifference_IgnoresTheParametersButSeesEverythingElse()
         {
             string before = Form(Payload(("ControlType", "Dynamic Combo Box"), ("DataProviderParameters", Tokens)));
@@ -750,8 +761,10 @@ namespace GxMcp.Worker.Tests
         {
             string properties = Source("Services", "PropertyService.cs");
 
-            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(
-                properties, @"if \(IsLayoutControlContainer\(\(object\)container\)\) return LayoutControlWriteUnsupported\(").Count);
+            // Only the Conditions of a layout control (issue #770) are delegated; everything else stays refused.
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(properties, @"IsLayoutControlContainer\(\(object\)container\)\)").Count);
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(properties, @"LayoutControlWriteUnsupported\(target, controlName,").Count);
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(properties, @"ControlConditionsService\.IsConditionsProperty\(").Count);
         }
 
         [Fact]

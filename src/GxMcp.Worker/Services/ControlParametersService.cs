@@ -378,7 +378,7 @@ namespace GxMcp.Worker.Services
 
         // -------------------------------------------------------------- context
 
-        private sealed class ControlContext
+        internal sealed class ControlContext
         {
             public KBObject Object;
             public LayoutControl Control;
@@ -397,14 +397,16 @@ namespace GxMcp.Worker.Services
                 return Payload.TryGet(name, out string value) && !string.IsNullOrEmpty(value) ? value : null;
             }
 
-            public string BuildXmlWith(string tokens, out string failure)
+            public string BuildXmlWith(string tokens, out string failure) => BuildXmlWith(PropertyName, tokens, out failure);
+
+            public string BuildXmlWith(string property, string tokens, out string failure)
             {
                 failure = null;
                 try
                 {
                     var attribute = Element.Attributes().FirstOrDefault(a =>
                         string.Equals(a.Name.LocalName, CustomPropertiesPayload.AttributeName, StringComparison.Ordinal));
-                    string value = (Payload ?? new CustomPropertiesPayload()).ToAttributeValue(PropertyName, tokens);
+                    string value = (Payload ?? new CustomPropertiesPayload()).ToAttributeValue(property, tokens);
                     if (attribute == null) Element.SetAttributeValue(CustomPropertiesPayload.AttributeName, value);
                     else attribute.Value = value;
                     return Document.ToString(SaveOptions.DisableFormatting);
@@ -418,6 +420,31 @@ namespace GxMcp.Worker.Services
         }
 
         private ControlContext Resolve(string target, string control, string typeFilter, out string error)
+        {
+            var context = ResolveControl(target, control, typeFilter, requireParameterEngine: true, out error);
+            if (context == null) return null;
+            context.Applicable = HasProperty(context.Control, PropertyName);
+            if (context.Payload.TryGet(PropertyName, out string tokens)) context.StoredTokens = tokens;
+
+            if (!string.IsNullOrWhiteSpace(context.StoredTokens))
+            {
+                string text = ParameterListEngine.ToText(context.Object, context.StoredTokens, out string textFailure);
+                if (text == null)
+                {
+                    error = McpResponse.Err(code: "CurrentParametersUnreadable", target: target,
+                        message: textFailure, hint: "The stored list is left untouched; nothing can be edited safely until it renders.");
+                    return null;
+                }
+                context.BeforeExpressions = ParameterListText.Split(text);
+            }
+            return context;
+        }
+
+        /// <summary>
+        /// The control of a layout form with its element, custom-property payload and the form's
+        /// version, read from a fresh instance. Shared by every typed control-property edit.
+        /// </summary>
+        internal ControlContext ResolveControl(string target, string control, string typeFilter, bool requireParameterEngine, out string error)
         {
             error = null;
             if (string.IsNullOrWhiteSpace(control))
@@ -477,7 +504,8 @@ namespace GxMcp.Worker.Services
                 return null;
             }
 
-            if (!ParameterListEngine.IsAvailable(out string engineReason))
+            string engineReason = null;
+            if (requireParameterEngine && !ParameterListEngine.IsAvailable(out engineReason))
             {
                 error = McpResponse.Err(code: "LanguageEngineUnavailable", target: target, message: engineReason);
                 return null;
@@ -541,25 +569,10 @@ namespace GxMcp.Worker.Services
                 return null;
             }
             context.Payload = payload;
-
-            context.Applicable = HasProperty(context.Control, PropertyName);
-            if (payload.TryGet(PropertyName, out string tokens)) context.StoredTokens = tokens;
-
-            if (!string.IsNullOrWhiteSpace(context.StoredTokens))
-            {
-                string text = ParameterListEngine.ToText(obj, context.StoredTokens, out string textFailure);
-                if (text == null)
-                {
-                    error = McpResponse.Err(code: "CurrentParametersUnreadable", target: target,
-                        message: textFailure, hint: "The stored list is left untouched; nothing can be edited safely until it renders.");
-                    return null;
-                }
-                context.BeforeExpressions = ParameterListText.Split(text);
-            }
             return context;
         }
 
-        private static bool HasProperty(LayoutControl control, string name)
+        internal static bool HasProperty(LayoutControl control, string name)
         {
             try
             {
@@ -646,7 +659,7 @@ namespace GxMcp.Worker.Services
         // The engine keeps the spacing the author typed; two spellings of one expression are one expression.
         private static string Squash(string expression) => Regex.Replace(expression ?? string.Empty, @"\s+", " ").Trim();
 
-        private static List<ParameterListDiagnostic> ValidateProspectiveLayout(KBObject obj, string newXml)
+        internal static List<ParameterListDiagnostic> ValidateProspectiveLayout(KBObject obj, string newXml)
         {
             var diagnostics = new List<ParameterListDiagnostic>();
             var document = new XmlDocument();
@@ -682,7 +695,8 @@ namespace GxMcp.Worker.Services
                         string.Equals(a.Name.LocalName, CustomPropertiesPayload.AttributeName, StringComparison.Ordinal));
                     if (attribute == null) continue;
                     if (!CustomPropertiesPayload.TryParse(attribute.Value, out var payload) || payload == null) continue;
-                    if (!payload.TryGet(PropertyName, out _)) continue;
+                    // Masked whether or not the list is stored yet: the first list written to a control
+                    // appears only in the saved form, and a one-sided mask reported it as a layout change.
                     attribute.Value = payload.ToAttributeValue(PropertyName, "(masked)");
                 }
                 return document.ToString(SaveOptions.DisableFormatting);
@@ -891,7 +905,7 @@ namespace GxMcp.Worker.Services
             return changes;
         }
 
-        private static JObject DescribeControl(LayoutControl control)
+        internal static JObject DescribeControl(LayoutControl control)
         {
             return new JObject
             {
@@ -905,7 +919,7 @@ namespace GxMcp.Worker.Services
             };
         }
 
-        private static JArray DescribeCandidates(LayoutPanel panel)
+        internal static JArray DescribeCandidates(LayoutPanel panel)
             => new JArray(panel.Controls
                 .Where(c => !string.IsNullOrEmpty(c.Binding) || !string.IsNullOrEmpty(c.ControlName))
                 .Take(40).Select(DescribeControl));

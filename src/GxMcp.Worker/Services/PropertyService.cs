@@ -844,6 +844,9 @@ namespace GxMcp.Worker.Services
                 hint: "For an Attribute, use genexus_structure action=set_attribute with payload={formula: <text>}. That route does not support dryRun; inspect the attribute before writing.");
         }
 
+        /// <summary>Writes the Conditions of a layout-form control (issue #770); set by the dispatcher.</summary>
+        internal ControlConditionsService ConditionsWriter { get; set; }
+
         public string SetProperty(string target, string propName, string value, string controlName = null, string typeFilter = null)
         {
             try
@@ -944,7 +947,10 @@ namespace GxMcp.Worker.Services
                 {
                     container = FindControl(obj, controlName);
                     if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
-                    if (IsLayoutControlContainer((object)container)) return LayoutControlWriteUnsupported(target, controlName, propName);
+                    if (IsLayoutControlContainer((object)container))
+                        return ConditionsWriter != null && ControlConditionsService.IsConditionsProperty(propName)
+                            ? ConditionsWriter.Set(target, controlName, value, null, false, true, typeFilter)
+                            : LayoutControlWriteUnsupported(target, controlName, propName);
                 }
 
                 // Validate before dispatching. ValidatePropertyWrite already exempts a
@@ -1065,7 +1071,13 @@ namespace GxMcp.Worker.Services
                 {
                     container = FindControl(obj, controlName);
                     if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
-                    if (IsLayoutControlContainer((object)container)) return LayoutControlWriteUnsupported(target, controlName, string.Join(", ", properties.Properties().Select(p => p.Name)));
+                    if (IsLayoutControlContainer((object)container))
+                    {
+                        var only = properties.Properties().Count() == 1 ? properties.Properties().First() : null;
+                        if (ConditionsWriter != null && only != null && ControlConditionsService.IsConditionsProperty(only.Name))
+                            return ConditionsWriter.Set(target, controlName, only.Value?.ToString() ?? string.Empty, expectedVersion, dryRun, rollbackOnFailure, typeFilter);
+                        return LayoutControlWriteUnsupported(target, controlName, string.Join(", ", properties.Properties().Select(p => p.Name)));
+                    }
                 }
 
                 var beforeValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1807,6 +1819,9 @@ namespace GxMcp.Worker.Services
                 && ResolvePropertyEntry(obj, "IsMain") != null
                     ? "IsMain" : requestedName;
 
+        /// <summary>The name of the SDT a Data Provider outputs, or null when it has none.</summary>
+        public string ReadDataProviderOutputSdt(KBObject obj) => TryReadPropertyString(obj, "OutputSDT", obj?.Model);
+
         private static string TryReadPropertyString(dynamic container, string propName, KBModel model = null)
         {
             try
@@ -2469,7 +2484,7 @@ namespace GxMcp.Worker.Services
             => Models.McpResponse.Err(
                 code: "LayoutControlPropertyWriteUnsupported", target: target,
                 message: "'" + controlName + "' is a control of a layout form; its properties are not written through genexus_properties (" + propertyNames + ").",
-                hint: "Only the parameter list of a Dynamic Combo Box can be set here (propertyName=DataProviderParameters with expressions[]). For other control properties edit the WebForm XML with genexus_edit part=WebForm.",
+                hint: "Only the parameter list (propertyName=DataProviderParameters with expressions[]) and the Conditions (propertyName=ControlWhere with value, expectedVersion and rollbackOnFailure) of a Dynamic Combo Box can be set here. For other control properties edit the WebForm XML with genexus_edit part=WebForm.",
                 extra: new JObject { ["persisted"] = false, ["savePathExercised"] = false });
 
         internal static bool IsLayoutControlContainer(object container)
