@@ -695,7 +695,8 @@ namespace GxMcp.Worker.Services
                         string.Equals(a.Name.LocalName, CustomPropertiesPayload.AttributeName, StringComparison.Ordinal));
                     if (attribute == null) continue;
                     if (!CustomPropertiesPayload.TryParse(attribute.Value, out var payload) || payload == null) continue;
-                    if (!payload.TryGet(PropertyName, out _)) continue;
+                    // Masked whether or not the list is stored yet: the first list written to a control
+                    // appears only in the saved form, and a one-sided mask reported it as a layout change.
                     attribute.Value = payload.ToAttributeValue(PropertyName, "(masked)");
                 }
                 return document.ToString(SaveOptions.DisableFormatting);

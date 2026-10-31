@@ -386,6 +386,17 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void LayoutDifference_WhenTheControlHadNoParametersBefore_IgnoresTheNewParameters()
+        {
+            // The first list written to a control whose payload never stored one appears only in the saved form.
+            string before = Form(Payload(("ControlType", "Dynamic Combo Box")));
+            string after = Form(Payload(("ControlType", "Dynamic Combo Box"), ("DataProviderParameters", Tokens)));
+
+            Assert.Null(ControlParametersService.DescribeLayoutDifference(before, after));
+            Assert.NotNull(ControlParametersService.DescribeLayoutDifference(before, after.Replace("=McpCbId.ContextualTitle", "=Other.ContextualTitle")));
+        }
+
+        [Fact]
         public void LayoutDifference_IgnoresTheParametersButSeesEverythingElse()
         {
             string before = Form(Payload(("ControlType", "Dynamic Combo Box"), ("DataProviderParameters", Tokens)));
