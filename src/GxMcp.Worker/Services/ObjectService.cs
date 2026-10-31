@@ -517,6 +517,16 @@ namespace GxMcp.Worker.Services
 
                 Logger.Info(string.Format("Creating Object: {0} ({1})", name, type));
 
+                // A WorkWithPlus template is refused by name before any lookup: its layout is edited in the IDE, and a
+                // create would save an empty object in its place.
+                if (ObjectCreateTypes.IsWorkWithPlusTemplate(type))
+                {
+                    return McpResponse.Err(
+                        code: "UnsupportedObjectType",
+                        message: "Unsupported object type: " + type,
+                        hint: ObjectCreateTypes.WorkWithPlusTemplateHint);
+                }
+
                 // Map string type to Guid. First try the well-known descriptor table (covers
                 // every type with a concrete wrapper class), then fall back to ObjClass.<Name>
                 // reflection so types without a public wrapper (SDPanel, Dashboard, Query,
@@ -528,7 +538,7 @@ namespace GxMcp.Worker.Services
                     return McpResponse.Err(
                         code: "UnsupportedObjectType",
                         message: "Unsupported object type: " + type,
-                        hint: "Known types: Transaction, Procedure, WebPanel, SDPanel, SDT, DataProvider, DataSelector, Domain, Attribute, Table, Index, ExternalObject, Image, Theme, ThemeClass, DesignSystem, ColorPalette, Menu, Menubar, Stencil, UserControl, WorkPanel, Report, Dashboard, Query, WorkflowDiagram, ConversationalFlows, TestSuite, API, URLRewrite, MiniApp, SuperApp, OfflineDatabase, DataView, Group, Language, TranslationMessage, WorkWithDevices, WorkWithWeb.");
+                        hint: ObjectCreateTypes.SupportedTypesHint);
                 }
 
                 // Pre-flight duplicate check: gives a clear, structured error before the SDK throws.
@@ -873,6 +883,10 @@ namespace GxMcp.Worker.Services
 
             var kb = _kbService.GetKB();
             if (kb == null) throw new Exception("KB not opened");
+
+            // Refused by name before the lookup, as CreateObject does: the atomic create path reaches the same template.
+            if (ObjectCreateTypes.IsWorkWithPlusTemplate(type))
+                throw new ArgumentException("Unsupported object type: " + type + ". " + ObjectCreateTypes.WorkWithPlusTemplateHint);
 
             var typeGuid = ResolveObjectTypeGuid(type);
             if (typeGuid == Guid.Empty)
