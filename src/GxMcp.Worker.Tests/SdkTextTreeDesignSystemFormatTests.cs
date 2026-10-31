@@ -52,6 +52,22 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void An_official_DesignStyles_block_is_dropped_when_the_text_also_has_a_native_part()
+        {
+            // #Properties is a native part, so the text is not read as one Source: the block after it is not kept.
+            const string document = "DesignSystem SynthDS\n{\n#Properties\n\tName = \"SynthDS\"\n#End\n"
+                + "#DesignStyles\n\tstyles SynthDS\n\t{\n\t}\n#End\n}\n";
+
+            Assert.True(SdkTextTreeService.TryParseObjectDocumentParts(document, out string type, out string name,
+                out Dictionary<string, string> parts, out string error), error);
+            Assert.Equal("DesignSystem", type);
+            Assert.Contains("Name = \"SynthDS\"", parts["Properties"]);
+            Assert.False(parts.ContainsKey("DesignStyles"));
+            Assert.False(parts.ContainsKey("Source"));
+            Assert.DoesNotContain("styles SynthDS", string.Join("\n", parts.Values));
+        }
+
+        [Fact]
         public void The_export_writes_a_DesignSystem_in_its_envelope_and_no_other_blocks()
         {
             string root = NewTempDirectory();
