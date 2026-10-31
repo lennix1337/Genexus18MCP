@@ -223,14 +223,20 @@ namespace GxMcp.Worker.Services
         private SearchIndex.IndexEntry LookupSdkEntry(TextSelector explicitTarget)
         {
             if (_objectService == null || _indexCacheService == null) return null;
+            (string name, string guid, string entityKey) = LookupIdentity(explicitTarget);
+            var obj = _objectService.FindObject(name, explicitTarget.Type, guid, entityKey);
+            return obj == null ? null : _indexCacheService.BuildLookupEntry(obj);
+        }
+
+        // The argument of the lookup for one explicit target: a GUID, an EntityKey or a name, and only one of them.
+        internal static (string Name, string Guid, string EntityKey) LookupIdentity(TextSelector explicitTarget)
+        {
             bool isGuid = Guid.TryParse(explicitTarget.Name, out _);
             bool isEntityKey = !isGuid && ObjectService.TryParseEntityKey(explicitTarget.Name, out _, out _);
-            var obj = _objectService.FindObject(
+            return (
                 isGuid || isEntityKey ? null : explicitTarget.Name,
-                explicitTarget.Type,
                 isGuid ? explicitTarget.Name : null,
                 isEntityKey ? explicitTarget.Name : null);
-            return obj == null ? null : _indexCacheService.BuildLookupEntry(obj);
         }
 
         private static string BuildNativeExportPlan(NativeExportState state)
