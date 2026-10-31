@@ -23,15 +23,29 @@ namespace GxMcp.Worker.Services
         private readonly TextTreeSelectionService _selector;
         private readonly ObjectService _objectService;
         private readonly IndexCacheService _indexCacheService;
+        // Part reads cross this delegate (ObjectService.ReadObjectPartText in production). Unit tests
+        // replace it at this boundary to check the identity every read receives.
+        private readonly Func<string, string, string, string, string, string, string> _readPartText;
 
         internal SdkTextTreeService(
             TextTreeSelectionService selector,
             ObjectService objectService,
             IndexCacheService indexCacheService)
+            : this(selector, objectService, indexCacheService, null)
+        {
+        }
+
+        internal SdkTextTreeService(
+            TextTreeSelectionService selector,
+            ObjectService objectService,
+            IndexCacheService indexCacheService,
+            Func<string, string, string, string, string, string, string> readPartText)
         {
             _selector = selector;
             _objectService = objectService;
             _indexCacheService = indexCacheService;
+            _readPartText = readPartText
+                ?? ((target, part, type, guid, entityKey, path) => _objectService.ReadObjectPartText(target, part, type, guid, entityKey, path));
         }
 
         internal static bool IsNativeFormat(JObject args)

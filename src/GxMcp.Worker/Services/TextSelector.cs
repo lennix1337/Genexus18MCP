@@ -65,7 +65,14 @@ namespace GxMcp.Worker.Services
 
         internal static bool Matches(TextSelector selector, SearchIndex.IndexEntry entry)
         {
-            return entry != null && Matches(selector, entry.Name, entry.Type);
+            if (entry == null) return false;
+            if (Matches(selector, entry.Name, entry.Type)) return true;
+            // A GUID or EntityKey names one object whatever its type, so it selects that entry too.
+            return selector != null
+                && !string.IsNullOrWhiteSpace(selector.Name)
+                && (string.IsNullOrWhiteSpace(selector.Type) || string.Equals(selector.Type, entry.Type, StringComparison.OrdinalIgnoreCase))
+                && (string.Equals(selector.Name, entry.Guid, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(selector.Name, entry.EntityKey, StringComparison.OrdinalIgnoreCase));
         }
 
         internal static bool Matches(TextSelector selector, string name, string type)

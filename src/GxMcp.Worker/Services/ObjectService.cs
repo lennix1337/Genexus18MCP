@@ -5312,12 +5312,14 @@ namespace GxMcp.Worker.Services
         /// Batch text projections use this seam to plan all output files first and write them in
         /// one controlled pass, while keeping SDK resolution and STA ownership in ObjectService.
         /// </summary>
-        internal string ReadObjectPartText(string target, string partName = null, string typeFilter = null)
+        internal string ReadObjectPartText(string target, string partName = null, string typeFilter = null,
+            string guid = null, string entityKey = null, string path = null)
         {
             try
             {
-                var obj = FindObject(target, typeFilter);
-                if (obj == null) return HealingService.FormatNotFoundError(target, GetLoadedIndexOrNull());
+                // Resolves like ReadObjectSourceParts (identity included) and reports a miss the same way.
+                var obj = FindObject(target, typeFilter, guid, entityKey, path);
+                if (obj == null) return FormatReadNotFound(target);
                 return ReadObjectSourceInternal(
                     obj,
                     string.IsNullOrWhiteSpace(partName) ? "Source" : partName,

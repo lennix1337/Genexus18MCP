@@ -218,26 +218,16 @@ namespace GxMcp.Worker.Services
             }
             try
             {
-                var candidates = new List<string>();
-                string typedName = (entry.Type ?? string.Empty) + ":" + entry.Name;
-                if (!string.IsNullOrWhiteSpace(typedName)) candidates.Add(typedName);
-                if (!string.IsNullOrWhiteSpace(entry.EntityKey)
-                    && !candidates.Any(value => string.Equals(value, entry.EntityKey, StringComparison.OrdinalIgnoreCase)))
-                    candidates.Add(entry.EntityKey);
-
-                string lastError = null;
-                foreach (string target in candidates)
+                // The index identity (GUID, EntityKey, path) travels with the name, as it does in the
+                // multi-part read and in genexus_read. The EntityKey is no longer retried as a name.
+                JObject response = ParseEnvelope(_readPartText(entry.Name, part, entry.Type, entry.Guid, entry.EntityKey, entry.Path));
+                JToken sourceToken = response["source"] ?? response["result"]?["source"];
+                if (sourceToken != null)
                 {
-                    JObject response = ParseEnvelope(_objectService.ReadObjectPartText(target, part, entry.Type));
-                    JToken sourceToken = response["source"] ?? response["result"]?["source"];
-                    if (sourceToken != null)
-                    {
-                        source = sourceToken.ToString();
-                        return true;
-                    }
-                    lastError = response["error"]?.ToString() ?? response["message"]?.ToString();
+                    source = sourceToken.ToString();
+                    return true;
                 }
-                error = lastError ?? "The SDK part did not return text content.";
+                error = response["error"]?.ToString() ?? response["message"]?.ToString() ?? "The SDK part did not return text content.";
                 return false;
             }
             catch (Exception ex)
