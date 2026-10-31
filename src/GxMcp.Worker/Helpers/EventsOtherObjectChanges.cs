@@ -109,6 +109,9 @@ namespace GxMcp.Worker.Helpers
             if (!onUtcClock && !Covers(offsetLow, offsetHigh, localUtcOffsetTicks, tolerance))
                 return Unavailable("StampClockNotComparable");
 
+            // The measured middle of the offset, before it is widened: that is the clock reading the stamp carries.
+            long measuredOffset = offsetLow + (offsetHigh - offsetLow) / 2;
+
             // The known clock the anchor matched, with the tolerance on both sides, always lies inside the offset range. An
             // anchor stamped a little before the write span, or a clock step inside it, must not close the window before the
             // writes this save made. Widening only turns a concurrent verdict into a blocking one, never the reverse.
@@ -120,7 +123,7 @@ namespace GxMcp.Worker.Helpers
                 true, null,
                 transactionStartTicks + offsetLow - Margin.Ticks,
                 transactionEndTicks.HasValue ? transactionEndTicks.Value + offsetHigh + Margin.Ticks : (long?)null,
-                offsetLow + (offsetHigh - offsetLow) / 2);
+                measuredOffset);
         }
 
         /// <summary>

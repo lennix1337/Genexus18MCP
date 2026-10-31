@@ -56,6 +56,19 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void AStampClockThreeSecondsAhead_IsReportedAsThreeSeconds_AndTheWindowStaysWidened()
+        {
+            // The target is stamped 105 s with the writes at 101 s to 103 s: the stamp clock reads three seconds ahead.
+            var window = EventsSaveWindow.Calibrate(At(100), At(160), At(101), At(103), At(105), LocalOffset);
+
+            Assert.True(window.Calibrated);
+            Assert.Equal(TimeSpan.FromSeconds(3).Ticks, window.OffsetTicks);
+            Assert.Equal(3d, window.Describe()["stampClockOffsetSeconds"]!.Value<double>());
+            Assert.Equal(At(93), window.LowTicks);
+            Assert.Equal(At(167), window.HighTicks);
+        }
+
+        [Fact]
         public void Window_FromTheLocalWallClockLabelledUtc_ShiftsWithThatOffset()
         {
             // The SDK stamps in a clock that is the Worker's local time: the target's stamp sits three hours before.
