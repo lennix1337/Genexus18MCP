@@ -76,6 +76,23 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void A_type_filter_limits_the_children_of_a_container_too()
+        {
+            ObjectTextService service = BuildService();
+
+            bool selected = service.TrySelectEntries(
+                "SynthB",
+                new JObject { ["type"] = "Transaction" },
+                allowAll: false,
+                out List<SearchIndex.IndexEntry> entries,
+                out string error,
+                includeChildren: true);
+
+            Assert.True(selected, error);
+            Assert.Empty(entries);
+        }
+
+        [Fact]
         public void A_module_name_with_children_still_expands_to_its_own_objects()
         {
             ObjectTextService service = BuildService();
