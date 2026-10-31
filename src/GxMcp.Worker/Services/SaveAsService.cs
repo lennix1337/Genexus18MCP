@@ -48,6 +48,16 @@ namespace GxMcp.Worker.Services
             string ApplyWwpPattern(string newName, PatternInstanceDescriptor sourceInstance);
         }
 
+        /// <summary>
+        /// Optional seam: a cloner that also carries the object-level properties the parts do not (a Data Provider's
+        /// OutputSDT). The answer is an Ok envelope whose <c>result.properties</c> names what was carried, an Ok
+        /// <c>Skipped</c> when there was nothing to carry, or an error, which rolls the clone back.
+        /// </summary>
+        public interface IObjectPropertyCloner
+        {
+            string CloneObjectProperties(string sourceName, string newName, string typeFilter);
+        }
+
         public sealed class SourceDescriptor
         {
             public string Name;
@@ -180,6 +190,12 @@ namespace GxMcp.Worker.Services
                     partsCloned, partsSkipped, "<all>", "No cloneable parts on source.");
             }
 
+            // Step 2b: carry the object-level properties the parts do not hold (a Data Provider's OutputSDT).
+            JArray propertiesCloned;
+            string propertiesFailure = CarryObjectProperties(sourceName, newName, typeFilter, src.Type,
+                completedSteps, partsCloned, partsSkipped, out propertiesCloned);
+            if (propertiesFailure != null) return propertiesFailure;
+
             // Step 3: optionally clone the WWP pattern instance.
             JObject patternBlock = null;
             if (includePattern)
@@ -211,9 +227,7 @@ namespace GxMcp.Worker.Services
                     ["partsCloned"] = partsCloned
                 }
             };
-            if (partsSkipped.Count > 0) ((JObject)payload["created"])["partsSkipped"] = partsSkipped;
-            if (patternBlock != null) payload["patternInstance"] = patternBlock;
-            if (variableIdRemap != null) payload["variableIdRemap"] = variableIdRemap;
+            AttachOptionalResults(payload, partsSkipped, propertiesCloned, patternBlock, variableIdRemap);
             return McpResponse.Ok(target: newName, code: "SavedAs", result: payload);
         }
 
@@ -413,6 +427,38 @@ namespace GxMcp.Worker.Services
             catch { return false; }
         }
 
+        /// <summary>
+        /// Carries the object-level properties through the cloner when it supports them. Returns the rolled-back
+        /// answer when the clone cannot take them, or null when it can (<paramref name="carried"/> names what was
+        /// carried, if anything).
+        /// </summary>
+        private string CarryObjectProperties(string sourceName, string newName, string typeFilter, string type,
+            JArray completedSteps, JArray partsCloned, JArray partsSkipped, out JArray carried)
+        {
+            carried = null;
+            var propertyCloner = _cloner as IObjectPropertyCloner;
+            if (propertyCloner == null) return null;
+
+            string answer = propertyCloner.CloneObjectProperties(sourceName, newName, typeFilter);
+            if (!IsSuccess(answer))
+                return RollbackFailedClone(sourceName, newName, type, completedSteps, partsCloned, partsSkipped, "ObjectProperties", answer);
+            if (IsSkipped(answer)) return null;
+
+            carried = JObject.Parse(answer)["result"]?["properties"] as JArray;
+            completedSteps.Add("cloneProperties");
+            return null;
+        }
+
+        private static void AttachOptionalResults(JObject payload, JArray partsSkipped, JArray propertiesCloned,
+            JObject patternBlock, JObject variableIdRemap)
+        {
+            var created = (JObject)payload["created"];
+            if (partsSkipped.Count > 0) created["partsSkipped"] = partsSkipped;
+            if (propertiesCloned != null && propertiesCloned.Count > 0) created["propertiesCloned"] = propertiesCloned;
+            if (patternBlock != null) payload["patternInstance"] = patternBlock;
+            if (variableIdRemap != null) payload["variableIdRemap"] = variableIdRemap;
+        }
+
         private static bool IsSkipped(string envelope)
         {
             if (!IsSuccess(envelope)) return false;
@@ -443,17 +489,47 @@ namespace GxMcp.Worker.Services
     /// Dashboard, Theme, MasterPage). Binary-only parts (assets, theme
     /// images) are not cloned — same limitation as genexus_export_unified.
     /// </summary>
-    public sealed class SdkObjectCloner : SaveAsService.IObjectCloner
+    public sealed class SdkObjectCloner : SaveAsService.IObjectCloner, SaveAsService.IObjectPropertyCloner
     {
         private readonly ObjectService _objects;
         private readonly WriteService _writes;
         private readonly PatternApplyService _patterns;
+        private readonly PropertyService _properties;
 
         public SdkObjectCloner(ObjectService objects, WriteService writes, PatternApplyService patterns)
+            : this(objects, writes, patterns, null)
+        {
+        }
+
+        public SdkObjectCloner(ObjectService objects, WriteService writes, PatternApplyService patterns, PropertyService properties)
         {
             _objects = objects;
             _writes = writes;
             _patterns = patterns;
+            _properties = properties;
+        }
+
+        /// <summary>
+        /// A Data Provider's OutputSDT lives on the object, not in a part, so a clone made part by part lost it and
+        /// no longer produced its collection. It is read from the source and set on the clone through the typed
+        /// output API. Other types, and a source without an output, have nothing to carry.
+        /// </summary>
+        public string CloneObjectProperties(string sourceName, string newName, string typeFilter)
+        {
+            string skipped = McpResponse.Ok(code: "Skipped", result: new JObject { ["skipped"] = true });
+            if (_properties == null) return skipped;
+            var source = _objects.FindObject(sourceName, typeFilter);
+            if (source == null || !string.Equals(source.TypeDescriptor?.Name, "DataProvider", StringComparison.OrdinalIgnoreCase))
+                return skipped;
+
+            string output = _properties.ReadDataProviderOutputSdt(source);
+            if (string.IsNullOrWhiteSpace(output)) return skipped;
+
+            string set = _properties.SetProperty(newName, "OutputSDT", output, null, "DataProvider");
+            JObject setAnswer;
+            try { setAnswer = JObject.Parse(set); } catch { return set; }
+            if (!string.Equals(setAnswer["status"]?.ToString(), "ok", StringComparison.OrdinalIgnoreCase)) return set;
+            return McpResponse.Ok(code: "PropertiesCloned", result: new JObject { ["properties"] = new JArray("OutputSDT") });
         }
 
         public SaveAsService.SourceDescriptor FindSource(string name, string typeFilter)
