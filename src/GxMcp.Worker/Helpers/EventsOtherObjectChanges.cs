@@ -198,6 +198,33 @@ namespace GxMcp.Worker.Helpers
             return window;
         }
 
+        /// <summary>
+        /// The pre-commit check on the target's stamp read inside the open transaction after the object save (contract item 5).
+        /// A read that shows the save's own stamp keeps the window. A read that differs from it but is later than the stamp the
+        /// target carried before the save uses another representation of the same clock than the save's stamp does, so the
+        /// pre-commit window is unavailable (fail closed). A read that failed leaves the window unavailable too. Any other
+        /// reading is not decided here.
+        /// </summary>
+        internal static EventsSaveWindow ConfirmPreCommitStamp(
+            EventsSaveWindow window, long? saveStampTicks, long? freshStampTicks, long lastUpdateBeforeTicks)
+        {
+            if (!window.Calibrated || saveStampTicks == null) return window;
+            if (freshStampTicks == null)
+            {
+                EventsSaveWindow notRead = Unavailable("PreCommitStampNotRead");
+                notRead.Evidence = window.Evidence;
+                return notRead;
+            }
+            if (freshStampTicks.Value == saveStampTicks.Value) return window;
+            if (freshStampTicks.Value > lastUpdateBeforeTicks)
+            {
+                EventsSaveWindow unavailable = Unavailable("PreCommitStampRepresentationMismatch");
+                unavailable.Evidence = window.Evidence;
+                return unavailable;
+            }
+            return window;
+        }
+
         private static bool Covers(long offsetLow, long offsetHigh, long clockOffset, long tolerance)
             => offsetLow - tolerance <= clockOffset && clockOffset <= offsetHigh + tolerance;
 

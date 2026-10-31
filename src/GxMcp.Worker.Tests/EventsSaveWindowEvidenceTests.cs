@@ -182,5 +182,62 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("TargetStampNotAdvanced", described["reason"]!.ToString());
             Assert.Equal(EventsSaveWindow.Iso(At(50)), described["anchorStampUtc"]!.ToString());
         }
+
+        // Contract item 5, rows (i) and (ii). Row (iii) is not decided by the function: it stops the item and is reported.
+
+        [Fact]
+        public void APreCommitReadThatShowsTheSaveStamp_KeepsTheWindow()
+        {
+            var calibrated = EventsSaveWindow.FromSaveEvidence(Evidence(At(102), At(50), null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(calibrated, At(102), At(102), At(50));
+
+            Assert.True(window.Calibrated);
+            Assert.Equal(calibrated.LowTicks, window.LowTicks);
+        }
+
+        [Fact]
+        public void APreCommitReadInAnotherRepresentation_LaterThanTheStampBeforeTheSave_IsUnavailable()
+        {
+            // The save stamp is in the SDK's UTC representation; the reading inside the transaction and the stamp before the save
+            // both use the local wall-clock ticks, so the reading is later than the stamp before the save and differs from the save.
+            var calibrated = EventsSaveWindow.FromSaveEvidence(Evidence(At(102), At(50) + LocalOffset, null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(calibrated, At(102), At(102) + LocalOffset, At(50) + LocalOffset);
+
+            Assert.False(window.Calibrated);
+            Assert.Equal("PreCommitStampRepresentationMismatch", window.Reason);
+        }
+
+        [Fact]
+        public void APreCommitReadThatEqualsTheStampBeforeTheSave_IsNotDecidedHere()
+        {
+            var calibrated = EventsSaveWindow.FromSaveEvidence(Evidence(At(102), At(50), null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(calibrated, At(102), At(50), At(50));
+
+            Assert.True(window.Calibrated);
+        }
+
+        [Fact]
+        public void APreCommitReadThatFailed_LeavesTheCalibratedWindowUnavailable()
+        {
+            var calibrated = EventsSaveWindow.FromSaveEvidence(Evidence(At(102), At(50), null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(calibrated, At(102), null, At(50));
+
+            Assert.False(window.Calibrated);
+            Assert.Equal("PreCommitStampNotRead", window.Reason);
+        }
+
+        [Fact]
+        public void AnUncalibratedWindow_StaysUnavailableWithItsReason_WhateverTheReading()
+        {
+            var notSaved = EventsSaveWindow.FromSaveEvidence(Evidence(null, At(50), null), transactionClosed: false);
+
+            var window = EventsSaveWindow.ConfirmPreCommitStamp(notSaved, null, At(102) + LocalOffset, At(50) + LocalOffset);
+
+            Assert.Equal("TargetNotSaved", window.Reason);
+        }
     }
 }

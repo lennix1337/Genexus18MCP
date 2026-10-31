@@ -201,9 +201,13 @@ namespace GxMcp.Worker.Services
                 // The inventory is read before the window, so the local offset is read after it, as before.
                 var preCommitInventory = EventsSaveIsolation.Inventory(_kb);
                 var preCommitWindow = BuildSaveWindow(transactionClosed: false);
+                // Contract item 5: the target's stamp read inside the open transaction must agree with the save's own stamp before
+                // the pre-commit window is trusted. The same read is the diagnostic recorded in the receipt.
+                long? freshStamp = ReadFreshStampAtPreCommit();
+                preCommitWindow = EventsSaveWindow.ConfirmPreCommitStamp(
+                    preCommitWindow, _stampAfterObjectSave, freshStamp, SdkTimestampNormalizer.NormalizeUtc(_lastUpdateBefore).Ticks);
                 var changedOthers = EventsOtherObjectChanges.Classify(_inventory, preCommitInventory, _guid, preCommitWindow);
                 _timings["inventoryPreCommitMs"] = inventoryWatch.ElapsedMilliseconds;
-                RecordFreshStampAtPreCommit();
                 _receipt["preCommitObjectStateVerified"] = true;
                 _receipt["preCommitFreshReadDeferred"] = true;
                 _receipt["preCommitSourceMatch"] = _receipt["preCommitObjectSourceMatch"]?.Value<bool>() == true;
@@ -234,19 +238,22 @@ namespace GxMcp.Worker.Services
                 if (mismatch != null) throw new InvalidOperationException(mismatch);
             }
 
-            // Diagnostic only: the target as the open transaction reads it after the object save. The window does not use it
-            // yet; its relation to the anchor is what the measurement in U16 reads (the guard is decided separately).
-            private void RecordFreshStampAtPreCommit()
+            // The target as the open transaction reads it after the object save: the stamp the pre-commit window is checked
+            // against (contract item 5), and the diagnostic the receipt keeps. A read that fails returns null.
+            private long? ReadFreshStampAtPreCommit()
             {
                 try
                 {
                     KBObject fresh = EventsSaveIsolation.Fresh(_kb, _guid);
-                    _receipt["freshStampAtPreCommit"] = EventsSaveWindow.Iso(SdkTimestampNormalizer.NormalizeUtc(fresh.LastUpdate).Ticks);
+                    long ticks = SdkTimestampNormalizer.NormalizeUtc(fresh.LastUpdate).Ticks;
+                    _receipt["freshStampAtPreCommit"] = EventsSaveWindow.Iso(ticks);
                     _receipt["freshStampAtPreCommitKind"] = fresh.LastUpdate.Kind.ToString();
+                    return ticks;
                 }
                 catch (Exception ex)
                 {
                     _receipt["freshStampError"] = IsolatedEventsSaveDiagnostics.Sanitize(ex.Message);
+                    return null;
                 }
             }
 
