@@ -441,28 +441,32 @@ namespace GxMcp.Worker.Services
 
         private void ReconcileNativeExport(NativeExportState state)
         {
+            // Files an earlier export wrote are removed only when this export covered the whole KB and finished. A limit,
+            // an ignore list, a skip, a failed object or a stop leaves part of the KB unexported, so its files stay.
+            bool complete = state.Mode == "all" && state.FullSelection && state.Failed == 0 && !state.StoppedOnError
+                && state.Options.Skip == 0;
             foreach (JObject previous in state.OldManifest.Values)
             {
                 string key = ManifestKey(previous["type"]?.ToString(), previous["name"]?.ToString());
                 bool keep = !state.EmittedKeys.Contains(key)
-                    && (state.Mode != "all" || !state.FullSelection || state.PlanKeys.Contains(key));
+                    && (!complete || state.PlanKeys.Contains(key));
                 if (keep) state.ManifestItems.Add((JObject)previous.DeepClone());
             }
             foreach (JObject previous in state.OldMetadata.Values)
             {
                 string key = NormalizePath(previous["file"]?.ToString());
                 bool keep = !state.EmittedMetadata.Contains(key)
-                    && (state.Mode != "all" || !state.FullSelection || !state.IncludeModuleMetadata);
+                    && (!complete || !state.IncludeModuleMetadata);
                 if (keep) state.MetadataItems.Add((JObject)previous.DeepClone());
             }
             foreach (JObject previous in state.OldPackages.Values)
             {
                 string key = NormalizePath(previous["file"]?.ToString());
                 bool keep = !state.EmittedPackages.Contains(key)
-                    && (state.Mode != "all" || !state.FullSelection || !state.IncludeModulePackages);
+                    && (!complete || !state.IncludeModulePackages);
                 if (keep) state.PackageItems.Add((JObject)previous.DeepClone());
             }
-            if (state.Mode == "all" && state.FullSelection)
+            if (complete)
             {
                 state.FilesDeleted = RemoveStaleFiles(state.Root, state.OldManifest, state.PlanKeys);
                 if (state.IncludeModuleMetadata)

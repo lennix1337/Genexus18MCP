@@ -301,6 +301,10 @@ namespace GxMcp.Worker.Services
                 if ((key == "targets" || key == "names" || key == "objects") && IsAllSelectorValue(value)) continue;
                 if (!string.IsNullOrWhiteSpace(value.ToString())) return false;
             }
+            // A limit, an ignore list or a skip leaves KB objects outside this export, so it is not the whole KB.
+            if ((args?["limit"]?.ToObject<int?>() ?? 0) > 0) return false;
+            if (TextSelectorParser.ParseMany(args?["ignore"]).Count > 0) return false;
+            if ((args?["skip"]?.ToObject<int?>() ?? 0) > 0) return false;
             return true;
         }
 
