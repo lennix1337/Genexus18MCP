@@ -17,6 +17,7 @@ namespace GxMcp.Worker.Tests
         [InlineData("WorkWithPlusforWebTemplate")]
         [InlineData("workwithplus for web template")]
         [InlineData("WorkWithPlus Template")]
+        [InlineData("  WorkWithPlus   for Web Template  ")]
         public void WorkWithPlusTemplate_IsRefusedUnderEverySpelling(string type)
         {
             Assert.True(ObjectCreateTypes.IsWorkWithPlusTemplate(type));
