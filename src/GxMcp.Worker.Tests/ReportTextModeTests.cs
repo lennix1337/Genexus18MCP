@@ -68,7 +68,8 @@ namespace GxMcp.Worker.Tests
             Assert.NotNull(PropertyService.ValidateDirectPropertyWrite("RPT_TEXT_MODE"));
             Assert.Null(PropertyService.ValidateDirectPropertyWrite("Description"));
             string source = RepoSource.WithoutComments(RepoSource.Read("src", "GxMcp.Worker", "Services", "PropertyService.cs"));
-            Assert.Contains("ResolveReportPropertyContainer(obj, propName, controlName)", source);
+            Assert.Contains("ResolvePropertyContainer(obj, propName, controlName)", source);
+            Assert.Contains("ResolveReportPropertyContainer(obj, nativeName, controlName)", source);
             Assert.Contains("ResolveReportPropertyContainer(fresh, propName, controlName)", source);
             Assert.Contains("FindObjectFreshByIdentity(original)", source);
             Assert.Contains("directWriteValidation = ValidateDirectPropertyWrite(pName)", source);

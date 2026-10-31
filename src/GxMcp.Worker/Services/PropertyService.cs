@@ -952,9 +952,9 @@ namespace GxMcp.Worker.Services
                 // name through the typed adapter below), but its read-only check runs first,
                 // so returning from the reference branch ahead of this call would make every
                 // read-only WebPanelReference property writable.
-                object reportContainer = ResolveReportPropertyContainer(obj, propName, controlName);
+                object reportContainer = ResolvePropertyContainer(obj, propName, controlName);
                 container = reportContainer ?? container;
-                string propertyValidation = reportContainer != null ? ValidateReportTextMode(value) : ValidatePropertyWrite(container, propName, value);
+                string propertyValidation = ValidatePropertyValue((object)container, propName, value, reportContainer != null);
                 if (propertyValidation != null)
                     return Models.McpResponse.Err(
                         code: propertyValidation.StartsWith("PropertyReadOnly", StringComparison.Ordinal)
@@ -965,7 +965,7 @@ namespace GxMcp.Worker.Services
                         message: propertyValidation,
                         target: target);
 
-                if (IsWebPanelReferenceType(GetPropertyTargetType(container, propName)))
+                if (IsReferenceProperty((object)container, propName))
                     return SetWebPanelReferenceProperty(obj, container, target, propName, value, controlName, typeFilter);
 
                 string beforeVal = null;
@@ -1105,12 +1105,11 @@ namespace GxMcp.Worker.Services
                     if (IsNonScalarProperty(propName) || string.Equals(propName, "OutputSDT", StringComparison.OrdinalIgnoreCase))
                         return Models.McpResponse.Err(code: "InvalidPropertyBatch", target: target,
                             message: $"'{propName}' cannot be changed by a scalar property batch.");
-                    object propertyContainer = ResolveReportPropertyContainer(obj, nativeName, controlName) ?? container;
-                    string validation = ReportLayoutHelper.IsTextModeProperty(nativeName)
-                        ? ValidateReportTextMode(val) : ValidatePropertyWrite((dynamic)propertyContainer, nativeName, val);
+                    object propertyContainer = ResolvePropertyContainer(obj, nativeName, controlName) ?? container;
+                    string validation = ValidatePropertyValue(propertyContainer, nativeName, val, ReportLayoutHelper.IsTextModeProperty(nativeName));
                     if (validation != null)
                         return Models.McpResponse.Err(code: "InvalidPropertyValue", target: target, message: validation);
-                    if (IsWebPanelReferenceType(GetPropertyTargetType((dynamic)propertyContainer, nativeName)))
+                    if (IsReferenceProperty(propertyContainer, nativeName))
                     {
                         object reference = ResolveWebPanelReference(_objectService, val);
                         if (reference == null)
@@ -1118,13 +1117,13 @@ namespace GxMcp.Worker.Services
                                 message: $"No MasterPage or WebPanel named '{val}' was found.");
                         references[propName] = reference;
                     }
-                    string previousValue = ReadPropertyValueAt(obj, nativeName, controlName);
+                    string previousValue = ReadStoredProperty(obj, nativeName, controlName);
                     previousValues[propName] = previousValue;
                     beforeValues[propName] = previousValue ?? string.Empty;
                 }
 
                 ObjectMoveSnapshot snapshot;
-                try { snapshot = ObjectMoveSnapshot.Capture(obj); }
+                try { snapshot = CaptureSnapshot(obj); }
                 catch (Exception ex)
                 {
                     return Models.McpResponse.Err(code: "PropertySnapshotFailed", target: target,
@@ -1773,6 +1772,12 @@ namespace GxMcp.Worker.Services
         protected internal virtual void WritePropertyValue(object container, string nativeName, string value, string controlName, KBObject obj)
             => ApplyPropertyValue((dynamic)container, nativeName, value, controlName, obj);
 
+        protected internal virtual bool IsReferenceProperty(object container, string nativeName)
+            => IsWebPanelReferenceType(GetPropertyTargetType((dynamic)container, nativeName));
+
+        // The object snapshot a write takes before it changes anything, and that a rollback restores.
+        internal virtual ObjectMoveSnapshot CaptureSnapshot(KBObject obj) => ObjectMoveSnapshot.Capture(obj);
+
         // The receipt of a single set. A requested name that stands for another SDK name is reported both ways: nativeName for the
         // property, and nativeNames for the same pair in the form a batch set reports.
         internal static JObject SingleSetReceipt(string requestedName, string nativeName, string value)
@@ -1795,8 +1800,8 @@ namespace GxMcp.Worker.Services
             if (names.Count > 0) result["nativeNames"] = names;
         }
 
-        private static string NativeWebPanelPropertyName(KBObject obj, string controlName, string requestedName)
-            => string.IsNullOrEmpty(controlName) && IsWebPanel(obj)
+        private string NativeWebPanelPropertyName(KBObject obj, string controlName, string requestedName)
+            => string.IsNullOrEmpty(controlName) && IsWebPanelTarget(obj)
                 && string.Equals(requestedName, "MainProgram", StringComparison.OrdinalIgnoreCase)
                 && ResolvePropertyEntry(obj, "MainProgram") == null
                 && ResolvePropertyEntry(obj, "IsMain") != null

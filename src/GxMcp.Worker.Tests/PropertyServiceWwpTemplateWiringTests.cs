@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.Serialization;
+using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -84,6 +86,7 @@ namespace GxMcp.Worker.Tests
             JObject json = JObject.Parse(service.SetProperty("SynthObject", "TemplateType", ""));
 
             Assert.NotEqual("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Equal(new[] { ("TemplateType", "") }, service.Validations);
         }
 
         [Theory]
@@ -137,6 +140,8 @@ namespace GxMcp.Worker.Tests
 
             Assert.NotEqual("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
             Assert.NotEqual("PropertyAliasConflict", json["error"]?["code"]?.ToString());
+            Assert.Equal(new[] { ("WWPTemplate_Type", "Trn.View"), ("WWPTemplate_TemplateXml", "<view />") }, service.Validations);
+            Assert.Empty(service.Writes);
         }
 
         [Fact]
@@ -147,6 +152,47 @@ namespace GxMcp.Worker.Tests
             JObject json = JObject.Parse(service.SetProperties("SynthObject", new JObject { ["TemplateType"] = "" }));
 
             Assert.NotEqual("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Equal(new[] { ("TemplateType", "") }, service.Validations);
+        }
+
+        [Fact]
+        public void ADryRunOfAValidAliasIsPreviewedWithTheSdkNameAndTheValueChecked()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", "<view />");
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", new JObject { ["TemplateType"] = "Trn.View" }, dryRun: true));
+            JObject preview = json["result"] as JObject;
+
+            Assert.Equal("DryRun", json["code"]?.ToString());
+            Assert.Equal("WWPTemplate_Type", preview?["nativeNames"]?["TemplateType"]?.ToString());
+            Assert.Equal("Trn.View", preview?["requested"]?["TemplateType"]?.ToString());
+            Assert.Equal("Trn.Selection", preview?["before"]?["TemplateType"]?.ToString());
+            Assert.Equal("v-current", preview?["versionToken"]?.ToString());
+            Assert.False(preview?["persisted"]?.ToObject<bool>() ?? true);
+            Assert.Equal(new[] { ("WWPTemplate_Type", "Trn.View") }, service.Validations);
+            Assert.Empty(service.Writes);
+        }
+
+        [Fact]
+        public void ADryRunOfAnUnknownTypeIsRefusedBeforeAnyStoredValueIsChecked()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", "<selection />");
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", new JObject { ["TemplateType"] = "Trn.Panel" }, dryRun: true));
+
+            Assert.Equal("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Empty(service.Validations);
+        }
+
+        [Fact]
+        public void ASingleSetOfAValidAliasReachesTheCheckWithTheSdkNameAndTheValue()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", "<view />");
+
+            JObject json = JObject.Parse(service.SetProperty("SynthTemplate", "TemplateType", "Trn.View"));
+
+            Assert.NotEqual("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Equal(new[] { ("WWPTemplate_Type", "Trn.View") }, service.Validations);
         }
 
         [Fact]
@@ -258,6 +304,15 @@ namespace GxMcp.Worker.Tests
             protected internal override object ReadTextMode(Artech.Architecture.Common.Objects.KBObject obj) => null;
 
             protected internal override string VersionOf(Artech.Architecture.Common.Objects.KBObject obj) => "v-current";
+
+            protected internal override bool IsReferenceProperty(object container, string nativeName) => false;
+
+            // An empty snapshot: the preview reports the parts it keeps, and this target keeps none.
+            internal override ObjectMoveSnapshot CaptureSnapshot(Artech.Architecture.Common.Objects.KBObject obj)
+            {
+                ConstructorInfo ctor = typeof(ObjectMoveSnapshot).GetConstructors(BindingFlags.NonPublic | BindingFlags.Instance).Single();
+                return (ObjectMoveSnapshot)ctor.Invoke(new[] { Activator.CreateInstance(ctor.GetParameters()[0].ParameterType), new byte[0], new byte[0] });
+            }
 
             protected internal override object ResolvePropertyContainer(Artech.Architecture.Common.Objects.KBObject obj, string nativeName, string controlName)
                 => null;
