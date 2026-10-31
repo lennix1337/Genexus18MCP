@@ -218,6 +218,79 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(SaveAsVariableIdRemap.IdUnavailable, SaveAsVariableIdRemap.ForClone(form, new[] { V("Eta", 11) }, null).Skipped);
         }
 
+        // The <ucw> of the sidebar in the Unanimo fixture (src/gx-engine/tests/fixtures/unanimo_master/masterunanimosidebar.webform.txt,
+        // line 28): its SidebarItems property is bound to var:5, the id of sidebarItems in that object.
+        private const string SidebarUserControl = @"<ucw gxControlType=""-1054227045"" PATTERN_ELEMENT_CUSTOM_PROPERTIES=""&lt;Properties&gt;&lt;Property&gt;&lt;Name&gt;ControlName&lt;/Name&gt;&lt;Value&gt;SidebarMenu&lt;/Value&gt;&lt;/Property&gt;&lt;Property&gt;&lt;Name&gt;SidebarItems&lt;/Name&gt;&lt;Value&gt;var:5&lt;/Value&gt;&lt;/Property&gt;&lt;/Properties&gt;"" />";
+
+        [Fact]
+        public void A_user_control_property_bound_to_a_variable_is_rebound_to_the_target_id_and_the_rest_of_the_line_stays()
+        {
+            // sidebarItems has id 5 in the source and 9 in the target.
+            var outcome = SaveAsVariableIdRemap.Apply(
+                SidebarUserControl,
+                SaveAsVariableIdRemap.SourceNamesById(new[] { V("sidebarItems", 5) }),
+                SaveAsVariableIdRemap.TargetIdsByName(new[] { V("sidebarItems", 9) }));
+
+            Assert.Equal(1, outcome.Remapped);
+            Assert.Empty(outcome.Unmapped);
+            Assert.Equal(SidebarUserControl.Replace("&lt;Value&gt;var:5&lt;/Value&gt;", "&lt;Value&gt;var:9&lt;/Value&gt;"), outcome.Xml);
+        }
+
+        [Fact]
+        public void A_chain_of_payload_bindings_is_rebound_in_one_pass()
+        {
+            // Theta and Lambda swap their ids; a second pass over the new ids would turn var:15 back into var:12.
+            var outcome = SaveAsVariableIdRemap.Apply(
+                Form("<ucw PATTERN_ELEMENT_CUSTOM_PROPERTIES=\"&lt;Value&gt;var:12&lt;/Value&gt;&lt;Value&gt;var:15&lt;/Value&gt;\" />"),
+                SaveAsVariableIdRemap.SourceNamesById(new[] { V("Theta", 12), V("Lambda", 15) }),
+                SaveAsVariableIdRemap.TargetIdsByName(new[] { V("Theta", 15), V("Lambda", 12) }));
+
+            Assert.Equal(2, outcome.Remapped);
+            Assert.Contains("&lt;Value&gt;var:15&lt;/Value&gt;&lt;Value&gt;var:12&lt;/Value&gt;", outcome.Xml);
+        }
+
+        [Fact]
+        public void An_attribute_binding_and_a_payload_binding_in_one_document_are_both_rebound()
+        {
+            var outcome = SaveAsVariableIdRemap.Apply(
+                Form(Data("var:11"), "<ucw PATTERN_ELEMENT_CUSTOM_PROPERTIES=\"&lt;Value&gt;var:15&lt;/Value&gt;\" />"),
+                SaveAsVariableIdRemap.SourceNamesById(new[] { V("Eta", 11), V("Lambda", 15) }),
+                SaveAsVariableIdRemap.TargetIdsByName(new[] { V("Eta", 14), V("Lambda", 19) }));
+
+            Assert.Equal(2, outcome.Remapped);
+            Assert.Equal(new[] { 14 }, BindingIds(outcome.Xml));
+            Assert.Contains("&lt;Value&gt;var:19&lt;/Value&gt;", outcome.Xml);
+        }
+
+        [Fact]
+        public void Other_values_and_a_payload_outside_a_tag_are_left_alone()
+        {
+            // A <Value> that is text, a var number inside a text, a number with a letter after it, and a payload in text.
+            string form = Form(
+                "<ucw PATTERN_ELEMENT_CUSTOM_PROPERTIES=\"&lt;Value&gt;SidebarMenu&lt;/Value&gt;&lt;Value&gt;a var:11 b&lt;/Value&gt;&lt;Value&gt;var:11x&lt;/Value&gt;\" />",
+                "<label>&lt;Value&gt;var:11&lt;/Value&gt;</label>");
+
+            var outcome = SaveAsVariableIdRemap.Apply(
+                form,
+                SaveAsVariableIdRemap.SourceNamesById(new[] { V("Eta", 11) }),
+                SaveAsVariableIdRemap.TargetIdsByName(new[] { V("Eta", 14) }));
+
+            Assert.Equal(0, outcome.Remapped);
+            Assert.Same(form, outcome.Xml);
+        }
+
+        [Fact]
+        public void A_payload_number_is_matched_whole_so_var_1_does_not_match_var_12()
+        {
+            var outcome = SaveAsVariableIdRemap.Apply(
+                Form("<ucw PATTERN_ELEMENT_CUSTOM_PROPERTIES=\"&lt;Value&gt;var:12&lt;/Value&gt;\" />"),
+                SaveAsVariableIdRemap.SourceNamesById(new[] { V("Today", 1) }),
+                SaveAsVariableIdRemap.TargetIdsByName(new[] { V("Today", 7) }));
+
+            Assert.Equal(0, outcome.Remapped);
+            Assert.Equal(new[] { 12 }, outcome.Unmapped);
+        }
+
         [Fact]
         public void The_primary_id_is_the_id_property_read_as_an_int()
         {

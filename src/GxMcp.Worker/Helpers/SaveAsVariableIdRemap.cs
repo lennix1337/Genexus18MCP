@@ -12,12 +12,13 @@ namespace GxMcp.Worker.Helpers
     /// </summary>
     /// <remarks>
     /// A WebForm binds each control to a variable by the variable's internal id, written as the attribute value
-    /// <c>var:N</c>. The id is assigned when the variable is declared in its object, so the same name can carry a
-    /// different id in another object. A text clone declares the variables in the order it reads them, and the
-    /// target numbers them in that order, so a control keeps its number and reaches whatever variable now has it,
-    /// with no error. The remap changes only the number of each <c>var:N</c> attribute value, to the id of the variable
-    /// with the same name in the target. A number that no source variable carries is kept and reported. A source
-    /// variable that the target does not declare is refused, because no binding to it would be right.
+    /// <c>var:N</c>. A user control property binds to one the same way, as a <c>&lt;Value&gt;var:N&lt;/Value&gt;</c>
+    /// inside its escaped payload. The id is assigned when the variable is declared in its object, so the same name can
+    /// carry a different id in another object. A text clone declares the variables in the order it reads them, and the
+    /// target numbers them in that order, so a binding keeps its number and reaches whatever variable now has it, with
+    /// no error. The remap changes only the number of those two forms, to the id of the variable with the same name in
+    /// the target. A number that no source variable carries is kept and reported. A source variable that the target does
+    /// not declare is refused, because no binding to it would be right.
     /// </remarks>
     internal static class SaveAsVariableIdRemap
     {
@@ -25,10 +26,13 @@ namespace GxMcp.Worker.Helpers
         private static readonly Regex TagPattern = new Regex(
             "<(?:[^<>\"']|\"[^\"]*\"|'[^']*')*>", RegexOptions.CultureInvariant);
 
-        // One attribute value whose text is exactly var:N. Group 1 is the attribute name and '=', group 2 the quote,
-        // group 3 the id.
-        private static readonly Regex VarAttributePattern = new Regex(
-            "(\\s[^\\s=<>\"']+\\s*=\\s*)([\"'])var:(\\d+)\\2", RegexOptions.CultureInvariant);
+        // One binding of the two forms the remap rebinds, matched in one pass inside a tag: an attribute value that is
+        // exactly var:N (group 1 is the attribute name and '=', group 2 the quote, group 3 the id), or the <Value> of a
+        // user control property in its escaped payload, when that <Value> is exactly var:N (group 4 is the id). A number
+        // of more than nine digits is not a variable id.
+        private static readonly Regex BindingPattern = new Regex(
+            "(\\s[^\\s=<>\"']+\\s*=\\s*)([\"'])var:(\\d{1,9})\\2|&lt;Value&gt;var:(\\d{1,9})&lt;/Value&gt;",
+            RegexOptions.CultureInvariant);
 
         /// <summary>A variable's name and its internal id within one object.</summary>
         internal sealed class NamedId
@@ -151,8 +155,9 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
-        /// Replaces each <c>var:N</c> attribute value of the WebForm by <c>var:M</c>, where N is the source id and M the
-        /// target id of the variable with the same name. Nothing else in the text changes.
+        /// Replaces each binding of the WebForm, an attribute value <c>var:N</c> or a payload <c>&lt;Value&gt;var:N&lt;/Value&gt;</c>,
+        /// by <c>var:M</c>, where N is the source id and M the target id of the variable with the same name. Nothing else
+        /// in the text changes.
         /// </summary>
         public static Outcome Apply(
             string webFormXml,
@@ -165,11 +170,12 @@ namespace GxMcp.Worker.Helpers
             int remapped = 0;
             string missing = null;
             var unmapped = new List<int>();
-            string rewritten = TagPattern.Replace(webFormXml, tag => VarAttributePattern.Replace(tag.Value, binding =>
+            // One pass: a replacement is never matched again, so a chain of ids is not followed.
+            string rewritten = TagPattern.Replace(webFormXml, tag => BindingPattern.Replace(tag.Value, binding =>
             {
-                int sourceId;
-                if (!int.TryParse(binding.Groups[3].Value, NumberStyles.None, CultureInfo.InvariantCulture, out sourceId))
-                    return binding.Value;
+                // Group 3 is set for an attribute value, group 4 for a payload <Value>.
+                bool attribute = binding.Groups[3].Success;
+                int sourceId = int.Parse(attribute ? binding.Groups[3].Value : binding.Groups[4].Value, CultureInfo.InvariantCulture);
 
                 string name;
                 if (!sourceNamesById.TryGetValue(sourceId, out name))
@@ -188,8 +194,10 @@ namespace GxMcp.Worker.Helpers
                 if (targetId == sourceId) return binding.Value;
 
                 remapped++;
-                return binding.Groups[1].Value + binding.Groups[2].Value
-                    + "var:" + targetId.ToString(CultureInfo.InvariantCulture) + binding.Groups[2].Value;
+                string id = targetId.ToString(CultureInfo.InvariantCulture);
+                return attribute
+                    ? binding.Groups[1].Value + binding.Groups[2].Value + "var:" + id + binding.Groups[2].Value
+                    : "&lt;Value&gt;var:" + id + "&lt;/Value&gt;";
             }));
 
             outcome.Unmapped.AddRange(unmapped);
