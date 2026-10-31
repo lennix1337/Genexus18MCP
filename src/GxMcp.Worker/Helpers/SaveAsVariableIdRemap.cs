@@ -34,6 +34,13 @@ namespace GxMcp.Worker.Helpers
             "(\\s[^\\s=<>\"']+\\s*=\\s*)([\"'])var:(\\d{1,9})\\2|&lt;Value&gt;var:(\\d{1,9})&lt;/Value&gt;",
             RegexOptions.CultureInvariant);
 
+        // Any var:N token of a text, so that a binding the remap does not rebind is still reported.
+        private static readonly Regex VarTokenPattern = new Regex(
+            "(?<![A-Za-z0-9_])var:(\\d{1,9})(?![A-Za-z0-9_])", RegexOptions.CultureInvariant);
+
+        /// <summary>The most other references a remap reports.</summary>
+        public const int MaxOtherReferences = 20;
+
         /// <summary>A variable's name and its internal id within one object.</summary>
         internal sealed class NamedId
         {
@@ -59,6 +66,12 @@ namespace GxMcp.Worker.Helpers
 
             /// <summary>Source ids that no source variable carries. Their bindings are kept as they were.</summary>
             public List<int> Unmapped { get; } = new List<int>();
+
+            /// <summary>
+            /// The var:N numbers of the text that the remap does not rebind, distinct and in the order they appear, at most
+            /// <see cref="MaxOtherReferences"/>. Their text is kept as it is.
+            /// </summary>
+            public List<int> OtherReferences { get; } = new List<int>();
 
             /// <summary>The source variable that the target does not declare, or null when the remap is accepted.</summary>
             public string MissingInTarget { get; set; }
@@ -200,11 +213,22 @@ namespace GxMcp.Worker.Helpers
                     : "&lt;Value&gt;var:" + id + "&lt;/Value&gt;";
             }));
 
+            // The bindings the remap handled are blanked out first, so each var:N left in the text is one it does not know.
+            string unhandled = TagPattern.Replace(webFormXml, tag => BindingPattern.Replace(tag.Value, " "));
+            var other = new List<int>();
+            foreach (Match token in VarTokenPattern.Matches(unhandled))
+            {
+                int id = int.Parse(token.Groups[1].Value, CultureInfo.InvariantCulture);
+                if (other.Count < MaxOtherReferences && !other.Contains(id)) other.Add(id);
+            }
+
+            // A refused remap writes nothing, so it reports nothing either.
+            if (missing != null) return new Outcome { Xml = webFormXml, MissingInTarget = missing };
+
+            outcome.Remapped = remapped;
+            outcome.Xml = remapped > 0 ? rewritten : webFormXml;
             outcome.Unmapped.AddRange(unmapped);
-            outcome.MissingInTarget = missing;
-            // A refused remap writes nothing, so it reports no rebinding either.
-            outcome.Remapped = missing == null ? remapped : 0;
-            outcome.Xml = missing == null && remapped > 0 ? rewritten : webFormXml;
+            outcome.OtherReferences.AddRange(other);
             return outcome;
         }
     }

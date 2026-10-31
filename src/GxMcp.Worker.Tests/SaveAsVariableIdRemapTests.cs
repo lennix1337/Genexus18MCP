@@ -218,6 +218,51 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(SaveAsVariableIdRemap.IdUnavailable, SaveAsVariableIdRemap.ForClone(form, new[] { V("Eta", 11) }, null).Skipped);
         }
 
+        [Fact]
+        public void A_binding_the_remap_does_not_know_is_reported_and_its_text_is_kept()
+        {
+            // A payload that names var:7 in another element is neither bound form, so it is reported and not rebound.
+            string form = Form("<ucw PATTERN_ELEMENT_CUSTOM_PROPERTIES=\"&lt;Other&gt;var:7&lt;/Other&gt;\" />");
+
+            var outcome = SaveAsVariableIdRemap.Apply(
+                form,
+                SaveAsVariableIdRemap.SourceNamesById(new[] { V("Eta", 7) }),
+                SaveAsVariableIdRemap.TargetIdsByName(new[] { V("Eta", 14) }));
+
+            Assert.Equal(0, outcome.Remapped);
+            Assert.Equal(new[] { 7 }, outcome.OtherReferences);
+            Assert.Same(form, outcome.Xml);
+        }
+
+        [Fact]
+        public void A_var_number_in_text_outside_a_tag_is_reported_as_another_reference()
+        {
+            var outcome = SaveAsVariableIdRemap.Apply(
+                Form("<label>var:11</label>"),
+                SaveAsVariableIdRemap.SourceNamesById(new[] { V("Eta", 11) }),
+                SaveAsVariableIdRemap.TargetIdsByName(new[] { V("Eta", 14) }));
+
+            Assert.Equal(0, outcome.Remapped);
+            Assert.Equal(new[] { 11 }, outcome.OtherReferences);
+        }
+
+        [Fact]
+        public void Other_references_are_distinct_in_order_and_at_most_twenty()
+        {
+            // Twenty-five distinct numbers, the first one repeated at the end: the first twenty, each once.
+            string[] tags = Enumerable.Range(101, 25).Select(number => "<label>var:" + number + "</label>")
+                .Concat(new[] { "<label>var:101</label>" })
+                .ToArray();
+
+            var outcome = SaveAsVariableIdRemap.Apply(
+                Form(tags),
+                new Dictionary<int, string>(),
+                new Dictionary<string, int>());
+
+            Assert.Equal(Enumerable.Range(101, 20), outcome.OtherReferences);
+            Assert.Equal(0, outcome.Remapped);
+        }
+
         // The <ucw> of the sidebar in the Unanimo fixture (src/gx-engine/tests/fixtures/unanimo_master/masterunanimosidebar.webform.txt,
         // line 28): its SidebarItems property is bound to var:5, the id of sidebarItems in that object.
         private const string SidebarUserControl = @"<ucw gxControlType=""-1054227045"" PATTERN_ELEMENT_CUSTOM_PROPERTIES=""&lt;Properties&gt;&lt;Property&gt;&lt;Name&gt;ControlName&lt;/Name&gt;&lt;Value&gt;SidebarMenu&lt;/Value&gt;&lt;/Property&gt;&lt;Property&gt;&lt;Name&gt;SidebarItems&lt;/Name&gt;&lt;Value&gt;var:5&lt;/Value&gt;&lt;/Property&gt;&lt;/Properties&gt;"" />";
