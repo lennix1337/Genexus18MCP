@@ -4,8 +4,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Artech.Architecture.Common.Objects;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
 
 namespace GxMcp.Worker.Services
@@ -361,6 +363,61 @@ namespace GxMcp.Worker.Services
             }
             catch { /* swallow — telemetry is best-effort */ }
             return result;
+        }
+
+        /// <summary>
+        /// The WorkWithPlus template block that genexus_doctor asks for by action WwpTemplates. It reads the KB
+        /// through the SDK, so the Gateway asks only a Worker that is already running with the KB open.
+        /// </summary>
+        public string WwpTemplatesResponse()
+        {
+            return McpResponse.Ok(code: "DoctorWwpTemplatesOk", result: BuildWwpTemplatesBlock());
+        }
+
+        /// <summary>
+        /// Builds the block. It never throws: a failure becomes an unavailable block with its reason, and a template
+        /// whose properties cannot be read is counted as unreadable without affecting the others.
+        /// </summary>
+        internal JObject BuildWwpTemplatesBlock()
+        {
+            try
+            {
+                var kb = _kbService?.GetKB() as KnowledgeBase;
+                if (kb == null) return WwpTemplatesUnavailable("KbNotOpen");
+                if (PatternRegistry.Current.FindById(PatternRegistry.WorkWithPlusPatternId) == null)
+                    return WwpTemplatesUnavailable("WorkWithPlusNotInstalled");
+
+                var objects = kb.DesignModel.Objects;
+                var records = new List<WwpTemplateHealth.TemplateRecord>();
+                foreach (var key in objects.GetKeys(WwpTemplateXml.ObjectType).OrderBy(k => k.ToString()).ToArray())
+                {
+                    try
+                    {
+                        var obj = PatternSettingsService.Fresh(objects.Get(key));
+                        records.Add(new WwpTemplateHealth.TemplateRecord
+                        {
+                            Name = obj.Name,
+                            Type = obj.GetPropertyValue<string>("WWPTemplate_Type"),
+                            TemplateXml = obj.GetPropertyValue<string>(WwpTemplateXml.SourceProperty)
+                        });
+                    }
+                    catch (Exception)
+                    {
+                        records.Add(new WwpTemplateHealth.TemplateRecord { Unreadable = true });
+                    }
+                }
+                return WwpTemplateHealth.Summarize(records);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Doctor WorkWithPlus template block failed: " + ex.Message);
+                return WwpTemplatesUnavailable("ReadFailed");
+            }
+        }
+
+        private static JObject WwpTemplatesUnavailable(string reason)
+        {
+            return new JObject { ["available"] = false, ["reason"] = reason };
         }
 
         private static JObject SafeBlock(Func<JObject> build, List<string> warnings, string blockName)

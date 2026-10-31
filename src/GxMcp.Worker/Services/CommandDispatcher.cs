@@ -3532,7 +3532,10 @@ namespace GxMcp.Worker.Services
 
         private string Handle_Doctor(JObject request, string method, string action, string target, string payload, JObject args)
         {
-            // genexus_doctor — health/triage envelope. No args.
+            // genexus_doctor — health/triage envelope. No args. The Gateway asks for the WorkWithPlus
+            // template block by action; any other call returns the full envelope.
+            if (string.Equals(action, "WwpTemplates", StringComparison.OrdinalIgnoreCase))
+                return _doctorService.WwpTemplatesResponse();
             return _doctorService.Diagnose();
         }
 
