@@ -15,6 +15,16 @@ namespace GxMcp.Worker.Tests
 
         private static long At(double seconds) => Origin + TimeSpan.FromSeconds(seconds).Ticks;
 
+        // A window made from Evidence() keeps the anchor the receipt shows: the save's stamp (102 s), its kind and the start of
+        // its write span (101 s). An unavailable window that the save made must keep it too.
+        private static void AssertAnchor(EventsSaveWindow window)
+        {
+            JObject described = window.Describe();
+            Assert.Equal(EventsSaveWindow.Iso(At(102)), described["anchorStampUtc"]!.ToString());
+            Assert.Equal("Utc", described["anchorKind"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(101)), described["writeStartUtc"]!.ToString());
+        }
+
         // The nominal save: the transaction opens at 100 s, the write span runs from 101 s to 103 s, the target is stamped
         // 102 s, and before the save the target carried 50 s.
         private static EventsSaveWindow.SaveEvidence Evidence(long? stampAfterObjectSave, long lastUpdateBefore, long? transactionEnd = null)
@@ -26,7 +36,8 @@ namespace GxMcp.Worker.Tests
                 ObjectSavedTicks = At(103),
                 StampAfterObjectSave = stampAfterObjectSave,
                 LastUpdateBeforeTicks = lastUpdateBefore,
-                LocalUtcOffsetTicks = LocalOffset
+                LocalUtcOffsetTicks = LocalOffset,
+                AnchorKind = "Utc"
             };
 
         [Fact]
@@ -113,6 +124,7 @@ namespace GxMcp.Worker.Tests
 
             Assert.False(window.Calibrated);
             Assert.Equal("PersistedStampDiffersFromSaveStamp", window.Reason);
+            AssertAnchor(window);
         }
 
         [Fact]
@@ -183,7 +195,29 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(EventsSaveWindow.Iso(At(50)), described["anchorStampUtc"]!.ToString());
         }
 
-        // Contract item 5, rows (i) and (ii). Row (iii) is not decided by the function: it stops the item and is reported.
+        // A save that stopped before its object save records only the instants it reached (docs/events-object-save-isolation.md,
+        // the receipt): an instant that was never recorded is left out, not written as the minimum date.
+        [Theory]
+        [InlineData(false)] // stopped before the source was assigned: no write span
+        [InlineData(true)]  // stopped in the part save: the write span started, the object save never returned
+        public void ASaveThatStoppedBeforeTheObjectSave_DescribesOnlyTheInstantsItRecorded(bool writeSpanStarted)
+        {
+            var evidence = Evidence(null, At(50), null);
+            evidence.ObjectSavedTicks = 0;
+            evidence.WriteSpanStartTicks = writeSpanStarted ? At(101) : 0;
+            evidence.AnchorKind = null;
+
+            JObject described = EventsSaveWindow.FromSaveEvidence(evidence, transactionClosed: true).Describe();
+
+            Assert.Equal("TargetNotSaved", described["reason"]!.ToString());
+            Assert.Equal(EventsSaveWindow.Iso(At(50)), described["lastUpdateBeforeUtc"]!.ToString());
+            Assert.Null(described["objectSavedUtc"]);
+            Assert.Null(described["anchorStampUtc"]);
+            Assert.Null(described["anchorMinusWriteStartSeconds"]);
+            Assert.Equal(writeSpanStarted, described["writeStartUtc"] != null);
+        }
+
+        // The pre-commit stamp check is described in the pre-commit paragraph of docs/events-object-save-isolation.md.
 
         [Fact]
         public void APreCommitReadThatShowsTheSaveStamp_KeepsTheWindow()
@@ -207,6 +241,7 @@ namespace GxMcp.Worker.Tests
 
             Assert.False(window.Calibrated);
             Assert.Equal("PreCommitStampRepresentationMismatch", window.Reason);
+            AssertAnchor(window);
         }
 
         [Fact]
@@ -228,6 +263,7 @@ namespace GxMcp.Worker.Tests
 
             Assert.False(window.Calibrated);
             Assert.Equal("PreCommitStampNotRead", window.Reason);
+            AssertAnchor(window);
         }
 
         [Fact]

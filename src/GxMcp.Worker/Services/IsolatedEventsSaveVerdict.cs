@@ -25,6 +25,12 @@ namespace GxMcp.Worker.Services
         internal const string OtherObjectsChangedCode = "OtherObjectsChangedDuringSave";
 
         /// <summary>
+        /// Largest number of other-process changes the pre-commit receipt describes in full. The count stays complete, and the whole
+        /// list is in <c>concurrentChanges</c> of the verdict: a refusal's receipt must not push a long error past the response budget.
+        /// </summary>
+        internal const int MaxPreCommitConcurrentDescribed = 10;
+
+        /// <summary>
         /// Records what the pre-commit inventory showed about the other objects, in fields of their own. A refusal at
         /// this stage rolls the transaction back, and when the change belonged to the transaction the rollback undoes
         /// it: the inventory read afterwards is clean, and <see cref="Apply"/> rewrites <c>unexpectedChangedObjects</c>
@@ -39,9 +45,9 @@ namespace GxMcp.Worker.Services
             receipt["preCommitSaveWindow"] = window.Describe();
             if (others.Concurrent.Count > 0)
             {
-                receipt["preCommitConcurrentChanges"] = others.ConcurrentDetails();
+                receipt["preCommitConcurrentChanges"] = others.ConcurrentDetails(MaxPreCommitConcurrentDescribed);
                 receipt["preCommitConcurrentChangeCount"] = others.Concurrent.Count;
-                if (others.Concurrent.Count > EventsOtherObjectChanges.MaxDescribed)
+                if (others.Concurrent.Count > MaxPreCommitConcurrentDescribed)
                     receipt["preCommitConcurrentChangesTruncated"] = true;
             }
             if (others.Blocking.Count == 0) return;

@@ -237,8 +237,8 @@ namespace GxMcp.Worker.Services
                 if (mismatch != null) throw new InvalidOperationException(mismatch);
             }
 
-            // The target as the open transaction reads it after the object save: the stamp the pre-commit window is checked
-            // against (contract item 5), and the diagnostic the receipt keeps. A read that fails returns null.
+            // The target as the open transaction reads it after the object save: the stamp the pre-commit check compares with the
+            // save's own stamp, and the diagnostic the receipt keeps. A read that fails returns null.
             private long? ReadFreshStampAtPreCommit()
             {
                 try

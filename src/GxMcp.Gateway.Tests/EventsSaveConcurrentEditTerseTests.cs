@@ -108,6 +108,23 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void TrimErrorEnvelope_KeepsThePreCommitTruncationFlagAndTheErrorOfAFailedFreshRead()
+        {
+            var input = JObject.Parse(
+                "{code:'ObjectSaveIncomplete',message:'verification failed',otherObjectMetadataIntact:true,"
+                + "preCommitSaveWindow:{calibrated:false,reason:'PreCommitStampNotRead'},"
+                + "preCommitConcurrentChangeCount:13,preCommitConcurrentChangesTruncated:true,freshStampError:'the read failed'}");
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            foreach (string key in new[]
+            {
+                "preCommitSaveWindow", "preCommitConcurrentChangeCount", "preCommitConcurrentChangesTruncated", "freshStampError"
+            })
+                Assert.True(JToken.DeepEquals(input[key], trimmed[key]), key);
+        }
+
+        [Fact]
         public void TrimErrorEnvelope_DoesNotInventTheFieldsWhenTheWorkerSentNone()
         {
             var trimmed = McpRouter.TrimErrorEnvelope(
@@ -117,7 +134,7 @@ namespace GxMcp.Gateway.Tests
             {
                 "unexpectedChangedObjects", "preCommitUnexpectedChangedObjects", "preCommitUnexpectedChangedObjectDetails",
                 "concurrentChanges", "saveWindow", "writeVerifiedForTarget", "preCommitSaveWindow", "preCommitConcurrentChanges",
-                "freshStampAtPreCommit"
+                "freshStampAtPreCommit", "freshStampError", "preCommitConcurrentChangesTruncated"
             })
                 Assert.False(trimmed.ContainsKey(key), key);
         }

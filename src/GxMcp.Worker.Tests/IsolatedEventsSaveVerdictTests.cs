@@ -293,6 +293,49 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void RecordPreCommitOthers_DescribesAtMostTheConcurrentChangesTheLimitAllows_AndKeepsTheCountAndTheFlag()
+        {
+            int limit = IsolatedEventsSaveVerdict.MaxPreCommitConcurrentDescribed;
+            var before = new Dictionary<Guid, EventsInventoryEntry>();
+            var after = new Dictionary<Guid, EventsInventoryEntry>();
+            for (int i = 0; i < limit + 3; i++)
+            {
+                var id = Guid.NewGuid();
+                before[id] = Entry(1, At(10));
+                after[id] = Entry(2, At(60));
+            }
+            var receipt = new JObject();
+
+            IsolatedEventsSaveVerdict.RecordPreCommitOthers(receipt, EventsOtherObjectChanges.Classify(before, after, Target, Open()), Open());
+
+            Assert.Equal(limit + 3, receipt["preCommitConcurrentChangeCount"]!.Value<int>());
+            Assert.Equal(limit, ((JArray)receipt["preCommitConcurrentChanges"]!).Count);
+            Assert.True(receipt["preCommitConcurrentChangesTruncated"]!.Value<bool>());
+            Assert.Empty((JArray)receipt["preCommitUnexpectedChangedObjects"]!);
+        }
+
+        [Fact]
+        public void RecordPreCommitOthers_WithTheLimitExactlyConcurrent_IsNotTruncated()
+        {
+            int limit = IsolatedEventsSaveVerdict.MaxPreCommitConcurrentDescribed;
+            var before = new Dictionary<Guid, EventsInventoryEntry>();
+            var after = new Dictionary<Guid, EventsInventoryEntry>();
+            for (int i = 0; i < limit; i++)
+            {
+                var id = Guid.NewGuid();
+                before[id] = Entry(1, At(10));
+                after[id] = Entry(2, At(60));
+            }
+            var receipt = new JObject();
+
+            IsolatedEventsSaveVerdict.RecordPreCommitOthers(receipt, EventsOtherObjectChanges.Classify(before, after, Target, Open()), Open());
+
+            Assert.Equal(limit, receipt["preCommitConcurrentChangeCount"]!.Value<int>());
+            Assert.Equal(limit, ((JArray)receipt["preCommitConcurrentChanges"]!).Count);
+            Assert.Null(receipt["preCommitConcurrentChangesTruncated"]);
+        }
+
+        [Fact]
         public void TheReceipt_SaysWhenItDescribesFewerChangesThanItFound()
         {
             var before = new Dictionary<Guid, EventsInventoryEntry>();

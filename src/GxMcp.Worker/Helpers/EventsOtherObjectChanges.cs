@@ -272,19 +272,26 @@ namespace GxMcp.Worker.Helpers
 
         /// <summary>
         /// The stamps the window was made from: the anchor (the target's stamp after the object save) against the start of the
-        /// write span, so a misplaced anchor shows in the receipt. Written only when a save made the window.
+        /// write span, so a misplaced anchor shows in the receipt. Written only when a save made the window. An instant the save
+        /// did not record (its write span or its object save never started or returned) is left out, not written as the minimum
+        /// date. <c>anchorMinusWriteStartSeconds</c> is the raw difference: where the SDK stamps the local wall clock labelled as
+        /// UTC it is about ±10,800 s, which is that clock's offset and not a misplaced anchor (docs/events-object-save-isolation.md).
         /// </summary>
         private void DescribeAnchor(JObject window)
         {
             if (Evidence == null) return;
-            window["writeStartUtc"] = Iso(Evidence.WriteSpanStartTicks);
-            window["objectSavedUtc"] = Iso(Evidence.ObjectSavedTicks);
+            if (Evidence.WriteSpanStartTicks != 0) window["writeStartUtc"] = Iso(Evidence.WriteSpanStartTicks);
+            if (Evidence.ObjectSavedTicks != 0) window["objectSavedUtc"] = Iso(Evidence.ObjectSavedTicks);
             window["lastUpdateBeforeUtc"] = Iso(Evidence.LastUpdateBeforeTicks);
             if (Evidence.AnchorKind != null) window["anchorKind"] = Evidence.AnchorKind;
             if (Evidence.StampAfterObjectSave is long anchor)
             {
                 window["anchorStampUtc"] = Iso(anchor);
-                window["anchorMinusWriteStartSeconds"] = Math.Round(TimeSpan.FromTicks(anchor - Evidence.WriteSpanStartTicks).TotalSeconds, 3);
+                if (Evidence.WriteSpanStartTicks != 0)
+                {
+                    double seconds = TimeSpan.FromTicks(anchor - Evidence.WriteSpanStartTicks).TotalSeconds;
+                    window["anchorMinusWriteStartSeconds"] = Math.Round(seconds, 3);
+                }
             }
         }
 
@@ -422,11 +429,14 @@ namespace GxMcp.Worker.Helpers
         /// <summary>The GUIDs of the blocking changes: the <c>unexpectedChangedObjects</c> field of the receipt.</summary>
         internal JArray BlockingGuids() => new JArray(Blocking.Select(c => c.Guid.ToString()));
 
-        internal JArray BlockingDetails() => Describe(Blocking);
+        internal JArray BlockingDetails() => Describe(Blocking, MaxDescribed);
 
-        internal JArray ConcurrentDetails() => Describe(Concurrent);
+        internal JArray ConcurrentDetails() => ConcurrentDetails(MaxDescribed);
 
-        private static JArray Describe(IReadOnlyList<EventsOtherObjectChange> changes)
-            => new JArray(changes.Take(MaxDescribed).Select(c => c.ToJson()));
+        /// <summary>The first <paramref name="limit"/> changes another process made outside the window, in full.</summary>
+        internal JArray ConcurrentDetails(int limit) => Describe(Concurrent, limit);
+
+        private static JArray Describe(IReadOnlyList<EventsOtherObjectChange> changes, int limit)
+            => new JArray(changes.Take(limit).Select(c => c.ToJson()));
     }
 }
