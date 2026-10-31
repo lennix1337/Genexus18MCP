@@ -53,6 +53,21 @@ Procedure `DCM37961700` maps to project `adcm37961700`; the published
   `Input parameters are not complete: User`. Cloud must stay off in validation.
 - Those tasks can also apply a pending database reorganization (#749).
 
+## What the Trial can and cannot do
+
+| Operation | Trial result |
+|---|---|
+| Create, edit, save-as, delete objects in a KB under the cap | Works |
+| Create or save-as an object past the cap | `TrialObjectLimitReached` (SDK `MaxObjCountException`, "a maximum limit was reached for your GeneXus product license"); nothing is saved |
+| `BuildOne`, `BuildAll`, `IdeWebBuildAndDeploy` | Fail at the GeneXus Cloud step (`DEPLOY_CLOUD` forced) |
+| `GenerateOnly` / SDK local build of `C:\KBs\*teste*` | Works, no Cloud |
+
+The cap counts the objects of the KB. Measured on `C:\KBs\KBTeste` (2026-10-31): `genexus_query query=*`
+reported 814 objects, four `genexus_create` calls succeeded (818) and the fifth failed; deleting the four
+restored 814. Deleting leftover probe objects is what frees room. The limit value itself lives in the SDK's
+protected code (`KBObject.Save`), so it is not readable from the decompiled assemblies; measure it with a
+create loop on a disposable KB and delete what the loop created.
+
 The script checks the generated project against an allow-list
 (`OpenKnowledgeBase`, `SpecifyOneOnly`, `SpecifyAllOnly`, `GenerateOnly`,
 `CloseKnowledgeBase`, `Message`, `OnError`) before it runs, and accepts only

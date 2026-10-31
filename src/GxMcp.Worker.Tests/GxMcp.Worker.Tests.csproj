@@ -44,6 +44,10 @@
       <HintPath>$(GX_PATH)\Artech.Genexus.Common.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="Artech.Common">
+      <HintPath>$(GX_PATH)\Artech.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Artech.Common.Properties">
       <HintPath>$(GX_PATH)\Artech.Common.Properties.dll</HintPath>
       <Private>False</Private>
