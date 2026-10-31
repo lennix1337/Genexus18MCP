@@ -750,8 +750,10 @@ namespace GxMcp.Worker.Tests
         {
             string properties = Source("Services", "PropertyService.cs");
 
-            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(
-                properties, @"if \(IsLayoutControlContainer\(\(object\)container\)\) return LayoutControlWriteUnsupported\(").Count);
+            // Only the Conditions of a layout control (issue #770) are delegated; everything else stays refused.
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(properties, @"IsLayoutControlContainer\(\(object\)container\)\)").Count);
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(properties, @"LayoutControlWriteUnsupported\(target, controlName,").Count);
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(properties, @"ControlConditionsService\.IsConditionsProperty\(").Count);
         }
 
         [Fact]
