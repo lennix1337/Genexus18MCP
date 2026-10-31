@@ -46,8 +46,8 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("SynthTemplate", json["target"]?.ToString());
             Assert.False(json["wouldDelete"]?.ToObject<bool>());
             Assert.False(json["persisted"]?.ToObject<bool>());
-            Assert.Contains("Nothing was deleted", json["error"]?["message"]?.ToString());
-            Assert.Contains("Settings Editor", json["error"]?["hint"]?.ToString());
+            Assert.Equal("WorkWithPlus templates cannot be deleted with genexus_delete_object. Delete them with the WorkWithPlus Settings Editor. Nothing was deleted.", json["error"]?["message"]?.ToString());
+            Assert.Equal("Delete the template with the WorkWithPlus Settings Editor in the IDE. genexus_delete_object does not remove WorkWithPlus templates.", json["error"]?["hint"]?.ToString());
         }
 
         [Theory]
@@ -120,6 +120,18 @@ namespace GxMcp.Worker.Tests
 
             Assert.Equal("DeleteNotSupportedForType", json["error"]?["code"]?.ToString());
             Assert.False(json["wouldDelete"]?.ToObject<bool>());
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void Without_an_open_kb_KbNotOpen_is_answered_before_the_confirm_rule(bool dryRun)
+        {
+            // Characterisation of the order: the KB is checked first, so a call with no KB open and no confirm
+            // is answered KbNotOpen, not ConfirmRequired.
+            var json = JObject.Parse(NewService().DeleteObject("SynthObject", null, confirm: false, dryRun: dryRun));
+
+            Assert.Equal("KbNotOpen", json["error"]?["code"]?.ToString());
         }
 
         [Fact]
