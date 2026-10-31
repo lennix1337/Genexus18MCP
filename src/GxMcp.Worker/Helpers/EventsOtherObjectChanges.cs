@@ -105,14 +105,80 @@ namespace GxMcp.Worker.Helpers
             long offsetLow = targetStampTicks - writeSpanEndTicks;
             long offsetHigh = targetStampTicks - writeSpanStartTicks;
             long tolerance = ClockTolerance.Ticks;
-            if (!Covers(offsetLow, offsetHigh, 0, tolerance) && !Covers(offsetLow, offsetHigh, localUtcOffsetTicks, tolerance))
+            bool onUtcClock = Covers(offsetLow, offsetHigh, 0, tolerance);
+            if (!onUtcClock && !Covers(offsetLow, offsetHigh, localUtcOffsetTicks, tolerance))
                 return Unavailable("StampClockNotComparable");
+
+            // The measured middle of the offset, before it is widened: that is the clock reading the stamp carries.
+            long measuredOffset = offsetLow + (offsetHigh - offsetLow) / 2;
+
+            // The known clock the anchor matched, with the tolerance on both sides, always lies inside the offset range. An
+            // anchor stamped a little before the write span, or a clock step inside it, must not close the window before the
+            // writes this save made. Widening only turns a concurrent verdict into a blocking one, never the reverse.
+            long matchedClock = onUtcClock ? 0 : localUtcOffsetTicks;
+            offsetLow = Math.Min(offsetLow, matchedClock - tolerance);
+            offsetHigh = Math.Max(offsetHigh, matchedClock + tolerance);
 
             return new EventsSaveWindow(
                 true, null,
                 transactionStartTicks + offsetLow - Margin.Ticks,
                 transactionEndTicks.HasValue ? transactionEndTicks.Value + offsetHigh + Margin.Ticks : (long?)null,
-                offsetLow + (offsetHigh - offsetLow) / 2);
+                measuredOffset);
+        }
+
+        /// <summary>
+        /// What the protected save recorded about its own clocks and its target. Plain values, so the production steps and
+        /// the offline double build the window through the same <see cref="FromSaveEvidence"/>.
+        /// </summary>
+        internal sealed class SaveEvidence
+        {
+            /// <summary>The Worker clock when the transaction opened.</summary>
+            internal long TransactionStartTicks { get; set; }
+
+            /// <summary>The Worker clock when the transaction closed; null while it is open or when its end was never recorded.</summary>
+            internal long? TransactionEndTicks { get; set; }
+
+            /// <summary>The Worker clock before the first call that can write the target.</summary>
+            internal long WriteSpanStartTicks { get; set; }
+
+            /// <summary>The Worker clock after the object save returned.</summary>
+            internal long ObjectSavedTicks { get; set; }
+
+            /// <summary>The target's stamp after the object save, normalized; null when the object save did not return.</summary>
+            internal long? StampAfterObjectSave { get; set; }
+
+            /// <summary>The target's stamp before the save, normalized.</summary>
+            internal long LastUpdateBeforeTicks { get; set; }
+
+            /// <summary>The Worker's local offset from UTC.</summary>
+            internal long LocalUtcOffsetTicks { get; set; }
+        }
+
+        /// <summary>
+        /// The window of one verdict, from the save's evidence alone. The checks run in this order: no object save, a target
+        /// stamp that did not advance, a closed transaction whose end was not recorded. Anything else is <see cref="Calibrate"/>.
+        /// </summary>
+        internal static EventsSaveWindow FromSaveEvidence(SaveEvidence evidence, bool transactionClosed)
+        {
+            if (evidence.StampAfterObjectSave == null) return Unavailable("TargetNotSaved");
+            if (evidence.StampAfterObjectSave.Value <= evidence.LastUpdateBeforeTicks) return Unavailable("TargetStampNotAdvanced");
+            if (transactionClosed && evidence.TransactionEndTicks == null) return Unavailable("TransactionNotClosed");
+            return Calibrate(
+                evidence.TransactionStartTicks, transactionClosed ? evidence.TransactionEndTicks : null,
+                evidence.WriteSpanStartTicks, evidence.ObjectSavedTicks, evidence.StampAfterObjectSave.Value,
+                evidence.LocalUtcOffsetTicks);
+        }
+
+        /// <summary>
+        /// The check on the stamp the committed target carries: a committed save must have persisted the stamp its window was
+        /// calibrated with. When it did not, the window is unavailable and no object is cleared.
+        /// </summary>
+        internal static EventsSaveWindow ConfirmPersistedStamp(
+            EventsSaveWindow window, bool committed, long persistedStampTicks, long? saveStampTicks)
+        {
+            if (window.Calibrated && committed && persistedStampTicks != saveStampTicks)
+                return Unavailable("PersistedStampDiffersFromSaveStamp");
+            return window;
         }
 
         private static bool Covers(long offsetLow, long offsetHigh, long clockOffset, long tolerance)

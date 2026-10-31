@@ -249,16 +249,16 @@ namespace GxMcp.Worker.Services
             // read right after the object save, is the anchor: it was assigned somewhere between the first write call
             // and that read. Without an advanced stamp there is no anchor and no object can be cleared.
             private EventsSaveWindow BuildSaveWindow(bool transactionClosed)
-            {
-                if (_stampAfterObjectSave == null) return EventsSaveWindow.Unavailable("TargetNotSaved");
-                if (_stampAfterObjectSave.Value <= SdkTimestampNormalizer.NormalizeUtc(_lastUpdateBefore).Ticks)
-                    return EventsSaveWindow.Unavailable("TargetStampNotAdvanced");
-                if (transactionClosed && !_transactionEnded) return EventsSaveWindow.Unavailable("TransactionNotClosed");
-                return EventsSaveWindow.Calibrate(
-                    _transactionStartUtc.Ticks, transactionClosed ? _transactionEndUtc.Ticks : (long?)null,
-                    _writeStartUtc.Ticks, _objectSavedUtc.Ticks, _stampAfterObjectSave.Value,
-                    TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).Ticks);
-            }
+                => EventsSaveWindow.FromSaveEvidence(new EventsSaveWindow.SaveEvidence
+                {
+                    TransactionStartTicks = _transactionStartUtc.Ticks,
+                    TransactionEndTicks = _transactionEnded ? _transactionEndUtc.Ticks : (long?)null,
+                    WriteSpanStartTicks = _writeStartUtc.Ticks,
+                    ObjectSavedTicks = _objectSavedUtc.Ticks,
+                    StampAfterObjectSave = _stampAfterObjectSave,
+                    LastUpdateBeforeTicks = SdkTimestampNormalizer.NormalizeUtc(_lastUpdateBefore).Ticks,
+                    LocalUtcOffsetTicks = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).Ticks
+                }, transactionClosed);
 
             public void RereadAfterCommit()
             {
@@ -281,11 +281,10 @@ namespace GxMcp.Worker.Services
                 var finalComparison = _snapshot.Compare(persisted, new[] { "Events" });
                 _receipt["preservedPartSnapshotAfter"] = ObjectMoveSnapshot.Capture(persisted).DescribeParts("Events");
                 var inventoryWatch = Stopwatch.StartNew();
-                EventsSaveWindow window = BuildSaveWindow(transactionClosed: true);
                 // A committed save must have persisted the stamp the window was calibrated with.
-                if (window.Calibrated && committed
-                    && SdkTimestampNormalizer.NormalizeUtc(persisted.LastUpdate).Ticks != _stampAfterObjectSave)
-                    window = EventsSaveWindow.Unavailable("PersistedStampDiffersFromSaveStamp");
+                EventsSaveWindow window = EventsSaveWindow.ConfirmPersistedStamp(
+                    BuildSaveWindow(transactionClosed: true), committed,
+                    SdkTimestampNormalizer.NormalizeUtc(persisted.LastUpdate).Ticks, _stampAfterObjectSave);
                 var finalOthers = EventsOtherObjectChanges.Classify(_inventory, EventsSaveIsolation.Inventory(_kb), _guid, window);
                 _timings["inventoryFinalMs"] = inventoryWatch.ElapsedMilliseconds;
                 bool partPersisted = EventsSaveIsolation.SourceEquivalent(EventsSaveIsolation.Source(persisted), _source);
