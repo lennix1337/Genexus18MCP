@@ -5,11 +5,11 @@ using System.Linq;
 namespace GxMcp.Worker.Helpers
 {
     /// <summary>
-    /// Which parts the property rollback compares with the state before the write. WebForm and Documentation keep their
-    /// content as CDATA text, where layout ids and empty default entries are part of the text, so a byte comparison cannot
-    /// tell their noise from a real change. Both are still restored with the rest of the object, but they are not compared:
-    /// the receipt names them as not compared instead of reporting a false change. Events, Rules, Variables and the other
-    /// parts keep the exact comparison. The move, SDT and variable rollbacks do not use this rule.
+    /// What the property rollback compares with the state before the write. The text of Events, Rules, Source and the other
+    /// text parts, and the text of Variables, are compared. The other parts are compared by their properties only: their content
+    /// is not read by the snapshot. WebForm and Documentation are not compared at all: the properties their snapshot reads carry
+    /// volatile entries (layout ids and empty defaults) that a byte comparison cannot tell from a change. Both are restored with
+    /// the object and listed as not compared. The move, SDT and variable rollbacks keep their own comparison.
     /// </summary>
     internal static class PropertyVerificationScope
     {

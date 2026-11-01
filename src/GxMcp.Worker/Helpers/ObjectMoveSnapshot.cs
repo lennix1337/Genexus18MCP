@@ -23,6 +23,9 @@ namespace GxMcp.Worker.Helpers
         private readonly byte[] _objectXml;
         private readonly byte[] _objectRestoreData;
 
+        /// <summary>The text of the variables when the snapshot was taken; compared by the property verification only.</summary>
+        internal string VariablesText { get; private set; } = string.Empty;
+
         private ObjectMoveSnapshot(Dictionary<string, PartSnapshot> parts, byte[] objectXml, byte[] objectRestoreData)
         {
             _parts = parts;
@@ -63,9 +66,26 @@ namespace GxMcp.Worker.Helpers
             byte[] objectRestoreData = SerializeEntityData(obj);
             if (objectRestoreData == null)
                 throw new MissingMethodException(obj.GetType().FullName, "SerializeData");
-            return new ObjectMoveSnapshot(parts,
+            var snapshot = new ObjectMoveSnapshot(parts,
                 Utf8(NormalizeObjectXml(obj.SerializeToXml() ?? string.Empty)),
                 objectRestoreData);
+            snapshot.VariablesText = CaptureVariablesText(obj);
+            return snapshot;
+        }
+
+        // The text of the variables, read as the variable editor reads them. The part's own properties do not carry the declarations,
+        // so the property verification compares this text too. Empty when the object has no variables part or the text cannot be read.
+        private static string CaptureVariablesText(KBObject obj)
+        {
+            try
+            {
+                return VariableInjector.GetVariablesAsText(obj) ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[PROPERTY] variables text could not be read: " + ex.Message);
+                return string.Empty;
+            }
         }
 
         public Comparison Compare(KBObject obj, params string[] ignoredPartNames)
@@ -217,9 +237,17 @@ namespace GxMcp.Worker.Helpers
                     changedLines.Add(line);
             }
 
+            // The declarations of the variables are compared as text: the part's properties alone do not show them.
+            if (!string.Equals(VariablesText, current.VariablesText, StringComparison.Ordinal))
+            {
+                changed.Add("Variables");
+                foreach (JToken line in ChangedLines.Describe("Variables", VariablesText, current.VariablesText, Math.Max(0, ChangedLines.DefaultMaxLines - changedLines.Count)))
+                    changedLines.Add(line);
+            }
+
             Comparison result = changed.Count == 0
                 ? Comparison.Verified(current.Hash)
-                : Comparison.Failed(changed, current.Hash, changedKeys);
+                : Comparison.Failed(changed.Distinct(StringComparer.OrdinalIgnoreCase), current.Hash, changedKeys);
             result.ChangedLines = changedLines;
             result.NotComparedParts = PropertyVerificationScope.NotComparedOf(_parts.Values.Concat(current._parts.Values).Select(part => part.Name));
             return result;
