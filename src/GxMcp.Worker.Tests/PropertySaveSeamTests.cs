@@ -6,9 +6,9 @@ using Xunit;
 namespace GxMcp.Worker.Tests
 {
     /// <summary>
-    /// The one save of a property write, run with fake save flags. The apply-on-save flag is on while the save runs, and it is given back
-    /// when the save returns or throws, and only when the rule says so. The four property write paths save through this seam, so these
-    /// tests stand for all four.
+    /// The one save of a property write, run with fake save flags. The seam saves the object itself, then runs the caller's commit work, and
+    /// the apply-on-save flag is on for both: it is given back when they return or throw, and only when the rule says so. The four property
+    /// write paths save through this seam, so these tests stand for all four.
     /// </summary>
     public class PropertySaveSeamTests
     {
@@ -32,15 +32,31 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void TheSuppressionIsOnWhileTheSaveRunsAndOffAfterIt()
+        public void TheSuppressionIsOnWhileTheObjectIsSavedAndWhileTheCommitRuns()
         {
             var flags = new FakeFlags(false);
             bool duringSave = false;
+            bool duringCommit = false;
 
-            PropertyApplyOnSaveRule.SaveWith(flags, true, null, new[] { "Description" }, () => duringSave = flags.Current);
+            PropertyApplyOnSaveRule.SaveWith(flags, true, null, new[] { "Description" },
+                () => duringSave = flags.Current,
+                () => duringCommit = flags.Current);
 
             Assert.True(duringSave);
+            Assert.True(duringCommit);
             Assert.False(flags.Current);
+        }
+
+        [Fact]
+        public void TheObjectIsSavedBeforeTheCommitWork()
+        {
+            var order = new List<string>();
+
+            PropertyApplyOnSaveRule.SaveWith(new FakeFlags(false), true, null, new[] { "Description" },
+                () => order.Add("save"),
+                () => order.Add("commit"));
+
+            Assert.Equal(new[] { "save", "commit" }, order);
         }
 
         [Fact]
@@ -48,8 +64,21 @@ namespace GxMcp.Worker.Tests
         {
             var flags = new FakeFlags(false);
 
-            Assert.Throws<InvalidOperationException>(() => PropertyApplyOnSaveRule.SaveWith(
-                flags, true, null, new[] { "Description" }, () => throw new InvalidOperationException("the save failed")));
+            Assert.Throws<InvalidOperationException>(() => PropertyApplyOnSaveRule.SaveWith(flags, true, null, new[] { "Description" },
+                () => throw new InvalidOperationException("the save failed"),
+                () => { }));
+
+            Assert.False(flags.Current);
+        }
+
+        [Fact]
+        public void TheSuppressionIsGivenBackWhenTheCommitThrows()
+        {
+            var flags = new FakeFlags(false);
+
+            Assert.Throws<InvalidOperationException>(() => PropertyApplyOnSaveRule.SaveWith(flags, true, null, new[] { "Description" },
+                () => { },
+                () => throw new InvalidOperationException("the commit failed")));
 
             Assert.False(flags.Current);
         }
@@ -60,7 +89,7 @@ namespace GxMcp.Worker.Tests
             var flags = new FakeFlags(true);
             bool duringSave = false;
 
-            PropertyApplyOnSaveRule.SaveWith(flags, true, null, new[] { "Description" }, () => duringSave = flags.Current);
+            PropertyApplyOnSaveRule.SaveWith(flags, true, null, new[] { "Description" }, () => duringSave = flags.Current, () => { });
 
             Assert.True(duringSave);
             Assert.True(flags.Current);
@@ -72,7 +101,7 @@ namespace GxMcp.Worker.Tests
             var flags = new FakeFlags(false);
             bool duringSave = true;
 
-            PropertyApplyOnSaveRule.SaveWith(flags, false, null, new[] { "Description" }, () => duringSave = flags.Current);
+            PropertyApplyOnSaveRule.SaveWith(flags, false, null, new[] { "Description" }, () => duringSave = flags.Current, () => { });
 
             Assert.False(duringSave);
         }
@@ -83,7 +112,7 @@ namespace GxMcp.Worker.Tests
             var flags = new FakeFlags(false);
             bool duringSave = true;
 
-            PropertyApplyOnSaveRule.SaveWith(flags, true, "Grid1", new[] { "Caption" }, () => duringSave = flags.Current);
+            PropertyApplyOnSaveRule.SaveWith(flags, true, "Grid1", new[] { "Caption" }, () => duringSave = flags.Current, () => { });
 
             Assert.False(duringSave);
         }
@@ -94,19 +123,15 @@ namespace GxMcp.Worker.Tests
             var flags = new FakeFlags(false);
             bool duringSave = true;
 
-            PropertyApplyOnSaveRule.SaveWith(flags, true, null, new[] { ApplyFlag, "Description" }, () => duringSave = flags.Current);
+            PropertyApplyOnSaveRule.SaveWith(flags, true, null, new[] { ApplyFlag, "Description" }, () => duringSave = flags.Current, () => { });
 
             Assert.False(duringSave);
         }
 
         [Fact]
-        public void ASaveWithoutAnObjectRunsAsItWas()
+        public void ASaveWithoutAnObjectIsRefused()
         {
-            bool ran = false;
-
-            PropertyApplyOnSaveRule.Save(null, null, new[] { "Description" }, () => ran = true);
-
-            Assert.True(ran);
+            Assert.Throws<ArgumentNullException>(() => PropertyApplyOnSaveRule.Save(null, null, new[] { "Description" }, () => { }));
         }
     }
 }

@@ -21,7 +21,9 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(4, SourceAssert.Count(PropertySource(), "PropertyApplyOnSaveRule.Save("));
             Assert.Equal(0, SourceAssert.Count(PropertySource(), "PropertyApplyOnSaveRule.Begin("));
             Assert.Equal(1, SourceAssert.Count(PropertySource(), "suppression = PropertyApplyOnSaveRule.BeginForRollback("));
-            Assert.Equal(1, SourceAssert.Count(PropertySource(), "PropertyApplyOnSaveRule.Save(obj, null, new[] { \"OutputSDT\" }, () =>"));
+            Assert.Equal(1, SourceAssert.Count(PropertySource(), "PropertyApplyOnSaveRule.Save(obj, null, new[] { \"OutputSDT\" }, () => trans.Commit());"));
+            // The save itself is inside the seam: no path of the property service calls EnsureSave, so a save outside the suppression cannot be written here.
+            Assert.Equal(0, SourceAssert.Count(PropertySource(), "EnsureSave("));
         }
 
         [Fact]

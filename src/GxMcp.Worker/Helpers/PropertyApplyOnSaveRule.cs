@@ -39,24 +39,23 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
-        /// The one save of a property write. The apply-on-save step is suppressed for this save only, when the rule says so; the suppression
-        /// ends before the call returns, even when the save throws. Without an object there is no flag to suppress, and the save runs as it is.
+        /// The one save of a property write. The object is saved here, and then the caller's commit work runs, all inside the suppression of
+        /// the apply-on-save step for this save only. The suppression ends before the call returns, even when the save or the commit throws.
         /// </summary>
-        internal static void Save(KBObject obj, string controlName, IEnumerable<string> requestedNames, Action save)
+        internal static void Save(KBObject obj, string controlName, IEnumerable<string> requestedNames, Action afterSave)
         {
-            if (obj == null)
-            {
-                save();
-                return;
-            }
-            SaveWith(ObjectSaveFlags.Of(obj), AnyApplyOnSaveOn(obj), controlName, requestedNames, save);
+            if (obj == null) throw new ArgumentNullException(nameof(obj));
+            SaveWith(ObjectSaveFlags.Of(obj), AnyApplyOnSaveOn(obj), controlName, requestedNames, () => obj.EnsureSave(), afterSave);
         }
 
         // The same save with the flags and the apply-on-save state given, so that the order and the give-back can be tested without an SDK object.
-        internal static void SaveWith(ISaveFlags flags, bool applyOnSaveOn, string controlName, IEnumerable<string> requestedNames, Action save)
+        internal static void SaveWith(ISaveFlags flags, bool applyOnSaveOn, string controlName, IEnumerable<string> requestedNames, Action saveObject, Action afterSave)
         {
             using (BeginWith(flags, applyOnSaveOn, controlName, requestedNames))
-                save();
+            {
+                saveObject();
+                afterSave();
+            }
         }
 
         internal static IDisposable BeginWith(ISaveFlags flags, bool applyOnSaveOn, string controlName, IEnumerable<string> requestedNames)

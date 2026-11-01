@@ -1004,11 +1004,7 @@ namespace GxMcp.Worker.Services
                         }
 
                         try { if (container != obj) container.Dirty = true; } catch { }
-                        PropertyApplyOnSaveRule.Save(obj, controlName, new[] { propName }, () =>
-                        {
-                            obj.EnsureSave();
-                            trans.Commit();
-                        });
+                        PropertyApplyOnSaveRule.Save(obj, controlName, new[] { propName }, () => trans.Commit());
                         committed = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
@@ -1242,7 +1238,6 @@ namespace GxMcp.Worker.Services
                         try { if (container != obj) container.Dirty = true; } catch { }
                         PropertyApplyOnSaveRule.Save(obj, controlName, properties.Properties().Select(p => p.Name), () =>
                         {
-                            obj.EnsureSave();
                             WriteService.StampObjectRevisionDates(obj, obj.Model);
                             trans.Commit();
                         });
@@ -2055,11 +2050,7 @@ namespace GxMcp.Worker.Services
                     {
                         container.SetPropertyValue(propName, newRef);
                         try { if (container != obj) container.Dirty = true; } catch { }
-                        PropertyApplyOnSaveRule.Save(obj, controlName, new[] { propName }, () =>
-                        {
-                            obj.EnsureSave();
-                            trans.Commit();
-                        });
+                        PropertyApplyOnSaveRule.Save(obj, controlName, new[] { propName }, () => trans.Commit());
                         committed = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
@@ -2158,11 +2149,7 @@ namespace GxMcp.Worker.Services
                         // The IPropertyBag is the KBObject itself (PropertiesObject) — obj.Properties
                         // is only an enumerable projection of descriptors, not the bag.
                         setOutput.Invoke(null, new object[] { obj, outputRef });
-                        PropertyApplyOnSaveRule.Save(obj, null, new[] { "OutputSDT" }, () =>
-                        {
-                            obj.EnsureSave();
-                            trans.Commit();
-                        });
+                        PropertyApplyOnSaveRule.Save(obj, null, new[] { "OutputSDT" }, () => trans.Commit());
                         committed = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
