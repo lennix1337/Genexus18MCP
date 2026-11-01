@@ -392,5 +392,36 @@ namespace GxMcp.Gateway.Tests
             string diagnostic = "GXMCP_SDK_COMPATIBLE major=18 GXMCP_SDK_VERSION_MISMATCH major=19";
             Assert.Equal("GXMCP_SDK_VERSION_MISMATCH", SdkDiagnosticClassifier.ClassifyCode(diagnostic));
         }
+
+        [Fact]
+        public void EntryState_Transitions_Follow_Explicit_StateMachine_And_Guard_Eviction()
+        {
+            var pool = new WorkerPool(CfgWithMax(2));
+            var vacantHandle = new KbHandle("vacant", "C:/Vacant");
+            var activeHandle = new KbHandle("active", "C:/Active");
+
+            pool.RegisterForTest(vacantHandle);
+            Assert.Equal(WorkerPoolEntryState.Vacant, pool.GetEntryStateForTest("vacant"));
+
+            var worker = new WorkerProcess(CfgWithMax(2), activeHandle);
+            pool.RegisterForTest(activeHandle, worker: worker);
+            Assert.Equal(WorkerPoolEntryState.Active, pool.GetEntryStateForTest("active"));
+
+            // Drain transition
+            pool.SetDrainingForTest("active");
+            Assert.Equal(WorkerPoolEntryState.Draining, pool.GetEntryStateForTest("active"));
+            Assert.True(pool.IsDrainingForTest("active"));
+
+            // While draining, entry cannot be evicted
+            Assert.Null(pool.SelectEvictableVictimForTest());
+
+            // Complete drain restores Active
+            pool.CompleteDrainForTest("active");
+            Assert.Equal(WorkerPoolEntryState.Active, pool.GetEntryStateForTest("active"));
+            Assert.False(pool.IsDrainingForTest("active"));
+
+            // Now evictable again
+            Assert.Equal("active", pool.SelectEvictableVictimForTest()?.Alias);
+        }
     }
 }

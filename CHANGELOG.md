@@ -21,6 +21,7 @@
 
 ### Changed
 
+- **`WorkerPool.Entry` implicit flags replaced with an explicit state machine.** The scattered volatile booleans and counters (`Draining`, `DrainFailed`, `Spawning`, `Reloading`) and unused `ReloadGate` synchronization primitive in `src/GxMcp.Gateway/WorkerPool.cs` were unified into a formal `WorkerPoolEntryState` (`Vacant`, `Spawning`, `Active`, `Draining`, `DrainFailed`). Capacity eviction (`IsEvictable`) now evaluates `e.State == WorkerPoolEntryState.Active` directly, preventing edge-case races during reload, drain, and concurrent worker acquisition.
 - **A pattern edit that sets an attribute the installed specification does not declare is refused before the save, with a shorter response.** The refusal keeps the code `PatternAttributeNotInSdkSpecification` and names the element and the attribute, but it has no `verifyDiff` and no suggested name. Undeclared attributes that the request leaves unchanged keep the full refusal.
 
 - **Pattern rollback messages name the content.** When a pattern edit cannot be rolled back, the message says `Content restore was not attempted`. Source edits keep `Source restore was not attempted`. A pattern edit that failed before its commit keeps the SDK transaction rollback it attempted (`rollback.attempted` and `rollback.error`) and reports that message as `rollback.restoreNotAttempted`.
