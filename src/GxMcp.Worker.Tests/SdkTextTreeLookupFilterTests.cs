@@ -143,9 +143,15 @@ namespace GxMcp.Worker.Tests
             return new JObject
             {
                 ["source"] = "Synth text",
-                ["objectName"] = target,
+                ["objectName"] = NameOf(target),
                 ["objectType"] = type
             }.ToString();
+        }
+
+        // The read is asked for Tipo:Nome, so the object's name is what follows its type.
+        private static string NameOf(string typedName)
+        {
+            return typedName.Substring(typedName.IndexOf(':') + 1);
         }
 
         private static SearchIndex.IndexEntry SynthEntry(string name, string type, string module)

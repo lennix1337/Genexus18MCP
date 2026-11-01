@@ -239,9 +239,10 @@ namespace GxMcp.Worker.Services
             }
             try
             {
-                // The index identity (GUID, EntityKey, path) travels with the name, as it does in the
-                // multi-part read and in genexus_read.
-                JObject response = ParseEnvelope(_readPartText(entry.Name, part, entry.Type, entry.Guid, entry.EntityKey, entry.Path));
+                // The index identity (GUID, EntityKey, path) travels with the Tipo:Nome, as it does in the multi-part
+                // read: a bare name would be ambiguous between homonyms of other types (Transaction and its Table).
+                string typedName = (entry.Type ?? string.Empty) + ":" + entry.Name;
+                JObject response = ParseEnvelope(_readPartText(typedName, part, entry.Type, entry.Guid, entry.EntityKey, entry.Path));
                 if (!IsSameObject(entry, response, out failure)) return false;
                 JToken sourceToken = response["source"] ?? response["result"]?["source"];
                 if (sourceToken != null)

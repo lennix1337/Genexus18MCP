@@ -81,9 +81,9 @@ namespace GxMcp.Worker.Tests
             // The object without parts sorts first, so the object after it is only exported if the export goes on.
             SdkTextTreeService service = BuildService(
                 new[] { SynthEntry("SynthAlpha"), SynthEntry("SynthZulu") },
-                (target, part, type, guid, entityKey, path) => target == "SynthAlpha"
-                    ? Reply("PartNotFound", null, target).ToString()
-                    : new JObject { ["source"] = "Synth text", ["objectName"] = target, ["objectType"] = "WorkWithPlus for Web Template" }.ToString());
+                (target, part, type, guid, entityKey, path) => target.EndsWith(":SynthAlpha")
+                    ? Reply("PartNotFound", new JArray(), "SynthAlpha").ToString()
+                    : new JObject { ["source"] = "Synth text", ["objectName"] = "SynthZulu", ["objectType"] = "WorkWithPlus for Web Template" }.ToString());
             string root = NewTempDirectory();
             try
             {

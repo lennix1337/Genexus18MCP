@@ -152,9 +152,9 @@ namespace GxMcp.Worker.Tests
                 new TextTreeSelectionService(cache),
                 new ObjectService(null, null),
                 cache,
-                (target, part, type, guid, entityKey, path) => target == failsFor
+                (target, part, type, guid, entityKey, path) => NameOf(target) == failsFor
                     ? McpResponse.Err(code: "ReadPartFailed", message: "Synth read failure", target: target)
-                    : new JObject { ["source"] = "Synth text", ["objectName"] = target, ["objectType"] = type }.ToString());
+                    : new JObject { ["source"] = "Synth text", ["objectName"] = NameOf(target), ["objectType"] = type }.ToString());
             var args = new JObject
             {
                 ["outputPath"] = root,
@@ -163,6 +163,12 @@ namespace GxMcp.Worker.Tests
             foreach (JProperty option in options.Properties()) args[option.Name] = option.Value;
             if (targetsOnly) args["targets"] = new JArray(loaded.Select(entry => entry.Name));
             return JObject.Parse(service.Execute("export_kb_to_text", null, args, CancellationToken.None));
+        }
+
+        // The read is asked for Tipo:Nome, so the object's name is what follows its type.
+        private static string NameOf(string typedName)
+        {
+            return typedName.Substring(typedName.IndexOf(':') + 1);
         }
 
         private static SearchIndex.IndexEntry Entry(string name, string module)

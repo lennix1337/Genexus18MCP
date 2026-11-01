@@ -34,7 +34,7 @@ namespace GxMcp.Worker.Tests
                 JObject response = Export(service, root, "SynthTemplate");
 
                 Assert.Equal(0, (int)response["result"]!["failed"]!);
-                Assert.Equal(new[] { "SynthTemplate", "Source", TemplateType, TemplateGuid, TemplateEntityKey, entry.Path },
+                Assert.Equal(new[] { TemplateType + ":SynthTemplate", "Source", TemplateType, TemplateGuid, TemplateEntityKey, entry.Path },
                     Assert.Single(reads));
             }
             finally
@@ -77,7 +77,7 @@ namespace GxMcp.Worker.Tests
                 JObject response = Export(service, root, "SynthTemplate");
 
                 Assert.Equal(1, (int)response["result"]!["failed"]!);
-                Assert.Equal(new[] { "SynthTemplate" }, reads.ToArray());
+                Assert.Equal(new[] { TemplateType + ":SynthTemplate" }, reads.ToArray());
             }
             finally
             {
