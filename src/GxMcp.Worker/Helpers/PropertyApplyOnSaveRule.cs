@@ -38,6 +38,23 @@ namespace GxMcp.Worker.Helpers
                 : null;
         }
 
+        /// <summary>
+        /// The suppression for the restoring save of a rollback. The rollback always keeps the pattern from running on save for an
+        /// object-level write, even when the batch changed a pattern flag: the save puts back what the snapshot holds, and a pattern
+        /// run would rewrite the parts the snapshot has just restored.
+        /// </summary>
+        internal static IDisposable BeginForRollback(KBObject obj, string controlName)
+        {
+            if (obj == null) return null;
+            return ShouldSuppressRollback(controlName, AnyApplyOnSaveOn(obj))
+                ? new PatternSaveIsolationScope(obj)
+                : null;
+        }
+
+        /// <summary>True for an object-level rollback on an object whose apply-on-save flag is on. The batch's own flags do not count.</summary>
+        internal static bool ShouldSuppressRollback(string controlName, bool applyOnSaveOn)
+            => string.IsNullOrEmpty(controlName) && applyOnSaveOn;
+
         // A pattern is applied on save when its "Apply:" property reads True on the object. When the properties cannot be
         // read, the save is left as it is: nothing is suppressed.
         private static bool AnyApplyOnSaveOn(KBObject obj)

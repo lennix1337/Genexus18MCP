@@ -16,8 +16,10 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void EveryPropertySaveDecidesItsSuppressionThroughThePropertyRule()
         {
-            // The single write, the batch write, the rollback, the reference write and the output SDT write.
-            Assert.Equal(5, SourceAssert.Count(PropertySource(), "suppression = PropertyApplyOnSaveRule.Begin("));
+            // The single write, the batch write, the reference write and the output SDT write decide with Begin; the rollback
+            // decides with BeginForRollback.
+            Assert.Equal(4, SourceAssert.Count(PropertySource(), "suppression = PropertyApplyOnSaveRule.Begin("));
+            Assert.Equal(1, SourceAssert.Count(PropertySource(), "suppression = PropertyApplyOnSaveRule.BeginForRollback("));
         }
 
         [Fact]

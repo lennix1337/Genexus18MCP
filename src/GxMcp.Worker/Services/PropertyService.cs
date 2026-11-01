@@ -1380,7 +1380,7 @@ namespace GxMcp.Worker.Services
                             (name, previous) => RestorePropertyValue(current, rollback.NativeNames[name], previous, rollback.ControlName));
                         current.Dirty = true;
                         // The restoring saves do not run the pattern on save: the snapshot is what the object must be after them.
-                        suppression = PropertyApplyOnSaveRule.Begin(current, rollback.ControlName, rollback.RequestedNames);
+                        suppression = PropertyApplyOnSaveRule.BeginForRollback(current, rollback.ControlName);
                         current.Save();
                         snapshot.RestoreParts(current);
                         sourceFailures = snapshot.RestoreSourceTexts(current);
@@ -1390,8 +1390,9 @@ namespace GxMcp.Worker.Services
                     }
                     finally
                     {
-                        suppression?.Dispose();
-                        if (!committed) try { tx.Rollback(); } catch { }
+                        // A flag the SDK refuses to restore must not keep the transaction open: the rollback runs either way.
+                        try { suppression?.Dispose(); }
+                        finally { if (!committed) try { tx.Rollback(); } catch { } }
                     }
                 }
                 // Each property counts as restored only when reading it again on this fresh copy gives its previous value.
