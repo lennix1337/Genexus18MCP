@@ -160,6 +160,11 @@ namespace GxMcp.Worker.Services
             }
             if (!MatchesImportSelector(type, name, target, args)) return;
             state.Processed++;
+            if (string.Equals(type, WwpTemplateDocument.Keyword, StringComparison.OrdinalIgnoreCase))
+            {
+                AddWwpTemplateImportRefusal(state, file, name, type);
+                return;
+            }
 
             string selectedPart = string.IsNullOrWhiteSpace(args["part"]?.ToString()) ? null : args["part"].ToString();
             if (!SelectNativeImportPart(parts, selectedPart, name, type, file, state)) return;
@@ -288,6 +293,26 @@ namespace GxMcp.Worker.Services
             });
             if (state.Options.StopOnError) state.StoppedOnError = true;
             return false;
+        }
+
+        private const string WwpTemplateImportRefusedCode = "WwpTemplateImportRefused";
+
+        // The native import does not write templates: their data are SDK properties, changed with genexus_properties. The file
+        // is refused on its own, before any part reaches the KB, and the rest of the batch still runs.
+        private static void AddWwpTemplateImportRefusal(NativeImportState state, string file, string name, string type)
+        {
+            state.Failed++;
+            state.Results.Add(new JObject
+            {
+                ["name"] = name,
+                ["type"] = type,
+                ["file"] = MakeRelative(state.Root, file),
+                ["status"] = "error",
+                ["code"] = WwpTemplateImportRefusedCode,
+                ["message"] = "'" + name + "' is a WorkWithPlus template: the native import does not write templates, so nothing was written to the KB.",
+                ["hint"] = "Change the template's properties with genexus_properties action=set, TemplateXml included."
+            });
+            if (state.Options.StopOnError) state.StoppedOnError = true;
         }
 
         private static void AddNativeImportError(NativeImportState state, string file, string message)
