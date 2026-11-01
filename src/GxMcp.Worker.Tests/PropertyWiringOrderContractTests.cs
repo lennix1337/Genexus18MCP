@@ -5,16 +5,12 @@ using Xunit;
 namespace GxMcp.Worker.Tests
 {
     /// <summary>
-    /// The order of the batch property save and the default check of the rollback, read from the production source. A batch write
-    /// needs a live object to run, so these tests pin the calls their semantics depend on inside the member that makes them. The
-    /// verification rules themselves are run by PropertyVerificationSeamTests.
+    /// The batch property save and the default check of the rollback, read from the production source. The batch saves through the one save
+    /// seam, whose order and give-back PropertySaveSeamTests runs, so the batch only has to call that seam. The default check is a dynamic
+    /// call, which PropertyDynamicCallsContractTests runs.
     /// </summary>
     public class PropertyWiringOrderContractTests
     {
-        private const string BeginCall = "suppression = PropertyApplyOnSaveRule.Begin(obj, controlName, properties.Properties().Select(p => p.Name));";
-        private const string SaveCall = "obj.EnsureSave();";
-        private const string DisposeCall = "suppression?.Dispose();";
-
         private static string PropertyService()
             => RepoSource.WithoutComments(RepoSource.Read("src", "GxMcp.Worker", "Services", "PropertyService.cs"));
 
@@ -33,29 +29,13 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void TheBatchStartsTheSuppressionBeforeItsSave()
+        public void TheBatchSavesThroughTheSaveSeamAndDisposesNothingItself()
         {
             string batch = MemberText(PropertyService(), "public string SetProperties(");
 
-            int begin = batch.IndexOf(BeginCall, StringComparison.Ordinal);
-            int save = batch.IndexOf(SaveCall, StringComparison.Ordinal);
-
-            Assert.True(begin >= 0, "the batch does not start the suppression");
-            Assert.True(save > begin, "the batch saves the object before the suppression starts");
-        }
-
-        [Fact]
-        public void TheBatchDisposesTheSuppressionInAFinallyAfterItsSave()
-        {
-            string batch = MemberText(PropertyService(), "public string SetProperties(");
-
-            int save = batch.IndexOf(SaveCall, StringComparison.Ordinal);
-            int finallyAt = batch.IndexOf("finally", Math.Max(save, 0), StringComparison.Ordinal);
-            int dispose = batch.IndexOf(DisposeCall, StringComparison.Ordinal);
-
-            Assert.True(save >= 0, "the batch does not save");
-            Assert.True(finallyAt > save, "the batch has no finally after its save");
-            Assert.True(dispose > finallyAt, "the suppression is not disposed in that finally");
+            Assert.Contains("PropertyApplyOnSaveRule.Save(obj, controlName, properties.Properties().Select(p => p.Name), () =>", batch);
+            Assert.DoesNotContain("PropertyApplyOnSaveRule.Begin(", batch);
+            Assert.DoesNotContain("suppression?.Dispose();", batch);
         }
 
         [Fact]

@@ -981,7 +981,6 @@ namespace GxMcp.Worker.Services
                     return SetWebPanelReferenceProperty(obj, container, target, propName, value, controlName, typeFilter);
 
                 string beforeVal = null;
-                IDisposable suppression = null;
                 using (var trans = obj.Model.KB.BeginTransaction())
                 {
                     bool committed = false;
@@ -1005,16 +1004,17 @@ namespace GxMcp.Worker.Services
                         }
 
                         try { if (container != obj) container.Dirty = true; } catch { }
-                        suppression = PropertyApplyOnSaveRule.Begin(obj, controlName, new[] { propName });
-                        obj.EnsureSave();
-                        trans.Commit();
+                        PropertyApplyOnSaveRule.Save(obj, controlName, new[] { propName }, () =>
+                        {
+                            obj.EnsureSave();
+                            trans.Commit();
+                        });
                         committed = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
                     finally
                     {
-                        suppression?.Dispose();
                         if (!committed)
                         {
                             try { trans.Rollback(); } catch (Exception rbEx) { Logger.Warn("[PROPERTY] Rollback failed: " + rbEx.Message); }
@@ -1174,7 +1174,6 @@ namespace GxMcp.Worker.Services
                     NoteNativeNames(preview, objectTypeId, properties, nativeNames);
                     return Models.McpResponse.Ok(target: target, code: "DryRun", result: preview);
                 }
-                IDisposable suppression = null;
                 using (var trans = obj.Model.KB.BeginTransaction())
                 {
                     bool committed = false;
@@ -1241,17 +1240,18 @@ namespace GxMcp.Worker.Services
                         }
 
                         try { if (container != obj) container.Dirty = true; } catch { }
-                        suppression = PropertyApplyOnSaveRule.Begin(obj, controlName, properties.Properties().Select(p => p.Name));
-                        obj.EnsureSave();
-                        WriteService.StampObjectRevisionDates(obj, obj.Model);
-                        trans.Commit();
+                        PropertyApplyOnSaveRule.Save(obj, controlName, properties.Properties().Select(p => p.Name), () =>
+                        {
+                            obj.EnsureSave();
+                            WriteService.StampObjectRevisionDates(obj, obj.Model);
+                            trans.Commit();
+                        });
                         committed = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
                     finally
                     {
-                        suppression?.Dispose();
                         if (!committed)
                         {
                             try { trans.Rollback(); } catch (Exception rbEx) { Logger.Warn("[PROPERTY] Rollback failed: " + rbEx.Message); }
@@ -1434,7 +1434,7 @@ namespace GxMcp.Worker.Services
         }
 
         // The SDK's answer: true when the property has no explicit value on the object and reads its default.
-        private static bool IsPropertyDefaultSafe(KBObject obj, string nativeName)
+        internal static bool IsPropertyDefaultSafe(object obj, string nativeName)
         {
             try
             {
@@ -2048,7 +2048,6 @@ namespace GxMcp.Worker.Services
                 }
 
                 string beforeVal = TryReadPropertyString(container, propName, obj.Model);
-                IDisposable suppression = null;
                 using (var trans = obj.Model.KB.BeginTransaction())
                 {
                     bool committed = false;
@@ -2056,16 +2055,17 @@ namespace GxMcp.Worker.Services
                     {
                         container.SetPropertyValue(propName, newRef);
                         try { if (container != obj) container.Dirty = true; } catch { }
-                        suppression = PropertyApplyOnSaveRule.Begin(obj, controlName, new[] { propName });
-                        obj.EnsureSave();
-                        trans.Commit();
+                        PropertyApplyOnSaveRule.Save(obj, controlName, new[] { propName }, () =>
+                        {
+                            obj.EnsureSave();
+                            trans.Commit();
+                        });
                         committed = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
                     finally
                     {
-                        suppression?.Dispose();
                         if (!committed) { try { trans.Rollback(); } catch (Exception rbEx) { Logger.Warn("[PROPERTY] Rollback failed: " + rbEx.Message); } }
                     }
                 }
@@ -2150,7 +2150,6 @@ namespace GxMcp.Worker.Services
                         : ctor.Invoke(new object[] { new Artech.Architecture.Common.Objects.KBObjectReference(sdt) });
                 }
 
-                IDisposable suppression = null;
                 using (var trans = obj.Model.KB.BeginTransaction())
                 {
                     bool committed = false;
@@ -2159,16 +2158,17 @@ namespace GxMcp.Worker.Services
                         // The IPropertyBag is the KBObject itself (PropertiesObject) — obj.Properties
                         // is only an enumerable projection of descriptors, not the bag.
                         setOutput.Invoke(null, new object[] { obj, outputRef });
-                        suppression = PropertyApplyOnSaveRule.Begin(obj, null, new[] { "OutputSDT" });
-                        obj.EnsureSave();
-                        trans.Commit();
+                        PropertyApplyOnSaveRule.Save(obj, null, new[] { "OutputSDT" }, () =>
+                        {
+                            obj.EnsureSave();
+                            trans.Commit();
+                        });
                         committed = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
                     finally
                     {
-                        suppression?.Dispose();
                         if (!committed) { try { trans.Rollback(); } catch { } }
                     }
                 }

@@ -39,6 +39,30 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
+        /// The one save of a property write. The apply-on-save step is suppressed for this save only, when the rule says so; the suppression
+        /// ends before the call returns, even when the save throws. Without an object there is no flag to suppress, and the save runs as it is.
+        /// </summary>
+        internal static void Save(KBObject obj, string controlName, IEnumerable<string> requestedNames, Action save)
+        {
+            if (obj == null)
+            {
+                save();
+                return;
+            }
+            SaveWith(ObjectSaveFlags.Of(obj), AnyApplyOnSaveOn(obj), controlName, requestedNames, save);
+        }
+
+        // The same save with the flags and the apply-on-save state given, so that the order and the give-back can be tested without an SDK object.
+        internal static void SaveWith(ISaveFlags flags, bool applyOnSaveOn, string controlName, IEnumerable<string> requestedNames, Action save)
+        {
+            using (BeginWith(flags, applyOnSaveOn, controlName, requestedNames))
+                save();
+        }
+
+        internal static IDisposable BeginWith(ISaveFlags flags, bool applyOnSaveOn, string controlName, IEnumerable<string> requestedNames)
+            => ShouldSuppress(controlName, applyOnSaveOn, requestedNames) ? new PatternSaveIsolationScope(flags) : null;
+
+        /// <summary>
         /// The suppression for the restoring save of a rollback. The rollback always keeps the pattern from running on save for an
         /// object-level write, even when the batch changed a pattern flag: the save puts back what the snapshot holds, and a pattern
         /// run would rewrite the parts the snapshot has just restored.
