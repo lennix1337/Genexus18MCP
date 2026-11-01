@@ -51,11 +51,23 @@ This project ships both the GitHub Release and the npm package `genexus-mcp`.
 Use the one-shot script (the only implementation entrypoint):
 
 ```powershell
-./release.ps1 -Version <X.Y.Z>
+./release.ps1 -Minor                  # auto-bumps minor (e.g. 4.2.0 -> 4.3.0)
+./release.ps1 -Patch                  # auto-bumps patch (e.g. 4.2.0 -> 4.2.1)
+./release.ps1 -Version <X.Y.Z>        # explicit version
 ```
 
 For a terminal or agent session that may time out, use
-`./release.ps1 -Version <X.Y.Z> -Detach` and poll the returned status path.
+`./release.ps1 -Minor -Detach` (or `-Patch`, or `-Version <X.Y.Z>`) and poll the returned status path.
+
+### Automated candidate CI & overlapped execution
+
+By default, `release.ps1` automates candidate CI verification and overlaps execution to minimize release turnaround:
+1. When a new release commit is created, it checks whether required status checks (`test`) are already green on that SHA.
+2. If not, it pushes `candidate/vX.Y.Z` to `origin` and ensures an automated candidate PR exists to trigger GitHub Actions CI.
+3. While cloud CI runs required checks on GitHub, the local machine concurrently builds `publish/`, compiles `nexus-ide.vsix`, and executes the canonical preflight (Worker, Gateway, live KB tests).
+4. Right before tagging (`Step "Verifying pre-publication freshness"`), `release.ps1` waits for GitHub Actions CI to conclude with success.
+5. Upon successful publication and verification, the candidate PR and remote candidate branch are cleaned up automatically.
+6. To disable automated candidate CI and require manual preparation / pre-existing green CI (legacy mode), pass `-NoAutoCandidate`.
 
 It bumps versions, synchronizes both npm lockfiles, SDK project files, and the
 catalog-generated release metadata, commits that source state before building,
