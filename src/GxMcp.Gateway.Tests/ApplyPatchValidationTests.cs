@@ -101,6 +101,15 @@ namespace GxMcp.Gateway.Tests
             Assert.Null(block["reorgRequired"]);
         }
 
+        [Fact]
+        public void ReorgRequiredFlagFalse_IsNotWritten()
+        {
+            var terminal = TerminalWithStatus("Failed");
+            terminal["reorgRequired"] = false;
+
+            Assert.Null(VerdictOf(terminal)["reorgRequired"]);
+        }
+
         [Theory]
         [InlineData("ok", false)]
         [InlineData("skipped", false)]
