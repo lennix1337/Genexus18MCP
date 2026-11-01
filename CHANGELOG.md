@@ -7,9 +7,14 @@
 
 ### Added
 
+- **`release.ps1` supports `-Minor` and `-Patch` switches for automatic semver increment.** Instead of manually inspecting `package.json` and computing the next semver, passing `-Minor` increments the minor version (`X.Y.Z` -> `X.(Y+1).0`) and `-Patch` increments the patch version (`X.Y.Z` -> `X.Y.(Z+1)`). Conflicting arguments (`-Minor` with `-Patch`, or with explicit `-Version`) are rejected with clear error guidance.
+- **Automated candidate CI and overlapped execution in `release.ps1`.** By default, `release.ps1` automates candidate branch (`candidate/vX.Y.Z`) pushing and candidate PR creation via `gh`, initiating cloud CI immediately on the release source commit. While GitHub Actions executes the required cloud `test` check, the local machine concurrently builds `publish/`, compiles `nexus-ide.vsix`, and executes the canonical preflight (Gateway, Worker, and live KB suites). Pre-publication freshness verification polls for CI success before tagging, and upon successful publication, the candidate branch and PR are cleaned up automatically. To opt out and use legacy manual preparation, `-NoAutoCandidate` is supported.
+
 ### Changed
 
 ### Fixed
+
+- **Reliable argument forwarding in `release.ps1 -Detach`.** Forwarded arguments are passed directly as an array (`-ArgumentList $argItems`) to `Start-Process`, preventing PowerShell parameter misparsing on Windows when launching detached background releases.
 
 ### Internal
 
