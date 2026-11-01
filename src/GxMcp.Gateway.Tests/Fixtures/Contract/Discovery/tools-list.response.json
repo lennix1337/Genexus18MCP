@@ -3689,7 +3689,7 @@
             "type": "string"
           },
           "projection": {
-            "description": "action=get: compact property subset…",
+            "description": "action=get: minimal, standard or full…",
             "enum": [
               "minimal",
               "standard",
@@ -3698,7 +3698,7 @@
             "type": "string"
           },
           "properties": {
-            "description": "Batch set: map of propertyName to value…",
+            "description": "Batch set: propertyName to value,…",
             "type": "object"
           },
           "propertyName": {
