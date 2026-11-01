@@ -14,7 +14,6 @@ namespace GxMcp.Worker.Services
     public class PropertyService
     {
         private readonly ObjectService _objectService;
-        private readonly PropertyResidueLedger<ObjectMoveSnapshot> _residue = new PropertyResidueLedger<ObjectMoveSnapshot>();
 
         // Small TTL cache for GetProperties — cold path on certain object kinds
         // (Domain, External Object) hits 3s the first time because the SDK lazily
@@ -1314,23 +1313,7 @@ namespace GxMcp.Worker.Services
                     result["persistedVerified"] = true;
                 }
                 result["versionToken"] = WriteService.ComputeVersionToken(fresh);
-                // A write on an object with residue of an earlier unconfirmed rollback reports its preserved parts against the state
-                // before that earlier write, and names the parts that still differ. It refuses nothing.
-                JArray preserved = snapshot.PreservedParts;
-                string residueKey = ObjectKey(obj);
-                if (_residue.TryGetOriginal(residueKey, out ObjectMoveSnapshot original))
-                {
-                    var residueCheck = original.ComparePropertyVerification(fresh);
-                    if (residueCheck.Equal)
-                        _residue.Forget(residueKey);
-                    else
-                    {
-                        string[] residueParts = residueCheck.ChangedParts.Values<string>().ToArray();
-                        preserved = new JArray(PropertyResidue.PreservedNames(original.PreservedParts.Values<string>(), residueParts));
-                        result["warnings"] = new JArray(PropertyResidue.Warning(residueParts));
-                    }
-                }
-                result["preservedParts"] = preserved;
+                result["preservedParts"] = snapshot.PreservedParts;
                 result["implicitOperations"] = new JArray();
                 return Models.McpResponse.Ok(target: target, code: "PropertiesApplied", result: result);
             }
@@ -1373,7 +1356,6 @@ namespace GxMcp.Worker.Services
                     WriteService.ComputeVersionToken(written), StringComparison.Ordinal))
                 {
                     // Nothing was attempted: every property is still as the batch wrote it.
-                    _residue.Remember(ObjectKey(written), snapshot);
                     var refused = new JObject();
                     PropertyRollbackRestore.NothingRestored(rollback.RequestedNames).AddTo(refused);
                     return Models.McpResponse.Err(code: "PropertyRollbackUnsafe", target: target,
@@ -1433,7 +1415,6 @@ namespace GxMcp.Worker.Services
                 }
                 if (restoredComparison != null && restoredComparison.NotComparedParts.Length > 0)
                     outcome["notComparedParts"] = new JArray(restoredComparison.NotComparedParts);
-                if (!verified) _residue.Remember(ObjectKey(written), snapshot);
                 return Models.McpResponse.Err(code: "PropertyVerificationFailed", target: target,
                     message: reason + PropertyRollbackRestore.DescribeSourceFailures(sourceFailures) + (verified ? PropertyRollbackRestore.DescribeVerified(restoredComparison?.NotComparedParts)
                         : " Snapshot restoration could not be verified; inspect the object before writing again."),
@@ -1442,7 +1423,6 @@ namespace GxMcp.Worker.Services
             catch (Exception ex)
             {
                 var failed = new JObject { ["rollbackAttempted"] = true, ["rollbackVerified"] = false };
-                _residue.Remember(ObjectKey(written), snapshot);
                 // Until the restoring transaction commits every property is still as written; after that the state is unknown, so no list is offered.
                 if (!restoreCommitted) PropertyRollbackRestore.NothingRestored(rollback.RequestedNames).AddTo(failed);
                 return Models.McpResponse.Err(code: "PropertyRollbackFailed", target: target,
@@ -1450,8 +1430,6 @@ namespace GxMcp.Worker.Services
                     extra: failed);
             }
         }
-
-        private static string ObjectKey(KBObject obj) => obj.Guid.ToString("N");
 
         // The SDK's answer: true when the property has no explicit value on the object and reads its default.
         private static bool IsPropertyDefaultSafe(KBObject obj, string nativeName)

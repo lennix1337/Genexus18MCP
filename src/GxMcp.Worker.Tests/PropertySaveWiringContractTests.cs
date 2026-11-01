@@ -35,18 +35,6 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void AnUnconfirmedRollbackLeavesItsResidueForTheLaterWritesToReport()
-        {
-            string src = PropertySource();
-
-            // The refused rollback, the unverified rollback and the failed rollback each keep the state before the write.
-            Assert.Equal(3, SourceAssert.Count(src, "_residue.Remember(ObjectKey(written), snapshot)"));
-            // A later write reports its preserved parts against that first state, and names the residue.
-            Assert.Equal(1, SourceAssert.Count(src, "_residue.TryGetOriginal(residueKey, out ObjectMoveSnapshot original)"));
-            Assert.Equal(1, SourceAssert.Count(src, "PropertyResidue.PreservedNames("));
-        }
-
-        [Fact]
         public void AResetIsChosenOnlyForAValueWrittenToTheObjectItself()
         {
             Assert.Equal(1, SourceAssert.Count(PropertySource(), "ReferenceEquals(propertyContainer, obj) && IsPropertyDefaultSafe(obj, nativeName)"));
