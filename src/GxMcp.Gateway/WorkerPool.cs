@@ -80,6 +80,29 @@ namespace GxMcp.Gateway
         DateTime AtUtc,
         int? ExitCode);
 
+    /// <summary>
+    /// Explicit operational lifecycle states of an entry in the <see cref="WorkerPool"/>.
+    /// Replaces scattered volatile flags (Spawning, Draining, DrainFailed, Reloading)
+    /// with single-source-of-truth state transitions and invariant enforcement.
+    /// </summary>
+    public enum WorkerPoolEntryState
+    {
+        /// <summary>Slot created or registered; no active worker process.</summary>
+        Vacant,
+
+        /// <summary>Worker process is currently starting (under SpawnGate).</summary>
+        Spawning,
+
+        /// <summary>Worker process is alive, healthy, and eligible to serve commands.</summary>
+        Active,
+
+        /// <summary>A planned reload/drain is active; incoming acquires await replacement.</summary>
+        Draining,
+
+        /// <summary>Drain failed during worker stop or replacement; entry is fail-closed.</summary>
+        DrainFailed
+    }
+
     public sealed class WorkerPool : IWorkerSupervisor
     {
         private readonly Configuration _config;
@@ -128,32 +151,63 @@ namespace GxMcp.Gateway
 
         private sealed class Entry
         {
+            private readonly object _stateLock = new object();
+            private WorkerPoolEntryState _state = WorkerPoolEntryState.Vacant;
+            private bool _isSpawning;
+            private bool _isReloading;
+
             public KbHandle Handle = null!;
             public WorkerProcess? Worker;
             public DateTime LastActivityUtc = DateTime.UtcNow;
             public readonly SemaphoreSlim SpawnGate = new SemaphoreSlim(1, 1);
             public readonly SemaphoreSlim LifecycleGate = new SemaphoreSlim(1, 1);
-            // Draining: set to true when a planned worker reload is in progress.
-            // AcquireAsync callers that hit the fast path while Draining==true wait
-            // on DrainComplete before returning the freshly-spawned replacement.
-            public volatile bool Draining;
-            // issue #333: commands currently queued for or executing on this Worker.
-            // Eviction may only take an entry whose count is zero, so opening a KB at
-            // capacity cannot stop a Worker in the middle of a build, write or index
-            // pass. Incremented before admission and decremented when the command
-            // finishes, including on failure - a leaked count would make an entry
-            // permanently ineligible, so the decrement is in a finally.
             public int InFlightCommands;
-            // A failed drain remains fail-closed while the old worker is shutting down.
-            public volatile bool DrainFailed;
-            // issue #26 P1: true while a worker process is actively being spawned for
-            // this entry (gate held, Start() not yet returned). Lets whoami/health tell
-            // "a process really IS coming up" apart from "no worker and nothing spawning"
-            // instead of reporting a perpetual, misleading "respawning".
-            public volatile bool Spawning;
-            public int Reloading;
             public TaskCompletionSource<bool> DrainComplete = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            public readonly SemaphoreSlim ReloadGate = new SemaphoreSlim(1, 1);
+
+            public WorkerPoolEntryState State { get { lock (_stateLock) return _state; } }
+            public bool Draining { get { lock (_stateLock) return _state == WorkerPoolEntryState.Draining; } }
+            public bool DrainFailed { get { lock (_stateLock) return _state == WorkerPoolEntryState.DrainFailed; } }
+            public bool Spawning { get { lock (_stateLock) return _isSpawning || _state == WorkerPoolEntryState.Spawning; } }
+            public bool Reloading { get { lock (_stateLock) return _isReloading; } }
+
+            public void SetSpawning(bool spawning)
+            {
+                lock (_stateLock)
+                {
+                    _isSpawning = spawning;
+                    if (spawning && _state == WorkerPoolEntryState.Vacant) _state = WorkerPoolEntryState.Spawning;
+                    else if (!spawning && _state == WorkerPoolEntryState.Spawning) _state = WorkerPoolEntryState.Vacant;
+                }
+            }
+
+            public bool TryBeginReload()
+            {
+                lock (_stateLock)
+                {
+                    if (_isReloading || _state == WorkerPoolEntryState.Draining) return false;
+                    _isReloading = true;
+                    _state = WorkerPoolEntryState.Draining;
+                    return true;
+                }
+            }
+
+            public void EndReload()
+            {
+                lock (_stateLock)
+                {
+                    _isReloading = false;
+                    if (_state == WorkerPoolEntryState.Draining) _state = WorkerPoolEntryState.DrainFailed;
+                }
+            }
+
+            public void TransitionTo(WorkerPoolEntryState targetState)
+            {
+                lock (_stateLock)
+                {
+                    _state = targetState;
+                    if (targetState == WorkerPoolEntryState.Active) { _isSpawning = false; _isReloading = false; }
+                }
+            }
         }
 
         public IReadOnlyList<KbHandle> ListOpen() =>
@@ -364,14 +418,14 @@ namespace GxMcp.Gateway
                 entry.Worker = worker;
                 if (SpawnFactoryForTest == null)
                 {
-                    entry.Spawning = true;   // issue #26 P1: a process really is coming up now.
+                    entry.SetSpawning(true);   // issue #26 P1: a process really is coming up now.
                     try
                     {
                         worker.Start();
                     }
                     finally
                     {
-                        entry.Spawning = false;
+                        entry.SetSpawning(false);
                     }
                     if (worker.SpawnMs.HasValue)
                     {
@@ -395,6 +449,7 @@ namespace GxMcp.Gateway
                     throw new InvalidOperationException($"Worker for KB '{handle.Alias}' exited during startup.");
                 }
                 entry.LastActivityUtc = DateTime.UtcNow;
+                entry.TransitionTo(WorkerPoolEntryState.Active);
                 startedWorker = worker;
                 return worker;
                 }
@@ -406,7 +461,10 @@ namespace GxMcp.Gateway
                     }
                     entry.Worker = null;
                     if (!entry.Draining)
+                    {
+                        entry.TransitionTo(WorkerPoolEntryState.Vacant);
                         _entries.TryRemove(new KeyValuePair<string, Entry>(handle.NormalizedAlias, entry));
+                    }
                     throw;
                 }
             }
@@ -459,7 +517,7 @@ namespace GxMcp.Gateway
             if (!_entries.TryGetValue(handle.NormalizedAlias, out var entry))
                 throw new InvalidOperationException($"No pool entry for alias '{handle.Alias}'.");
 
-            if (Interlocked.CompareExchange(ref entry.Reloading, 1, 0) != 0)
+            if (!entry.TryBeginReload())
                 throw new InvalidOperationException($"A worker reload is already in progress for alias '{handle.Alias}'.");
 
             await entry.LifecycleGate.WaitAsync(ct).ConfigureAwait(false);
@@ -472,10 +530,6 @@ namespace GxMcp.Gateway
             // AcquireAsync awaiting it would fall through instantly instead of waiting.
             // Fresh TCS per drain cycle, installed before Draining flips true.
             entry.DrainComplete = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            // Mark draining before touching the process so any concurrent AcquireAsync
-            // that passes the Worker != null check enters the wait path.
-            entry.Draining = true;
 
             WorkerProcess? oldWorker = entry.Worker;
             if (oldWorker != null)
@@ -520,12 +574,12 @@ namespace GxMcp.Gateway
                 // GetOrAdd identity guarantee.
                 var newWorker = await SpawnWorkerAsync(handle, entry, ct).ConfigureAwait(false);
                 drainSucceeded = true;
-                entry.DrainFailed = false;
+                entry.TransitionTo(WorkerPoolEntryState.Active);
                 return newWorker;
             }
             catch
             {
-                entry.DrainFailed = true;
+                entry.TransitionTo(WorkerPoolEntryState.DrainFailed);
                 throw;
             }
             finally
@@ -533,17 +587,15 @@ namespace GxMcp.Gateway
                 // Draining must clear before DrainComplete fires: a waiter unblocked by
                 // DrainComplete re-checks entry.Worker/Draining immediately, and must see
                 // the entry as no longer draining once it wakes.
-                entry.Draining = false;
                 entry.DrainComplete.TrySetResult(true);
             }
             }
             finally
             {
                 if (!drainSucceeded)
-                    entry.DrainFailed = true;
-                entry.Draining = false;
+                    entry.TransitionTo(WorkerPoolEntryState.DrainFailed);
                 entry.DrainComplete.TrySetResult(true);
-                Interlocked.Exchange(ref entry.Reloading, 0);
+                entry.EndReload();
                 entry.LifecycleGate.Release();
             }
         }
@@ -654,10 +706,7 @@ namespace GxMcp.Gateway
         /// </summary>
         private bool IsEvictable(Entry e) =>
             e.Worker != null
-            && !e.Spawning
-            && !e.Draining
-            && !e.DrainFailed
-            && Volatile.Read(ref e.Reloading) == 0
+            && e.State == WorkerPoolEntryState.Active
             && Volatile.Read(ref e.InFlightCommands) == 0
             && !(WorkerSideActivity?.Invoke(e.Handle.NormalizedAlias) ?? false);
 
@@ -883,12 +932,17 @@ namespace GxMcp.Gateway
 
         internal void RegisterForTest(KbHandle h, DateTime? lastActivity = null, WorkerProcess? worker = null)
         {
-            _entries[h.NormalizedAlias] = new Entry
+            var entry = new Entry
             {
                 Handle = h,
                 LastActivityUtc = lastActivity ?? DateTime.UtcNow,
                 Worker = worker
             };
+            if (worker != null)
+            {
+                entry.TransitionTo(WorkerPoolEntryState.Active);
+            }
+            _entries[h.NormalizedAlias] = entry;
             // Mirror AcquireAsync: an acquired KB is also durably "known" (issue #26 P3).
             _known[h.NormalizedAlias] = h;
         }
@@ -907,7 +961,7 @@ namespace GxMcp.Gateway
         {
             if (!_entries.TryGetValue(alias.ToLowerInvariant(), out var entry))
                 throw new InvalidOperationException($"No entry for alias '{alias}'.");
-            entry.Draining = true;
+            entry.TransitionTo(WorkerPoolEntryState.Draining);
             return entry.DrainComplete;
         }
 
@@ -920,15 +974,21 @@ namespace GxMcp.Gateway
         {
             if (!_entries.TryGetValue(alias.ToLowerInvariant(), out var entry))
                 throw new InvalidOperationException($"No entry for alias '{alias}'.");
-            entry.Draining = false;
+            entry.TransitionTo(entry.Worker != null ? WorkerPoolEntryState.Active : WorkerPoolEntryState.Vacant);
             entry.DrainComplete.TrySetResult(true);
         }
 
+        private Entry? FindEntry(string? alias) =>
+            alias != null && _entries.TryGetValue(alias.ToLowerInvariant(), out var e) ? e : null;
+
         /// <summary>Returns true when the entry for <paramref name="alias"/> exists and Draining==true.</summary>
         internal bool IsDrainingForTest(string alias) =>
-            _entries.TryGetValue(alias.ToLowerInvariant(), out var e) && e.Draining;
+            FindEntry(alias)?.Draining == true;
 
         internal bool IsReloadingForTest(string alias) =>
-            _entries.TryGetValue(alias.ToLowerInvariant(), out var e) && Volatile.Read(ref e.Reloading) != 0;
+            FindEntry(alias)?.Reloading == true;
+
+        internal WorkerPoolEntryState? GetEntryStateForTest(string alias) =>
+            FindEntry(alias)?.State;
     }
 }
