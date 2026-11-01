@@ -38,7 +38,16 @@ function Write-Status {
     [IO.File]::WriteAllText($temp, ($Value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
     # One atomic replace: Move-Item -Force can leave a moment with no file, and a Wait that reads then
     # reported a gate that had just passed as an unreadable path.
-    [IO.File]::Move($temp, $statusPath, $true)
+    # Retry on sharing violations if a concurrent Wait is currently reading the destination.
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            [IO.File]::Move($temp, $statusPath, $true)
+            break
+        } catch {
+            if ($attempt -ge 30) { throw }
+            Start-Sleep -Milliseconds 50
+        }
+    }
 }
 
 function Read-Status {
@@ -114,8 +123,11 @@ switch ($Action) {
             if ($state.pid -ne 0 -and -not (Get-Process -Id $state.pid -ErrorAction SilentlyContinue)) {
                 # The gate may have written its result and exited between the read above
                 # and this process check; only a status still 'running' now means it died.
-                Start-Sleep -Milliseconds 250
-                $state = Read-Status
+                for ($retry = 0; $retry -lt 10; $retry++) {
+                    Start-Sleep -Milliseconds 100
+                    $state = Read-Status
+                    if ($state -and $state.status -ne 'running') { break }
+                }
                 if ($state -and $state.status -ne 'running') { break }
                 Write-Output "gate '$Name' died without a result (pid $($state.pid) is gone)"
                 exit 3
