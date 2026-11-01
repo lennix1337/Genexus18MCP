@@ -29,11 +29,27 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void ADefaultPropertyTheSdkWillNotResetIsLeftOutOfTheRollback()
+        public void ADefaultPropertyTheSdkWillNotResetIsWrittenBackInsteadOfLeftBehind()
         {
             var resets = new List<string>();
             var writes = new List<string>();
             var previous = new Dictionary<string, string> { ["MasterPage"] = "Default" };
+
+            var written = PropertyRollbackRestore.ResetOrWriteBack(
+                new[] { "MasterPage" }, previous, new HashSet<string> { "MasterPage" },
+                name => false, resets.Add, (name, value) => writes.Add(name + "=" + value));
+
+            Assert.Empty(resets);
+            Assert.Equal(new[] { "MasterPage=Default" }, writes);
+            Assert.Equal(new[] { "MasterPage" }, written);
+        }
+
+        [Fact]
+        public void ADefaultPropertyWithoutAPreviousValueIsNotWrittenWhenTheSdkWillNotReset()
+        {
+            var resets = new List<string>();
+            var writes = new List<string>();
+            var previous = new Dictionary<string, string> { ["MasterPage"] = null };
 
             var written = PropertyRollbackRestore.ResetOrWriteBack(
                 new[] { "MasterPage" }, previous, new HashSet<string> { "MasterPage" },

@@ -1151,7 +1151,8 @@ namespace GxMcp.Worker.Services
                     }
                     string previousValue = ReadStoredProperty(obj, nativeName, controlName);
                     previousValues[propName] = previousValue;
-                    if (string.IsNullOrEmpty(controlName) && IsPropertyDefaultSafe(obj, nativeName)) wereDefault.Add(propName);
+                    // Only a value written to the object itself can be reset. A value in another container is written back instead.
+                    if (string.IsNullOrEmpty(controlName) && ReferenceEquals(propertyContainer, obj) && IsPropertyDefaultSafe(obj, nativeName)) wereDefault.Add(propName);
                     beforeValues[propName] = previousValue ?? string.Empty;
                 }
 
@@ -1491,11 +1492,13 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // The SDK's public reset check is PropertiesObject.CanResetValue. A refusal, or a member the SDK does not have, answers
+        // false, and the rollback writes the previous value back instead of leaving the new one behind.
         private static bool CanResetObjectProperty(KBObject obj, string nativeName)
         {
             try
             {
-                return (bool)((dynamic)obj).CanResetProperty(nativeName);
+                return (bool)((dynamic)obj).CanResetValue(nativeName);
             }
             catch (Exception ex)
             {

@@ -101,9 +101,10 @@ namespace GxMcp.Worker.Helpers
 
         /// <summary>
         /// The reset variant of the first step. A property that had no explicit value before the batch is reset to its
-        /// default, not written back with its effective value, which would make it explicit on the object. A name that the
-        /// SDK will not reset is left out, so it is reported as not restored. Other names keep the rule of
-        /// <see cref="WriteBack"/>.
+        /// default when the SDK allows it, not written back with its effective value, which would make it explicit on the
+        /// object. When the SDK refuses the reset, the property is written back to its previous value, so the new value does
+        /// not stay behind; the confirmation then reports it as not restored, because it is no longer default. Other names
+        /// keep the rule of <see cref="WriteBack"/>.
         /// </summary>
         internal static IReadOnlyList<string> ResetOrWriteBack(IEnumerable<string> requestedNames, IDictionary<string, string> previousValues,
             ISet<string> wereDefault, Func<string, bool> canReset, Action<string> resetOne, Action<string, string> restoreOne)
@@ -113,9 +114,8 @@ namespace GxMcp.Worker.Helpers
             {
                 try
                 {
-                    if (wereDefault != null && wereDefault.Contains(name))
+                    if (wereDefault != null && wereDefault.Contains(name) && canReset != null && canReset(name))
                     {
-                        if (canReset == null || !canReset(name)) continue;
                         resetOne(name);
                         written.Add(name);
                         continue;
