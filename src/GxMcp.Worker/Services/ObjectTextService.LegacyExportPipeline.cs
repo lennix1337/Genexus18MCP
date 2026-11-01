@@ -189,7 +189,7 @@ namespace GxMcp.Worker.Services
                 try
                 {
                     string raw = _objectService.ExportObjectToText(
-                        item.Item1.Type + ":" + item.Item1.Name,
+                        item.Item1.Type + ":" + TextSelectorParser.QualifiedName(item.Item1),
                         item.Item2,
                         args["part"]?.ToString(),
                         item.Item1.Type,
