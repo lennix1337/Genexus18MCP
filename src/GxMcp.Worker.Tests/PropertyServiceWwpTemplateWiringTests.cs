@@ -251,6 +251,172 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(new[] { ("TemplateType", "") }, service.Writes);
         }
 
+        private const string StoredXml = "<selection Name=\"SynthTemplate\" instanceType=\"WebPanel\"><table name=\"TableMain\" class=\"SynthOld\" /></selection>";
+        private const string SelfClosingXml = "<selection Name=\"SynthTemplate\" />";
+
+        private static JObject PatchOf(string find, string replace)
+            => new JObject { ["TemplateXml"] = new JObject { ["find"] = find, ["replace"] = replace } };
+
+        [Theory]
+        [InlineData("TemplateXml")]
+        [InlineData("WWPTemplate_TemplateXml")]
+        public void ADryRunOfATemplateXmlPatchPreviewsTheSummaryAndNeitherTheXmlNorItsOldValue(string name)
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+            var batch = new JObject { [name] = new JObject { ["find"] = "class=\"SynthOld\"", ["replace"] = "class=\"SynthNew\"" } };
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", batch, dryRun: true));
+            JObject preview = json["result"] as JObject;
+
+            Assert.Equal("DryRun", json["code"]?.ToString());
+            Assert.Equal(1, preview?["patch"]?[name]?["occurrences"]?.ToObject<int>());
+            Assert.Equal(1, preview?["patch"]?[name]?["replaced"]?.ToObject<int>());
+            Assert.Null(preview?["before"]?[name]);
+            Assert.Null(preview?["requested"]?[name]);
+            Assert.Equal("v-current", preview?["versionToken"]?.ToString());
+            Assert.False(preview?["persisted"]?.ToObject<bool>() ?? true);
+            var validated = Assert.Single(service.Validations);
+            Assert.Equal("WWPTemplate_TemplateXml", validated.Name);
+            Assert.Contains("class=\"SynthNew\"", validated.Value);
+            Assert.Empty(service.Writes);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void APatchThatBreaksTheXmlIsRefusedWithTheSameVerdictInBothModes(bool dryRun)
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate",
+                PatchOf("<table name=\"TableMain\" class=\"SynthOld\" />", "<table name=\"TableMain\""), dryRun: dryRun));
+
+            Assert.Equal("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Equal("XmlMalformed", json["error"]?["violations"]?[0]?["check"]?.ToString());
+            Assert.Empty(service.Writes);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void APatchThatChangesTheRootIsRefusedAsARootMismatchInBothModes(bool dryRun)
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", SelfClosingXml);
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", PatchOf("<selection", "<view"), dryRun: dryRun));
+
+            Assert.Equal("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Equal("RootMismatch", json["error"]?["violations"]?[0]?["check"]?.ToString());
+            Assert.Empty(service.Writes);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void APatchThatFindsNothingIsRefusedWithTheReadNextStepInBothModes(bool dryRun)
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", PatchOf("<table name=\"Absent\"", "<table />"), dryRun: dryRun));
+
+            Assert.Equal("NoMatch", json["error"]?["code"]?.ToString());
+            Assert.Equal("read_template_xml", json["suggested_next_step"]?["action"]?.ToString());
+            Assert.Empty(service.Writes);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void APatchGivesTheSameRefusalAsTheWholeXmlItProduces(bool dryRun)
+        {
+            // Each refused result is checked twice: as a patch of the stored XML, and as the XML the patch produces, sent whole.
+            var cases = new[]
+            {
+                (Stored: StoredXml, Find: "<table name=\"TableMain\" class=\"SynthOld\" />", Replace: "<table name=\"TableMain\""),
+                (Stored: SelfClosingXml, Find: "<selection", Replace: "<view")
+            };
+            foreach (var (stored, find, replace) in cases)
+            {
+                var byPatch = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", stored);
+                var byWhole = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", stored);
+                string wholeXml = stored.Replace(find, replace);
+
+                JObject patched = JObject.Parse(byPatch.SetProperties("SynthTemplate", PatchOf(find, replace), dryRun: dryRun));
+                JObject whole = JObject.Parse(byWhole.SetProperties("SynthTemplate", new JObject { ["TemplateXml"] = wholeXml }, dryRun: dryRun));
+
+                Assert.Equal("WwpTemplateInvalid", patched["error"]?["code"]?.ToString());
+                Assert.Equal(whole["error"]?["code"]?.ToString(), patched["error"]?["code"]?.ToString());
+                Assert.Equal(whole["error"]?["violations"]?[0]?["check"]?.ToString(), patched["error"]?["violations"]?[0]?["check"]?.ToString());
+                Assert.Empty(byPatch.Writes);
+            }
+        }
+
+        [Fact]
+        public void APatchAndATypeChangeInOneBatchAreCheckedTogetherAgainstThePatchedXml()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", SelfClosingXml);
+            var batch = PatchOf("<selection", "<view");
+            batch["TemplateType"] = "Trn.View";
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", batch, dryRun: true));
+
+            Assert.Equal("DryRun", json["code"]?.ToString());
+            Assert.Equal(new[] { ("WWPTemplate_TemplateXml", "<view Name=\"SynthTemplate\" />"), ("WWPTemplate_Type", "Trn.View") },
+                service.Validations);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void APatchThatChangesNothingWritesNothingInEitherMode(bool dryRun)
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", PatchOf("class=\"SynthOld\"", "class=\"SynthOld\""), dryRun: dryRun));
+
+            Assert.Equal("WriteNoChange", json["code"]?.ToString());
+            Assert.Empty(service.Validations);
+            Assert.Empty(service.Writes);
+        }
+
+        [Fact]
+        public void APatchOnAnotherObjectTypeIsNotAppliedAndItsValueIsCheckedAsText()
+        {
+            var service = new FakeTemplateTarget(OtherObjectType, "Trn.Selection", StoredXml);
+
+            JObject json = JObject.Parse(service.SetProperties("SynthObject", PatchOf("class", "klass"), dryRun: true));
+
+            Assert.Equal("DryRun", json["code"]?.ToString());
+            Assert.Null(json["result"]?["patch"]);
+            var validated = Assert.Single(service.Validations);
+            Assert.Equal("TemplateXml", validated.Name);
+            Assert.StartsWith("{", validated.Value);
+        }
+
+        [Fact]
+        public void ASingleSetOfAPatchShapedValueIsTextAndNotPatched()
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+
+            JObject json = JObject.Parse(service.SetProperty("SynthTemplate", "TemplateXml", "{\"find\":\"class\",\"replace\":\"klass\"}"));
+
+            Assert.Equal("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Equal("XmlMalformed", json["error"]?["violations"]?[0]?["check"]?.ToString());
+        }
+
+        [Fact]
+        public void APatchTakesTheFreshReadOfTheObjectAndAPlainWriteDoesNot()
+        {
+            var patched = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+            JObject.Parse(patched.SetProperties("SynthTemplate", PatchOf("<table name=\"Absent\"", "<table />")));
+            Assert.Equal(1, patched.FreshReads);
+            Assert.Empty(patched.Writes);
+
+            var plain = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+            JObject.Parse(plain.SetProperties("SynthTemplate", new JObject { ["TemplateType"] = "Trn.Panel" }));
+            Assert.Equal(0, plain.FreshReads);
+        }
+
         // A PropertyService whose SDK steps answer from fixed values: the target is an uninitialized SDK object of a
         // type that is not a template, unless the test says otherwise, and the stored template properties are the test's.
         private sealed class FakeTemplateTarget : PropertyService
@@ -278,7 +444,14 @@ namespace GxMcp.Worker.Tests
 
             protected internal override Artech.Architecture.Common.Objects.KBObject FindTarget(string target, string typeFilter) => Target;
 
-            protected internal override Artech.Architecture.Common.Objects.KBObject FindFreshTarget(Artech.Architecture.Common.Objects.KBObject obj) => obj;
+            // How many fresh reads the call took, one for each time the production path asked for an independent read.
+            internal int FreshReads { get; private set; }
+
+            protected internal override Artech.Architecture.Common.Objects.KBObject FindFreshTarget(Artech.Architecture.Common.Objects.KBObject obj)
+            {
+                FreshReads++;
+                return obj;
+            }
 
             protected internal override Guid TargetTypeOf(Artech.Architecture.Common.Objects.KBObject obj) => _objectType;
 
