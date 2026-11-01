@@ -1435,7 +1435,7 @@ namespace GxMcp.Worker.Services
                     outcome["notComparedParts"] = new JArray(restoredComparison.NotComparedParts);
                 if (!verified) _residue.Remember(ObjectKey(written), snapshot);
                 return Models.McpResponse.Err(code: "PropertyVerificationFailed", target: target,
-                    message: reason + PropertyRollbackRestore.DescribeSourceFailures(sourceFailures) + (verified ? " The complete object snapshot was restored and verified."
+                    message: reason + PropertyRollbackRestore.DescribeSourceFailures(sourceFailures) + (verified ? PropertyRollbackRestore.DescribeVerified(restoredComparison?.NotComparedParts)
                         : " Snapshot restoration could not be verified; inspect the object before writing again."),
                     extra: outcome);
             }

@@ -150,6 +150,18 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
+        /// The sentence of a rollback whose compared parts match their snapshot again. It names the parts that were restored but not
+        /// compared, so the message never claims more than the comparison checked.
+        /// </summary>
+        internal static string DescribeVerified(IEnumerable<string> notCompared)
+        {
+            string[] names = (notCompared ?? Enumerable.Empty<string>()).ToArray();
+            return names.Length == 0
+                ? " The compared parts were restored and verified."
+                : " The compared parts were restored and verified; " + string.Join(", ", names) + " were restored but not compared.";
+        }
+
+        /// <summary>
         /// The confirmation after the reset variant. A property that was default before the batch counts as restored when it
         /// was written, when it reads back its previous value (if one was read), and when it is default again. The others
         /// follow the rule of <see cref="Confirm"/>.
