@@ -44,7 +44,7 @@
 
 ### Fixed
 
-- **`genexus_apply_pattern validate=true` answers `ok` only when its build ends `Succeeded`.** A validation build that was cancelled, ended with an error, stopped for a reorganization or reported no end state used to pass as `ok`. The `validation` block now says `failed` for those, names the end state in `buildStatus` (with `reorgRequired: true` when a reorganization stopped it), and the apply response is marked as an error.
+- **`genexus_apply_pattern validate=true` answers `ok` only when its build ends `Succeeded`.** A validation build that was cancelled, ended with an error or stopped for a reorganization used to pass as `ok`, and so did a build still queued behind another one, because the poll read it as finished. Now the poll waits for a queued or running build (up to 180 seconds, then `timeout`), the `validation` block says `failed` for a build that ended in any other state, names the end state in `buildStatus` (with `reorgRequired: true` when a reorganization stopped it), and the apply response is marked as an error.
 
 - **`genexus_save_as` of a Data Provider keeps its output SDT.** The clone was made part by part and came back with an empty `OutputSDT`, so it no longer produced its collection. The output is read from the source and set on the clone through the typed output API, reported as `created.propertiesCloned`; a clone that cannot take it is rolled back like one that cannot take a part.
 
