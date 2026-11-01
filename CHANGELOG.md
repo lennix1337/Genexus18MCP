@@ -44,6 +44,8 @@
 
 ### Fixed
 
+- **`genexus_apply_pattern validate=true` answers `ok` only when its build ends `Succeeded`.** A validation build that was cancelled, ended with an error, stopped for a reorganization or reported no end state used to pass as `ok`. The `validation` block now says `failed` for those, names the end state in `buildStatus` (with `reorgRequired: true` when a reorganization stopped it), and the apply response is marked as an error.
+
 - **`genexus_save_as` of a Data Provider keeps its output SDT.** The clone was made part by part and came back with an empty `OutputSDT`, so it no longer produced its collection. The output is read from the source and set on the clone through the typed output API, reported as `created.propertiesCloned`; a clone that cannot take it is rolled back like one that cannot take a part.
 
 - **A WorkWithPlus template write that would leave the template failing these checks is refused before anything is written.** A `genexus_properties set` (single, batch or `dryRun`) and an `object_atomic` write that change `WWPTemplate_Type` or `WWPTemplate_TemplateXml` are refused when the type is empty or is not a known type of WorkWithPlus 16.2, when the XML is empty, malformed, declares a DTD or has another root than the one of its type, and when a stored value cannot be read (`WwpTemplateInvalid`, with a `violations` list). These checks filter the form of the template: they do not run the editor's own validators. Refs https://github.com/lennix1337/Genexus18MCP/issues/794
