@@ -121,7 +121,9 @@ namespace GxMcp.Worker.Services
                     || string.Equals(entry.Type, "Module", StringComparison.OrdinalIgnoreCase));
         }
 
-        // A name written Qualifier.Name selects the object only when the qualifier is one of the names that hold it.
+        // A name written Qualifier.Name selects the object only when the qualifier is one of the names that hold it. Null
+        // qualifiers mean the caller cannot tell the module (a manifest of the legacy export has none): the name then matches
+        // on its last segment alone, as before.
         internal static bool Matches(TextSelector selector, string name, string type, IEnumerable<string> qualifiers = null)
         {
             if (selector == null) return false;
@@ -133,9 +135,9 @@ namespace GxMcp.Worker.Services
                 && string.Equals(selector.Name, type + ":" + name, StringComparison.OrdinalIgnoreCase)) return true;
             int dot = selector.Name.LastIndexOf('.');
             if (dot < 0 || !string.Equals(selector.Name.Substring(dot + 1), name, StringComparison.OrdinalIgnoreCase)) return false;
+            if (qualifiers == null) return true;
             string qualifier = selector.Name.Substring(0, dot);
-            return qualifiers != null
-                && qualifiers.Any(known => string.Equals(known, qualifier, StringComparison.OrdinalIgnoreCase));
+            return qualifiers.Any(known => string.Equals(known, qualifier, StringComparison.OrdinalIgnoreCase));
         }
 
         // The module that holds an object, or null when it sits in the root module or in none.

@@ -183,6 +183,72 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(new[] { "Procedure:SynthRootProc2" }, CapturedDeleteTargets(index, "SynthRootProc2"));
         }
 
+        // The manifest the legacy export writes carries no module for its entries, so a name qualified by a module cannot be
+        // checked against it. The name matches the entries by their last segment, as it did before the module check.
+        [Fact]
+        public void A_qualified_name_selects_the_manifest_entries_it_names_as_before()
+        {
+            string root = NewManifestDirectory(("SynthProc", "a.gxtext"), ("SynthProc", "b.gxtext"));
+            try
+            {
+                var service = new ObjectTextService(null, IndexHolding(ProcInB));
+
+                JObject response = JObject.Parse(service.Execute("validate_kb_text_files", null,
+                    new JObject { ["inputPath"] = root, ["name"] = "SynthModuleA.SynthProc" }, CancellationToken.None));
+
+                Assert.Equal(new[] { "a.gxtext", "b.gxtext" }, ValidatedFiles(response));
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void A_bare_name_selects_every_manifest_entry_with_that_name()
+        {
+            string root = NewManifestDirectory(("SynthProc", "a.gxtext"), ("SynthProc", "b.gxtext"));
+            try
+            {
+                var service = new ObjectTextService(null, IndexHolding(ProcInB));
+
+                JObject response = JObject.Parse(service.Execute("validate_kb_text_files", null,
+                    new JObject { ["inputPath"] = root, ["name"] = "SynthProc" }, CancellationToken.None));
+
+                Assert.Equal(new[] { "a.gxtext", "b.gxtext" }, ValidatedFiles(response));
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        // A manifest of the legacy shape: one Procedure entry per file, with no module.
+        private static string NewManifestDirectory(params (string Name, string File)[] entries)
+        {
+            string root = Path.Combine(Path.GetTempPath(), "gxmcp-manifest-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            var items = new JArray();
+            foreach (var entry in entries)
+            {
+                File.WriteAllText(Path.Combine(root, entry.File), "// synthetic text\r\n");
+                items.Add(new JObject { ["name"] = entry.Name, ["type"] = "Procedure", ["part"] = "Source", ["file"] = entry.File });
+            }
+            File.WriteAllText(Path.Combine(root, "_gxmcp-object-text-manifest.json"), new JObject
+            {
+                ["kind"] = "GeneXusObjectText",
+                ["schemaVersion"] = 1,
+                ["part"] = "Source",
+                ["objects"] = items
+            }.ToString());
+            return root;
+        }
+
+        private static List<string> ValidatedFiles(JObject response)
+        {
+            return response.SelectTokens("$.result.results[*].file").Select(token => (string)token).ToList();
+        }
+
         private static ObjectService.DeleteResolution FoundIn(string module)
         {
             return new ObjectService.DeleteResolution
