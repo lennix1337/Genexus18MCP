@@ -31,5 +31,26 @@ namespace GxMcp.Gateway.Tests
             Assert.False(trimmed["wouldDelete"]?.ToObject<bool>());
             Assert.False(trimmed["persisted"]?.ToObject<bool>());
         }
+
+        // The envelope ObjectService.DeleteModuleMismatchResponse returns when a name qualified by a module finds an object
+        // of another one. The Worker test QualifiedObjectNameTests pins the same message and hint.
+        private const string ModuleMismatch =
+            "{\"status\":\"error\",\"target\":\"SynthModuleA.SynthProc\"," +
+            "\"error\":{\"code\":\"ObjectModuleMismatch\"," +
+            "\"message\":\"The name 'SynthModuleA.SynthProc' names a module that does not hold the object found. Nothing was deleted.\"," +
+            "\"hint\":\"Name the object with the module that holds it, or with its bare name when that name is unique in the KB.\"}," +
+            "\"foundModule\":\"SynthModuleB\",\"wouldDelete\":false,\"persisted\":false}";
+
+        [Fact]
+        public void Terse_module_mismatch_keeps_the_code_the_module_found_and_wouldDelete_false()
+        {
+            var trimmed = McpRouter.TrimErrorEnvelope(JObject.Parse(ModuleMismatch), verbose: false);
+
+            Assert.Equal("ObjectModuleMismatch", trimmed["code"]?.ToString());
+            Assert.Equal("SynthModuleB", trimmed["foundModule"]?.ToString());
+            Assert.Equal("SynthModuleA.SynthProc", trimmed["target"]?.ToString());
+            Assert.False(trimmed["wouldDelete"]?.ToObject<bool>());
+            Assert.False(trimmed["persisted"]?.ToObject<bool>());
+        }
     }
 }

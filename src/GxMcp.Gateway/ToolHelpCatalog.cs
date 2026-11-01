@@ -527,7 +527,7 @@ namespace GxMcp.Gateway
                 "- `text_mirror_status` — inspect pending changes, batches, watermark, and errors.\n" +
                 "- `text_mirror_catchup` — reconcile queued changes or the full indexed KB.\n" +
                 "- `text_mirror_set_references` — enable/disable reference export. Watcher callbacks only enqueue identities; SDK reads happen on the Worker's owning STA.\n" +
-                "- `delete_kb_objects` — delete selected objects in a batch; requires `confirm: true`, and supports `dryRun: true`.\n" +
+                "- `delete_kb_objects` — delete selected objects in a batch; requires `confirm: true`, and supports `dryRun: true`. A name written `Module.Name` selects only the object of that module and deletes that object, never a homonym of another module. The index keeps one object per `Type:Name`, so a homonym the index does not hold is not selected by name: that name answers `NoObjectsMatched`. A single delete (`genexus_delete_object`) whose `Module.Name` resolves to an object of another module is refused with `ObjectModuleMismatch`, and nothing is deleted.\n" +
                 "- `export_unified` — export complete object envelope as a portable JSON file.\n" +
                 "- `screenshot_publish` — publish screenshot PNG into `.gx/published-screenshots`.\n" +
                 "- `ocr` — optical character recognition on image assets.\n",
