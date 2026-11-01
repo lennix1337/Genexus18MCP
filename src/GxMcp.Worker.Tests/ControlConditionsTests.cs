@@ -195,5 +195,30 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("ConditionsWriter.Set(target, controlName, value, null, false, true, typeFilter)", properties);
             Assert.Contains("ConditionsWriter.Set(target, controlName, only.Value?.ToString() ?? string.Empty, expectedVersion, dryRun, rollbackOnFailure, typeFilter)", properties);
         }
+
+        [Fact]
+        public void Find_MatchesControlByVariableReferenceAndBindingName()
+        {
+            var panel = new LayoutPanel();
+            var control = new LayoutControl
+            {
+                Id = Guid.NewGuid().ToString(),
+                ControlName = "ComboValue",
+                Binding = "var:5",
+                BindingName = "ComboValue"
+            };
+            panel.Controls.Add(control);
+
+            var byRef = LayoutFormModel.Find(panel, "&ComboValue");
+            var byBare = LayoutFormModel.Find(panel, "ComboValue");
+            var byBinding = LayoutFormModel.Find(panel, "var:5");
+
+            Assert.Single(byRef);
+            Assert.Same(control, byRef[0]);
+            Assert.Single(byBare);
+            Assert.Same(control, byBare[0]);
+            Assert.Single(byBinding);
+            Assert.Same(control, byBinding[0]);
+        }
     }
 }
