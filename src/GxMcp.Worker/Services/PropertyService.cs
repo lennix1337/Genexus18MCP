@@ -1045,7 +1045,7 @@ namespace GxMcp.Worker.Services
                 // structured PropertyNotPersisted envelope; a confirmed match attaches the
                 // before/requested/persisted diff block to the success response.
                 string verified = VerifyPropertyPersisted(target, propName, value, controlName, typeFilter, beforeVal, obj);
-                if (verified != null) return verified;
+                if (verified != null) return ReportRequestedName(verified, requestedName, propName);
 
                 var applied = SingleSetReceipt(requestedName, propName, value);
                 return Models.McpResponse.Ok(target: target, code: "PropertyApplied", result: applied);
@@ -1832,6 +1832,20 @@ namespace GxMcp.Worker.Services
             receipt["nativeName"] = nativeName;
             receipt["nativeNames"] = new JObject { [requestedName] = nativeName };
             return receipt;
+        }
+
+        // The verified reply of a single set names the property as the SDK holds it. A requested name that stands for another SDK name
+        // is reported as asked, with the SDK name as nativeName and in nativeNames, as the reply of a set that was not verified is.
+        internal static string ReportRequestedName(string reply, string requestedName, string nativeName)
+        {
+            if (string.IsNullOrEmpty(requestedName) || string.Equals(requestedName, nativeName, StringComparison.Ordinal)) return reply;
+            JObject envelope = JObject.Parse(reply);
+            if (!string.Equals(envelope["status"]?.ToString(), "ok", StringComparison.Ordinal) || !(envelope["result"] is JObject result))
+                return reply;
+            result["property"] = requestedName;
+            result["nativeName"] = nativeName;
+            result["nativeNames"] = new JObject { [requestedName] = nativeName };
+            return envelope.ToString(Newtonsoft.Json.Formatting.None);
         }
 
         // The SDK names a call used for a requested name, when they differ, so the caller reads both. Only a WorkWithPlus template
