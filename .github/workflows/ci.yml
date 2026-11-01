@@ -373,8 +373,13 @@ jobs:
         shell: pwsh
         run: node scripts/tests/docs.test.js
 
+      # These read docs/, plans/ and *.md, the very files a docs-only change edits,
+      # so the docs_only shortcut must never skip them (#785).
+      - name: Release line-ending policy
+        shell: pwsh
+        run: ./scripts/tests/test-line-endings.ps1
+
       - name: Verify release metadata synchronization
-        if: ${{ steps.scope.outputs.docs_only != 'true' }}
         shell: pwsh
         run: |
           $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
@@ -382,7 +387,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release-facing metadata is out of sync. Run python scripts/sync-release-metadata.py --version <package-version> --write.' }
 
       - name: Validate quality gate manifests and scripts
-        if: ${{ steps.scope.outputs.docs_only != 'true' }}
         shell: pwsh
         run: |
           $scriptPaths = @(
