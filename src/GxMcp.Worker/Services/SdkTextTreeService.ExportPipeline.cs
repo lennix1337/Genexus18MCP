@@ -24,6 +24,7 @@ namespace GxMcp.Worker.Services
             public bool IncludeModulePackages;
             public bool IncludeTableProjections;
             public bool FullSelection;
+            public bool HasExplicitTargets;
             public List<ExportPlan> Plan;
             public Dictionary<string, JObject> OldManifest;
             public Dictionary<string, JObject> OldMetadata;
@@ -38,6 +39,7 @@ namespace GxMcp.Worker.Services
             public JArray PackageItems = new JArray();
             public int Exported;
             public int Skipped;
+            public int NoTextParts;
             public int Failed;
             public int FilesWritten;
             public int CompanionFilesWritten;
@@ -200,6 +202,7 @@ namespace GxMcp.Worker.Services
                 IncludeModulePackages = includeModulePackages,
                 IncludeTableProjections = includeTableProjections,
                 FullSelection = IsFullSelection(target, args),
+                HasExplicitTargets = explicitTargets.Count > 0,
                 Plan = plan,
                 OldManifest = LoadManifest(root),
                 OldMetadata = LoadManifestMetadata(root),
@@ -402,6 +405,15 @@ namespace GxMcp.Worker.Services
 
         private static void RegisterNativeExportError(NativeExportState state, ExportPlan item, ReadFailure failure)
         {
+            // A KB-wide export cannot give text to an object that has none (a WorkWithPlus template keeps its data in SDK
+            // properties). That object is counted and reported, and the rest of the export still completes. An object the
+            // request named stays a failure: its text was asked for.
+            if (failure.Code == NoTextPartsCode && !state.HasExplicitTargets)
+            {
+                state.NoTextParts++;
+                state.Results.Add(BuildResult(item, "skipped", 0, failure.Message, failure.Code, failure.Hint));
+                return;
+            }
             state.Failed++;
             state.Results.Add(BuildResult(item, "error", 0, failure.Message, failure.Code, failure.Hint));
             if (state.Options.StopOnError) state.StoppedOnError = true;
@@ -451,8 +463,8 @@ namespace GxMcp.Worker.Services
         {
             // Files an earlier export wrote are removed only when this export covered the whole KB and finished. A limit,
             // an ignore list, a skip, a failed object or a stop leaves part of the KB unexported, so its files stay.
-            bool complete = state.Mode == "all" && state.FullSelection && state.Failed == 0 && !state.StoppedOnError
-                && state.Options.Skip == 0;
+            // The skip is part of FullSelection, so it is not repeated here. An object without text parts is counted, not failed.
+            bool complete = state.Mode == "all" && state.FullSelection && state.Failed == 0 && !state.StoppedOnError;
             foreach (JObject previous in state.OldManifest.Values)
             {
                 string key = ManifestKey(previous["type"]?.ToString(), previous["name"]?.ToString());
@@ -542,6 +554,7 @@ namespace GxMcp.Worker.Services
                 ["planned"] = state.Plan.Count,
                 ["exported"] = state.Exported,
                 ["skipped"] = state.Skipped,
+                ["noTextParts"] = state.NoTextParts,
                 ["failed"] = state.Failed,
                 ["filesWritten"] = state.FilesWritten,
                 ["companionFilesWritten"] = state.CompanionFilesWritten,
@@ -549,7 +562,7 @@ namespace GxMcp.Worker.Services
                 ["bytesWritten"] = state.BytesWritten,
                 ["listOnly"] = false,
                 ["filesAvailable"] = state.Plan.Count,
-                ["remaining"] = Math.Max(0, state.Plan.Count - state.Exported - state.Skipped - state.Failed),
+                ["remaining"] = Math.Max(0, state.Plan.Count - state.Exported - state.Skipped - state.NoTextParts - state.Failed),
                 ["stoppedOnError"] = state.StoppedOnError,
                 ["metadataFilesWritten"] = state.MetadataFilesWritten,
                 ["metadataFilesSkipped"] = state.MetadataFilesSkipped,

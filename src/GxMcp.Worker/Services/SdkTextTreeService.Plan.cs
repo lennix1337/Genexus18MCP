@@ -180,6 +180,7 @@ namespace GxMcp.Worker.Services
             public string Hint { get; set; }
         }
 
+        internal const string NoTextPartsCode = "ObjectHasNoTextParts";
         private const string StaleIndexHint = "The index is out of date: run genexus_lifecycle action=index, then export again.";
 
         private bool TryReadParts(SearchIndex.IndexEntry entry, IEnumerable<string> requestedParts, out Dictionary<string, string> parts, out ReadFailure failure)
@@ -220,12 +221,12 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        // A part read that failed because the object exposes no text part at all. The read lists the available
-        // parts when there are some, so a missing or empty list means the type has none.
+        // A part read that failed because the object exposes no text part at all. The read always lists the object's
+        // parts, so an empty list means the type has none; a reply without the list says nothing of the kind.
         internal static bool IsNoTextPartsReply(JObject response)
         {
             if (!string.Equals(response?["code"]?.ToString(), "PartNotFound", StringComparison.Ordinal)) return false;
-            return !(response["availableParts"] is JArray available) || available.Count == 0;
+            return response["availableParts"] is JArray available && available.Count == 0;
         }
 
         private bool TryReadPart(SearchIndex.IndexEntry entry, string part, out string source, out ReadFailure failure)
@@ -287,14 +288,14 @@ namespace GxMcp.Worker.Services
         internal static bool IsNoTextPartsEnvelope(JObject response)
         {
             if (response == null || response["code"] != null || response["error"] != null) return false;
-            return !(response["availableParts"] is JArray available) || available.Count == 0;
+            return response["availableParts"] is JArray available && available.Count == 0;
         }
 
         private static ReadFailure NoTextPartsFailure(SearchIndex.IndexEntry entry)
         {
             return new ReadFailure
             {
-                Code = "ObjectHasNoTextParts",
+                Code = NoTextPartsCode,
                 Message = "'" + entry.Name + "' (" + entry.Type + ") has no text parts to export: its data are SDK properties "
                     + "(WorkWithPlus templates keep them in WWPTemplate_* properties, for example).",
                 Hint = "Read the properties with genexus_properties action=get and change them with action=set. The native export does not write them."

@@ -4372,12 +4372,8 @@ namespace GxMcp.Worker.Services
                     ["parts"] = partsObj
                 };
                 if (variablesProjection != null) result["variables"] = variablesProjection;
-                if (partsObj.Count == 0)
-                {
-                    // With no part read, the parts the object lists tell a type without text parts from a failed read.
-                    try { result["availableParts"] = new JArray(GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj)); }
-                    catch { }
-                }
+                // With no part read, the parts the object lists tell a type without text parts from a failed read.
+                if (partsObj.Count == 0) WithAvailableParts(result, () => GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj));
                 return result.ToString();
             }
             catch (Exception ex)
@@ -5347,7 +5343,7 @@ namespace GxMcp.Worker.Services
                     0,
                     int.MaxValue,
                     "mcp",
-                    false), obj);
+                    false), obj.Name, obj.TypeDescriptor?.Name);
             }
             catch (Exception ex)
             {
@@ -5356,19 +5352,32 @@ namespace GxMcp.Worker.Services
         }
 
         // The export compares the object a read resolved with its index entry, so the reply names that object.
-        private static string WithObjectIdentity(string reply, KBObject obj)
+        internal static string WithObjectIdentity(string reply, string objectName, string objectType)
         {
             try
             {
                 JObject response = JObject.Parse(reply);
-                response["objectName"] = obj.Name;
-                response["objectType"] = obj.TypeDescriptor?.Name;
+                response["objectName"] = objectName;
+                response["objectType"] = objectType;
                 return response.ToString();
             }
             catch (Newtonsoft.Json.JsonException)
             {
                 return reply;
             }
+        }
+
+        // The parts an object lists, as the reply's availableParts. A listing that fails, or gives no list, leaves the
+        // field out: the reply then says nothing about the object's parts, so it is never taken for a type without parts.
+        internal static JObject WithAvailableParts(JObject reply, Func<IEnumerable<string>> listParts)
+        {
+            try
+            {
+                IEnumerable<string> parts = listParts();
+                if (parts != null) reply["availableParts"] = new JArray(parts);
+            }
+            catch { }
+            return reply;
         }
 
         /// <summary>
@@ -5796,15 +5805,9 @@ namespace GxMcp.Worker.Services
                     result["error"] = $"Part '{partName}' not found in {obj.Name}";
                     result["objectName"] = obj.Name;
                     result["objectType"] = obj.TypeDescriptor?.Name;
-                    try
-                    {
-                        var avail = GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj);
-                        if (avail != null && avail.Length > 0)
-                        {
-                            result["availableParts"] = new JArray(avail);
-                        }
-                    }
-                    catch { }
+                    // The list is there whenever the object can be read, empty for a type without parts: a reply without it
+                    // cannot tell a type without parts from a part name that does not exist.
+                    WithAvailableParts(result, () => GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj));
                     string typeName = obj.TypeDescriptor?.Name ?? "object";
                     string available = result["availableParts"] is JArray parts && parts.Count > 0
                         ? $" Valid parts for {typeName}: {string.Join(", ", parts.Values<string>())}."

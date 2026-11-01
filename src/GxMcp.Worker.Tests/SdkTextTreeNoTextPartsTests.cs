@@ -18,7 +18,8 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void A_part_read_is_a_no_text_parts_reply_only_when_the_object_lists_no_part()
         {
-            Assert.True(SdkTextTreeService.IsNoTextPartsReply(Reply("PartNotFound")));
+            // A reply without the parts list cannot say the object has none: it is a failed read, not a type without parts.
+            Assert.False(SdkTextTreeService.IsNoTextPartsReply(Reply("PartNotFound")));
             Assert.True(SdkTextTreeService.IsNoTextPartsReply(Reply("PartNotFound", new JArray())));
             Assert.False(SdkTextTreeService.IsNoTextPartsReply(Reply("PartNotFound", new JArray("Rules"))));
             Assert.False(SdkTextTreeService.IsNoTextPartsReply(Reply("ObjectNotFound")));
@@ -29,14 +30,16 @@ namespace GxMcp.Worker.Tests
         public void An_object_without_text_parts_is_reported_with_its_own_code_and_the_property_commands()
         {
             SdkTextTreeService service = BuildService(new[] { SynthEntry("SynthTemplate") }, (target, part, type, guid, entityKey, path) =>
-                Reply("PartNotFound").ToString());
+                Reply("PartNotFound", new JArray()).ToString());
             string root = NewTempDirectory();
             try
             {
                 JObject response = Export(service, root, "SynthTemplate");
 
+                // A named target is asked for its text, so it stays a failure and is not counted as having no text parts.
                 Assert.Equal("partial", (string)response["status"]);
                 Assert.Equal(1, (int)response["result"]!["failed"]!);
+                Assert.Equal(0, (int)response["result"]!["noTextParts"]!);
                 JObject reply = ObjectReply(response, "SynthTemplate");
                 Assert.Equal("error", (string)reply["status"]);
                 Assert.Equal("ObjectHasNoTextParts", (string)reply["code"]!);
@@ -136,6 +139,110 @@ namespace GxMcp.Worker.Tests
             }
         }
 
+        [Fact]
+        public void A_multi_part_envelope_is_a_no_text_parts_envelope_only_when_it_lists_no_part()
+        {
+            Assert.True(SdkTextTreeService.IsNoTextPartsEnvelope(new JObject { ["parts"] = new JObject(), ["availableParts"] = new JArray() }));
+            Assert.False(SdkTextTreeService.IsNoTextPartsEnvelope(new JObject { ["parts"] = new JObject(), ["availableParts"] = new JArray("Rules") }));
+            Assert.False(SdkTextTreeService.IsNoTextPartsEnvelope(new JObject { ["parts"] = new JObject() }));
+            Assert.False(SdkTextTreeService.IsNoTextPartsEnvelope(null));
+        }
+
+        [Fact]
+        public void A_single_part_read_without_the_parts_list_is_a_failure_not_a_type_without_parts()
+        {
+            SdkTextTreeService service = BuildService(new[] { SynthEntry("SynthTemplate") }, (target, part, type, guid, entityKey, path) =>
+                Reply("PartNotFound").ToString());
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = Export(service, root, "SynthTemplate");
+
+                JObject reply = ObjectReply(response, "SynthTemplate");
+                Assert.Equal("error", (string)reply["status"]);
+                Assert.Equal("PartNotFound", (string)reply["code"]!);
+                Assert.Equal(1, (int)response["result"]!["failed"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_multi_part_read_without_the_parts_list_is_a_failure_not_a_type_without_parts()
+        {
+            SdkTextTreeService service = BuildService(
+                new[] { SynthEntry("SynthTemplate") },
+                (target, part, type, guid, entityKey, path) => throw new InvalidOperationException("part=all reads every part at once"),
+                (target, parts, type, guid, entityKey, path) => new JObject { ["parts"] = new JObject() }.ToString());
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = Export(service, root, new JObject { ["part"] = "all" }, "SynthTemplate");
+
+                JObject reply = ObjectReply(response, "SynthTemplate");
+                Assert.Equal("error", (string)reply["status"]);
+                Assert.NotEqual("ObjectHasNoTextParts", (string)reply["code"]);
+                Assert.Equal("The SDK returned no textual parts.", (string)reply["message"]);
+                Assert.Equal(1, (int)response["result"]!["failed"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // A KB-wide export counts an object without text parts as skipped, so the rest of the export still completes and
+        // a deleted object's file is removed. The earlier export wrote SynthDeleted; the later one no longer holds it.
+        [Fact]
+        public void A_full_export_counts_an_object_without_text_parts_and_still_removes_a_deleted_object()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                SdkTextTreeService earlier = BuildService(
+                    new[] { SynthEntry("SynthTemplate"), SynthEntry("SynthDeleted", "Procedure") }, ReadTextOrNoParts);
+                Assert.Equal(0, (int)ExportWholeKb(earlier, root)["result"]!["failed"]!);
+                string deleted = Directory.GetFiles(root, "SynthDeleted.gx", SearchOption.AllDirectories).Single();
+
+                SdkTextTreeService later = BuildService(new[] { SynthEntry("SynthTemplate") }, ReadTextOrNoParts);
+                JObject response = ExportWholeKb(later, root);
+
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal(1, (int)response["result"]!["noTextParts"]!);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
+                Assert.True((int)response["result"]!["filesDeleted"]! >= 1);
+                Assert.False(File.Exists(deleted));
+                JObject reply = ObjectReply(response, "SynthTemplate");
+                Assert.Equal("skipped", (string)reply["status"]!);
+                Assert.Equal("ObjectHasNoTextParts", (string)reply["code"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // The template has no text part; the other objects answer their text, as the read does for a Procedure.
+        private static string ReadTextOrNoParts(string target, string part, string type, string guid, string entityKey, string path)
+        {
+            string name = target.Substring(target.IndexOf(':') + 1);
+            return name == "SynthTemplate"
+                ? Reply("PartNotFound", new JArray()).ToString()
+                : new JObject { ["source"] = "Synth text", ["objectName"] = name, ["objectType"] = type }.ToString();
+        }
+
+        private static JObject ExportWholeKb(SdkTextTreeService service, string root)
+        {
+            var args = new JObject
+            {
+                ["outputPath"] = root,
+                ["mode"] = "all"
+            };
+            return JObject.Parse(service.Execute("export_kb_to_text", null, args, CancellationToken.None));
+        }
+
         private static JObject ObjectReply(JObject response, string name)
         {
             return response["result"]!["objects"]!.Cast<JObject>().Single(item => (string)item["name"]! == name);
@@ -154,12 +261,12 @@ namespace GxMcp.Worker.Tests
             return reply;
         }
 
-        private static SearchIndex.IndexEntry SynthEntry(string name)
+        private static SearchIndex.IndexEntry SynthEntry(string name, string type = "WorkWithPlus for Web Template")
         {
             return new SearchIndex.IndexEntry
             {
                 Name = name,
-                Type = "WorkWithPlus for Web Template",
+                Type = type,
                 Module = "WWPBaseObjects",
                 Guid = "6b1f0c52-0d8a-4a57-9f3e-2f6d1c0a9e11",
                 EntityKey = "083f1b21-5715-45e1-8a8d-ceadef141e02-9001",
