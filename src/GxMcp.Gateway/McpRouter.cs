@@ -2303,9 +2303,9 @@ namespace GxMcp.Gateway
         // respect the full MaxLongPollSeconds.
         public const int SafeLongPollSecondsWithoutProgress = 50;
 
-        // A genexus_properties set on a WorkWithPlus host runs the pattern's apply-on-save inside the call: 50 to 54 s on a real
-        // host. With a progressToken the client receives notifications/progress, so a property set may wait this long for the
-        // answer. Without a token the window above still caps the wait: the client closes the transport after about 60 s of silence.
+        // A genexus_properties set can take 50 to 54 s on one real host. With a progressToken the client receives notifications/progress,
+        // so a property set may wait this long for the answer. Without a token the window above still caps the wait: the client closes
+        // the transport after about 60 s of silence.
         public const int PropertySetWaitSecondsWithProgress = 90;
         public const int HeartbeatIntervalSeconds = 15;
 
