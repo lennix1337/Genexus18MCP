@@ -946,6 +946,12 @@ namespace GxMcp.Worker.Services
                 if (!string.IsNullOrEmpty(controlName))
                 {
                     container = FindControl(obj, controlName);
+                    if (container != null && !(container is global::Artech.Packages.Patterns.Objects.PatternInstanceElementAttributes)
+                        && (string.Equals(propName?.Trim(), "ControlWhere", StringComparison.OrdinalIgnoreCase) || string.Equals(propName?.Trim(), "Conditions", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var layout = ResolveLayoutControl(obj, controlName);
+                        if (layout != null) container = layout;
+                    }
                     if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
                     if (IsLayoutControlContainer((object)container))
                         return ConditionsWriter != null && ControlConditionsService.IsConditionsProperty(propName)
@@ -1072,10 +1078,16 @@ namespace GxMcp.Worker.Services
                 if (!string.IsNullOrEmpty(controlName))
                 {
                     container = FindControl(obj, controlName);
+                    var only = properties.Properties().Count() == 1 ? properties.Properties().First() : null;
+                    if (container != null && !(container is global::Artech.Packages.Patterns.Objects.PatternInstanceElementAttributes)
+                        && only != null && (string.Equals(only.Name?.Trim(), "ControlWhere", StringComparison.OrdinalIgnoreCase) || string.Equals(only.Name?.Trim(), "Conditions", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var layout = ResolveLayoutControl(obj, controlName);
+                        if (layout != null) container = layout;
+                    }
                     if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
                     if (IsLayoutControlContainer((object)container))
                     {
-                        var only = properties.Properties().Count() == 1 ? properties.Properties().First() : null;
                         if (ConditionsWriter != null && only != null && ControlConditionsService.IsConditionsProperty(only.Name))
                             return ConditionsWriter.Set(target, controlName, only.Value?.ToString() ?? string.Empty, expectedVersion, dryRun, rollbackOnFailure, typeFilter);
                         return LayoutControlWriteUnsupported(target, controlName, string.Join(", ", properties.Properties().Select(p => p.Name)));

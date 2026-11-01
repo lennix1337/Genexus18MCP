@@ -2960,6 +2960,8 @@ namespace GxMcp.Worker.Services
             {
                 bool isSet = string.Equals(action, "Set", StringComparison.OrdinalIgnoreCase) || string.Equals(action, "SetMultiple", StringComparison.OrdinalIgnoreCase);
                 string requestedProperty = args?["propertyName"]?.ToString();
+                if (string.IsNullOrWhiteSpace(requestedProperty) && args?["properties"]?.Type == JTokenType.String)
+                    requestedProperty = args["properties"].ToString();
                 if (isSet && args?["expressions"] is JArray requestedExpressions)
                 {
                     if (!string.IsNullOrWhiteSpace(requestedProperty) && !ControlParametersService.IsParametersProperty(requestedProperty))
