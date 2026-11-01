@@ -2042,7 +2042,9 @@ namespace GxMcp.Gateway
                 // destination resolved or stopped, the parent the SDK actually left, the persist path it
                 // answered to, what changed, and the compensation that proves nothing was left behind.
                 "placement", "expectedParent", "actualParent", "strategy", "strategyDetail",
-                "changedParts", "propertyDifferences", "compensation"
+                "changedParts", "propertyDifferences", "compensation",
+                // genexus_delete_object refusal and dryRun: wouldDelete=false says the object was not deleted.
+                "wouldDelete"
             };
             foreach (var k in diagnosticKeys)
             {
