@@ -220,6 +220,151 @@ namespace GxMcp.Worker.Tests
             }
         }
 
+        // A wildcard selects the objects of the tree and names none of them: the templates are skipped, with or without stopOnError.
+        [Theory]
+        [InlineData("targets", false)]
+        [InlineData("targets", true)]
+        [InlineData("name", false)]
+        [InlineData("name", true)]
+        public void A_wildcard_selects_the_templates_of_a_tree_without_naming_them(string form, bool stopOnError)
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+                File.WriteAllText(Path.Combine(root, "SynthBeta.gx"), OtherTemplateFile);
+                var options = new JObject { ["stopOnError"] = stopOnError };
+                if (form == "targets") options["targets"] = new JArray("*");
+                else options["name"] = "*";
+
+                JObject response = Import(BuildService(), root, options);
+
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
+                Assert.Equal(2, (int)response["result"]!["templatesNotImported"]!);
+                Assert.False((bool)response["result"]!["stoppedOnError"]!);
+                Assert.All(response["result"]!["objects"]!.Cast<JObject>(), item => Assert.Equal("WwpTemplateNotImported", (string)item["code"]!));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // The wildcard does not name the template, but a template the request names by its name is still an error.
+        [Fact]
+        public void A_template_named_by_its_name_is_still_an_error_next_to_a_wildcard()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+                File.WriteAllText(Path.Combine(root, "SynthBeta.gx"), OtherTemplateFile);
+
+                JObject response = Import(BuildService(), root, new JObject { ["targets"] = new JArray("*", "SynthAlpha") });
+
+                Assert.Equal("partial", (string)response["status"]);
+                Assert.Equal(1, (int)response["result"]!["failed"]!);
+                Assert.Equal(1, (int)response["result"]!["templatesNotImported"]!);
+                JObject[] items = response["result"]!["objects"]!.Cast<JObject>().ToArray();
+                Assert.Equal("WwpTemplateImportRefused", (string)items.Single(item => (string)item["name"]! == "SynthAlpha")["code"]!);
+                Assert.Equal("WwpTemplateNotImported", (string)items.Single(item => (string)item["name"]! == "SynthBeta")["code"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // A typed target names the template with the type the export reports or with the file's keyword: each spelling names it.
+        [Theory]
+        [InlineData("WorkWithPlus for Web Template")]
+        [InlineData("WorkWithPlusforWebTemplate")]
+        [InlineData("workwithplus for web template")]
+        [InlineData("WWPTemplate")]
+        public void A_typed_target_names_the_template_whatever_the_spelling_of_its_type(string requestedType)
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+                var target = new JObject { ["type"] = requestedType, ["name"] = "SynthAlpha" };
+
+                JObject response = Import(BuildService(), root, new JObject { ["targets"] = new JArray(target) });
+
+                Assert.Equal("partial", (string)response["status"]);
+                Assert.Equal(1, (int)response["result"]!["failed"]!);
+                JObject item = Assert.Single(response["result"]!["objects"]!.Cast<JObject>());
+                Assert.Equal("WwpTemplateImportRefused", (string)item["code"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // A typed target of another type names no template: the template is not reported at all.
+        [Fact]
+        public void A_typed_target_of_another_type_does_not_name_the_template()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+                var target = new JObject { ["type"] = "Procedure", ["name"] = "SynthAlpha" };
+
+                JObject response = Import(BuildService(), root, new JObject { ["targets"] = new JArray(target) });
+
+                Assert.Equal(0, (int)response["result"]!["templatesNotImported"]!);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
+                Assert.Empty(response["result"]!["objects"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // The type filter takes the template's type with either spelling, and a filter of another type selects no template.
+        [Fact]
+        public void A_type_filter_with_the_template_type_selects_the_template_files()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+
+                JObject response = Import(BuildService(), root, new JObject { ["type"] = "WorkWithPlus for Web Template" });
+
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal(1, (int)response["result"]!["templatesNotImported"]!);
+                Assert.Equal("WwpTemplateNotImported", (string)Assert.Single(response["result"]!["objects"]!.Cast<JObject>())["code"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_type_filter_of_another_type_selects_no_template()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+
+                JObject response = Import(BuildService(), root, new JObject { ["type"] = "Procedure" });
+
+                Assert.Equal(0, (int)response["result"]!["templatesNotImported"]!);
+                Assert.Empty(response["result"]!["objects"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
         private static SdkTextTreeService BuildService()
         {
             return new SdkTextTreeService(

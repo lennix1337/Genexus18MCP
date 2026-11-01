@@ -249,21 +249,31 @@ namespace GxMcp.Worker.Services
         private static bool MatchesImportSelector(string type, string name, string target, JObject args)
         {
             string typeFilter = args["type"]?.ToString();
-            if (!string.IsNullOrWhiteSpace(typeFilter) && !string.Equals(typeFilter, type, StringComparison.OrdinalIgnoreCase)) return false;
+            if (!string.IsNullOrWhiteSpace(typeFilter) && !SameImportType(typeFilter, type)) return false;
             List<Tuple<string, string>> selectors = ImportSelectors(target, args);
             return selectors.Count == 0 || SelectorsName(selectors, type, name);
         }
 
-        // Whether the request names this object itself, as a target, and not only through a filter that lets it pass.
+        // Whether the request names this object itself, as a target, and not only through a filter that lets it pass. A wildcard
+        // selects a set and names no object, as the export's target list does (ExplicitTargets).
         private static bool NamesImportObject(string type, string name, string target, JObject args)
         {
-            return SelectorsName(ImportSelectors(target, args), type, name);
+            return SelectorsName(ImportSelectors(target, args).Where(s => s.Item2.IndexOf('*') < 0).ToList(), type, name);
         }
 
         private static bool SelectorsName(List<Tuple<string, string>> selectors, string type, string name)
         {
-            return selectors.Any(s => (string.IsNullOrWhiteSpace(s.Item1) || string.Equals(s.Item1, type, StringComparison.OrdinalIgnoreCase))
+            return selectors.Any(s => (string.IsNullOrWhiteSpace(s.Item1) || SameImportType(s.Item1, type))
                 && (s.Item2 == "*" || string.Equals(s.Item2, name, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        // A type the request gives, for a target or a filter, names the file's type: a WorkWithPlus template is one type whatever
+        // its spelling, so "WorkWithPlus for Web Template" and the file's "WorkWithPlusforWebTemplate" agree. Other types compare as before.
+        private static bool SameImportType(string requested, string fileType)
+        {
+            if (string.Equals(requested, fileType, StringComparison.OrdinalIgnoreCase)) return true;
+            return GxMcp.Worker.Helpers.ObjectCreateTypes.IsWorkWithPlusTemplate(requested)
+                && GxMcp.Worker.Helpers.ObjectCreateTypes.IsWorkWithPlusTemplate(fileType);
         }
 
         private static List<Tuple<string, string>> ImportSelectors(string target, JObject args)
