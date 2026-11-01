@@ -43,7 +43,7 @@ namespace GxMcp.Worker.Services
                 return false;
             }
 
-            TextTreeFilters filters = TextTreeFilters.Read(args, allowIdentity);
+            TextTreeFilters filters = TextTreeFilters.Read(args);
             IEnumerable<SearchIndex.IndexEntry> baseEntries = index.Objects.Values;
             IEnumerable<SearchIndex.IndexEntry> query = baseEntries
                 .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.Name))
@@ -81,10 +81,9 @@ namespace GxMcp.Worker.Services
         internal static List<SearchIndex.IndexEntry> AddLookedUp(
             IEnumerable<SearchIndex.IndexEntry> selected,
             IEnumerable<SearchIndex.IndexEntry> lookedUp,
-            JObject args,
-            bool allowIdentity = false)
+            JObject args)
         {
-            TextTreeFilters filters = TextTreeFilters.Read(args, allowIdentity);
+            TextTreeFilters filters = TextTreeFilters.Read(args);
             if (filters.IgnoresAll) return new List<SearchIndex.IndexEntry>();
             IEnumerable<SearchIndex.IndexEntry> found = lookedUp.Where(entry => entry != null
                 && !string.IsNullOrWhiteSpace(entry.Name)
@@ -121,15 +120,13 @@ namespace GxMcp.Worker.Services
             private readonly string _module;
             private readonly string _pathPrefix;
             private readonly List<TextSelector> _ignored;
-            private readonly bool _allowIdentity;
 
-            private TextTreeFilters(JObject args, bool allowIdentity)
+            private TextTreeFilters(JObject args)
             {
                 _type = args?["type"]?.ToString();
                 _module = args?["module"]?.ToString();
                 _pathPrefix = TextTreePath.NormalizePath(args?["pathPrefix"]?.ToString());
                 _ignored = TextSelectorParser.ParseMany(args?["ignore"]);
-                _allowIdentity = allowIdentity;
                 Limit = args?["limit"]?.ToObject<int?>() ?? 0;
             }
 
@@ -137,7 +134,7 @@ namespace GxMcp.Worker.Services
 
             internal bool IgnoresAll => _ignored.Any(TextSelectorParser.IsAll);
 
-            internal static TextTreeFilters Read(JObject args, bool allowIdentity = false) => new TextTreeFilters(args, allowIdentity);
+            internal static TextTreeFilters Read(JObject args) => new TextTreeFilters(args);
 
             internal bool Accepts(SearchIndex.IndexEntry entry)
             {
@@ -145,7 +142,9 @@ namespace GxMcp.Worker.Services
                 if (!string.IsNullOrWhiteSpace(_type) && !string.Equals(entry.Type, _type, StringComparison.OrdinalIgnoreCase)) return false;
                 if (!string.IsNullOrWhiteSpace(_module) && !string.Equals(entry.Module, _module, StringComparison.OrdinalIgnoreCase)) return false;
                 if (!string.IsNullOrWhiteSpace(_pathPrefix) && !TextTreePath.NormalizePath(entry.Path).StartsWith(_pathPrefix, StringComparison.OrdinalIgnoreCase)) return false;
-                return !_ignored.Any(selector => TextSelectorParser.Matches(selector, entry, _allowIdentity));
+                // The ignore list takes a GUID or EntityKey on every path. It only removes entries, so an identity cannot
+                // send an action to a homonym by name.
+                return !_ignored.Any(selector => TextSelectorParser.Matches(selector, entry, allowIdentity: true));
             }
         }
 

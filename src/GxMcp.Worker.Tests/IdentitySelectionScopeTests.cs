@@ -11,7 +11,7 @@ using Xunit;
 namespace GxMcp.Worker.Tests
 {
     // The GUID or EntityKey of an object selects it only on the native export. The delete and the legacy export act by
-    // Tipo:Nome, so the same identity selects nothing there: the delete loop is not reached and nothing is written.
+    // Type:Name, so the same identity selects nothing there: the delete loop is not reached and nothing is written.
     // The delete and the legacy export run through ObjectTextService.Execute with no ObjectService, so a selection that
     // reached the loop would fail on the object read, not answer NoObjectsMatched.
     public sealed class IdentitySelectionScopeTests
@@ -75,6 +75,113 @@ namespace GxMcp.Worker.Tests
             {
                 DeleteTree(root);
             }
+        }
+
+        // An ignore entry given by identity removes its object on every path. The list only takes entries away, so the
+        // object the caller asked to keep never reaches the delete loop, and the native export drops it too.
+        [Theory]
+        [InlineData(ProcGuid)]
+        [InlineData(ProcEntityKey)]
+        public void The_delete_drops_an_ignore_entry_given_by_identity_and_keeps_that_object(string ignored)
+        {
+            var service = new ObjectTextService(null, BuildIndex());
+
+            JObject response = JObject.Parse(service.Execute("delete_kb_objects", null, new JObject
+            {
+                ["targets"] = new JArray("SynthProcA", "SynthProcB"),
+                ["ignore"] = new JArray(ignored),
+                ["confirm"] = true
+            }, CancellationToken.None));
+
+            List<string> reached = ObjectNames(response);
+            Assert.Contains("SynthProcA", reached);
+            Assert.DoesNotContain("SynthProcB", reached);
+        }
+
+        [Fact]
+        public void The_delete_drops_an_ignore_entry_given_by_name_and_keeps_that_object()
+        {
+            var service = new ObjectTextService(null, BuildIndex());
+
+            JObject response = JObject.Parse(service.Execute("delete_kb_objects", null, new JObject
+            {
+                ["targets"] = new JArray("SynthProcA", "SynthProcB"),
+                ["ignore"] = new JArray("Procedure:SynthProcB"),
+                ["confirm"] = true
+            }, CancellationToken.None));
+
+            List<string> reached = ObjectNames(response);
+            Assert.Contains("SynthProcA", reached);
+            Assert.DoesNotContain("SynthProcB", reached);
+        }
+
+        // The delete and the legacy export select through this method, with identities off for the targets.
+        [Theory]
+        [InlineData(ProcGuid)]
+        [InlineData(ProcEntityKey)]
+        public void The_selection_of_the_delete_and_the_legacy_export_drops_an_ignore_entry_given_by_identity(string ignored)
+        {
+            var selection = new TextTreeSelectionService(BuildIndex());
+            var args = new JObject
+            {
+                ["targets"] = new JArray("SynthProcA", "SynthProcB"),
+                ["ignore"] = new JArray(ignored)
+            };
+
+            bool selected = selection.TrySelectEntries(null, args, allowAll: false,
+                out List<SearchIndex.IndexEntry> entries, out string error);
+
+            Assert.True(selected, error);
+            Assert.Equal(new[] { "SynthProcA" }, entries.Select(entry => entry.Name).ToArray());
+        }
+
+        [Theory]
+        [InlineData(ProcGuid)]
+        [InlineData(ProcEntityKey)]
+        public void The_native_export_drops_an_ignore_entry_given_by_identity(string ignored)
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                var service = BuildNamedNativeService();
+
+                JObject response = JObject.Parse(service.Execute("export_kb_to_text", null, new JObject
+                {
+                    ["outputPath"] = root,
+                    ["mode"] = "all",
+                    ["targets"] = new JArray("SynthProcA", "SynthProcB"),
+                    ["ignore"] = new JArray(ignored)
+                }, CancellationToken.None));
+
+                Assert.Equal(1, (int)response["result"]!["exported"]!);
+                Assert.Single(Directory.GetFiles(root, "SynthProcA.gx", SearchOption.AllDirectories));
+                Assert.Empty(Directory.GetFiles(root, "SynthProcB.gx", SearchOption.AllDirectories));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        private static List<string> ObjectNames(JObject response)
+        {
+            return response.SelectTokens("$..results[*].name").Select(token => (string)token!).ToList();
+        }
+
+        // Each read names the object it was asked for, so every target passes the identity check on its own.
+        private static SdkTextTreeService BuildNamedNativeService()
+        {
+            IndexCacheService cache = BuildIndex();
+            return new SdkTextTreeService(
+                new TextTreeSelectionService(cache),
+                new ObjectService(null, null),
+                cache,
+                (target, part, type, guid, entityKey, path) => new JObject
+                {
+                    ["source"] = "Synth text",
+                    ["objectName"] = target.Substring(target.IndexOf(':') + 1),
+                    ["objectType"] = type
+                }.ToString());
         }
 
         private static SdkTextTreeService BuildNativeService()

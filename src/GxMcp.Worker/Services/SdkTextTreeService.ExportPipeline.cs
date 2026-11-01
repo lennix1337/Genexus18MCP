@@ -154,7 +154,7 @@ namespace GxMcp.Worker.Services
                 if (found == null) unresolved.Add(explicitTarget);
                 else lookedUp.Add(found);
             }
-            selected = TextTreeSelectionService.AddLookedUp(selected, lookedUp, args, allowIdentity: true);
+            selected = TextTreeSelectionService.AddLookedUp(selected, lookedUp, args);
             if (selected.Count == 0)
             {
                 if (unresolved.Count > 0)
