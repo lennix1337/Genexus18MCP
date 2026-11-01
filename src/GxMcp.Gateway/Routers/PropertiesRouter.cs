@@ -110,7 +110,7 @@ namespace GxMcp.Gateway.Routers
 
         private static bool SendsTemplateXmlPatchWithSingleProperty(JObject? args)
         {
-            bool singleSent = IsSent(args?["propertyName"]) || IsSent(args?["value"]);
+            bool singleSent = NamesAProperty(args?["propertyName"]) || IsSent(args?["value"]);
             return singleSent && args?["properties"] is JObject properties
                 && properties.Properties().Any(p => p.Value is JObject && IsTemplateXmlName(p.Name));
         }
@@ -122,5 +122,9 @@ namespace GxMcp.Gateway.Routers
 
         // A key sent as JSON null is not sent.
         private static bool IsSent(JToken? token) => token != null && token.Type != JTokenType.Null;
+
+        // propertyName names a property only when it has text, as the worker reads it: a blank name is not sent.
+        private static bool NamesAProperty(JToken? token)
+            => IsSent(token) && !(token!.Type == JTokenType.String && string.IsNullOrWhiteSpace(token.ToString()));
     }
 }

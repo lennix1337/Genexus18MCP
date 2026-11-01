@@ -48,6 +48,29 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("SynthOld", routed["properties"]?["TemplateXml"]?["find"]?.ToString());
         }
 
+        [Theory]
+        [InlineData("\"\"")]
+        [InlineData("\"   \"")]
+        public void ABlankPropertyNameIsNotSentSoThePatchIsRouted(string propertyName)
+        {
+            var routed = JObject.FromObject(new PropertiesRouter().ConvertToolCall("genexus_properties", JObject.Parse(
+                "{ \"action\": \"set\", \"name\": \"SynthTemplate\", \"propertyName\": " + propertyName + ", " +
+                "\"properties\": { \"TemplateXml\": { \"find\": \"SynthOld\", \"replace\": \"SynthNew\" } } }"))!);
+
+            Assert.Equal("SynthOld", routed["properties"]?["TemplateXml"]?["find"]?.ToString());
+        }
+
+        [Fact]
+        public void AnEmptyValueSentWithAPatchIsRefused()
+        {
+            var args = JObject.Parse(@"{ ""action"": ""set"", ""name"": ""SynthTemplate"", ""value"": """",
+                ""properties"": { ""TemplateXml"": { ""find"": ""SynthOld"", ""replace"": ""SynthNew"" } } }");
+
+            var refusal = Assert.Throws<UsageException>(() => new PropertiesRouter().ConvertToolCall("genexus_properties", args));
+
+            Assert.Equal("InvalidPropertyBatch", refusal.Code);
+        }
+
         [Fact]
         public void AnObjectValueOnAnotherPropertyWithAPropertyNameIsNotRefusedAsAPatch()
         {
