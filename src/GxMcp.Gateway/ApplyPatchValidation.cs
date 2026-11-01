@@ -1,3 +1,4 @@
+using System.Linq;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Gateway
@@ -34,6 +35,26 @@ namespace GxMcp.Gateway
             {
                 block["reorgRequired"] = true;
             }
+        }
+
+        /// <summary>
+        /// Writes the validation block of a build that reached an end state: the verdict, the counts, the task and the
+        /// first itemized errors and warnings, read from the worker's status reply.
+        /// </summary>
+        internal static void WriteBlock(JObject block, JObject terminal, string? taskId)
+        {
+            int errorCount = terminal["ErrorCount"]?.ToObject<int?>() ?? terminal["errorCount"]?.ToObject<int?>() ?? (terminal["Errors"] as JArray)?.Count ?? 0;
+            int warningCount = terminal["WarningCount"]?.ToObject<int?>() ?? terminal["warningCount"]?.ToObject<int?>() ?? (terminal["Warnings"] as JArray)?.Count ?? 0;
+            WriteVerdict(block, terminal, errorCount);
+            block["errorCount"] = errorCount;
+            block["warningCount"] = warningCount;
+            block["taskId"] = taskId;
+            var errors = terminal["Errors"] as JArray ?? terminal["errors"] as JArray;
+            if (errors != null && errors.Count > 0)
+                block["errors"] = new JArray(errors.Take(10));
+            var warnings = terminal["Warnings"] as JArray ?? terminal["warnings"] as JArray;
+            if (warnings != null && warnings.Count > 0)
+                block["warnings"] = new JArray(warnings.Take(5));
         }
 
         /// <summary>True when a validation block that is neither ok nor skipped must mark the apply response as an error.</summary>

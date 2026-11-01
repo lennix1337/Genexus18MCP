@@ -975,18 +975,7 @@ namespace GxMcp.Gateway
                     }
                     else
                     {
-                        int errorCount = terminal["ErrorCount"]?.ToObject<int?>() ?? terminal["errorCount"]?.ToObject<int?>() ?? (terminal["Errors"] as JArray)?.Count ?? 0;
-                        int warningCount = terminal["WarningCount"]?.ToObject<int?>() ?? terminal["warningCount"]?.ToObject<int?>() ?? (terminal["Warnings"] as JArray)?.Count ?? 0;
-                        ApplyPatchValidation.WriteVerdict(vBlock, terminal, errorCount);
-                        vBlock["errorCount"] = errorCount;
-                        vBlock["warningCount"] = warningCount;
-                        vBlock["taskId"] = taskId;
-                        var errArr = terminal["Errors"] as JArray ?? terminal["errors"] as JArray;
-                        if (errArr != null && errArr.Count > 0)
-                            vBlock["errors"] = new JArray(errArr.Take(10));
-                        var warnArr = terminal["Warnings"] as JArray ?? terminal["warnings"] as JArray;
-                        if (warnArr != null && warnArr.Count > 0)
-                            vBlock["warnings"] = new JArray(warnArr.Take(5));
+                        ApplyPatchValidation.WriteBlock(vBlock, terminal, taskId);
                     }
                 }
 
