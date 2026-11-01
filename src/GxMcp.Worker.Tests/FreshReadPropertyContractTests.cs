@@ -56,10 +56,10 @@ namespace GxMcp.Worker.Tests
         {
             string src = PropertySource();
 
-            // Three sites read the object independently: the reconciliation read, the preview /
-            // version-checked write, and the refresh inside the write transaction.
-            Assert.Equal(3, SourceAssert.Count(src, "return FreshReadUnavailableEnvelope(target,"));
-            Assert.Equal(3, SourceAssert.Count(src, "_objectService.GetLastResolutionDiagnostic()"));
+            // Four sites read the object independently: the reconciliation read, the gate that waits for an unconfirmed
+            // rollback, the preview / version-checked write, and the refresh inside the write transaction.
+            Assert.Equal(4, SourceAssert.Count(src, "return FreshReadUnavailableEnvelope(target,"));
+            Assert.Equal(4, SourceAssert.Count(src, "_objectService.GetLastResolutionDiagnostic()"));
             Assert.DoesNotContain("code: \"FreshReadUnavailable\"", src);
         }
 
