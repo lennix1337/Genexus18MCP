@@ -186,7 +186,9 @@ namespace GxMcp.Worker.Tests
             {
                 string body = SourceAssert.MethodBody(src, method);
                 Assert.Contains("transactionCommitted = true;", body);
-                // The failure after the commit passes through the receipt helper; the verification reply is checked by behavior, below.
+                // The verified reply and the failure after the commit each pass through the receipt helper. The argument of the verified
+                // reply is not fixed here: it may be composed with another helper, as the conflict noted in the PR says.
+                Assert.Contains("if (verified != null) return CommittedReceipt(", body);
                 Assert.Contains("return transactionCommitted ? CommittedReceipt(failure) : failure;", body);
             }
         }
