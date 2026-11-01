@@ -35,6 +35,27 @@ namespace GxMcp.Worker.Tests
         }
 
         [Theory]
+        [InlineData("wwptemplate_templatexml", "WWPTemplate_TemplateXml")]
+        [InlineData(" WWPTemplate_TemplateXml ", "WWPTemplate_TemplateXml")]
+        [InlineData("wwptemplate_type", "WWPTemplate_Type")]
+        public void AnSdkNameComesBackInTheSdkSpellingWhateverItsCaseOrSpacing(string requested, string sdkName)
+        {
+            Assert.Equal(sdkName, WwpTemplatePropertyRules.NativeName(TemplateObjectType, requested));
+        }
+
+        [Fact]
+        public void AnSdkNameOnAnotherObjectTypeComesBackAsItIs()
+        {
+            Assert.Equal(" WWPTemplate_TemplateXml ", WwpTemplatePropertyRules.NativeName(OtherObjectType, " WWPTemplate_TemplateXml "));
+        }
+
+        [Fact]
+        public void AnAliasAndTheSpacedSdkNameItStandsForAreOneConflict()
+        {
+            Assert.NotNull(WwpTemplatePropertyRules.FindConflict(TemplateObjectType, new[] { "TemplateXml", " WWPTemplate_TemplateXml " }));
+        }
+
+        [Theory]
         [InlineData("TemplateType")]
         [InlineData("TemplateXml")]
         [InlineData("MainTemplate")]
