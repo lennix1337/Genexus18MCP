@@ -1,23 +1,27 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using GxMcp.Worker.Models;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GxMcp.Worker.Tests
 {
-    // The native import of a WorkWithPlus template file. The import does not write templates: the file is refused on its own,
-    // before any part is sent to the KB. The service has no write service, so a file that does reach the write answers an
-    // error, and no KB is written by either path.
+    // The native import of a WorkWithPlus template file. The import does not write templates. In a tree, the template file is
+    // skipped with its own code, counted apart, and does not stop the batch; a template the request names is an error. The
+    // service has no write service, so a file that does reach the write answers an error, and no KB is written by either path.
     public sealed class SdkTextTreeWwpTemplateImportTests
     {
         private const string TemplateFile = "WorkWithPlusforWebTemplate SynthAlpha\n{\n\t#Properties\n\t\tName = \"SynthAlpha\"\n\n\t\t\n\t#End\n\n}\n";
+        private const string AliasTemplateFile = "WWPTemplate SynthAlpha\n{\n\t#Properties\n\t\tName = \"SynthAlpha\"\n\n\t\t\n\t#End\n\n}\n";
+        private const string OtherTemplateFile = "WorkWithPlusforWebTemplate SynthBeta\n{\n\t#Properties\n\t\tName = \"SynthBeta\"\n\n\t\t\n\t#End\n\n}\n";
         private const string ProcedureFile = "Procedure SynthZulu\n{\n#Source\nSynth text\n#End\n}\n";
 
         [Fact]
-        public void A_template_file_is_refused_on_its_own_with_its_code_and_no_part_is_sent()
+        public void A_template_file_of_a_tree_is_skipped_with_its_own_code_and_no_part_is_sent()
         {
             string root = NewTempDirectory();
             try
@@ -26,12 +30,13 @@ namespace GxMcp.Worker.Tests
 
                 JObject response = Import(BuildService(), root);
 
-                Assert.Equal("partial", (string)response["status"]);
-                Assert.Equal(1, (int)response["result"]!["failed"]!);
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
+                Assert.Equal(1, (int)response["result"]!["templatesNotImported"]!);
                 Assert.False((bool)response["result"]!["stoppedOnError"]!);
                 JObject item = Assert.Single(response["result"]!["objects"]!.Cast<JObject>());
-                Assert.Equal("error", (string)item["status"]!);
-                Assert.Equal("WwpTemplateImportRefused", (string)item["code"]!);
+                Assert.Equal("skipped", (string)item["status"]!);
+                Assert.Equal("WwpTemplateNotImported", (string)item["code"]!);
                 Assert.Equal("SynthAlpha", (string)item["name"]!);
                 Assert.Equal("WorkWithPlusforWebTemplate", (string)item["type"]!);
                 Assert.Contains("genexus_properties", (string)item["hint"]!);
@@ -44,7 +49,52 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void The_refusal_of_a_template_file_does_not_stop_the_other_files_of_the_batch()
+        public void A_tree_whose_only_file_is_a_template_imports_as_ok_and_writes_nothing()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+
+                JObject response = Import(BuildService(), root, new JObject { ["dryRun"] = false, ["confirm"] = true });
+
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal("ObjectTextNativeImportCompleted", (string)response["code"]!);
+                Assert.Equal(0, (int)response["result"]!["succeeded"]!);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
+                Assert.Equal(1, (int)response["result"]!["templatesNotImported"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void Templates_do_not_stop_a_tree_even_with_stopOnError()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+                File.WriteAllText(Path.Combine(root, "SynthBeta.gx"), OtherTemplateFile);
+
+                JObject response = Import(BuildService(), root, new JObject { ["stopOnError"] = true });
+
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.False((bool)response["result"]!["stoppedOnError"]!);
+                Assert.Equal(0, (int)response["result"]!["remaining"]!);
+                Assert.Equal(2, (int)response["result"]!["templatesNotImported"]!);
+                Assert.All(response["result"]!["objects"]!.Cast<JObject>(), item => Assert.Equal("skipped", (string)item["status"]!));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_template_skipped_in_a_tree_does_not_hide_the_failure_of_the_other_files()
         {
             string root = NewTempDirectory();
             try
@@ -54,10 +104,11 @@ namespace GxMcp.Worker.Tests
 
                 JObject response = Import(BuildService(), root);
 
-                Assert.False((bool)response["result"]!["stoppedOnError"]!);
-                Assert.Equal(2, (int)response["result"]!["failed"]!);
+                Assert.Equal("partial", (string)response["status"]);
+                Assert.Equal(1, (int)response["result"]!["failed"]!);
+                Assert.Equal(1, (int)response["result"]!["templatesNotImported"]!);
                 JObject[] items = response["result"]!["objects"]!.Cast<JObject>().ToArray();
-                Assert.Equal("WwpTemplateImportRefused", (string)items.Single(item => (string)item["name"]! == "SynthAlpha")["code"]!);
+                Assert.Equal("skipped", (string)items.Single(item => (string)item["name"]! == "SynthAlpha")["status"]!);
                 // The procedure was attempted: it has its own part result, which the missing write service answers.
                 Assert.NotNull(items.Single(item => (string)item["name"]! == "SynthZulu")["partResults"]);
             }
@@ -68,19 +119,18 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void With_stopOnError_the_batch_stops_at_the_template_file()
+        public void A_template_with_the_alias_header_is_skipped_too()
         {
             string root = NewTempDirectory();
             try
             {
-                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
-                File.WriteAllText(Path.Combine(root, "SynthZulu.gx"), ProcedureFile);
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), AliasTemplateFile);
 
-                JObject response = Import(BuildService(), root, new JObject { ["stopOnError"] = true });
+                JObject response = Import(BuildService(), root);
 
-                Assert.True((bool)response["result"]!["stoppedOnError"]!);
                 JObject item = Assert.Single(response["result"]!["objects"]!.Cast<JObject>());
-                Assert.Equal("WwpTemplateImportRefused", (string)item["code"]!);
+                Assert.Equal("WwpTemplateNotImported", (string)item["code"]!);
+                Assert.Null(item["partResults"]);
             }
             finally
             {
@@ -89,18 +139,80 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void A_dry_run_refuses_the_template_file_too()
+        public void A_template_the_request_names_as_a_target_is_an_error_and_stops_with_stopOnError()
         {
             string root = NewTempDirectory();
             try
             {
                 File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+                File.WriteAllText(Path.Combine(root, "SynthBeta.gx"), OtherTemplateFile);
 
-                JObject response = Import(BuildService(), root, new JObject { ["dryRun"] = true, ["confirm"] = false });
+                JObject response = Import(BuildService(), root, new JObject { ["targets"] = new JArray("SynthAlpha"), ["stopOnError"] = true });
 
-                Assert.True((bool)response["result"]!["dryRun"]!);
+                Assert.Equal("partial", (string)response["status"]);
+                Assert.Equal(1, (int)response["result"]!["failed"]!);
+                Assert.Equal(0, (int)response["result"]!["templatesNotImported"]!);
+                Assert.True((bool)response["result"]!["stoppedOnError"]!);
                 JObject item = Assert.Single(response["result"]!["objects"]!.Cast<JObject>());
+                Assert.Equal("error", (string)item["status"]!);
                 Assert.Equal("WwpTemplateImportRefused", (string)item["code"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // The request's selector comes before the refusal: a template it does not name is not reported at all.
+        [Fact]
+        public void A_template_the_request_does_not_select_is_not_reported()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "SynthAlpha.gx"), TemplateFile);
+                File.WriteAllText(Path.Combine(root, "SynthZulu.gx"), ProcedureFile);
+
+                JObject response = Import(BuildService(), root, new JObject { ["targets"] = new JArray("SynthZulu") });
+
+                Assert.Equal(0, (int)response["result"]!["templatesNotImported"]!);
+                Assert.DoesNotContain(response["result"]!["objects"]!.Cast<JObject>(), item => (string)item["name"]! == "SynthAlpha");
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // The export of a KB with a template writes the template, and the import of that very tree is not partial because of it.
+        [Fact]
+        public void A_plan_of_a_tree_the_export_wrote_is_ok_and_its_template_is_skipped()
+        {
+            SdkTextTreeService service = BuildTreeService();
+            string root = NewTempDirectory();
+            try
+            {
+                JObject export = JObject.Parse(service.Execute("export_kb_to_text", null, new JObject
+                {
+                    ["outputPath"] = root,
+                    ["mode"] = "all"
+                }, CancellationToken.None));
+                Assert.Equal(2, (int)export["result"]!["exported"]!);
+
+                JObject plan = JObject.Parse(service.Execute("import_text_to_kb", null, new JObject
+                {
+                    ["inputPath"] = root,
+                    ["dryRun"] = true,
+                    ["listOnly"] = true,
+                    ["stopOnError"] = true
+                }, CancellationToken.None));
+
+                Assert.Equal("ok", (string)plan["status"]);
+                Assert.Equal(0, (int)plan["result"]!["failed"]!);
+                Assert.False((bool)plan["result"]!["stoppedOnError"]!);
+                JObject[] items = plan["result"]!["objects"]!.Cast<JObject>().ToArray();
+                Assert.Equal("WwpTemplateNotImported", (string)items.Single(item => (string)item["name"]! == "SynthAlpha")["code"]!);
+                Assert.Equal("planned", (string)items.Single(item => (string)item["name"]! == "SynthZulu")["status"]!);
             }
             finally
             {
@@ -114,6 +226,47 @@ namespace GxMcp.Worker.Tests
                 new TextTreeSelectionService(new IndexCacheService()),
                 new ObjectService(null, null),
                 new IndexCacheService());
+        }
+
+        // The export of a template and a procedure, with the SDK reads replaced at their boundaries, for the round trip.
+        private static SdkTextTreeService BuildTreeService()
+        {
+            var entries = new[]
+            {
+                new SearchIndex.IndexEntry
+                {
+                    Name = "SynthAlpha",
+                    Type = WwpTemplateTestFixtures.TemplateType,
+                    Module = "SynthModuleA",
+                    Guid = "6b1f0c52-0d8a-4a57-9f3e-2f6d1c0a9e11",
+                    EntityKey = "083f1b21-5715-45e1-8a8d-ceadef141e02-9001",
+                    ParentFolderPath = "Root Module/SynthModuleA/Selection",
+                    Path = "SynthModuleA/Selection/SynthAlpha"
+                },
+                new SearchIndex.IndexEntry
+                {
+                    Name = "SynthZulu",
+                    Type = "Procedure",
+                    Module = "SynthModuleA",
+                    Guid = "7c2d1e63-1e9b-4b68-8a40-3a7e2d1b0f22",
+                    EntityKey = "7c2d1e63-1e9b-4b68-8a40-3a7e2d1b0f22-9002",
+                    ParentFolderPath = "Root Module/SynthModuleA/Procs",
+                    Path = "SynthModuleA/Procs/SynthZulu"
+                }
+            };
+            var cache = new IndexCacheService();
+            cache.LoadFromEntries(entries.ToList());
+            cache.MarkIndexComplete(entries.Length);
+            return new SdkTextTreeService(
+                new TextTreeSelectionService(cache),
+                new ObjectService(null, null),
+                cache,
+                (target, part, type, guid, entityKey, path) => target.EndsWith(":SynthZulu", StringComparison.Ordinal)
+                    ? new JObject { ["source"] = "Synth text" }.ToString()
+                    : new JObject { ["code"] = "PartNotFound", ["availableParts"] = new JArray() }.ToString(),
+                null,
+                null,
+                (target, type, guid, entityKey, path) => WwpTemplateTestFixtures.PropertiesOf("SynthAlpha"));
         }
 
         private static JObject Import(SdkTextTreeService service, string root, JObject options = null)

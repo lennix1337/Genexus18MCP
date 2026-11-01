@@ -250,6 +250,24 @@ namespace GxMcp.Worker.Services
         {
             string typeFilter = args["type"]?.ToString();
             if (!string.IsNullOrWhiteSpace(typeFilter) && !string.Equals(typeFilter, type, StringComparison.OrdinalIgnoreCase)) return false;
+            List<Tuple<string, string>> selectors = ImportSelectors(target, args);
+            return selectors.Count == 0 || SelectorsName(selectors, type, name);
+        }
+
+        // Whether the request names this object itself, as a target, and not only through a filter that lets it pass.
+        private static bool NamesImportObject(string type, string name, string target, JObject args)
+        {
+            return SelectorsName(ImportSelectors(target, args), type, name);
+        }
+
+        private static bool SelectorsName(List<Tuple<string, string>> selectors, string type, string name)
+        {
+            return selectors.Any(s => (string.IsNullOrWhiteSpace(s.Item1) || string.Equals(s.Item1, type, StringComparison.OrdinalIgnoreCase))
+                && (s.Item2 == "*" || string.Equals(s.Item2, name, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private static List<Tuple<string, string>> ImportSelectors(string target, JObject args)
+        {
             var selectors = new List<Tuple<string, string>>();
             JArray array = args["targets"] as JArray ?? args["names"] as JArray ?? args["objects"] as JArray;
             if (array != null)
@@ -275,9 +293,7 @@ namespace GxMcp.Worker.Services
                     }
                 }
             }
-            if (selectors.Count == 0) return true;
-            return selectors.Any(s => (string.IsNullOrWhiteSpace(s.Item1) || string.Equals(s.Item1, type, StringComparison.OrdinalIgnoreCase))
-                && (s.Item2 == "*" || string.Equals(s.Item2, name, StringComparison.OrdinalIgnoreCase)));
+            return selectors;
         }
 
         private static string ManifestKey(SearchIndex.IndexEntry entry)
