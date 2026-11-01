@@ -41,6 +41,25 @@ foreach ($valid in @('0.0.0', '1.2.3-rc.1+build.7')) {
 foreach ($invalid in @('01.2.3', '1.02.3', '1.2.03', '1.2', '1.2.3-01')) {
     if (Test-StrictSemVer $invalid) { throw "Invalid semver was accepted: $invalid" }
 }
+$paramBlock = $ast.ParamBlock
+$paramNames = @($paramBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+foreach ($expectedParam in @('Minor', 'Patch', 'NoAutoCandidate')) {
+    if ($paramNames -notcontains $expectedParam) {
+        throw "Canonical release script is missing parameter: -$expectedParam"
+    }
+}
+foreach ($funcName in @('Ensure-ReleaseCandidateCi', 'Wait-ReleaseRequiredChecksGreen', 'Cleanup-ReleaseCandidate', 'Test-ReleaseRequiredChecksQuiet')) {
+    $fnDef = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $funcName }, $true)
+    if (-not $fnDef) { throw "Canonical release script is missing candidate CI function: $funcName" }
+}
+$minorPatchRun = & pwsh -NoProfile -File (Join-Path $root 'release.ps1') -Minor -Patch -DryRun 2>&1
+if ($LASTEXITCODE -eq 0 -or ($minorPatchRun -join "`n") -notmatch 'Cannot specify both -Minor and -Patch') {
+    throw 'Running release.ps1 with -Minor and -Patch must fail with conflict guidance.'
+}
+$minorVersionRun = & pwsh -NoProfile -File (Join-Path $root 'release.ps1') -Minor -Version 9.9.9 -DryRun 2>&1
+if ($LASTEXITCODE -eq 0 -or ($minorVersionRun -join "`n") -notmatch 'Cannot specify -Version together with -Minor or -Patch') {
+    throw 'Running release.ps1 with -Minor and -Version must fail with conflict guidance.'
+}
 $issueReferenceDefinition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ChangelogIssueReferences' }, $true)
 if (-not $issueReferenceDefinition) { throw 'Canonical release entrypoint is missing changelog issue-reference validation.' }
 . ([scriptblock]::Create($issueReferenceDefinition.Extent.Text))
