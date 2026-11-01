@@ -63,6 +63,18 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void FailedWithMoreErrorsThanTheWorkerListed_ReportsTheCounter()
+        {
+            // The worker counts every error in ErrorCount and keeps at most 50 messages in Errors.
+            string[] listed = Enumerable.Range(1, 50).Select(i => $"SynthError{i:D2}").ToArray();
+
+            var block = BlockOf(StatusReply("Failed", errorCount: 60, warningCount: 0, listed));
+
+            Assert.Equal(60, (int?)block["errorCount"]);
+            Assert.Equal(10, Assert.IsType<JArray>(block["errors"]).Count);
+        }
+
+        [Fact]
         public void ReorgRequiredReply_IsFailedAndFlagged()
         {
             var reply = StatusReply("ReorgRequired", errorCount: 0, warningCount: 0);
