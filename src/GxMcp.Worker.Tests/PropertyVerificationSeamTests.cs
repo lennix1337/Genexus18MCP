@@ -126,5 +126,93 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("Variables", result.ChangedParts.Select(part => part.ToString()));
             Assert.NotEmpty(result.ChangedLines);
         }
+
+        [Fact]
+        public void ADeletedDescriptionFailsTheVerification()
+        {
+            var expected = Snapshot(UrlAccessYes, "&Count : Numeric(4) // Contador\n");
+            var actual = Snapshot(UrlAccessYes, "&Count : Numeric(4) // \n");
+
+            var result = expected.ComparePropertyVerificationWith(actual);
+
+            Assert.False(result.Equal);
+            Assert.Contains("Variables", result.ChangedParts.Select(part => part.ToString()));
+        }
+
+        [Fact]
+        public void AnUnreadableVariablesTextIsNotComparedAndIsNeverADifference()
+        {
+            var expected = Snapshot(UrlAccessYes, null);
+            var actual = Snapshot(UrlAccessYes, "&Count : Numeric(4)\n");
+
+            var result = expected.ComparePropertyVerificationWith(actual);
+
+            Assert.True(result.Equal);
+            Assert.Empty(result.ChangedParts);
+            Assert.Contains("Variables", result.NotComparedParts);
+        }
+
+        [Fact]
+        public void AnUnreadableVariablesTextOnTheOtherSideIsNotADifferenceEither()
+        {
+            var expected = Snapshot(UrlAccessYes, "&Count : Numeric(4)\n");
+            var actual = Snapshot(UrlAccessYes, null);
+
+            var result = expected.ComparePropertyVerificationWith(actual);
+
+            Assert.True(result.Equal);
+            Assert.Empty(result.ChangedParts);
+            Assert.Contains("Variables", result.NotComparedParts);
+        }
+
+        [Fact]
+        public void AVariableDeletedBySaveFailsTheWriteVerificationEvenWhenNoPartChanged()
+        {
+            var expected = Snapshot(UrlAccessYes, "&Count : Numeric(4) // Contador\n", Part("events", "Events", "source", "Event 'Load'\n"));
+            var actual = Snapshot(UrlAccessYes, string.Empty, Part("events", "Events", "source", "Event 'Load'\n"));
+
+            var result = expected.CompareWrittenWith(actual);
+
+            Assert.False(result.Equal);
+            Assert.Equal(new[] { "Variables" }, result.ChangedParts.Select(part => part.ToString()));
+        }
+
+        [Fact]
+        public void AWriteWithTheSameVariablesAndPartsVerifies()
+        {
+            var expected = Snapshot(UrlAccessYes, "&Count : Numeric(4)\n", Part("events", "Events", "source", "Event 'Load'\n"));
+            var actual = Snapshot(UrlAccessYes, "&Count : Numeric(4)\n", Part("events", "Events", "source", "Event 'Load'\n"));
+
+            var result = expected.CompareWrittenWith(actual);
+
+            Assert.True(result.Equal);
+            Assert.Empty(result.ChangedParts);
+            Assert.Empty(result.NotComparedParts);
+        }
+
+        [Fact]
+        public void AChangedPartStillFailsTheWriteVerification()
+        {
+            var expected = Snapshot(UrlAccessYes, "&Count : Numeric(4)\n", Part("events", "Events", "source", "Event 'Load'\n"));
+            var actual = Snapshot(UrlAccessYes, "&Count : Numeric(4)\n", Part("events", "Events", "source", "Event 'Unload'\n"));
+
+            var result = expected.CompareWrittenWith(actual);
+
+            Assert.False(result.Equal);
+            Assert.Equal("Events", result.ChangedParts[0].ToString());
+        }
+
+        [Fact]
+        public void AnUnreadableVariablesTextDoesNotFailTheWriteVerificationAndIsListedAsNotCompared()
+        {
+            var expected = Snapshot(UrlAccessYes, null);
+            var actual = Snapshot(UrlAccessYes, "&Count : Numeric(4)\n");
+
+            var result = expected.CompareWrittenWith(actual);
+
+            Assert.True(result.Equal);
+            Assert.Empty(result.ChangedParts);
+            Assert.Contains("Variables", result.NotComparedParts);
+        }
     }
 }

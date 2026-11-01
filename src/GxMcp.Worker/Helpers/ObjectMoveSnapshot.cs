@@ -23,8 +23,11 @@ namespace GxMcp.Worker.Helpers
         private readonly byte[] _objectXml;
         private readonly byte[] _objectRestoreData;
 
-        /// <summary>The text of the variables when the snapshot was taken; compared by the property verification only.</summary>
-        internal string VariablesText { get; private set; } = string.Empty;
+        /// <summary>
+        /// The variables text when the snapshot was taken, compared by the property verification and the write verification. Null when it
+        /// could not be read: the comparison then leaves the variables out instead of counting them as changed.
+        /// </summary>
+        internal string VariablesText { get; private set; }
 
         private ObjectMoveSnapshot(Dictionary<string, PartSnapshot> parts, byte[] objectXml, byte[] objectRestoreData)
         {
@@ -69,23 +72,8 @@ namespace GxMcp.Worker.Helpers
             var snapshot = new ObjectMoveSnapshot(parts,
                 Utf8(NormalizeObjectXml(obj.SerializeToXml() ?? string.Empty)),
                 objectRestoreData);
-            snapshot.VariablesText = CaptureVariablesText(obj);
+            snapshot.VariablesText = VariablesFingerprint.Capture(obj);
             return snapshot;
-        }
-
-        // The text of the variables, read as the variable editor reads them. The part's own properties do not carry the declarations,
-        // so the property verification compares this text too. Empty when the object has no variables part or the text cannot be read.
-        private static string CaptureVariablesText(KBObject obj)
-        {
-            try
-            {
-                return VariableInjector.GetVariablesAsText(obj) ?? string.Empty;
-            }
-            catch (Exception ex)
-            {
-                Logger.Debug("[PROPERTY] variables text could not be read: " + ex.Message);
-                return string.Empty;
-            }
         }
 
         public Comparison Compare(KBObject obj, params string[] ignoredPartNames)
@@ -161,6 +149,12 @@ namespace GxMcp.Worker.Helpers
             try { current = Capture(obj); }
             catch (Exception ex) { return Comparison.Failed(new[] { "SnapshotReadFailed: " + ex.Message }, null); }
 
+            return ComparePartsWith(current, ignoredPartNames);
+        }
+
+        // The parts comparison of CompareParts, against a snapshot already taken.
+        private Comparison ComparePartsWith(ObjectMoveSnapshot current, string[] ignoredPartNames)
+        {
             var ignored = new HashSet<string>(ignoredPartNames ?? new string[0], StringComparer.OrdinalIgnoreCase);
             Func<KeyValuePair<string, PartSnapshot>, bool> include = p => !ignored.Contains(p.Value.Name);
             var expectedFingerprints = _parts.Where(include)
@@ -184,6 +178,35 @@ namespace GxMcp.Worker.Helpers
             return changed.Count == 0
                 ? Comparison.Verified(current.Hash)
                 : Comparison.Failed(changed, current.Hash, changedKeys);
+        }
+
+        // The check after a property write: the parts, as CompareParts compares them, and the variables text, which no part carries. The
+        // variables are left out, and listed in NotComparedParts, when their text cannot be read on either side.
+        public Comparison CompareWritten(KBObject obj)
+        {
+            if (obj == null)
+                return Comparison.Failed(new[] { "ObjectMissing" }, null);
+
+            ObjectMoveSnapshot current;
+            try { current = Capture(obj); }
+            catch (Exception ex) { return Comparison.Failed(new[] { "SnapshotReadFailed: " + ex.Message }, null); }
+
+            return CompareWrittenWith(current);
+        }
+
+        internal Comparison CompareWrittenWith(ObjectMoveSnapshot current)
+        {
+            Comparison parts = ComparePartsWith(current, null);
+            var changed = new List<string>(parts.ChangedParts.Values<string>());
+            bool variablesCompared = VariablesText != null && current.VariablesText != null;
+            if (variablesCompared && !string.Equals(VariablesText, current.VariablesText, StringComparison.Ordinal))
+                changed.Add("Variables");
+
+            Comparison result = changed.Count == 0
+                ? Comparison.Verified(current.Hash)
+                : Comparison.Failed(changed, current.Hash, parts.ChangedPartKeys);
+            result.NotComparedParts = variablesCompared ? new string[0] : new[] { "Variables" };
+            return result;
         }
 
 
@@ -247,8 +270,10 @@ namespace GxMcp.Worker.Helpers
                     changedLines.Add(line);
             }
 
-            // The declarations of the variables are compared as text: the part's properties alone do not show them.
-            if (!string.Equals(VariablesText, current.VariablesText, StringComparison.Ordinal))
+            // The declarations of the variables are compared as text: the part's properties alone do not show them. A text that cannot be
+            // read on either side is left out and listed as not compared; it is never a difference.
+            bool variablesCompared = VariablesText != null && current.VariablesText != null;
+            if (variablesCompared && !string.Equals(VariablesText, current.VariablesText, StringComparison.Ordinal))
             {
                 changed.Add("Variables");
                 foreach (JToken line in ChangedLines.Describe("Variables", VariablesText, current.VariablesText, Math.Max(0, ChangedLines.DefaultMaxLines - changedLines.Count)))
@@ -259,7 +284,8 @@ namespace GxMcp.Worker.Helpers
                 ? Comparison.Verified(current.Hash)
                 : Comparison.Failed(changed.Distinct(StringComparer.OrdinalIgnoreCase), current.Hash, changedKeys);
             result.ChangedLines = changedLines;
-            result.NotComparedParts = PropertyVerificationScope.NotComparedOf(_parts.Values.Concat(current._parts.Values).Select(part => part.Name));
+            string[] notCompared = PropertyVerificationScope.NotComparedOf(_parts.Values.Concat(current._parts.Values).Select(part => part.Name));
+            result.NotComparedParts = variablesCompared ? notCompared : notCompared.Concat(new[] { "Variables" }).ToArray();
             return result;
         }
 

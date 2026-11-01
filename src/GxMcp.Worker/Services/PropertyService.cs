@@ -1296,7 +1296,7 @@ namespace GxMcp.Worker.Services
                 }
 
                 var fresh = _objectService.FindObjectFreshByIdentity(obj);
-                var partsComparison = fresh == null ? null : snapshot.CompareParts(fresh);
+                var partsComparison = fresh == null ? null : snapshot.CompareWritten(fresh);
                 if (partsComparison == null || !partsComparison.Equal)
                     return RollbackPropertySnapshot(target, obj, snapshot, rollback,
                         "The property save changed an unrelated object part"
@@ -1314,6 +1314,8 @@ namespace GxMcp.Worker.Services
                 }
                 result["versionToken"] = WriteService.ComputeVersionToken(fresh);
                 result["preservedParts"] = snapshot.PreservedParts;
+                if (partsComparison.NotComparedParts.Length > 0)
+                    result["notComparedParts"] = new JArray(partsComparison.NotComparedParts);
                 result["implicitOperations"] = new JArray();
                 return Models.McpResponse.Ok(target: target, code: "PropertiesApplied", result: result);
             }

@@ -4,8 +4,9 @@ using Xunit;
 namespace GxMcp.Worker.Tests
 {
     /// <summary>
-    /// What the property rollback compares: the Variables text is captured with the snapshot and compared with the state after the
-    /// rollback. These checks pin that wiring in the snapshot source, since a live object is needed to run it.
+    /// What the property write and its rollback compare: the variables text is captured with the snapshot, and compared both after the
+    /// rollback and after the write. These checks pin that wiring in the snapshot source, since a live object is needed to run it; the
+    /// comparison rules themselves are run by PropertyVerificationSeamTests.
     /// </summary>
     public class PropertyVerificationCoverageContractTests
     {
@@ -15,16 +16,17 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void TheVariablesTextIsCapturedWithTheSnapshot()
         {
-            Assert.Equal(1, SourceAssert.Count(SnapshotSource(), "snapshot.VariablesText = CaptureVariablesText(obj);"));
+            Assert.Equal(1, SourceAssert.Count(SnapshotSource(), "snapshot.VariablesText = VariablesFingerprint.Capture(obj);"));
         }
 
         [Fact]
-        public void TheVariablesTextIsComparedByTheVerification()
+        public void TheVariablesTextIsComparedByTheVerificationAndTheWriteCheck()
         {
             string src = SnapshotSource();
 
-            Assert.Equal(1, SourceAssert.Count(src, "if (!string.Equals(VariablesText, current.VariablesText, StringComparison.Ordinal))"));
-            Assert.Equal(1, SourceAssert.Count(src, "changed.Add(\"Variables\");"));
+            // One comparison in the property verification and one in the write check, both guarded by the variables being readable.
+            Assert.Equal(2, SourceAssert.Count(src, "if (variablesCompared && !string.Equals(VariablesText, current.VariablesText, StringComparison.Ordinal))"));
+            Assert.Equal(2, SourceAssert.Count(src, "changed.Add(\"Variables\");"));
         }
     }
 }
