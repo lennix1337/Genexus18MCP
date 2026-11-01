@@ -395,6 +395,13 @@ Routes are bare identifiers, mappings use `=>`, and rules end in `;`. Mixing
 top-level verb blocks or adding `@Get`/`@Post` decorators is rejected by the
 GeneXus 18 grammar. Expose multiple verbs with per-Procedure REST instead.
 
+### Changing part of a WorkWithPlus template XML
+
+- Change one text of a template's XML without resending the whole XML:
+  `genexus_properties action=set name=<template> properties={"TemplateXml": {"find": "<exact text>", "replace": "<new text>"}}`.
+  The find text must occur once; `replaceAll: true` replaces every occurrence, and `expectedCount` states how many are expected.
+  Preview with `dryRun: true` first: it returns the `patch` block, the verdict and a `versionToken`, not the XML. Send that token as `expectedVersion` so a template that changed after the preview is refused. A refusal says what to fix: `NoMatch` (read the XML and copy the text exactly), `Ambiguous` (add surrounding text), `WwpTemplateInvalid` (the result is not a valid template; its `violations` say which check failed).
+
 ### Folder and module placement
 
 - Move an existing object with
