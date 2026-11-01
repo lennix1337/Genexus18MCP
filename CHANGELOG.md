@@ -7,7 +7,7 @@
 
 ### Added
 
-- **`genexus_properties set` can replace text in the XML of a WorkWithPlus template.** The `TemplateXml` value takes `{find, replace, replaceAll, expectedCount}`: the find text must match the stored XML exactly, and the result is checked as a template before anything is saved. `dryRun` previews the change without returning the XML. The `WWPTemplate_*` SDK names now match in any letter case and with spaces around them, which changes the behaviour released in v4.2.0 for those names: before, a spaced name was refused as an unknown property (`PropertyNotFound`) and is now written, and another letter case now also shows `nativeNames` in the receipt. No other name changes.
+- **`genexus_properties set` can replace text in the XML of a WorkWithPlus template.** The `TemplateXml` value takes `{find, replace, replaceAll, expectedCount}`: the find text must match the stored XML exactly, and the result is checked as a template before anything is saved. `dryRun` previews the change without returning the XML. The `WWPTemplate_*` SDK names now match in any letter case and with spaces around them, which changes the behaviour released in v4.2.0 for those names: before, a spaced name was refused as an unknown property (`PropertyNotFound`) and is now written, and another letter case now also shows `nativeNames` in the receipt. No other name changes. Refs https://github.com/lennix1337/Genexus18MCP/issues/806
 
 ### Changed
 
