@@ -1272,9 +1272,7 @@ namespace GxMcp.Worker.Services
                     PreviousValues = previousValues,
                     NativeNames = nativeNames
                 };
-                var verifiedBefore = new JObject();
-                var verifiedRequested = new JObject();
-                var verifiedPersisted = new JObject();
+                var checks = new List<(string Name, string Before, string Requested, string Persisted)>();
                 foreach (var p in properties.Properties())
                 {
                     string propName = p.Name;
@@ -1295,11 +1293,8 @@ namespace GxMcp.Worker.Services
                     if (diff == null || diff["persistedVerified"]?.ToObject<bool>() != true)
                         return RollbackPropertySnapshot(target, obj, snapshot, rollback,
                             $"The saved property '{propName}' could not be confirmed.");
-                    // A patch reports its own summary; the XML it wrote is not echoed back.
-                    if (patch.Patches[propName] != null) continue;
-                    verifiedBefore[propName] = diff["before"]?.ToString() ?? string.Empty;
-                    verifiedRequested[propName] = diff["requested"]?.ToString() ?? requested;
-                    verifiedPersisted[propName] = diff["persisted"]?.ToString() ?? string.Empty;
+                    checks.Add((propName, diff["before"]?.ToString() ?? string.Empty, diff["requested"]?.ToString() ?? requested,
+                        diff["persisted"]?.ToString() ?? string.Empty));
                 }
 
                 var fresh = _objectService.FindObjectFreshByIdentity(obj);
@@ -1313,13 +1308,8 @@ namespace GxMcp.Worker.Services
                 var result = new JObject { ["properties"] = WwpTemplateXmlPatch.Omit(request, patch.Patches) };
                 NoteNativeNames(result, objectTypeId, properties, nativeNames);
                 if (patch.Patches.Count > 0) result["patch"] = patch.Patches;
-                if (verifiedPersisted.Count == properties.Count - patch.Patches.Count)
-                {
-                    result["before"] = verifiedBefore;
-                    result["requested"] = verifiedRequested;
-                    result["persisted"] = verifiedPersisted;
-                    result["persistedVerified"] = true;
-                }
+                foreach (JProperty field in WwpTemplateXmlPatch.VerifiedReceipt(checks, patch.Patches).Properties())
+                    result[field.Name] = field.Value;
                 result["versionToken"] = WriteService.ComputeVersionToken(fresh);
                 result["preservedParts"] = snapshot.PreservedParts;
                 result["implicitOperations"] = new JArray();

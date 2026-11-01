@@ -196,6 +196,8 @@ namespace GxMcp.Worker.Tests
             var outcome = WwpTemplateXmlPatch.Apply(WwpTemplateXml.ObjectType, Batch("class", "klass"), () => null);
 
             Assert.Equal("FreshReadUnavailable", outcome.RefusalCode);
+            Assert.DoesNotContain("retry", outcome.RefusalHint);
+            Assert.Contains("action=get propertyName=TemplateXml", outcome.RefusalHint);
         }
 
         [Fact]
@@ -218,6 +220,8 @@ namespace GxMcp.Worker.Tests
         [InlineData("TemplateXml", true)]
         [InlineData("WWPTemplate_TemplateXml", true)]
         [InlineData(" templatexml ", true)]
+        [InlineData("wwptemplate_templatexml", true)]
+        [InlineData(" WWPTemplate_TemplateXml ", true)]
         [InlineData("TemplateCategory", false)]
         public void OnlyTheTemplateXmlOfTheTemplateTypeTakesAPatch(string name, bool expected)
         {
@@ -268,6 +272,59 @@ namespace GxMcp.Worker.Tests
             Assert.True(context.Length <= 200, context.Length.ToString());
             Assert.Contains("xxxx", context);
         }
+
+        [Fact]
+        public void NullOptionalKeysCountAsAbsent()
+        {
+            var patch = new JObject
+            {
+                ["find"] = "name=\"TableMain\" class=\"SynthOld\"",
+                ["replace"] = "name=\"TableMain\" class=\"SynthNew\"",
+                ["replaceAll"] = JValue.CreateNull(),
+                ["expectedCount"] = JValue.CreateNull()
+            };
+
+            var outcome = Apply(new JObject { ["TemplateXml"] = patch });
+
+            Assert.Null(outcome.RefusalCode);
+            Assert.Equal(1, outcome.Patches["TemplateXml"]?["occurrences"]?.Value<int>());
+        }
+
+        [Fact]
+        public void OccurrencesOfAnEmptyFindIsEmpty()
+        {
+            Assert.Empty(WwpTemplateXmlPatch.Occurrences(Xml, string.Empty));
+        }
+
+        [Fact]
+        public void TheReceiptNamesTheCheckedValuesAndLeavesOutAPatch()
+        {
+            var receipt = WwpTemplateXmlPatch.VerifiedReceipt(new[]
+            {
+                ("TemplateCategory", "SynthOld", "SynthCategory", "SynthCategory"),
+                ("TemplateXml", "<old />", "<new />", "<new />")
+            }, new JObject { ["TemplateXml"] = new JObject() });
+
+            Assert.Equal(new[] { "TemplateCategory" }, Names(receipt["before"]));
+            Assert.Equal("SynthOld", receipt["before"]?["TemplateCategory"]?.ToString());
+            Assert.Equal(new[] { "TemplateCategory" }, Names(receipt["requested"]));
+            Assert.Equal(new[] { "TemplateCategory" }, Names(receipt["persisted"]));
+            Assert.True(receipt["persistedVerified"]?.Value<bool>());
+        }
+
+        [Fact]
+        public void TheReceiptOfAPlainWriteNamesEveryCheckedProperty()
+        {
+            var receipt = WwpTemplateXmlPatch.VerifiedReceipt(new[]
+            {
+                ("TemplateCategory", "SynthOld", "SynthCategory", "SynthCategory"),
+                ("TemplateCategoryOrder", "1", "2", "2")
+            }, new JObject());
+
+            Assert.Equal(new[] { "TemplateCategory", "TemplateCategoryOrder" }, Names(receipt["persisted"]));
+        }
+
+        private static string[] Names(JToken block) => (block as JObject)?.Properties().Select(p => p.Name).ToArray() ?? Array.Empty<string>();
 
         private static int CountOf(string text, string value)
         {

@@ -53,6 +53,29 @@ namespace GxMcp.Worker.Services
             return copy;
         }
 
+        // The receipt of a write whose every property was read back. A patch is left out: its XML is named by its summary and not
+        // echoed. persistedVerified holds because the read-back ran for every property before the receipt is built.
+        internal static JObject VerifiedReceipt(IEnumerable<(string Name, string Before, string Requested, string Persisted)> checks, JObject patches)
+        {
+            var before = new JObject();
+            var requested = new JObject();
+            var persisted = new JObject();
+            foreach (var check in checks)
+            {
+                if (patches[check.Name] != null) continue;
+                before[check.Name] = check.Before;
+                requested[check.Name] = check.Requested;
+                persisted[check.Name] = check.Persisted;
+            }
+            return new JObject
+            {
+                ["before"] = before,
+                ["requested"] = requested,
+                ["persisted"] = persisted,
+                ["persistedVerified"] = true
+            };
+        }
+
         // The decision for a batch. readCurrent supplies the template XML stored now, and is called only when the batch holds a patch.
         internal static Outcome Apply(Guid objectType, JObject properties, Func<string> readCurrent)
         {
@@ -66,7 +89,7 @@ namespace GxMcp.Worker.Services
             string current = readCurrent();
             if (current == null)
                 return Refused(outcome, "FreshReadUnavailable", "The stored TemplateXml could not be read; no patch was applied.",
-                    "Read the template again with genexus_properties action=get and retry the patch.");
+                    "Repeating the same patch gives the same result. Read the template with genexus_properties action=get propertyName=TemplateXml to see whether its XML can be read, or send the whole XML with genexus_properties set.");
 
             var effective = new JObject();
             int patches = 0;
@@ -171,14 +194,14 @@ namespace GxMcp.Worker.Services
                 return false;
             }
 
-            JToken replaceAll = value["replaceAll"];
+            JToken replaceAll = Sent(value["replaceAll"]);
             if (replaceAll != null && replaceAll.Type != JTokenType.Boolean)
             {
                 problem = "replaceAll must be true or false.";
                 return false;
             }
 
-            JToken count = value["expectedCount"];
+            JToken count = Sent(value["expectedCount"]);
             int? expectedCount = null;
             if (count != null)
             {
@@ -202,10 +225,15 @@ namespace GxMcp.Worker.Services
 
         private static string StringValue(JToken token) => token?.Type == JTokenType.String ? token.ToString() : null;
 
-        // Ordinal and non-overlapping: the XML is matched byte for byte, with no culture rules.
-        private static List<int> Occurrences(string text, string find)
+        // A key sent as JSON null is not sent: an optional key takes its default, as it does when the key is absent.
+        private static JToken Sent(JToken token) => token == null || token.Type == JTokenType.Null ? null : token;
+
+        // Ordinal and non-overlapping: the XML is matched byte for byte, with no culture rules. An empty find would match at every
+        // position, so it has no occurrences here; the caller refuses it first, and this guard keeps a regression from looping.
+        internal static List<int> Occurrences(string text, string find)
         {
             var hits = new List<int>();
+            if (string.IsNullOrEmpty(find)) return hits;
             for (int at = text.IndexOf(find, StringComparison.Ordinal); at >= 0; at = text.IndexOf(find, at + find.Length, StringComparison.Ordinal))
                 hits.Add(at);
             return hits;
