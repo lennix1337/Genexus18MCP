@@ -301,5 +301,32 @@ namespace GxMcp.Gateway.Tests
             complete["status"] = "Running";
             Assert.False(Program.IsTerminalPersistedReread(complete));
         }
+
+        [Fact]
+        public void AnUnknownPersistedIsNotAConfirmationAndDoesNotThrow()
+        {
+            var unknown = new JObject
+            {
+                ["status"] = "Completed",
+                ["persisted"] = "unknown",
+                ["rereadConfirmed"] = true
+            };
+
+            Assert.False(Program.IsTerminalPersistedReread(unknown));
+        }
+
+        [Fact]
+        public void APerPropertyPersistedMapIsNotAConfirmationAndDoesNotThrow()
+        {
+            // The success receipt of a property write carries persisted as the map of values read back, not as a boolean.
+            var mapped = new JObject
+            {
+                ["status"] = "Completed",
+                ["persisted"] = new JObject { ["Description"] = "Yes" },
+                ["rereadConfirmed"] = true
+            };
+
+            Assert.False(Program.IsTerminalPersistedReread(mapped));
+        }
     }
 }

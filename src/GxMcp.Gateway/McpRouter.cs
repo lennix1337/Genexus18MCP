@@ -1981,8 +1981,9 @@ namespace GxMcp.Gateway
                 // issue #542: Structure writer rollback evidence (which members the SDK
                 // refused, whether a revert was attempted, and why it could not be verified).
                 "unappliedMembers", "rollbackAttempted", "rollbackError",
-                // genexus_properties set: which written properties the rollback put back (names only).
-                "propertiesRestored", "propertiesNotRestored",
+                // genexus_properties set: which written properties the rollback put back (names only), and whether the
+                // batch's transaction committed; its persisted value is listed with the patch receipt fields above.
+                "committed", "propertiesRestored", "propertiesNotRestored",
                 "reReadConfirmed", "commentOnly", "commentStyle", "before", "after",
                 "matchedCount", "implicitOperations", "diagnosticContext",
                 // Patch safety evidence: retain the distinction between a save attempt
@@ -2301,6 +2302,11 @@ namespace GxMcp.Gateway
         // notifications/progress on HeartbeatIntervalSeconds and can safely
         // respect the full MaxLongPollSeconds.
         public const int SafeLongPollSecondsWithoutProgress = 50;
+
+        // A genexus_properties set on a WorkWithPlus host runs the pattern's apply-on-save inside the call: 50 to 54 s on a
+        // real host, so the window above cut the answer just before the save finished. 90 s covers that save and stays under
+        // the ~120 s the client gives up after. Only property sets use it (see ResolveNoProgressTimeoutMs).
+        public const int PropertySetSafeLongPollSecondsWithoutProgress = 90;
         public const int HeartbeatIntervalSeconds = 15;
 
         /// <summary>

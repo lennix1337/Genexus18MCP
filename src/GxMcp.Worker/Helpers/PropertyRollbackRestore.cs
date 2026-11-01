@@ -44,6 +44,34 @@ namespace GxMcp.Worker.Helpers
         internal static Report NothingRestored(IEnumerable<string> requestedNames)
             => new Report(new string[0], (requestedNames ?? Enumerable.Empty<string>()).ToList());
 
+        /// <summary>The <c>persisted</c> value when nothing can settle whether the requested values are still in the object.</summary>
+        internal const string UnknownPersisted = "unknown";
+
+        /// <summary>
+        /// Marks an error receipt whose batch write has committed: <c>committed</c> is true, and <c>persisted</c> is what the
+        /// object holds now, a boolean or <see cref="UnknownPersisted"/>. Every error after the commit carries both, so a caller
+        /// can tell a write that landed from one that was refused before the commit.
+        /// </summary>
+        internal static void MarkCommitted(JObject receipt, object persisted)
+        {
+            receipt["committed"] = true;
+            receipt["persisted"] = JToken.FromObject(persisted);
+        }
+
+        /// <summary>
+        /// <c>persisted</c> after a verification failure whose rollback ran. It is false only when the rollback was verified:
+        /// the object is then back to its snapshot and the requested values are gone. Without that proof nothing settles it.
+        /// </summary>
+        internal static object PersistedAfterVerificationFailure(bool rollbackVerified)
+            => rollbackVerified ? (object)false : UnknownPersisted;
+
+        /// <summary>
+        /// <c>persisted</c> after a rollback that failed. Until the restoring transaction commits, every property is still as the
+        /// batch wrote it, so the values are persisted. Once it commits the state is no longer known.
+        /// </summary>
+        internal static object PersistedAfterRollbackFailure(bool restoreCommitted)
+            => restoreCommitted ? (object)UnknownPersisted : (object)true;
+
         /// <summary>
         /// The parenthesis the "unrelated part changed" reason adds: the names of the parts that differ, never their content.
         /// Empty when no name is known, so the reason reads as it did before.

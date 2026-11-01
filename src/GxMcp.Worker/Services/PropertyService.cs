@@ -1042,6 +1042,8 @@ namespace GxMcp.Worker.Services
         public string SetProperties(string target, JObject properties, string controlName = null, string typeFilter = null,
             string expectedVersion = null, bool dryRun = false, bool rollbackOnFailure = true)
         {
+            // Set once the batch's transaction commits: an error after that point reports committed:true.
+            bool transactionCommitted = false;
             try
             {
                 if (properties == null || properties.Count == 0)
@@ -1226,6 +1228,7 @@ namespace GxMcp.Worker.Services
                         WriteService.StampObjectRevisionDates(obj, obj.Model);
                         trans.Commit();
                         committed = true;
+                        transactionCommitted = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
@@ -1304,7 +1307,13 @@ namespace GxMcp.Worker.Services
             }
             catch (Exception ex)
             {
-                return "{\"status\":\"Error\",\"message\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                // The envelope of an unexpected failure keeps its shape; after the commit it also says what was persisted.
+                string failure = "{\"status\":\"Error\",\"message\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                if (!transactionCommitted) return failure;
+                var receipt = JObject.Parse(failure);
+                // A failure after the commit leaves the written values in place, but nothing confirmed them.
+                PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.UnknownPersisted);
+                return receipt.ToString(Newtonsoft.Json.Formatting.None);
             }
         }
 
@@ -1336,6 +1345,7 @@ namespace GxMcp.Worker.Services
                     // Nothing was attempted: every property is still as the batch wrote it.
                     var refused = new JObject();
                     PropertyRollbackRestore.NothingRestored(rollback.RequestedNames).AddTo(refused);
+                    PropertyRollbackRestore.MarkCommitted(refused, true);
                     return Models.McpResponse.Err(code: "PropertyRollbackUnsafe", target: target,
                         message: reason + " The persisted version could not be tied to this write; automatic rollback was refused.",
                         extra: refused);
@@ -1372,6 +1382,7 @@ namespace GxMcp.Worker.Services
                 report.AddTo(outcome);
                 // The parts that still differ from the snapshot, by name only: without them an unverified rollback cannot be told from damage.
                 if (restoredComparison != null && !restoredComparison.Equal) outcome["changedParts"] = restoredComparison.ChangedParts;
+                PropertyRollbackRestore.MarkCommitted(outcome, PropertyRollbackRestore.PersistedAfterVerificationFailure(verified));
                 return Models.McpResponse.Err(code: "PropertyVerificationFailed", target: target,
                     message: reason + PropertyRollbackRestore.DescribeSourceFailures(sourceFailures) + (verified ? " The complete object snapshot was restored and verified."
                         : " Snapshot restoration could not be verified; inspect the object before writing again."),
@@ -1382,6 +1393,7 @@ namespace GxMcp.Worker.Services
                 var failed = new JObject { ["rollbackAttempted"] = true, ["rollbackVerified"] = false };
                 // Until the restoring transaction commits every property is still as written; after that the state is unknown, so no list is offered.
                 if (!restoreCommitted) PropertyRollbackRestore.NothingRestored(rollback.RequestedNames).AddTo(failed);
+                PropertyRollbackRestore.MarkCommitted(failed, PropertyRollbackRestore.PersistedAfterRollbackFailure(restoreCommitted));
                 return Models.McpResponse.Err(code: "PropertyRollbackFailed", target: target,
                     message: reason + " Snapshot restoration failed: " + ex.Message,
                     extra: failed);
