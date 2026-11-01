@@ -109,27 +109,44 @@ namespace GxMcp.Worker.Helpers
         internal static IReadOnlyList<string> ResetOrWriteBack(IEnumerable<string> requestedNames, IDictionary<string, string> previousValues,
             ISet<string> wereDefault, Func<string, bool> canReset, Action<string> resetOne, Action<string, string> restoreOne)
         {
+            // The batch goes back in reverse order: a property written later can change what the properties before it read back as
+            // (a WebComponent flag, for one, hides the master page), so the later ones are undone first. A name whose step throws is
+            // tried once more after the others.
             var written = new List<string>();
-            foreach (string name in requestedNames)
+            var failed = new List<string>();
+            foreach (string name in (requestedNames ?? Enumerable.Empty<string>()).Reverse())
             {
-                try
-                {
-                    if (wereDefault != null && wereDefault.Contains(name) && canReset != null && canReset(name))
-                    {
-                        resetOne(name);
-                        written.Add(name);
-                        continue;
-                    }
-                    if (!previousValues.TryGetValue(name, out string previous) || previous == null) continue;
-                    restoreOne(name, previous);
-                    written.Add(name);
-                }
-                catch (Exception ex)
-                {
-                    ExceptionRoot.Log("Rollback could not write property '" + name + "' back", ex);
-                }
+                if (RestoreOne(name, previousValues, wereDefault, canReset, resetOne, restoreOne)) written.Add(name);
+                else failed.Add(name);
+            }
+            foreach (string name in failed)
+            {
+                if (RestoreOne(name, previousValues, wereDefault, canReset, resetOne, restoreOne)) written.Add(name);
             }
             return written;
+        }
+
+        // One step of the reset variant: a default property is reset when the SDK allows it, any other property is written back
+        // to its previous value. Returns false when nothing was written; a step that throws is logged and counts as nothing written.
+        private static bool RestoreOne(string name, IDictionary<string, string> previousValues, ISet<string> wereDefault,
+            Func<string, bool> canReset, Action<string> resetOne, Action<string, string> restoreOne)
+        {
+            try
+            {
+                if (wereDefault != null && wereDefault.Contains(name) && canReset != null && canReset(name))
+                {
+                    resetOne(name);
+                    return true;
+                }
+                if (!previousValues.TryGetValue(name, out string previous) || previous == null) return false;
+                restoreOne(name, previous);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ExceptionRoot.Log("Rollback could not write property '" + name + "' back", ex);
+                return false;
+            }
         }
 
         /// <summary>

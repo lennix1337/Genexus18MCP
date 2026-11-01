@@ -25,7 +25,7 @@ namespace GxMcp.Worker.Tests
 
             Assert.Equal(new[] { "MasterPage" }, resets);
             Assert.Equal(new[] { "Description=Before" }, writes);
-            Assert.Equal(new[] { "MasterPage", "Description" }, written);
+            Assert.Equal(new[] { "Description", "MasterPage" }, written);
         }
 
         [Fact]
@@ -111,6 +111,38 @@ namespace GxMcp.Worker.Tests
 
             Assert.Empty(report.Restored);
             Assert.Equal(new[] { "Description" }, report.NotRestored);
+        }
+        [Fact]
+        public void TheBatchGoesBackInReverseOrder()
+        {
+            var writes = new List<string>();
+            var previous = new Dictionary<string, string> { ["A"] = "a", ["B"] = "b", ["C"] = "c" };
+
+            PropertyRollbackRestore.ResetOrWriteBack(
+                new[] { "A", "B", "C" }, previous, new HashSet<string>(),
+                name => false, name => { }, (name, value) => writes.Add(name));
+
+            Assert.Equal(new[] { "C", "B", "A" }, writes);
+        }
+
+        [Fact]
+        public void ANameWhoseStepThrowsIsTriedAgainAfterTheOthers()
+        {
+            var attempts = new List<string>();
+            var previous = new Dictionary<string, string> { ["A"] = "a", ["B"] = "b" };
+            int failuresLeft = 1;
+
+            var written = PropertyRollbackRestore.ResetOrWriteBack(
+                new[] { "A", "B" }, previous, new HashSet<string>(),
+                name => false, name => { },
+                (name, value) =>
+                {
+                    attempts.Add(name);
+                    if (name == "A" && failuresLeft-- > 0) throw new System.InvalidOperationException("busy");
+                });
+
+            Assert.Equal(new[] { "B", "A", "A" }, attempts);
+            Assert.Equal(new[] { "B", "A" }, written);
         }
     }
 }
