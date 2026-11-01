@@ -30,6 +30,7 @@ namespace GxMcp.Worker.Services
             public Dictionary<string, JObject> OldMetadata;
             public Dictionary<string, JObject> OldPackages;
             public HashSet<string> PlanKeys;
+            public HashSet<int> HomonymIndexes;
             public HashSet<string> EmittedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> EmittedMetadata = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> EmittedPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -207,7 +208,8 @@ namespace GxMcp.Worker.Services
                 OldManifest = LoadManifest(root),
                 OldMetadata = LoadManifestMetadata(root),
                 OldPackages = LoadManifestArray(root, "packages"),
-                PlanKeys = new HashSet<string>(plan.Select(item => ManifestKey(item.Entry)), StringComparer.OrdinalIgnoreCase)
+                PlanKeys = new HashSet<string>(plan.Select(item => ManifestKey(item.Entry)), StringComparer.OrdinalIgnoreCase),
+                HomonymIndexes = FindHomonymIndexes(plan)
             };
             state.Skipped = Math.Min(options.Skip, plan.Count);
             return true;
@@ -244,6 +246,31 @@ namespace GxMcp.Worker.Services
                 isEntityKey ? explicitTarget.Name : null);
         }
 
+        // The native tree keeps one object per Type:Name, and the manifest and the validator key it that way. Of the plan
+        // entries that share a Type:Name, the first is written and each later one is reported instead.
+        private static HashSet<int> FindHomonymIndexes(List<ExportPlan> plan)
+        {
+            var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new HashSet<int>();
+            for (int index = 0; index < plan.Count; index++)
+            {
+                if (!keys.Add(ManifestKey(plan[index].Entry))) result.Add(index);
+            }
+            return result;
+        }
+
+        private const string HomonymCode = "HomonymInSameTree";
+
+        private static ReadFailure HomonymFailure(ExportPlan item)
+        {
+            return new ReadFailure
+            {
+                Code = HomonymCode,
+                Message = "'" + item.Entry.Name + "' (" + item.Entry.Type + ") is a homonym of an object planned earlier in this export.",
+                Hint = "The native tree keeps one object per Type:Name: export the other homonym into a separate root (outputPath)."
+            };
+        }
+
         private static string BuildNativeExportPlan(NativeExportState state)
         {
             var planResults = new JArray();
@@ -251,6 +278,7 @@ namespace GxMcp.Worker.Services
             foreach (ExportPlan item in state.Plan)
             {
                 int index = planResults.Count;
+                bool homonym = state.HomonymIndexes.Contains(index);
                 planResults.Add(new JObject
                 {
                     ["name"] = item.Entry.Name,
@@ -258,8 +286,8 @@ namespace GxMcp.Worker.Services
                     ["role"] = item.Role,
                     ["part"] = item.Part,
                     ["file"] = item.RelativePath,
-                    ["status"] = index < offset ? "skipped" : "planned",
-                    ["reason"] = index < offset ? "skip" : "listOnly"
+                    ["status"] = index < offset ? "skipped" : homonym ? "error" : "planned",
+                    ["reason"] = index < offset ? "skip" : homonym ? HomonymCode : "listOnly"
                 });
             }
             return McpResponse.Ok(code: "ObjectTextNativeExportPlan", result: new JObject
@@ -320,6 +348,13 @@ namespace GxMcp.Worker.Services
                     ["status"] = "skipped",
                     ["reason"] = "skip"
                 });
+                return;
+            }
+
+            // A homonym is reported, not written: the tree has one object per Type:Name (see FindHomonymIndexes).
+            if (state.HomonymIndexes.Contains(index))
+            {
+                RegisterNativeExportError(state, item, HomonymFailure(item));
                 return;
             }
 
