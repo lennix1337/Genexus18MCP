@@ -73,8 +73,9 @@ namespace GxMcp.Worker.Tests
         {
             JObject envelope = Refused(PropertyRollbackRestore.PersistenceProof.Unknown);
 
+            // Without a read the value may be in the object: persisted is true, and persistenceStateKnown says the state is not settled.
             Assert.Equal(JTokenType.Boolean, envelope["persisted"].Type);
-            Assert.False((bool)envelope["persisted"]);
+            Assert.True((bool)envelope["persisted"]);
             Assert.False((bool)envelope["persistenceStateKnown"]);
         }
 
@@ -111,7 +112,8 @@ namespace GxMcp.Worker.Tests
             Assert.True((bool)notPersisted["committed"]);
             Assert.False((bool)notPersisted["persisted"]);
             Assert.True((bool)notPersisted["persistenceStateKnown"]);
-            Assert.False((bool)writeFailed["persisted"]);
+            // A write that failed without a read is unknown: persisted true, persistenceStateKnown false.
+            Assert.True((bool)writeFailed["persisted"]);
             Assert.False((bool)writeFailed["persistenceStateKnown"]);
         }
 

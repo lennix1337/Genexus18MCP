@@ -37,14 +37,15 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void AnUnknownStateWritesPersistedFalseAndNeverAString()
+        public void AnUnknownStateWritesPersistedTrueAndAnUnsettledState()
         {
+            // The value may be in the object, so persisted is true; persistenceStateKnown says that no read settled it.
             var receipt = new JObject();
 
             PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.PersistenceProof.Unknown);
 
             Assert.Equal(JTokenType.Boolean, receipt["persisted"].Type);
-            Assert.False((bool)receipt["persisted"]);
+            Assert.True((bool)receipt["persisted"]);
             Assert.False((bool)receipt["persistenceStateKnown"]);
         }
 

@@ -316,6 +316,23 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void AReceiptWhoseStateIsNotKnownConfirmsNothingWhateverItsPersistedFieldSays()
+        {
+            // The unknown state of a write receipt carries persisted true, as the sibling routes do; only persistenceStateKnown tells it apart.
+            var unknown = new JObject
+            {
+                ["status"] = "Completed",
+                ["persisted"] = true,
+                ["persistenceStateKnown"] = false,
+                ["rereadConfirmed"] = true
+            };
+
+            Assert.False(Program.IsTerminalPersistedReread(unknown));
+            unknown["persistenceStateKnown"] = true;
+            Assert.True(Program.IsTerminalPersistedReread(unknown));
+        }
+
+        [Fact]
         public void APerPropertyPersistedMapIsNotAConfirmationAndDoesNotThrow()
         {
             // The success receipt of a property write carries persisted as the map of values read back, not as a boolean.

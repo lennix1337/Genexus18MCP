@@ -58,15 +58,15 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
-        /// Marks an error receipt whose batch write has committed: <c>committed</c> is true, <c>persisted</c> says whether the requested
-        /// values are in the object now (always a boolean), and <c>persistenceStateKnown</c> says whether a read settled it. An unknown
-        /// state carries <c>persisted:false</c> and <c>persistenceStateKnown:false</c>. The string "unknown" is never written: scripts read
-        /// it as true, and typed readers throw on it.
+        /// Marks an error receipt whose batch write has committed: <c>committed</c> is true, <c>persisted</c> is a boolean that is false
+        /// only when a read showed the requested values are not in the object, and <c>persistenceStateKnown</c> says whether a read settled
+        /// it. An unknown state carries <c>persisted:true</c> and <c>persistenceStateKnown:false</c>, as the receipts of the Conditions and
+        /// DataProviderParameters routes do: the value may be in the object, so a reader decides on <c>persistenceStateKnown</c> first.
         /// </summary>
         internal static void MarkCommitted(JObject receipt, PersistenceProof proof)
         {
             receipt["committed"] = true;
-            receipt["persisted"] = proof == PersistenceProof.Verified;
+            receipt["persisted"] = proof != PersistenceProof.NotPersisted;
             receipt["persistenceStateKnown"] = proof != PersistenceProof.Unknown;
         }
 
