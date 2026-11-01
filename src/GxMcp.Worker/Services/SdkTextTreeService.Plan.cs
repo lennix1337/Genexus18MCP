@@ -182,7 +182,7 @@ namespace GxMcp.Worker.Services
 
         internal const string NoTextPartsCode = "ObjectHasNoTextParts";
         // The properties read answers this for an object of another type: its missing text parts stay a no-text-parts case.
-        internal const string NotWwpTemplateCode = "NotWwpTemplate";
+        internal const string NotWwpTemplateCode = WwpTemplateReply.NotTemplateCode;
         private const string StaleIndexHint = "The index is out of date: run genexus_lifecycle action=index, then export again.";
 
         private bool TryReadParts(SearchIndex.IndexEntry entry, IEnumerable<string> requestedParts, out Dictionary<string, string> parts, out ReadFailure failure)

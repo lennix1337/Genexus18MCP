@@ -1,41 +1,43 @@
-using GxMcp.Worker.Models;
-using Newtonsoft.Json.Linq;
+using System.Collections.Generic;
+using GxMcp.Worker.Services;
 
 namespace GxMcp.Worker.Tests
 {
-    // The SDK's answers about WorkWithPlus templates, in the shape ObjectService.ReadWwpTemplateProperties replies them.
-    // The tests of the template's export and of its import share them, so each value is written once.
+    // The SDK's answers about WorkWithPlus templates. The reply is built by the production shaping function, so the fixtures
+    // hold only the values the SDK would give; the tests of the template's export and of its import share them.
     internal static class WwpTemplateTestFixtures
     {
         internal const string TemplateType = "WorkWithPlus for Web Template";
+        internal const string TemplateXml = "<selection Name=\"SynthTemplate\" instanceType=\"WebPanel\"><table name=\"TableMain\" /></selection>";
 
-        // The template's name, its type and the values of the official text, as the SDK holds them.
-        internal static string PropertiesOf(string objectName)
+        // The values the SDK holds for SynthTemplate, by SDK property name.
+        internal static Dictionary<string, object> SdkValues(string category = "SynthCategory")
         {
-            return new JObject
+            return new Dictionary<string, object>
             {
-                ["objectName"] = objectName,
-                ["objectType"] = TemplateType,
-                ["properties"] = new JObject
-                {
-                    ["Name"] = objectName,
-                    ["Description"] = "Synth description",
-                    ["TemplateCategory"] = "SynthCategory",
-                    ["TemplateCategoryOrder"] = "0",
-                    ["TemplateType"] = "Trn.Selection",
-                    ["TemplateXml"] = "<selection Name=\"SynthTemplate\" instanceType=\"WebPanel\"><table name=\"TableMain\" /></selection>",
-                    ["MainTemplate"] = "Main",
-                    ["InstanceType"] = "WebPanel",
-                    ["PreviewImage"] = string.Empty,
-                    ["IsDefault"] = "False"
-                }
-            }.ToString();
+                ["Description"] = "Synth description",
+                ["WWPTemplate_Category"] = category,
+                ["WWPTemplate_CategoryOrder"] = 0,
+                ["WWPTemplate_Type"] = "Trn.Selection",
+                ["WWPTemplate_TemplateXml"] = TemplateXml,
+                ["WWPTemplate_MainTemplate"] = "Main",
+                ["WWPTemplate_InstanceType"] = "WebPanel",
+                ["WWPTemplate_PreviewImage"] = string.Empty,
+                ["IsDefault"] = false
+            };
         }
 
-        // The SDK's answer for an object of another type: it is not a template, so its missing text parts are a case of their own.
+        // The reply the SDK read of a template gives, shaped by the production function.
+        internal static string PropertiesOf(string objectName)
+        {
+            Dictionary<string, object> values = SdkValues();
+            return WwpTemplateReply.Shape(WwpTemplateXml.ObjectType, objectName, TemplateType, name => values.TryGetValue(name, out object value) ? value : null);
+        }
+
+        // The reply the SDK read of an object of another type gives: it is not a template.
         internal static string NotATemplate(string target)
         {
-            return McpResponse.Err(code: "NotWwpTemplate", message: target + " is not a WorkWithPlus template.", target: target);
+            return WwpTemplateReply.Shape(System.Guid.Empty, target, "Image", name => null);
         }
     }
 }

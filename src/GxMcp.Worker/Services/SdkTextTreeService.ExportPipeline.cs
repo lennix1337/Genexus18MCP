@@ -485,7 +485,10 @@ namespace GxMcp.Worker.Services
 
             var named = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (JProperty property in values.Properties())
-                named[property.Name] = property.Value.Type == JTokenType.Null ? string.Empty : property.Value.ToString();
+            {
+                // A value the SDK does not hold is left out: the document never shows it as an empty value.
+                if (property.Value.Type != JTokenType.Null) named[property.Name] = property.Value.ToString();
+            }
             document = WwpTemplateDocument.Build(entry.Name, named);
             item.Parts = new List<string> { WwpTemplateDocument.Section };
             return true;
