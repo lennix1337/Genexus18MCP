@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- **An error answer over the 80k budget keeps its verdict.** An error with long lists or long text, such as a refused `genexus_edit`, went over the budget and came back as the generic budget message, without `code`, `persisted` or `rollbackVerified`. Now the cut shortens the largest list or long text first, keeps the status, the error code, message and hint and every short field whole, and shortens the write receipt lists last; when shortening is not enough, the answer keeps only the verdict. An error whose bulk sits inside its error object is cut as well. A shortened error says so in `gatewayTruncationHint`, and its lists are partial. Successful answers over the budget keep the budget message and its previous shape.
+- **An error answer over the 80k budget keeps its verdict.** An error with long lists or long text, such as a refused `genexus_edit`, went over the budget and came back as the generic budget message, without `code`, `persisted` or `rollbackVerified`. Now the cut shortens the largest list or long text first, keeps the status, the error code, message and hint and every short field whole, and shortens the write receipt lists last; when shortening is not enough, the answer keeps only the verdict, with its texts cut at 500 characters. An error whose bulk sits inside its error object is cut as well. A shortened error says so in `gatewayTruncationHint`, and its lists are partial. Successful answers over the budget keep the budget message and its previous shape.
 
 ### Internal
 
