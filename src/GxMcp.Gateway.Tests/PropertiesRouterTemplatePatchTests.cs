@@ -98,9 +98,11 @@ namespace GxMcp.Gateway.Tests
 
             foreach (string expected in new[]
             {
-                "`replaceAll: true` every match is replaced", "`patch` block", "`NoMatch`", "`Ambiguous`", "`WwpTemplateInvalid`"
+                "`replaceAll: true` every match is replaced", "`patch` block", "`NoMatch`", "`Ambiguous`", "`WwpTemplateInvalid`",
+                "send the `versionToken` of the `dryRun`", "other properties may share the call"
             })
                 Assert.Contains(expected, help);
+            Assert.DoesNotContain("goes alone", help);
         }
     }
 }
