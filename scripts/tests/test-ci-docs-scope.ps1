@@ -101,6 +101,21 @@ try {
     $result = Invoke-Scope $emptyAllowed 'pull_request' $docs $docs
     Assert-Scope ($result.Output -eq 'docs_only=true') 'Mutation must expose the vacuous docs-only classification for an empty diff.'
 
+    # #785: validators that read docs/, plans/ and *.md must run on a docs-only change.
+    $alwaysRun = @('Release line-ending policy', 'Verify release metadata synchronization', 'Validate quality gate manifests and scripts')
+    function Get-AlwaysRunViolations([string]$Text) {
+        foreach ($name in $alwaysRun) {
+            $step = [regex]::Match($Text, '(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n(?<body>.*?)(?=^      - name:|^      #|^  [a-z]|\z)')
+            if (-not $step.Success) { "$name is missing"; continue }
+            if ($step.Groups['body'].Value -match 'docs_only') { "$name is gated by docs_only" }
+        }
+    }
+    $violations = @(Get-AlwaysRunViolations $contracts)
+    Assert-Scope ($violations.Count -eq 0) "Contract validators must not be skipped by docs_only: $($violations -join '; ')"
+    $regated = $contracts.Replace("      - name: Verify release metadata synchronization`n", "      - name: Verify release metadata synchronization`n        if: `${{ steps.scope.outputs.docs_only != 'true' }}`n")
+    Assert-Scope ($regated -ne $contracts) 'Mutation setup: metadata step not found.'
+    Assert-Scope (@(Get-AlwaysRunViolations $regated).Count -eq 1) 'Mutation that re-gates a validator behind docs_only must be detected.'
+
     Assert-Scope ($contracts -match '(?ms)- name: Checkout\r?\n        uses: [^\r\n]+\r?\n        with:\r?\n          fetch-depth: 0') 'contracts needs full history to classify a three-dot PR diff.'
     Assert-Scope ($contracts -match '(?ms)- name: Docs scope regression tests\r?\n        shell: pwsh\r?\n        run: ./scripts/tests/test-ci-docs-scope.ps1\r?\n\r?\n      - name: Detect change scope') 'Regression must run unconditionally before the scope it protects.'
     Write-Host "PASS: $checks docs-scope assertions, including three behavioral mutations."

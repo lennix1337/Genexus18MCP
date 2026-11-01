@@ -789,6 +789,8 @@ namespace GxMcp.Worker.Services
             catch (Exception ex)
             {
                 Logger.Error("CreateObject failed: " + ex.Message);
+                var trialLimit = TrialObjectLimit.Find(ex);
+                if (trialLimit != null) return TrialObjectLimit.Response(name, trialLimit);
                 return McpResponse.Err(code: "CreateObjectFailed", message: ex.Message);
             }
         }

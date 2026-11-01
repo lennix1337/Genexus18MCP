@@ -171,6 +171,21 @@ namespace GxMcp.Gateway
             // genexus_edit used to serialize its full source payload into a key
             // for that doomed lookup on every call.
             bool isMutating = IsMutatingTool(tName, tArgs);
+            // READ-ONLY MODE: fails closed, so it is checked against the classifier's proof of a
+            // read rather than against isMutating (an unclassified tool is not a proven read).
+            if (ReadOnlyMode.FromEnvironment().Refuses(tName, tArgs))
+                return BuildToolResultContent(ReadOnlyMode.BuildRefusal(tName), isError: true, toolName: tName, toolArgs: tArgs);
+            if (isMutating && !IsMutationPreview(tArgs))
+            {
+                var writeAllowlist = WriteKbAllowlist.FromEnvironment();
+                string? writeKbPath = _currentKb.Value?.Path ?? _activeConfig?.Environment?.KBPath;
+                if (!writeAllowlist.Allows(writeKbPath))
+                    return BuildToolResultContent(
+                        WriteKbAllowlist.BuildRefusal(tName, writeKbPath ?? "(no KB resolved)", writeAllowlist.Raw),
+                        isError: true,
+                        toolName: tName,
+                        toolArgs: tArgs);
+            }
             // WRITE GATE: unconditional on purpose. A write refused because a peer
             // Gateway held the journal mid-commit would be a false block, so this
             // must not consult a change signal. The genexus_read branch below uses
