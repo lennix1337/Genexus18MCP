@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- **`genexus_apply_pattern validate=true` answers `ok` only when its build ends `Succeeded`.** A validation build that was cancelled, ended with an error or stopped for a reorganization used to pass as `ok`, and so did a build still queued behind another one, because the poll read it as finished. Now the poll waits for a queued or running build (up to 180 seconds, then `timeout`), the `validation` block says `failed` for a build that ended in any other state, names the end state in `buildStatus` (with `reorgRequired: true` when a reorganization stopped it), and the apply response is marked as an error.
+- **`genexus_apply_pattern validate=true` answers `ok` only when its build ends `Succeeded`.** A validation build that was cancelled, ended with an error or stopped for a reorganization used to pass as `ok`, and so did a build still queued behind another one, because the poll read it as finished. Now the poll waits for a queued or running build (up to 180 seconds, then `timeout`), the `validation` block says `failed` for a build that ended in any other state, names the end state in `buildStatus` (with `reorgRequired: true` when a reorganization stopped it), and the apply response is marked as an error. Refs https://github.com/lennix1337/Genexus18MCP/issues/802
 
 ### Internal
 
