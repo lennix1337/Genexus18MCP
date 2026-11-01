@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- **`genexus_properties` answers `ShowMasterPageWhenPopUp` on a web panel.** The SDK lists this flag as `SHOWMASTERPAGE_POPUP`, so the official name used to answer `PropertyNotFound` on get and on set. Both names now work at object level on web panels: the reply names the property as asked and gives the SDK key as `nativeName`. A batch set with a name the object does not have answers `PropertyNotFound` (it answered `InvalidPropertyValue`), and a read-only property answers `PropertyReadOnly`, as a single set does. A batch reply reports the SDK name of a renamed property, such as `ShowMasterPageWhenPopUp` or `MainProgram`, in `nativeNames`. The listing of all properties is unchanged.
+
 ### Internal
 
 ## v4.2.0 - 2026-11-01

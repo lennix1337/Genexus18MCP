@@ -248,7 +248,8 @@ namespace GxMcp.Worker.Services
                     propertyNames,
                     projection,
                     versionToken,
-                    query);
+                    query,
+                    officialAliases: string.IsNullOrEmpty(controlName) && IsWebPanelTarget(obj));
                 if (!reconcileTimedOutWrite) return shaped;
                 var authoritative = JObject.Parse(shaped);
                 if (authoritative["result"] is JObject result)
@@ -476,6 +477,44 @@ namespace GxMcp.Worker.Services
                 .ToList();
         }
 
+        // The SDK key a web panel property is listed under when the SDK does not list the official name (Properties.WBP). Only
+        // ShowMasterPageWhenPopUp takes this path; MainProgram keeps its own handling, as IsMain.
+        internal static string WebPanelSdkNameOf(string officialName)
+            => string.Equals(officialName?.Trim(), "ShowMasterPageWhenPopUp", StringComparison.OrdinalIgnoreCase)
+                ? "SHOWMASTERPAGE_POPUP"
+                : null;
+
+        // The error code of a refused value. A single set and a batch set answer the same refusal with the same code.
+        internal static string ValidationErrorCode(string validation)
+        {
+            if (validation == null) return "InvalidPropertyValue";
+            if (validation.StartsWith("PropertyNotFound", StringComparison.Ordinal)) return "PropertyNotFound";
+            if (validation.StartsWith("PropertyReadOnly", StringComparison.Ordinal)) return "PropertyReadOnly";
+            return "InvalidPropertyValue";
+        }
+
+        // The item that answers a requested name. A web panel property asked by its official name is answered from the item the
+        // SDK lists under its SDK key, and the answer carries both names. The listing of the object itself is not changed.
+        private static JObject FindListedItem(JArray props, string requested, bool officialAliases)
+        {
+            foreach (JObject p in props)
+            {
+                var n = p["name"]?.ToString();
+                if (string.Equals(n, requested, StringComparison.OrdinalIgnoreCase) || IsDomainReadAlias(requested, n))
+                    return p;
+            }
+
+            string sdkName = officialAliases ? WebPanelSdkNameOf(requested) : null;
+            if (sdkName == null) return null;
+            JObject listed = props.OfType<JObject>()
+                .FirstOrDefault(p => string.Equals(p["name"]?.ToString(), sdkName, StringComparison.OrdinalIgnoreCase));
+            if (listed == null) return null;
+            var answer = (JObject)listed.DeepClone();
+            answer["name"] = requested;
+            answer["nativeName"] = sdkName;
+            return answer;
+        }
+
         internal static Func<string, bool> BuildPropertyMatcher(string pattern)
         {
             if (string.IsNullOrEmpty(pattern)) return _ => true;
@@ -505,7 +544,8 @@ namespace GxMcp.Worker.Services
             IEnumerable<string> propertyNames = null,
             string projection = null,
             string versionToken = null,
-            string query = null)
+            string query = null,
+            bool officialAliases = false)
         {
             var props = fullPropsResult?["properties"] as JArray ?? new JArray();
             List<string> allPropNames = null;
@@ -614,17 +654,7 @@ namespace GxMcp.Worker.Services
             if (requested.Count == 1)
             {
                 string targetPropName = requested[0];
-                JObject matched = null;
-                foreach (JObject p in props)
-                {
-                    var n = p["name"]?.ToString();
-                    if (string.Equals(n, targetPropName, StringComparison.OrdinalIgnoreCase) ||
-                        IsDomainReadAlias(targetPropName, n))
-                    {
-                        matched = p;
-                        break;
-                    }
-                }
+                JObject matched = FindListedItem(props, targetPropName, officialAliases);
 
                 if (matched == null)
                 {
@@ -680,23 +710,14 @@ namespace GxMcp.Worker.Services
 
                 foreach (var req in requested)
                 {
-                    foreach (JObject p in props)
+                    JObject p = FindListedItem(props, req, officialAliases);
+                    if (p == null || foundRequested.Contains(req)) continue;
+                    var n = p["name"]?.ToString();
+                    foundRequested.Add(req);
+                    matchedArray.Add((JObject)p.DeepClone());
+                    if (!string.IsNullOrEmpty(n) && valuesMap[n] == null)
                     {
-                        var n = p["name"]?.ToString();
-                        if (string.Equals(n, req, StringComparison.OrdinalIgnoreCase) ||
-                            IsDomainReadAlias(req, n))
-                        {
-                            if (!foundRequested.Contains(req))
-                            {
-                                foundRequested.Add(req);
-                                matchedArray.Add((JObject)p.DeepClone());
-                                if (!string.IsNullOrEmpty(n) && valuesMap[n] == null)
-                                {
-                                    valuesMap[n] = p["value"]?.ToString() ?? "";
-                                }
-                            }
-                            break;
-                        }
+                        valuesMap[n] = p["value"]?.ToString() ?? "";
                     }
                 }
 
@@ -870,6 +891,9 @@ namespace GxMcp.Worker.Services
                     propName = singleWiring.NativeNames[propName];
                 }
 
+                // A web panel property the SDK lists under another key (ShowMasterPageWhenPopUp). requestedName keeps the name asked for.
+                propName = NativeWebPanelAliasName(obj, controlName, propName);
+
                 // Folder/module placement is not a scalar property write — it's a parent
                 // move. Route it to ObjectService.MoveObject (create-in-Root then reparent
                 // via the Udm EntityManager). The old "not writable — Parent/Module setters
@@ -969,11 +993,7 @@ namespace GxMcp.Worker.Services
                 string propertyValidation = ValidatePropertyValue((object)container, propName, value, reportContainer != null);
                 if (propertyValidation != null)
                     return Models.McpResponse.Err(
-                        code: propertyValidation.StartsWith("PropertyReadOnly", StringComparison.Ordinal)
-                            ? "PropertyReadOnly"
-                            : propertyValidation.StartsWith("PropertyNotFound", StringComparison.Ordinal)
-                                ? "PropertyNotFound"
-                                : "InvalidPropertyValue",
+                        code: ValidationErrorCode(propertyValidation),
                         message: propertyValidation,
                         target: target);
 
@@ -1105,6 +1125,7 @@ namespace GxMcp.Worker.Services
                 // The template decision (aliases, conflicts and the checks of a WorkWithPlus template) is the same for a dry run
                 // and for a write. It is taken once the version has matched, before any value is read for the write.
                 var objectTypeId = string.IsNullOrEmpty(controlName) ? TargetTypeOf(obj) : Guid.Empty;
+                bool reportsSdkNames = objectTypeId == WwpTemplateXml.ObjectType || (string.IsNullOrEmpty(controlName) && IsWebPanelTarget(obj));
                 var wiring = WwpTemplateWiring.Write(objectTypeId,
                     properties.Properties().Select(p => new KeyValuePair<string, string>(p.Name, p.Value?.ToString() ?? string.Empty)),
                     name => ReadStoredProperty(obj, name, null));
@@ -1132,7 +1153,7 @@ namespace GxMcp.Worker.Services
                     object propertyContainer = ResolvePropertyContainer(obj, nativeName, controlName) ?? container;
                     string validation = ValidatePropertyValue(propertyContainer, nativeName, val, ReportLayoutHelper.IsTextModeProperty(nativeName));
                     if (validation != null)
-                        return Models.McpResponse.Err(code: "InvalidPropertyValue", target: target, message: validation);
+                        return Models.McpResponse.Err(code: ValidationErrorCode(validation), target: target, message: validation);
                     if (IsReferenceProperty(propertyContainer, nativeName))
                     {
                         object reference = ResolveWebPanelReference(_objectService, val);
@@ -1165,7 +1186,7 @@ namespace GxMcp.Worker.Services
                         ["independentReadVerified"] = true,
                         ["implicitOperations"] = new JArray()
                     };
-                    NoteNativeNames(preview, objectTypeId, properties, nativeNames);
+                    NoteNativeNames(preview, reportsSdkNames, properties, nativeNames);
                     return Models.McpResponse.Ok(target: target, code: "DryRun", result: preview);
                 }
                 using (var trans = obj.Model.KB.BeginTransaction())
@@ -1294,7 +1315,7 @@ namespace GxMcp.Worker.Services
                         + " or the parts could not be verified.");
 
                 var result = new JObject { ["properties"] = properties };
-                NoteNativeNames(result, objectTypeId, properties, nativeNames);
+                NoteNativeNames(result, reportsSdkNames, properties, nativeNames);
                 if (verifiedPersisted.Count == properties.Count)
                 {
                     result["before"] = verifiedBefore;
@@ -1780,7 +1801,7 @@ namespace GxMcp.Worker.Services
 
         protected internal virtual JObject SerializeTarget(KBObject obj, object container, string[] selectedNames, string controlName)
             => selectedNames.Length > 0
-                ? SerializeSelectedProperties(container, obj.Model, selectedNames, string.IsNullOrEmpty(controlName) && IsWebPanel(obj))
+                ? SerializeSelectedProperties(container, obj.Model, selectedNames, string.IsNullOrEmpty(controlName) && IsWebPanelTarget(obj))
                 : SerializeProperties(container, obj.Model);
 
         protected internal virtual object ReadTextMode(KBObject obj)
@@ -1813,11 +1834,11 @@ namespace GxMcp.Worker.Services
             return receipt;
         }
 
-        // The SDK names a call used for a requested name, when they differ, so the caller reads both. Only WorkWithPlus
-        // template objects have such names.
-        internal static void NoteNativeNames(JObject result, Guid objectType, JObject properties, IDictionary<string, string> nativeNames)
+        // The SDK names a call used for a requested name, when they differ, so the caller reads both. Only a WorkWithPlus template
+        // and a web panel at object level have such names; the caller says whether its object has them.
+        internal static void NoteNativeNames(JObject result, bool reportsSdkNames, JObject properties, IDictionary<string, string> nativeNames)
         {
-            if (objectType != WwpTemplateXml.ObjectType) return;
+            if (!reportsSdkNames) return;
             var names = new JObject();
             foreach (var p in properties.Properties())
                 if (!string.Equals(p.Name, nativeNames[p.Name], StringComparison.Ordinal)) names[p.Name] = nativeNames[p.Name];
@@ -1829,7 +1850,20 @@ namespace GxMcp.Worker.Services
                 && string.Equals(requestedName, "MainProgram", StringComparison.OrdinalIgnoreCase)
                 && ResolvePropertyEntry(obj, "MainProgram") == null
                 && ResolvePropertyEntry(obj, "IsMain") != null
-                    ? "IsMain" : requestedName;
+                    ? "IsMain" : NativeWebPanelAliasName(obj, controlName, requestedName);
+
+        // The name a web panel write sends to the SDK for a requested name that the SDK lists under another key. The key replaces the
+        // name only when the SDK lists the key and not the name, so an SDK that lists the name keeps it. Object level only.
+        internal string NativeWebPanelAliasName(KBObject obj, string controlName, string requestedName)
+        {
+            string sdkName = WebPanelSdkNameOf(requestedName);
+            return sdkName != null && string.IsNullOrEmpty(controlName) && IsWebPanelTarget(obj)
+                && !ObjectListsProperty(obj, requestedName) && ObjectListsProperty(obj, sdkName)
+                    ? sdkName : requestedName;
+        }
+
+        // Whether the SDK lists the property on the object. Production reads the object's property bag; a test answers from a list.
+        protected internal virtual bool ObjectListsProperty(KBObject obj, string name) => ResolvePropertyEntry(obj, name) != null;
 
         /// <summary>The name of the SDT a Data Provider outputs, or null when it has none.</summary>
         public string ReadDataProviderOutputSdt(KBObject obj) => TryReadPropertyString(obj, "OutputSDT", obj?.Model);
@@ -2583,18 +2617,22 @@ namespace GxMcp.Worker.Services
             foreach (string name in names)
             {
                 dynamic entry = ResolvePropertyEntry(container, name);
-                bool alias = entry == null && webPanel
-                    && string.Equals(name, "MainProgram", StringComparison.OrdinalIgnoreCase);
-                if (alias) entry = ResolvePropertyEntry(container, "IsMain");
+                // A web panel name the SDK lists under another key: MainProgram as IsMain, ShowMasterPageWhenPopUp as
+                // SHOWMASTERPAGE_POPUP. The item is named as asked, and nativeName carries the SDK key.
+                string sdkName = null;
+                if (entry == null && webPanel)
+                    sdkName = string.Equals(name, "MainProgram", StringComparison.OrdinalIgnoreCase) ? "IsMain" : WebPanelSdkNameOf(name);
+                bool alias = sdkName != null;
+                if (alias) entry = ResolvePropertyEntry(container, sdkName);
                 if (entry == null) continue;
                 try
                 {
                     var item = new JObject
                     {
-                        ["name"] = alias ? "MainProgram" : entry.Name.ToString(),
+                        ["name"] = alias ? name.Trim() : entry.Name.ToString(),
                         ["value"] = RenderPropertyValue((object)entry.Value, model)
                     };
-                    if (alias) item["nativeName"] = "IsMain";
+                    if (alias) item["nativeName"] = sdkName;
                     try
                     {
                         if (entry.Definition != null)
