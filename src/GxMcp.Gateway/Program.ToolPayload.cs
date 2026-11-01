@@ -25,7 +25,8 @@ namespace GxMcp.Gateway
             // on obviously small responses (whoami, status, inspect, short reads, mutations).
             if (result is JObject quickObj)
             {
-                bool mayExceedBudget = false;
+                // An error envelope is measured by its size whatever its shape: its bulk may sit inside the error object.
+                bool mayExceedBudget = IsErrorEnvelope(quickObj);
                 foreach (var prop in quickObj.Properties())
                 {
                     if (prop.Value is JValue jv && jv.Value is string s && s.Length > (isXmlMetadataRead ? 100000 : 15000))
@@ -238,33 +239,103 @@ namespace GxMcp.Gateway
         private static bool IsErrorEnvelope(JObject obj)
             => string.Equals(obj["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase);
 
+        // The error cut works in steps. Each step shortens the largest contributor: a list with more than one item is
+        // halved, and a long text is cut at ErrorTextLimit. Verdict texts (status, error.code, error.message, error.hint,
+        // persisted, rollbackVerified) are never shortened, and the write receipt lists are the last to be shortened.
+        // The steps stop once the envelope fits the budget less the room the marker needs. ErrorMaxSteps bounds the work;
+        // when the steps are not enough, the answer is the verdict alone.
+        private const int ErrorBudget = 80000;
+        private const int ErrorMarkerRoom = 1000;
+        private const int ErrorTextLimit = 2000;
+        private const int ErrorVerdictTextLimit = 500;
+        private const int ErrorMaxSteps = 100;
+        private static readonly string[] ErrorVerdictNames = { "status", "code", "message", "hint", "persisted", "rollbackVerified" };
+        private static readonly string[] ErrorReceiptLists = { "propertiesRestored", "propertiesNotRestored" };
+        private const string ErrorHint = "Gateway shortened this error to fit the context budget. Kept whole: status, error.code, error.message, error.hint and the scalar fields shorter than 2000 characters. Shortened: long lists, which keep their first items, and text longer than 2000 characters, which is cut and marked with \"...\". The shortened lists are partial; reading the object again does not return the lists of this refusal.";
+        private const string ErrorVerdictHint = "Gateway reduced this error to its verdict to fit the context budget: status, error.code, error.message and error.hint (texts cut at 500 characters) and the scalar fields. Lists and objects are not in this answer.";
+
         /// <summary>
-        /// Shortens an error envelope over the budget: the largest list is halved until the envelope fits, and long text is
-        /// cut when the lists are not enough. Scalars and the error object stay whole, so the verdict reaches the caller.
+        /// Shortens an error envelope over the budget, one contributor at a time, the largest first. The steps stop when the
+        /// envelope fits the budget less the room of the marker; when they do not, the answer is the verdict alone.
         /// </summary>
         private static JObject ShortenErrorEnvelope(JObject obj)
         {
-            while (obj.ToString(Formatting.None).Length > 80000)
+            int target = ErrorBudget - ErrorMarkerRoom;
+            for (int step = 0; step < ErrorMaxSteps && SizeOf(obj) > target; step++)
             {
-                JArray? largest = obj.DescendantsAndSelf().OfType<JArray>()
-                    .Where(list => list.Count > 1)
-                    .OrderByDescending(list => list.ToString(Formatting.None).Length)
+                JToken? contributor = ErrorContributors(obj)
+                    .OrderBy(token => IsReceiptToken(token) ? 1 : 0)
+                    .ThenByDescending(SizeOf)
                     .FirstOrDefault();
-                if (largest == null) break;
-                int keep = Math.Max(1, largest.Count / 2);
-                while (largest.Count > keep) largest.RemoveAt(largest.Count - 1);
+                if (contributor == null) break;
+                ShortenContributor(contributor);
             }
-            if (obj.ToString(Formatting.None).Length > 80000)
+            obj["gatewayTruncationHint"] = ErrorHint;
+            return SizeOf(obj) <= ErrorBudget ? obj : VerdictOnly(obj);
+        }
+
+        private static int SizeOf(JToken token) => token.ToString(Formatting.None).Length;
+
+        // Lists with more than one item, and long text outside the verdict names.
+        private static IEnumerable<JToken> ErrorContributors(JObject obj)
+        {
+            foreach (JToken token in obj.DescendantsAndSelf())
             {
-                foreach (JValue text in obj.DescendantsAndSelf().OfType<JValue>().ToList())
-                {
-                    if (text.Type == JTokenType.String && text.ToString().Length > 2000)
-                        text.Value = text.ToString().Substring(0, 2000) + "...";
-                }
+                if (IsVerdictToken(token)) continue;
+                if (token is JArray list && list.Count > 1)
+                    yield return token;
+                else if (token is JValue { Type: JTokenType.String } text && text.Value is string s && s.Length > ErrorTextLimit + 3)
+                    yield return token;
             }
-            obj["isTruncated"] = true;
-            obj["gatewayTruncationHint"] = "Gateway shortened the lists and long text of this error to fit the context budget. The error object and the write receipt are kept whole; read the object again for the complete lists.";
-            return obj;
+        }
+
+        private static bool IsVerdictToken(JToken token)
+            => token.Parent is JProperty property && ErrorVerdictNames.Contains(property.Name);
+
+        private static bool IsReceiptToken(JToken token)
+            => token.AncestorsAndSelf().OfType<JProperty>().Any(property => ErrorReceiptLists.Contains(property.Name));
+
+        private static void ShortenContributor(JToken contributor)
+        {
+            if (contributor is JArray list)
+            {
+                int keep = Math.Max(1, list.Count / 2);
+                while (list.Count > keep) list.RemoveAt(list.Count - 1);
+            }
+            else if (contributor is JValue text && text.Value is string s)
+            {
+                text.Value = s.Substring(0, ErrorTextLimit) + "...";
+            }
+        }
+
+        // The verdict alone: the top-level scalars and the error object's code, message and hint, with texts cut at
+        // ErrorVerdictTextLimit. Lists and objects are left out, so the result is bounded by the number of top-level scalars.
+        private static JObject VerdictOnly(JObject obj)
+        {
+            var verdict = new JObject();
+            foreach (JProperty property in obj.Properties())
+            {
+                if (property.Value is JArray || property.Value is JObject) continue;
+                verdict[property.Name] = LimitedVerdictText(property.Value);
+            }
+            if (obj["error"] is JObject error)
+            {
+                var kept = new JObject();
+                foreach (string name in new[] { "code", "message", "hint" })
+                {
+                    if (error[name] != null) kept[name] = LimitedVerdictText(error[name]!);
+                }
+                verdict["error"] = kept;
+            }
+            verdict["gatewayTruncationHint"] = ErrorVerdictHint;
+            return verdict;
+        }
+
+        private static JToken LimitedVerdictText(JToken value)
+        {
+            if (value is JValue { Type: JTokenType.String } text && text.Value is string s && s.Length > ErrorVerdictTextLimit)
+                return new JValue(s.Substring(0, ErrorVerdictTextLimit) + "...");
+            return value.DeepClone();
         }
 
         /// <summary>
