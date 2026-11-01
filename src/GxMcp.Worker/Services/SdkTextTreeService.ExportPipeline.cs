@@ -437,11 +437,13 @@ namespace GxMcp.Worker.Services
                 Dictionary<string, string> parts;
                 if (item.Parts != null && item.Parts.Count > 1)
                 {
-                    if (!TryReadParts(item.ReadEntry ?? item.Entry, item.Parts, out parts, out failure)) return false;
+                    if (!TryReadParts(item.ReadEntry ?? item.Entry, item.Parts, out parts, out ReadFailure partsFailure))
+                        return TryBuildWwpTemplateDocument(item, partsFailure, out document, out failure);
                 }
                 else
                 {
-                    if (!TryReadPart(item.ReadEntry ?? item.Entry, item.Part, out string source, out failure)) return false;
+                    if (!TryReadPart(item.ReadEntry ?? item.Entry, item.Part, out string source, out ReadFailure partFailure))
+                        return TryBuildWwpTemplateDocument(item, partFailure, out document, out failure);
                     parts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                     {
                         [item.Part] = source
@@ -459,6 +461,34 @@ namespace GxMcp.Worker.Services
                 failure = new ReadFailure { Message = ex.Message };
                 return false;
             }
+        }
+
+        // An object with no text part may still be a WorkWithPlus template, whose data are SDK properties: the export writes
+        // them in the layout of the official text. Any other object keeps the no-text-parts failure it was read with, and an
+        // object whose properties cannot be read fails alone, as the other objects of the export do.
+        private bool TryBuildWwpTemplateDocument(ExportPlan item, ReadFailure noTextParts, out string document, out ReadFailure failure)
+        {
+            document = null;
+            failure = noTextParts;
+            if (noTextParts?.Code != NoTextPartsCode) return false;
+
+            SearchIndex.IndexEntry entry = item.ReadEntry ?? item.Entry;
+            string typedName = (entry.Type ?? string.Empty) + ":" + entry.Name;
+            JObject response = ParseEnvelope(_readTemplateProperties(typedName, entry.Type, entry.Guid, entry.EntityKey, entry.Path));
+            if (ReplyCode(response) == NotWwpTemplateCode) return false;
+            if (!IsSameObject(entry, response, out failure)) return false;
+            if (!(response["properties"] is JObject values))
+            {
+                failure = FailureOf(entry, response, "The WorkWithPlus template's properties could not be read.");
+                return false;
+            }
+
+            var named = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (JProperty property in values.Properties())
+                named[property.Name] = property.Value.Type == JTokenType.Null ? string.Empty : property.Value.ToString();
+            document = WwpTemplateDocument.Build(entry.Name, named);
+            item.Parts = new List<string> { WwpTemplateDocument.Section };
+            return true;
         }
 
         private static void RegisterNativeExportError(NativeExportState state, ExportPlan item, string message)

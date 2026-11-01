@@ -181,6 +181,8 @@ namespace GxMcp.Worker.Services
         }
 
         internal const string NoTextPartsCode = "ObjectHasNoTextParts";
+        // The properties read answers this for an object of another type: its missing text parts stay a no-text-parts case.
+        internal const string NotWwpTemplateCode = "NotWwpTemplate";
         private const string StaleIndexHint = "The index is out of date: run genexus_lifecycle action=index, then export again.";
 
         private bool TryReadParts(SearchIndex.IndexEntry entry, IEnumerable<string> requestedParts, out Dictionary<string, string> parts, out ReadFailure failure)
@@ -300,6 +302,12 @@ namespace GxMcp.Worker.Services
                     + "(WorkWithPlus templates keep them in WWPTemplate_* properties, for example).",
                 Hint = "Read the properties with genexus_properties action=get and change them with action=set. The native export does not write them."
             };
+        }
+
+        // The code of an error reply, whether the reply nests it under "error" or carries it at the top.
+        private static string ReplyCode(JObject response)
+        {
+            return response["error"] is JObject error ? error["code"]?.ToString() : response["code"]?.ToString();
         }
 
         // The read's own error. An object the index lists and the read cannot find means the index is out of date.

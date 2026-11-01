@@ -5351,6 +5351,39 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // The values the export writes for a WorkWithPlus template, read fresh from the object the identity resolves to, keyed
+        // by the names of the official text. An object of another type replies NotWwpTemplate: its missing text parts stay a
+        // case of their own.
+        internal string ReadWwpTemplateProperties(string target, string typeFilter = null, string guid = null, string entityKey = null, string path = null)
+        {
+            try
+            {
+                target = ResolveTargetForIdentity(target, guid, entityKey, path);
+                var obj = FindObject(target, typeFilter, guid, entityKey, path);
+                if (obj == null) return FormatReadNotFound(target);
+                if (obj.TypeDescriptor?.Id != WwpTemplateXml.ObjectType)
+                    return McpResponse.Err(code: "NotWwpTemplate", message: "'" + obj.Name + "' is not a WorkWithPlus template.", target: target);
+
+                var values = new JObject();
+                foreach (string property in WwpTemplateDocument.PropertyOrder)
+                {
+                    if (property == WwpTemplateDocument.NameProperty) values[property] = obj.Name;
+                    else if (WwpTemplateDocument.SdkNameOf(property) is string sdkName)
+                        values[property] = obj.GetPropertyValue(sdkName)?.ToString() ?? string.Empty;
+                }
+                return new JObject
+                {
+                    ["objectName"] = obj.Name,
+                    ["objectType"] = obj.TypeDescriptor.Name,
+                    ["properties"] = values
+                }.ToString();
+            }
+            catch (Exception ex)
+            {
+                return McpResponse.Err(code: "WwpTemplatePropertiesReadFailed", message: "Template properties read failed: " + ex.Message, target: target);
+            }
+        }
+
         // The export compares the object a read resolved with its index entry, so the reply names that object.
         internal static string WithObjectIdentity(string reply, string objectName, string objectType)
         {
