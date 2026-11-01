@@ -78,7 +78,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void A_template_read_by_one_part_is_written_with_its_properties_too()
+        public void A_template_read_by_the_part_source_is_written_with_its_properties()
         {
             SdkTextTreeService service = BuildService(new[] { TemplateEntry("SynthTemplate") }, Template("SynthTemplate"));
             string root = NewTempDirectory();
@@ -89,6 +89,114 @@ namespace GxMcp.Worker.Tests
                 Assert.Equal("ok", (string)response["status"]);
                 string file = Directory.GetFiles(root, "SynthTemplate.gx", SearchOption.AllDirectories).Single();
                 Assert.Equal(ExpectedDocument, File.ReadAllText(file));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // part=all reads every part at once, through the multi-part read. The single-part read must not run at all.
+        [Fact]
+        public void A_template_exported_with_all_parts_is_written_through_the_multi_part_read()
+        {
+            int multiPartReads = 0;
+            SdkTextTreeService service = BuildService(
+                new[] { TemplateEntry("SynthTemplate") },
+                Template("SynthTemplate"),
+                (target, part, type, guid, entityKey, path) => throw new InvalidOperationException("part=all reads every part at once"),
+                (target, parts, type, guid, entityKey, path) =>
+                {
+                    multiPartReads++;
+                    return NoTextPartsEnvelope(target, parts, type, guid, entityKey, path);
+                });
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = Export(service, root, new JObject { ["part"] = "all" }, "SynthTemplate");
+
+                Assert.Equal(1, multiPartReads);
+                Assert.Equal("ok", (string)response["status"]);
+                string file = Directory.GetFiles(root, "SynthTemplate.gx", SearchOption.AllDirectories).Single();
+                Assert.Equal(ExpectedDocument, File.ReadAllText(file));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // A list of parts with more than one name is a multi-part read as well.
+        [Fact]
+        public void A_template_exported_with_a_list_of_parts_is_written_through_the_multi_part_read()
+        {
+            int multiPartReads = 0;
+            SdkTextTreeService service = BuildService(
+                new[] { TemplateEntry("SynthTemplate") },
+                Template("SynthTemplate"),
+                (target, part, type, guid, entityKey, path) => throw new InvalidOperationException("a list of parts is read together"),
+                (target, parts, type, guid, entityKey, path) =>
+                {
+                    multiPartReads++;
+                    return NoTextPartsEnvelope(target, parts, type, guid, entityKey, path);
+                });
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = Export(service, root, new JObject { ["parts"] = new JArray("Source", "Rules") }, "SynthTemplate");
+
+                Assert.Equal(1, multiPartReads);
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal(ExpectedDocument, File.ReadAllText(Directory.GetFiles(root, "SynthTemplate.gx", SearchOption.AllDirectories).Single()));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // The unchanged-file skip compares the index's version token, which carries the entry's last update: an entry the index
+        // updated is written again.
+        [Fact]
+        public void A_template_is_written_again_when_its_index_entry_changes()
+        {
+            SearchIndex.IndexEntry entry = TemplateEntry("SynthTemplate");
+            entry.LastUpdate = new DateTime(2026, 10, 31, 12, 0, 0, DateTimeKind.Utc);
+            string root = NewTempDirectory();
+            try
+            {
+                Export(BuildService(new[] { entry }, Template("SynthTemplate")), root, "SynthTemplate");
+
+                entry.LastUpdate = new DateTime(2026, 11, 1, 9, 0, 0, DateTimeKind.Utc);
+                JObject again = Export(BuildService(new[] { entry }, Template("SynthTemplate")), root,
+                    new JObject { ["mode"] = "newAndModified" }, "SynthTemplate");
+
+                Assert.Equal(1, (int)again["result"]!["exported"]!);
+                Assert.Equal(0, (int)again["result"]!["skipped"]!);
+                Assert.Equal("ok", (string)ObjectReply(again, "SynthTemplate")["status"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // A value the SDK does not hold is left out of the document; it is never written as an empty value.
+        [Fact]
+        public void A_value_the_sdk_does_not_hold_is_left_out_of_the_document()
+        {
+            JObject reply = JObject.Parse(WwpTemplateTestFixtures.PropertiesOf("SynthTemplate"));
+            ((JObject)reply["properties"]!)["Description"] = null;
+            SdkTextTreeService service = BuildService(new[] { TemplateEntry("SynthTemplate") }, (target, type, guid, entityKey, path) => reply.ToString());
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = Export(service, root, "SynthTemplate");
+
+                Assert.Equal("ok", (string)response["status"]);
+                string text = File.ReadAllText(Directory.GetFiles(root, "SynthTemplate.gx", SearchOption.AllDirectories).Single());
+                Assert.DoesNotContain("Description", text);
+                Assert.Contains("\t\tTemplateCategory = \"SynthCategory\"\n", text);
             }
             finally
             {
