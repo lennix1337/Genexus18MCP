@@ -59,9 +59,17 @@ namespace GxMcp.Worker.Services
                     .ToList();
                 if (containers.Count > 0)
                 {
+                    // A container named with its qualifier brings the objects under its path; a bare name brings them by name.
+                    List<SearchIndex.IndexEntry> byName = containers
+                        .Where(container => selectors.Any(selector => !TextSelectorParser.IsQualified(selector) && TextSelectorParser.Matches(selector, container, allowIdentity)))
+                        .ToList();
+                    List<SearchIndex.IndexEntry> byPath = containers
+                        .Where(container => selectors.Any(selector => TextSelectorParser.IsQualified(selector) && TextSelectorParser.Matches(selector, container, allowIdentity)))
+                        .ToList();
                     IEnumerable<SearchIndex.IndexEntry> descendants = baseEntries
                         .Where(entry => entry != null && !IsContainerEntry(entry))
-                        .Where(entry => containers.Any(container => IsDescendantOf(entry, container)))
+                        .Where(entry => byName.Any(container => IsDescendantOf(entry, container))
+                            || byPath.Any(container => IsChildByPath(entry, container)))
                         .Where(filters.Accepts);
                     query = query.Concat(descendants);
                 }
@@ -143,8 +151,9 @@ namespace GxMcp.Worker.Services
                 if (!string.IsNullOrWhiteSpace(_module) && !string.Equals(entry.Module, _module, StringComparison.OrdinalIgnoreCase)) return false;
                 if (!string.IsNullOrWhiteSpace(_pathPrefix) && !TextTreePath.NormalizePath(entry.Path).StartsWith(_pathPrefix, StringComparison.OrdinalIgnoreCase)) return false;
                 // The ignore list takes a GUID or EntityKey on every path. It only removes entries, so an identity cannot
-                // send an action to a homonym by name.
-                return !_ignored.Any(selector => TextSelectorParser.Matches(selector, entry, allowIdentity: true));
+                // send an action to a homonym by name. A name in it matches by its last segment: written with the folder, or
+                // with an outdated module, it still spares the object, which is the safe side of a list that removes.
+                return !_ignored.Any(selector => TextSelectorParser.Matches(selector, entry, allowIdentity: true, qualifiedByModule: false));
             }
         }
 
@@ -178,6 +187,22 @@ namespace GxMcp.Worker.Services
                 if (PathContainsSegment(value, container.Name)) return true;
             }
             return false;
+        }
+
+        // A container named with its qualifier holds the entries whose path starts with its own. Without a path, the name rule.
+        private static bool IsChildByPath(SearchIndex.IndexEntry entry, SearchIndex.IndexEntry container)
+        {
+            string containerPath = PathBelowRoot(container?.Path);
+            if (entry == null || containerPath.Length == 0) return IsDescendantOf(entry, container);
+            return PathBelowRoot(entry.Path).StartsWith(containerPath + "/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string PathBelowRoot(string path)
+        {
+            string normalized = TextTreePath.NormalizePath(path);
+            return normalized.StartsWith("Root Module/", StringComparison.OrdinalIgnoreCase)
+                ? normalized.Substring("Root Module/".Length)
+                : normalized;
         }
 
         private static bool PathContainsSegment(string path, string segment)

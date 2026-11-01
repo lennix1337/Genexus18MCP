@@ -74,7 +74,7 @@ namespace GxMcp.Worker.Services
                 try
                 {
                     parsed = ParseResult(_objectService.DeleteObject(
-                        item.Type + ":" + TextSelectorParser.QualifiedName(item), item.Type, confirm, dryRun));
+                        item.Type + ":" + TextSelectorParser.QualifiedName(item), item.Type, confirm, dryRun, expectedGuid: item.Guid));
                 }
                 catch (Exception ex)
                 {

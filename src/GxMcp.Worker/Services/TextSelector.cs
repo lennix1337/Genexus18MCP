@@ -87,11 +87,12 @@ namespace GxMcp.Worker.Services
         }
 
         // An entry is selected by its name and type. Its GUID or EntityKey selects it only when the caller allows
-        // identity: the native export does; the delete and the legacy export select by name and type alone.
-        internal static bool Matches(TextSelector selector, SearchIndex.IndexEntry entry, bool allowIdentity = false)
+        // identity: the native export does; the delete and the legacy export select by name and type alone. The ignore
+        // list passes qualifiedByModule false: an ignored name matches by its last segment, so it spares more, never less.
+        internal static bool Matches(TextSelector selector, SearchIndex.IndexEntry entry, bool allowIdentity = false, bool qualifiedByModule = true)
         {
             if (entry == null) return false;
-            if (Matches(selector, entry.Name, entry.Type, QualifiersOf(entry))) return true;
+            if (Matches(selector, entry.Name, entry.Type, qualifiedByModule ? QualifiersOf(entry) : null)) return true;
             // A GUID or EntityKey names one object whatever its type. A folder or module is a container: selecting
             // it by identity would also select its same-named children elsewhere.
             return allowIdentity
@@ -147,6 +148,12 @@ namespace GxMcp.Worker.Services
             return string.IsNullOrWhiteSpace(module) || string.Equals(module, RootModule, StringComparison.OrdinalIgnoreCase)
                 ? null
                 : module;
+        }
+
+        // A name written with a dot before its last segment: Qualifier.Name, a folder path or a module. An identity has none.
+        internal static bool IsQualified(TextSelector selector)
+        {
+            return selector != null && !string.IsNullOrWhiteSpace(selector.Name) && selector.Name.IndexOf('.') > 0;
         }
 
         // The name a delete sends for one selected object: qualified by its module, so the resolution reaches that object

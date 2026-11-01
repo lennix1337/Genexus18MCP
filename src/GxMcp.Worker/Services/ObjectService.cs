@@ -1415,18 +1415,57 @@ namespace GxMcp.Worker.Services
         }
 
         /// <summary>
-        /// A target written Module.Name names the object of that module. True when the module the object found lives in is
-        /// the one the target names, or when the target is not written that way: a bare name, an identity, or a longer
-        /// folder path, which is not checked here.
+        /// A target written Module.Name names the object of that module, or of the folder that holds it. True when the
+        /// qualifier is the module the object found lives in, or one of the names that hold it (<paramref name="qualifiers"/>),
+        /// or when the target is not written that way: a bare name, an identity, or a path of three names or more, which is
+        /// not checked here.
         /// </summary>
-        internal static bool QualifierNamesModule(string target, string moduleName)
+        internal static bool QualifierNamesModule(string target, string moduleName, IEnumerable<string> qualifiers = null)
         {
             string name = (target ?? string.Empty).Trim();
             int colon = name.IndexOf(':');
             if (colon > 0 && !TryParseEntityKey(name, out _, out _)) name = name.Substring(colon + 1);
             int dot = name.IndexOf('.');
             if (dot <= 0 || name.IndexOf('.', dot + 1) >= 0) return true;
-            return string.Equals(name.Substring(0, dot), moduleName, StringComparison.OrdinalIgnoreCase);
+            string qualifier = name.Substring(0, dot);
+            if (string.Equals(qualifier, moduleName, StringComparison.OrdinalIgnoreCase)) return true;
+            return qualifiers != null && qualifiers.Any(known => string.Equals(known, qualifier, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// The object the resolution found is the one the batch chose when its GUID is the chosen entry's. The GUID is checked
+        /// after the resolution; the selection stays by name. A missing GUID on either side checks nothing.
+        /// </summary>
+        internal static bool IsChosenObject(string expectedGuid, Guid resolvedGuid)
+        {
+            if (string.IsNullOrWhiteSpace(expectedGuid) || !Guid.TryParse(expectedGuid, out Guid chosen)) return true;
+            return resolvedGuid == Guid.Empty || resolvedGuid == chosen;
+        }
+
+        /// <summary>The refusal for a resolved object that is not the one the batch chose: the same code, with the reason.</summary>
+        internal static string DeleteChosenObjectMismatchResponse(string target, string objName, string foundModule)
+        {
+            return McpResponse.Err(
+                code: "ObjectModuleMismatch",
+                message: "The object found for '" + target + "' is not the one the batch chose, so it was not deleted. Nothing was deleted.",
+                hint: "The object index may be stale: refresh it with genexus_lifecycle action=index, then run the delete again.",
+                target: objName,
+                extra: new JObject
+                {
+                    ["foundModule"] = foundModule ?? string.Empty,
+                    ["wouldDelete"] = false,
+                    ["persisted"] = false
+                });
+        }
+
+        /// <summary>
+        /// The module a delete compares a Module.Name target with. An object that is a module is its own module: the module
+        /// that holds it is its parent module, or none for a module of the root.
+        /// </summary>
+        internal static string HolderModuleName(string moduleName, Guid moduleGuid, Guid objectGuid, string parentModuleName)
+        {
+            if (moduleGuid != Guid.Empty && moduleGuid == objectGuid) return parentModuleName;
+            return moduleName;
         }
 
         /// <summary>The refusal for a target that names another module than the one the object found lives in.</summary>
@@ -1461,6 +1500,9 @@ namespace GxMcp.Worker.Services
             // The module that holds the object found, or null when it sits in none. A target written Module.Name is checked
             // against it before any write.
             public string ModuleName { get; set; }
+            // The names that may qualify the object found, from its index entry: its module, the modules that hold it and its
+            // folder path. Null when the index does not hold it; the check then uses ModuleName alone.
+            public IEnumerable<string> Qualifiers { get; set; }
         }
 
         private Func<string, string, bool, bool, DeleteResolution> _deleteTargetResolver;
@@ -1508,17 +1550,30 @@ namespace GxMcp.Worker.Services
                 Name = obj.Name,
                 TypeName = obj.TypeDescriptor?.Name ?? "Unknown",
                 Guid = obj.Guid,
-                ModuleName = ModuleNameOf(obj)
+                ModuleName = ModuleNameOf(obj),
+                Qualifiers = QualifiersOfIndexed(obj.Guid)
             };
+        }
+
+        private IEnumerable<string> QualifiersOfIndexed(Guid guid)
+        {
+            SearchIndex.IndexEntry entry = GetLoadedIndexOrNull()?.FindByGuid(guid.ToString("D"));
+            return entry == null ? null : TextSelectorParser.QualifiersOf(entry);
         }
 
         private static string ModuleNameOf(KBObject obj)
         {
-            try { return obj?.Module?.Name; }
+            try
+            {
+                KBObject module = obj?.Module;
+                object parent = obj?.Parent;
+                return HolderModuleName(module?.Name, module?.Guid ?? Guid.Empty, obj?.Guid ?? Guid.Empty,
+                    (parent as global::Artech.Architecture.Common.Objects.Module)?.Name);
+            }
             catch (Exception) { return null; }
         }
 
-        public string DeleteObject(string target, string typeFilter, bool confirm, bool dryRun = false, string expectedVersion = null)
+        public string DeleteObject(string target, string typeFilter, bool confirm, bool dryRun = false, string expectedVersion = null, string expectedGuid = null)
         {
             Guid objGuid = Guid.Empty;
             string objName = target;
@@ -1585,9 +1640,12 @@ namespace GxMcp.Worker.Services
                 // spelling, is refused here, before the version check and any transaction.
                 if (IsDeleteRefusedForType(objType))
                     return DeleteNotSupportedForTypeResponse(objName, objType);
-                // A target written Module.Name deletes only the object of that module: a homonym in another module is refused.
-                if (!QualifierNamesModule(target, resolution.ModuleName))
+                // A target written Module.Name deletes only the object of that module or of its folder, and the object found must be
+                // the one the batch chose: a homonym in another module, or another object under the same name, is refused.
+                if (!QualifierNamesModule(target, resolution.ModuleName, resolution.Qualifiers))
                     return DeleteModuleMismatchResponse(target, objName, resolution.ModuleName);
+                if (!IsChosenObject(expectedGuid, resolution.Guid))
+                    return DeleteChosenObjectMismatchResponse(target, objName, resolution.ModuleName);
                 string qualifiedName = GetQualifiedObjectName(obj);
                 string versionBefore = WriteService.ComputeVersionToken(obj);
                 if (!string.IsNullOrWhiteSpace(expectedVersion)
