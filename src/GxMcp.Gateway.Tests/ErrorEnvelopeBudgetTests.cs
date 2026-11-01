@@ -129,6 +129,21 @@ namespace GxMcp.Gateway.Tests
             Assert.True(SizeOf(truncated) <= Budget);
         }
 
+        // A cut text is 2003 characters long. Cutting it again changes nothing, so the steps run out before the lists are halved.
+        [Fact]
+        public void CutTextIsNotCutAgain_SoEveryListStillFits()
+        {
+            JObject payload = Refusal(items: 0, itemChars: 0);
+            payload["saveFailureMessage"] = new string('y', 90000);
+            for (int i = 0; i < 50; i++)
+                payload[$"SynthList{i:D2}"] = new JArray(new string('x', 990), new string('w', 990));
+
+            JObject truncated = Truncate(payload, "genexus_edit");
+
+            Assert.Equal(50, Enumerable.Range(0, 50).Count(i => truncated[$"SynthList{i:D2}"] is JArray));
+            Assert.True(SizeOf(truncated) <= Budget);
+        }
+
         [Fact]
         public void MassInAnObjectMap_FallsBackToTheVerdict()
         {
