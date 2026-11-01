@@ -11,9 +11,7 @@
 
 ### Fixed
 
-- **A name qualified by a module (`Module.Name`) or by a folder (`Module.Folder`) selects only the objects of that module or folder, for a batch delete and for an export.** Before, the name matched any object with the same last name, and `includeChildren` expanded a qualified folder or module by name, so a batch delete could reach the same-named folder of another module. A batch delete and a legacy export now name each object they chose by its module. A single delete whose qualified name resolves to another module's object, or to an object whose GUID is not the one the batch chose, is refused with `ObjectModuleMismatch`, and nothing is written. A qualifier that is neither the module nor a folder holding the object no longer selects it: `Pasta.Nome` for a folder inside another module, and `Externo.Nome` for an object of a module nested in `Externo`.
-
-- **An `ignore` entry keeps matching by its last segment.** An entry written with the folder an object sits in, or with an outdated module, still spares that object.
+- **A name qualified by a module (`Module.Name`) or by a folder (`Module.Folder`) selects only the objects of that module or folder, for a batch delete and for an export.** Before, the name matched any object with the same last name, and `includeChildren` expanded a qualified folder or module by name, so a batch delete could reach the same-named folder of another module. A batch delete and a legacy export now name each object they chose by its module. A single delete whose qualified name resolves to another module's object is refused with `ObjectModuleMismatch`, and nothing is written. A batch delete also refuses an object whose GUID is not the one it chose, with the same code and a message that tells the two cases apart. A qualifier that is neither the module nor a folder holding the object no longer selects it: `Folder.Name` for a folder inside another module, and `Outer.Name` for an object of a module nested in `Outer`.
 
 ### Internal
 

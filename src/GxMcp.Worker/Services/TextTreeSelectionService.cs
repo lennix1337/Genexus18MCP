@@ -189,11 +189,12 @@ namespace GxMcp.Worker.Services
             return false;
         }
 
-        // A container named with its qualifier holds the entries whose path starts with its own. Without a path, the name rule.
+        // A container named with its qualifier holds the entries whose path starts with its own. A container without a path
+        // holds none: the name rule would reach the homonyms the qualifier excludes.
         private static bool IsChildByPath(SearchIndex.IndexEntry entry, SearchIndex.IndexEntry container)
         {
             string containerPath = PathBelowRoot(container?.Path);
-            if (entry == null || containerPath.Length == 0) return IsDescendantOf(entry, container);
+            if (entry == null || containerPath.Length == 0) return false;
             return PathBelowRoot(entry.Path).StartsWith(containerPath + "/", StringComparison.OrdinalIgnoreCase);
         }
 

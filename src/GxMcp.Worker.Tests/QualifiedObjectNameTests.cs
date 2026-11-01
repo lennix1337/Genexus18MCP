@@ -430,6 +430,78 @@ namespace GxMcp.Worker.Tests
             Assert.True(ObjectService.QualifierNamesModule("Procedure:SynthModuleA.Procs.SynthProc", "SynthModuleB"));
         }
 
+        // The batch chose an object with a GUID; a resolution that gives no GUID is not that object, so it is refused.
+        [Fact]
+        public void The_batch_delete_refuses_a_resolved_object_without_a_guid_when_the_chosen_entry_has_one()
+        {
+            var objects = new ObjectService(null, null);
+            objects.SetDeleteTargetResolverForTest((target, typeFilter, dryRun, confirm) => FoundIn("SynthModuleA", guid: Guid.Empty));
+            var service = new ObjectTextService(objects, IndexHolding(ProcInA));
+
+            JObject response = JObject.Parse(service.Execute("delete_kb_objects", null,
+                new JObject { ["name"] = "SynthModuleA.SynthProc", ["confirm"] = true }, CancellationToken.None));
+
+            Assert.Equal(1, (int)response["result"]!["failed"]!);
+            Assert.Equal("ObjectModuleMismatch", (string)response.SelectToken("$..results[0].response.error.code"));
+        }
+
+        [Fact]
+        public void The_chosen_object_check_refuses_a_resolution_without_a_guid()
+        {
+            Assert.False(ObjectService.IsChosenObject("50000000-0000-4000-8000-00000000000a", Guid.Empty));
+        }
+
+        // Without a valid expected GUID there is nothing to compare: the check is off.
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("not-a-guid")]
+        [InlineData("00000000-0000-0000-0000-000000000000")]
+        public void The_chosen_object_check_is_off_without_a_valid_expected_guid(string expectedGuid)
+        {
+            Assert.True(ObjectService.IsChosenObject(expectedGuid, Guid.Empty));
+            Assert.True(ObjectService.IsChosenObject(expectedGuid, Guid.NewGuid()));
+        }
+
+        // A folder named with its qualifier and no path holds nothing: the name rule would reach the homonym folders of other modules.
+        [Fact]
+        public void A_qualified_container_without_a_path_expands_to_nothing()
+        {
+            var folderWithoutPath = new SearchIndex.IndexEntry
+            {
+                Type = "Folder",
+                Name = "Procs",
+                Module = "SynthModuleA",
+                Guid = Guid.NewGuid().ToString("D"),
+                EntityKey = Guid.NewGuid().ToString("D") + "-9001"
+            };
+            var index = IndexHolding(folderWithoutPath, Rooted("Procedure", "SynthProcA", "SynthModuleA", "SynthModuleA/Procs"));
+
+            List<string> targets = CapturedBatchTargets(index, new JObject { ["name"] = "SynthModuleA.Procs" });
+
+            Assert.Empty(targets);
+        }
+
+        // The module refusal and the GUID refusal share the code; their messages tell the two cases apart.
+        [Fact]
+        public void The_module_refusal_and_the_guid_refusal_have_different_messages_and_hints()
+        {
+            string byModule = (string)JObject.Parse(ObjectService.DeleteModuleMismatchResponse("SynthModuleA.SynthProc", "SynthProc", "SynthModuleB"))["error"]?["message"];
+            JObject byGuid = JObject.Parse(ObjectService.DeleteChosenObjectMismatchResponse("SynthModuleA.SynthProc", "SynthProc", "SynthModuleA"));
+            JObject byGuidBare = JObject.Parse(ObjectService.DeleteChosenObjectMismatchResponse("SynthProc", "SynthProc", "SynthModuleB"));
+            string guidMessage = (string)byGuid["error"]?["message"];
+
+            Assert.Equal("ObjectModuleMismatch", (string)byGuid["error"]?["code"]);
+            Assert.Contains("GUID", guidMessage);
+            Assert.Contains("module 'SynthModuleA'", guidMessage);
+            Assert.DoesNotContain("does not hold", guidMessage);
+            Assert.Contains("genexus_lifecycle action=index", (string)byGuid["error"]?["hint"]);
+            Assert.Contains("GUID", (string)byGuidBare["error"]?["message"]);
+            Assert.DoesNotContain("module '", (string)byGuidBare["error"]?["message"]);
+            Assert.DoesNotContain("GUID", byModule);
+            Assert.NotEqual(byModule, guidMessage);
+        }
+
         // The batch delete's targets for an index and a name, with the resolution as the only thing that answers.
         private static List<string> CapturedBatchTargets(IndexCacheService index, JObject args)
         {

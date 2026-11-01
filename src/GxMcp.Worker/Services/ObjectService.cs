@@ -1434,20 +1434,28 @@ namespace GxMcp.Worker.Services
 
         /// <summary>
         /// The object the resolution found is the one the batch chose when its GUID is the chosen entry's. The GUID is checked
-        /// after the resolution; the selection stays by name. A missing GUID on either side checks nothing.
+        /// after the resolution; the selection stays by name. A missing or empty expected GUID turns the check off; a resolution
+        /// without a GUID (Guid.Empty) is not the chosen object.
         /// </summary>
         internal static bool IsChosenObject(string expectedGuid, Guid resolvedGuid)
         {
-            if (string.IsNullOrWhiteSpace(expectedGuid) || !Guid.TryParse(expectedGuid, out Guid chosen)) return true;
-            return resolvedGuid == Guid.Empty || resolvedGuid == chosen;
+            if (string.IsNullOrWhiteSpace(expectedGuid) || !Guid.TryParse(expectedGuid, out Guid chosen) || chosen == Guid.Empty) return true;
+            return resolvedGuid == chosen;
         }
 
-        /// <summary>The refusal for a resolved object that is not the one the batch chose: the same code, with the reason.</summary>
+        /// <summary>
+        /// The refusal for a resolved object whose GUID is not the chosen entry's: the same code as a module mismatch, with its
+        /// own message. A qualified target has passed the module check, so the module it names holds another object of that name.
+        /// </summary>
         internal static string DeleteChosenObjectMismatchResponse(string target, string objName, string foundModule)
         {
+            string qualifier = TwoPartQualifier(target);
+            string message = qualifier == null
+                ? "The object found for '" + target + "' has a different GUID from the one the batch chose: it is another object with the same name. Nothing was deleted."
+                : "The name '" + target + "' is in module '" + qualifier + "', but the object found there has a different GUID from the one the batch chose: it is another object with the same name. Nothing was deleted.";
             return McpResponse.Err(
                 code: "ObjectModuleMismatch",
-                message: "The object found for '" + target + "' is not the one the batch chose, so it was not deleted. Nothing was deleted.",
+                message: message,
                 hint: "The object index may be stale: refresh it with genexus_lifecycle action=index, then run the delete again.",
                 target: objName,
                 extra: new JObject
@@ -1456,6 +1464,17 @@ namespace GxMcp.Worker.Services
                     ["wouldDelete"] = false,
                     ["persisted"] = false
                 });
+        }
+
+        /// <summary>The qualifier of a target written Module.Name (after any type prefix), or null when it is not written that way.</summary>
+        internal static string TwoPartQualifier(string target)
+        {
+            string name = (target ?? string.Empty).Trim();
+            int colon = name.IndexOf(':');
+            if (colon > 0 && !TryParseEntityKey(name, out _, out _)) name = name.Substring(colon + 1);
+            int dot = name.IndexOf('.');
+            if (dot <= 0 || name.IndexOf('.', dot + 1) >= 0) return null;
+            return name.Substring(0, dot);
         }
 
         /// <summary>
