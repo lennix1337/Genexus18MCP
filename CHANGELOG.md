@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- **`genexus_properties` answers `ShowMasterPageWhenPopUp` on a web panel.** The SDK lists this flag as `SHOWMASTERPAGE_POPUP`, so the official name used to answer `PropertyNotFound` on get and on set. Both names now work at object level on web panels: the reply names the property as asked and gives the SDK key as `nativeName`. A batch set with a name the object does not have answers `PropertyNotFound` (it answered `InvalidPropertyValue`), and a read-only property answers `PropertyReadOnly`, as a single set does. A batch reply reports the SDK name of a renamed property, such as `ShowMasterPageWhenPopUp` or `MainProgram`, in `nativeNames`. The listing of all properties is unchanged. Refs https://github.com/lennix1337/Genexus18MCP/issues/814
 - **Reliable argument forwarding in `release.ps1 -Detach`.** Forwarded arguments are passed directly as an array (`-ArgumentList $argItems`) to `Start-Process`, preventing PowerShell parameter misparsing on Windows when launching detached background releases.
 
 ### Internal
