@@ -977,11 +977,7 @@ namespace GxMcp.Gateway
                     {
                         int errorCount = terminal["ErrorCount"]?.ToObject<int?>() ?? terminal["errorCount"]?.ToObject<int?>() ?? (terminal["Errors"] as JArray)?.Count ?? 0;
                         int warningCount = terminal["WarningCount"]?.ToObject<int?>() ?? terminal["warningCount"]?.ToObject<int?>() ?? (terminal["Warnings"] as JArray)?.Count ?? 0;
-                        string termStatus = terminal["Status"]?.ToString() ?? "";
-                        bool buildOk = errorCount == 0
-                            && !string.Equals(termStatus, "Failed", StringComparison.OrdinalIgnoreCase)
-                            && terminal["error"] == null;
-                        vBlock["status"] = buildOk ? "ok" : "failed";
+                        ApplyPatchValidation.WriteVerdict(vBlock, terminal, errorCount);
                         vBlock["errorCount"] = errorCount;
                         vBlock["warningCount"] = warningCount;
                         vBlock["taskId"] = taskId;
@@ -1005,8 +1001,7 @@ namespace GxMcp.Gateway
                     {
                         c0["text"] = newText;
                     }
-                    if (!string.Equals(vBlock["status"]?.ToString(), "ok", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(vBlock["status"]?.ToString(), "skipped", StringComparison.OrdinalIgnoreCase))
+                    if (ApplyPatchValidation.PromotesToError(vBlock))
                     {
                         innerResult["isError"] = true;
                     }
