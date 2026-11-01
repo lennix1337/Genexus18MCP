@@ -191,6 +191,8 @@ namespace GxMcp.Gateway
                         }
                         return obj;
                     }
+                    // An error envelope keeps its verdict: its lists and long text are shortened, not replaced by the budget phrase.
+                    if (IsErrorEnvelope(obj)) return ShortenErrorEnvelope(obj);
                     // Fallback to ensuring valid JSON structure when heavily nested Strings overfill
                     return JToken.FromObject(new {
                         jsonrpc = "2.0",
@@ -228,6 +230,41 @@ namespace GxMcp.Gateway
             }
 
             return new JValue(raw.Substring(0, 75000) + "... [TRUNCATED]");
+        }
+
+        /// <summary>
+        /// An error envelope is a Worker refusal: <c>status: "error"</c>, with the error object and the write receipt beside it.
+        /// </summary>
+        private static bool IsErrorEnvelope(JObject obj)
+            => string.Equals(obj["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Shortens an error envelope over the budget: the largest list is halved until the envelope fits, and long text is
+        /// cut when the lists are not enough. Scalars and the error object stay whole, so the verdict reaches the caller.
+        /// </summary>
+        private static JObject ShortenErrorEnvelope(JObject obj)
+        {
+            while (obj.ToString(Formatting.None).Length > 80000)
+            {
+                JArray? largest = obj.DescendantsAndSelf().OfType<JArray>()
+                    .Where(list => list.Count > 1)
+                    .OrderByDescending(list => list.ToString(Formatting.None).Length)
+                    .FirstOrDefault();
+                if (largest == null) break;
+                int keep = Math.Max(1, largest.Count / 2);
+                while (largest.Count > keep) largest.RemoveAt(largest.Count - 1);
+            }
+            if (obj.ToString(Formatting.None).Length > 80000)
+            {
+                foreach (JValue text in obj.DescendantsAndSelf().OfType<JValue>().ToList())
+                {
+                    if (text.Type == JTokenType.String && text.ToString().Length > 2000)
+                        text.Value = text.ToString().Substring(0, 2000) + "...";
+                }
+            }
+            obj["isTruncated"] = true;
+            obj["gatewayTruncationHint"] = "Gateway shortened the lists and long text of this error to fit the context budget. The error object and the write receipt are kept whole; read the object again for the complete lists.";
+            return obj;
         }
 
         /// <summary>

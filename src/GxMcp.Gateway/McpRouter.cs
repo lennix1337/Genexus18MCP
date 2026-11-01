@@ -2044,7 +2044,9 @@ namespace GxMcp.Gateway
                 "placement", "expectedParent", "actualParent", "strategy", "strategyDetail",
                 "changedParts", "propertyDifferences", "compensation",
                 // genexus_delete_object refusal and dryRun: wouldDelete=false says the object was not deleted.
-                "wouldDelete"
+                "wouldDelete",
+                // Budget cut of an error envelope: which lists and text were shortened, so the caller knows they are partial.
+                "isTruncated", "gatewayTruncationHint"
             };
             foreach (var k in diagnosticKeys)
             {
