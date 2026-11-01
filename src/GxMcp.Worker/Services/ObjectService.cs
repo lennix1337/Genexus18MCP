@@ -5351,6 +5351,23 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // The values the export writes for a WorkWithPlus template: the object the identity resolves to is read through the SDK,
+        // and the reply is shaped by WwpTemplateReply, which decides the type and leaves out the values the SDK does not hold.
+        internal string ReadWwpTemplateProperties(string target, string typeFilter = null, string guid = null, string entityKey = null, string path = null)
+        {
+            try
+            {
+                target = ResolveTargetForIdentity(target, guid, entityKey, path);
+                var obj = FindObject(target, typeFilter, guid, entityKey, path);
+                if (obj == null) return FormatReadNotFound(target);
+                return WwpTemplateReply.Shape(obj.TypeDescriptor?.Id, obj.Name, obj.TypeDescriptor?.Name, sdkName => obj.GetPropertyValue(sdkName));
+            }
+            catch (Exception ex)
+            {
+                return McpResponse.Err(code: WwpTemplateReply.ReadFailedCode, message: "Template properties read failed: " + ex.Message, target: target);
+            }
+        }
+
         // The export compares the object a read resolved with its index entry, so the reply names that object.
         internal static string WithObjectIdentity(string reply, string objectName, string objectType)
         {
