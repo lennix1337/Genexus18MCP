@@ -626,6 +626,10 @@ try {
             throw "Release version $($case.Version) legacy classification must be $($case.Legacy): only majors below 3 skip the strict asset contract."
         }
     }
+    if ((Get-GxMcpNextSemVer -CurrentVersion '4.2.0' -Bump minor) -ne '4.3.0') { throw 'Get-GxMcpNextSemVer minor calculation failed' }
+    if ((Get-GxMcpNextSemVer -CurrentVersion '4.2.0' -Bump patch) -ne '4.2.1') { throw 'Get-GxMcpNextSemVer patch calculation failed' }
+    if ((Get-GxMcpNextSemVer -CurrentVersion '4.2.0' -Bump major) -ne '5.0.0') { throw 'Get-GxMcpNextSemVer major calculation failed' }
+    if ((Get-GxMcpNextSemVer -CurrentVersion 'v1.9.9' -Bump minor) -ne '1.10.0') { throw 'Get-GxMcpNextSemVer v-prefix minor failed' }
     foreach ($script in @('release.ps1', 'scripts/release-doctor.ps1', 'scripts/release-preflight.ps1', 'scripts/release-status.ps1', 'scripts/verify-release-publication.ps1')) {
         if ((Get-Content -LiteralPath (Join-Path $root $script) -Raw) -match "notmatch '\^3") {
             throw "$script must classify legacy releases with Test-GxMcpReleaseLegacyVersion, not a 3.x prefix match."

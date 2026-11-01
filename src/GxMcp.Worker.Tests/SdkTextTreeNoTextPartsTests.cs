@@ -193,10 +193,10 @@ namespace GxMcp.Worker.Tests
             }
         }
 
-        // A module named as a target selects the templates under it as explicit targets: each one is an error and the reply
-        // is partial. The module filter, with no target named, counts the same template in noTextParts and stays ok.
+        // A module named as a target selects the objects under it, its template among them. The SDK gives the template's
+        // properties, so the template is written with them and the reply is ok. The module filter does the same with no target.
         [Fact]
-        public void A_named_module_makes_its_template_an_error_and_the_reply_partial()
+        public void A_named_module_exports_its_template_with_its_properties_and_the_reply_ok()
         {
             string root = NewTempDirectory();
             try
@@ -208,11 +208,12 @@ namespace GxMcp.Worker.Tests
                     ["targets"] = new JArray("SynthModule")
                 }, CancellationToken.None));
 
-                Assert.Equal("partial", (string)response["status"]);
-                Assert.Equal(1, (int)response["result"]!["failed"]!);
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
                 Assert.Equal(0, (int)response["result"]!["noTextParts"]!);
-                Assert.Equal(1, (int)response["result"]!["exported"]!);
-                Assert.Equal("ObjectHasNoTextParts", (string)ObjectReply(response, "SynthTemplate")["code"]!);
+                Assert.Equal(2, (int)response["result"]!["exported"]!);
+                Assert.Equal("ok", (string)ObjectReply(response, "SynthTemplate")["status"]!);
+                Assert.Single(Directory.GetFiles(root, "SynthTemplate.gx", SearchOption.AllDirectories));
             }
             finally
             {
@@ -221,7 +222,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void A_module_filter_without_named_targets_counts_the_template_and_keeps_the_reply_ok()
+        public void A_module_filter_exports_the_template_and_keeps_the_reply_ok()
         {
             string root = NewTempDirectory();
             try
@@ -235,8 +236,8 @@ namespace GxMcp.Worker.Tests
 
                 Assert.Equal("ok", (string)response["status"]);
                 Assert.Equal(0, (int)response["result"]!["failed"]!);
-                Assert.Equal(1, (int)response["result"]!["noTextParts"]!);
-                Assert.Equal(1, (int)response["result"]!["exported"]!);
+                Assert.Equal(0, (int)response["result"]!["noTextParts"]!);
+                Assert.Equal(2, (int)response["result"]!["exported"]!);
                 Assert.Equal(0, (int)response["result"]!["remaining"]!);
             }
             finally
@@ -361,7 +362,12 @@ namespace GxMcp.Worker.Tests
                     return name == "SynthTemplate"
                         ? Reply("PartNotFound", new JArray()).ToString()
                         : new JObject { ["source"] = "Synth text", ["objectName"] = name, ["objectType"] = type }.ToString();
-                });
+                },
+                null,
+                null,
+                (target, type, guid, entityKey, path) => target.EndsWith(":SynthTemplate", StringComparison.Ordinal)
+                    ? WwpTemplateTestFixtures.PropertiesOf("SynthTemplate")
+                    : WwpTemplateTestFixtures.NotATemplate(target));
         }
 
         // The template has no text part; the other objects answer their text, as the read does for a Procedure.
@@ -419,19 +425,23 @@ namespace GxMcp.Worker.Tests
         private static SdkTextTreeService BuildService(
             IEnumerable<SearchIndex.IndexEntry> entries,
             Func<string, string, string, string, string, string, string> readPartText,
-            Func<string, IEnumerable<string>, string, string, string, string, string> readPartsText = null)
+            Func<string, IEnumerable<string>, string, string, string, string, string> readPartsText = null,
+            Func<string, string, string, string, string, string> readTemplateProperties = null)
         {
             var cache = new IndexCacheService();
             List<SearchIndex.IndexEntry> loaded = entries.ToList();
             cache.LoadFromEntries(loaded);
             cache.MarkIndexComplete(loaded.Count);
+            // Unless a test gives the template's properties, the SDK says the object is not a template, so its
+            // missing text parts are the no-text-parts case. The template's own export is in SdkTextTreeWwpTemplateExportTests.
             return new SdkTextTreeService(
                 new TextTreeSelectionService(cache),
                 new ObjectService(null, null),
                 cache,
                 readPartText,
                 null,
-                readPartsText);
+                readPartsText,
+                readTemplateProperties ?? ((target, type, guid, entityKey, path) => WwpTemplateTestFixtures.NotATemplate(target)));
         }
 
         private static JObject Export(SdkTextTreeService service, string root, params string[] targets)

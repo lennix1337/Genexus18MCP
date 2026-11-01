@@ -37,6 +37,9 @@
 [CmdletBinding()]
 param(
     [string]$Version,
+    [switch]$Minor,
+    [switch]$Patch,
+    [switch]$NoAutoCandidate,
     [string]$NotesFile,
     [switch]$DryRun,
     [switch]$SkipBuild,
@@ -86,18 +89,30 @@ $root = $PSScriptRoot
 . (Join-Path $root 'scripts\gx-version-catalog.ps1')
 . (Join-Path $root 'scripts\release-contract.ps1')
 $gxCatalog = Get-GxVersionCatalog -Root $root
-$versionWasImplicit = [string]::IsNullOrWhiteSpace($Version)
+if ($Minor -and $Patch) {
+    throw "Cannot specify both -Minor and -Patch."
+}
+if (($Minor -or $Patch) -and -not [string]::IsNullOrWhiteSpace($Version)) {
+    throw "Cannot specify -Version together with -Minor or -Patch."
+}
+$versionWasImplicit = [string]::IsNullOrWhiteSpace($Version) -and -not $Minor -and -not $Patch
 $statusPackagePath = Join-Path $root 'package.json'
 if (-not (Test-Path -LiteralPath $statusPackagePath -PathType Leaf)) {
     throw "package.json not found at $statusPackagePath"
 }
-if ($versionWasImplicit) {
-    $Version = [string](Get-Content -LiteralPath $statusPackagePath -Raw | ConvertFrom-Json).version
+$currentPackageVersion = [string](Get-Content -LiteralPath $statusPackagePath -Raw | ConvertFrom-Json).version
+if ($Minor -or $Patch) {
+    $bumpType = if ($Minor) { 'minor' } else { 'patch' }
+    $Version = Get-GxMcpNextSemVer -CurrentVersion $currentPackageVersion -Bump $bumpType
+} elseif ($versionWasImplicit) {
+    $Version = $currentPackageVersion
 }
 $Version = ([string]$Version).Trim().TrimStart('v')
+$AutoCandidate = (-not $NoAutoCandidate) -and (-not $PrepareOnly)
 $releaseDryRunBeforeIssueHelpers = $DryRun
 $releaseCloseIssuesBeforeIssueHelpers = $CloseIssues
 . (Join-Path $root 'scripts/release-issues.ps1') -DefineOnly
+. (Join-Path $root 'scripts/release-candidate-ci.ps1')
 $DryRun = $releaseDryRunBeforeIssueHelpers
 $CloseIssues = $releaseCloseIssuesBeforeIssueHelpers
 $statusToken = if ([string]::IsNullOrWhiteSpace($Version)) { 'pending' } else { $Version -replace '[^0-9A-Za-z.-]', '-' }
@@ -130,6 +145,11 @@ $statusState = [ordered]@{
     nextAction = 'inspect-status'
     exitCode = $null
     error = $null
+    candidate = [ordered]@{
+        branch = $null
+        prNumber = $null
+        prUrl = $null
+    }
     issues = [ordered]@{
         discovered = @()
         validated = @()
@@ -564,7 +584,9 @@ function Fail([string]$msg) {
 
 trap {
     $message = Protect-GxMcpReleaseMessage $_.Exception.Message
-    Write-ReleaseStatus -Phase 'failed' -State 'failed' -ExitCode 1 -ErrorMessage $message
+    if (Get-Command Write-ReleaseStatus -ErrorAction SilentlyContinue) {
+        Write-ReleaseStatus -Phase 'failed' -State 'failed' -ExitCode 1 -ErrorMessage $message
+    }
     throw $message
 }
 
@@ -653,14 +675,12 @@ if ($Detach) {
     $logBase = Join-Path $env:TEMP "gxmcp-release$verTag-$stamp"
     $stdoutLog = "$logBase.log"
     $stderrLog = "$logBase.err.log"
-    $forwarded = Get-ForwardedArgs -BoundParams $PSBoundParameters -Exclude @('Detach')
+    $forwarded = Get-ForwardedArgs -BoundParams $PSBoundParameters -Exclude @('Detach', 'Minor', 'Patch')
+    if ($forwarded -notcontains '-Version') { $forwarded += @('-Version', $Version) }
     if ($forwarded -notcontains '-StatusFile') { $forwarded += @('-StatusFile', $StatusFile) }
     $forwarded += @('-DetachedStdoutLog', $stdoutLog, '-DetachedStderrLog', $stderrLog)
     $argItems = @('-NoProfile', '-File', $PSCommandPath) + $forwarded
-    $argString = (($argItems | ForEach-Object {
-        if ($_ -match '\s') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
-    }) -join ' ')
-    $child = Start-Process -FilePath $pwshExe -ArgumentList $argString `
+    $child = Start-Process -FilePath $pwshExe -ArgumentList $argItems `
         -WorkingDirectory $root `
         -RedirectStandardOutput $stdoutLog `
         -RedirectStandardError $stderrLog `
@@ -850,32 +870,9 @@ function Assert-ReleaseBaseFresh {
 function Assert-ReleaseRequiredChecksGreen {
     param([Parameter(Mandatory = $true)][string]$Commit)
 
-    $branchRaw = @(gh api 'repos/{owner}/{repo}/branches/main' 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $branchRaw.Count -eq 0) {
-        Fail "Could not read the main branch protection; refusing to publish without verifying required CI."
-    }
-    $rulesRaw = @(gh api 'repos/{owner}/{repo}/rules/branches/main' 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        Fail "Could not read the main branch rules; refusing to publish without verifying required CI."
-    }
-    $rules = if ($rulesRaw.Count -gt 0) { ($rulesRaw -join [Environment]::NewLine) | ConvertFrom-Json } else { @() }
-    $required = @(Get-GxMcpReleaseRequiredCheckContexts -Branch (($branchRaw -join [Environment]::NewLine) | ConvertFrom-Json) -Rules $rules)
-    $runLines = @(gh api --paginate "repos/{owner}/{repo}/commits/$Commit/check-runs?per_page=100" --jq '.check_runs[] | [.id,.name,.status,(.conclusion // ""),(.app.id // 0),(.started_at // ""),.head_sha] | @tsv' 2>$null)
-    if ($LASTEXITCODE -ne 0) { Fail "Could not read check runs for $Commit. A commit GitHub does not know yet has none: run release.ps1 -PrepareOnly, push that SHA as a candidate branch/PR so CI runs on it, then rerun." }
-    $statusLines = @(gh api "repos/{owner}/{repo}/commits/$Commit/status?per_page=100" --jq '.statuses[] | [.context,.state] | @tsv' 2>$null)
-    if ($LASTEXITCODE -ne 0) { Fail "Could not read commit statuses for $Commit." }
-    $checkRuns = @($runLines | Where-Object { $_ } | ForEach-Object {
-        $parts = ([string]$_) -split "`t"
-        if ($parts.Count -lt 7) { Fail "Unexpected check-run record for $Commit; refusing to publish without verifying required CI." }
-        [pscustomobject]@{ id = $parts[0]; name = $parts[1]; status = $parts[2]; conclusion = $parts[3]; app_id = $parts[4]; started_at = $parts[5]; head_sha = $parts[6] }
-    })
-    $statuses = @($statusLines | Where-Object { $_ } | ForEach-Object {
-        $parts = ([string]$_) -split "`t"
-        [pscustomobject]@{ context = $parts[0]; state = $parts[1] }
-    })
-    $verdict = Test-GxMcpReleaseRequiredChecks -RequiredContexts $required -CheckRuns $checkRuns -Statuses $statuses -Commit $Commit
-    if (-not $verdict.Valid) { Fail "Required CI is not green on $Commit ($($verdict.Error)). Wait for or fix CI, then rerun the same version. For an unpublished release commit, run release.ps1 -PrepareOnly, push that SHA as a candidate branch/PR so CI runs on it, then rerun." }
-    Ok "Required checks ($($required -join ', ')) are green on $Commit."
+    $report = Get-GxMcpReleaseRequiredChecksReport -Commit $Commit
+    if (-not $report.Valid) { Fail $report.Error }
+    Ok "Required checks ($($report.Required -join ', ')) are green on $Commit."
 }
 
 # Last gate before the release becomes visible. Re-reads everything that can go stale
@@ -1362,7 +1359,17 @@ if ($PrepareOnly) {
 # be published and building it would only fail later. Re-verified right before tagging.
 if (-not $DryRun -and -not $resumeRelease) {
     Step "Checking required CI on the release source commit"
-    Assert-ReleaseRequiredChecksGreen -Commit $releaseSourceCommit
+    if ($AutoCandidate) {
+        $ciState = Test-ReleaseRequiredChecksQuiet -Commit $releaseSourceCommit
+        if ($ciState.Valid) {
+            Ok "Required checks ($($ciState.Required -join ', ')) are already green on $releaseSourceCommit."
+        } else {
+            Ensure-ReleaseCandidateCi -Commit $releaseSourceCommit -Tag $tag -DryRun:$DryRun
+            Ok "Candidate CI initiated for $releaseSourceCommit ($tag). Overlapping local build/preflight with remote CI."
+        }
+    } else {
+        Assert-ReleaseRequiredChecksGreen -Commit $releaseSourceCommit
+    }
 }
 
 $preflightSummaryPath = Join-Path $env:TEMP "gxmcp-release-preflight-$Version.json"
@@ -1686,6 +1693,9 @@ if ($resumeRelease) {
     if ($DryRun) {
         Warn "[DRY-RUN] would re-verify HEAD, origin/main, the preflight certificate, and required CI on $releaseSourceCommit before tagging."
     } else {
+        if ($AutoCandidate) {
+            Wait-ReleaseRequiredChecksGreen -Commit $releaseSourceCommit
+        }
         Assert-ReleasePrePublicationFresh -SourceCommit $releaseSourceCommit -Tag $tag -SummaryPath $preflightSummaryPath
         Ok 'HEAD, origin/main, preflight certificate, and required CI are fresh for the release source commit.'
     }
@@ -1861,6 +1871,10 @@ if (@($CloseIssues).Count -gt 0) {
     Step "Closing released issues"
     $issueReleaseUrl = if ($releaseUrl) { $releaseUrl } else { "https://github.com/lennix1337/Genexus18MCP/releases/tag/$tag" }
     Close-ReleaseIssues -ReleaseUrl $issueReleaseUrl
+}
+
+if ($AutoCandidate -and -not $DryRun) {
+    Cleanup-ReleaseCandidate -Tag $tag
 }
 
 Write-Host ""
