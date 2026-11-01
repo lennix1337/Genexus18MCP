@@ -49,6 +49,16 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void SucceededWithItemizedErrors_IsFailedInTheBlock()
+        {
+            // The block passes the error count to the verdict: a Succeeded build that reports errors must not come out ok.
+            var block = BlockOf(StatusReply("Succeeded", errorCount: 2, warningCount: 0));
+
+            Assert.Equal("failed", (string?)block["status"]);
+            Assert.Equal(2, (int?)block["errorCount"]);
+        }
+
+        [Fact]
         public void FailedWithTwelveErrors_KeepsTheFirstTen()
         {
             string[] errors = Enumerable.Range(1, 12).Select(i => $"SynthError{i:D2}").ToArray();
