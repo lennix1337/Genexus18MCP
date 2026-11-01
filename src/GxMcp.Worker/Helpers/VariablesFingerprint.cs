@@ -62,25 +62,32 @@ namespace GxMcp.Worker.Helpers
         private static IEnumerable<VariableFact> ReadVariables(KBObject obj)
         {
             var part = obj.Parts.Get<VariablesPart>();
+            return FactsOf(part, p => p.Variables.Cast<global::Artech.Genexus.Common.Variable>().Select(v => (IVariableSource)new SdkVariable(v)));
+        }
+
+        // The facts of a variables part, the part being read by the caller. A missing part has no variables. The members come through
+        // IVariableSource, so a test can pass a fake collection and check the facts that this mapping builds.
+        internal static IEnumerable<VariableFact> FactsOf<TPart>(TPart part, Func<TPart, IEnumerable<IVariableSource>> variablesOf)
+        {
             if (part == null) return new VariableFact[0];
-            return part.Variables
-                .Cast<global::Artech.Genexus.Common.Variable>()
-                .Select(v => new VariableFact(
-                    v.Name, DeclarationOf(v.Type.ToString(), v.Length, v.Decimals, v.IsCollection), v.Description, v.IsStandard))
+            return variablesOf(part)
+                .Select(v => new VariableFact(v.Name, DeclarationOf(v.TypeName, v.Length, v.Decimals, v.IsCollection), OneLine(v.Description),
+                    v.IsStandard, v.IsAutoDefined))
                 .ToList();
         }
     }
 
-    /// <summary>One variable as the variables text reads it: its name, the declaration that follows the name, its description, and whether
-    /// GeneXus defines it as a standard variable (a standard variable is left out of the text).</summary>
+    /// <summary>One variable as the variables text reads it: its name, the declaration that follows the name, its description on one line, and
+    /// whether GeneXus defines it as a standard or as an auto-defined variable. Only a standard variable is left out of the text.</summary>
     internal sealed class VariableFact
     {
-        internal VariableFact(string name, string declaration, string description, bool standard = false)
+        internal VariableFact(string name, string declaration, string description, bool standard = false, bool autoDefined = false)
         {
             Name = name;
             Declaration = declaration;
             Description = description;
             Standard = standard;
+            AutoDefined = autoDefined;
         }
 
         internal string Name { get; }
@@ -90,5 +97,54 @@ namespace GxMcp.Worker.Helpers
         internal string Description { get; }
 
         internal bool Standard { get; }
+
+        internal bool AutoDefined { get; }
+    }
+
+    /// <summary>The members of an SDK variable that its variables text reads. Production wraps the SDK variable; a test passes a fake.</summary>
+    internal interface IVariableSource
+    {
+        string Name { get; }
+
+        string TypeName { get; }
+
+        int Length { get; }
+
+        int Decimals { get; }
+
+        bool IsCollection { get; }
+
+        string Description { get; }
+
+        bool IsStandard { get; }
+
+        bool IsAutoDefined { get; }
+    }
+
+    /// <summary>The SDK variable behind <see cref="IVariableSource"/>. It forwards each member and adds no rule of its own.</summary>
+    internal sealed class SdkVariable : IVariableSource
+    {
+        private readonly global::Artech.Genexus.Common.Variable _variable;
+
+        internal SdkVariable(global::Artech.Genexus.Common.Variable variable)
+        {
+            _variable = variable;
+        }
+
+        public string Name => _variable.Name;
+
+        public string TypeName => _variable.Type.ToString();
+
+        public int Length => _variable.Length;
+
+        public int Decimals => _variable.Decimals;
+
+        public bool IsCollection => _variable.IsCollection;
+
+        public string Description => _variable.Description;
+
+        public bool IsStandard => _variable.IsStandard;
+
+        public bool IsAutoDefined => _variable.IsAutoDefined;
     }
 }

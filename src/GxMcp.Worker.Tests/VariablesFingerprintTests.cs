@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Runtime.Serialization;
 using Artech.Architecture.Common.Objects;
 using GxMcp.TestSupport;
@@ -16,6 +17,39 @@ namespace GxMcp.Worker.Tests
     {
         private static string Fingerprint(params VariableFact[] variables)
             => VariablesFingerprint.Capture(null, _ => variables);
+
+        // A fake SDK variable: the members that the variables text reads, with no Knowledge Base behind them.
+        private sealed class FakeVariable : IVariableSource
+        {
+            internal FakeVariable(string name, string typeName, int length, int decimals, bool collection, string description,
+                bool standard = false, bool autoDefined = false)
+            {
+                Name = name;
+                TypeName = typeName;
+                Length = length;
+                Decimals = decimals;
+                IsCollection = collection;
+                Description = description;
+                IsStandard = standard;
+                IsAutoDefined = autoDefined;
+            }
+
+            public string Name { get; }
+
+            public string TypeName { get; }
+
+            public int Length { get; }
+
+            public int Decimals { get; }
+
+            public bool IsCollection { get; }
+
+            public string Description { get; }
+
+            public bool IsStandard { get; }
+
+            public bool IsAutoDefined { get; }
+        }
 
         [Fact]
         public void EachVariableIsWrittenWithItsDeclarationAndItsDescription()
@@ -137,6 +171,62 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void TheSdkVariablesBecomeFactsWithTheirNameDeclarationDescriptionAndFlags()
+        {
+            var fakes = new IVariableSource[]
+            {
+                new FakeVariable("Count", "Numeric", 4, 0, false, "Contador\r\nLinha dois   "),
+                new FakeVariable("Items", "SDT", 10, 0, true, null, autoDefined: true),
+                new FakeVariable("Pad", "Character", 40, 0, false, "Padrao", standard: true),
+            };
+
+            var facts = VariablesFingerprint.FactsOf(new object(), _ => fakes).ToList();
+
+            Assert.Equal(3, facts.Count);
+            Assert.Equal("Count", facts[0].Name);
+            Assert.Equal(" : Numeric(4)", facts[0].Declaration);
+            Assert.Equal("Contador Linha dois", facts[0].Description);
+            Assert.False(facts[0].Standard);
+            Assert.False(facts[0].AutoDefined);
+            Assert.Equal(" : SDT(10) Collection", facts[1].Declaration);
+            Assert.Equal(string.Empty, facts[1].Description);
+            Assert.True(facts[1].AutoDefined);
+            Assert.True(facts[2].Standard);
+        }
+
+        [Fact]
+        public void TheTextOfTheSdkVariablesLeavesOutOnlyTheStandardOne()
+        {
+            var fakes = new IVariableSource[]
+            {
+                new FakeVariable("Count", "Numeric", 4, 0, false, "Contador"),
+                new FakeVariable("Pad", "Character", 40, 0, false, "Padrao", standard: true),
+                new FakeVariable("Items", "SDT", 10, 0, true, "Itens", autoDefined: true),
+            };
+
+            string text = VariablesFingerprint.Of(VariablesFingerprint.FactsOf(new object(), _ => fakes));
+
+            Assert.Equal("&Count : Numeric(4) // Contador\n&Items : SDT(10) Collection // Itens\n", text);
+        }
+
+        [Fact]
+        public void AMissingVariablesPartHasNoFactsAndItsVariablesAreNotRead()
+        {
+            var facts = VariablesFingerprint.FactsOf<object>(null, _ => throw new InvalidOperationException("the variables must not be read"));
+
+            Assert.Empty(facts);
+        }
+
+        [Fact]
+        public void AnAutoDefinedVariableStaysInTheText()
+        {
+            string before = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"), new VariableFact("Items", " : SDT(10) Collection", "", autoDefined: true));
+            string after = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"));
+
+            Assert.NotEqual(before, after);
+        }
+
+        [Fact]
         public void TheSdkReaderGivesNoTextWhenTheObjectCannotBeRead()
         {
             // The production reader is the default one: an object whose parts cannot be read is unknown, never an empty text.
@@ -150,7 +240,7 @@ namespace GxMcp.Worker.Tests
         {
             string src = RepoSource.WithoutComments(RepoSource.Read("src", "GxMcp.Worker", "Helpers", "VariablesFingerprint.cs"));
 
-            Assert.Equal(1, SourceAssert.Count(src, "part.Variables"));
+            Assert.Equal(1, SourceAssert.Count(src, "p.Variables"));
             Assert.Equal(1, SourceAssert.Count(src, "v.Description"));
         }
 
