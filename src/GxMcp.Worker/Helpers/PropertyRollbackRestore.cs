@@ -44,33 +44,47 @@ namespace GxMcp.Worker.Helpers
         internal static Report NothingRestored(IEnumerable<string> requestedNames)
             => new Report(new string[0], (requestedNames ?? Enumerable.Empty<string>()).ToList());
 
-        /// <summary>The <c>persisted</c> value when nothing can settle whether the requested values are still in the object.</summary>
-        internal const string UnknownPersisted = "unknown";
-
-        /// <summary>
-        /// Marks an error receipt whose batch write has committed: <c>committed</c> is true, and <c>persisted</c> is what the
-        /// object holds now, a boolean or <see cref="UnknownPersisted"/>. Every error after the commit carries both, so a caller
-        /// can tell a write that landed from one that was refused before the commit.
-        /// </summary>
-        internal static void MarkCommitted(JObject receipt, object persisted)
+        /// <summary>What the read-back proved about the requested values, once the batch write has committed.</summary>
+        internal enum PersistenceProof
         {
-            receipt["committed"] = true;
-            receipt["persisted"] = JToken.FromObject(persisted);
+            /// <summary>Every requested value was read back as requested: the values are in the object.</summary>
+            Verified,
+
+            /// <summary>The object was read back and the requested values are not in it, or a rollback restored every property.</summary>
+            NotPersisted,
+
+            /// <summary>No read settled it.</summary>
+            Unknown
         }
 
         /// <summary>
-        /// <c>persisted</c> after a verification failure whose rollback ran. It is false only when the rollback was verified:
-        /// the object is then back to its snapshot and the requested values are gone. Without that proof nothing settles it.
+        /// Marks an error receipt whose batch write has committed: <c>committed</c> is true, <c>persisted</c> says whether the requested
+        /// values are in the object now (always a boolean), and <c>persistenceStateKnown</c> says whether a read settled it. An unknown
+        /// state carries <c>persisted:false</c> and <c>persistenceStateKnown:false</c>. The string "unknown" is never written: scripts read
+        /// it as true, and typed readers throw on it.
         /// </summary>
-        internal static object PersistedAfterVerificationFailure(bool rollbackVerified)
-            => rollbackVerified ? (object)false : UnknownPersisted;
+        internal static void MarkCommitted(JObject receipt, PersistenceProof proof)
+        {
+            receipt["committed"] = true;
+            receipt["persisted"] = proof == PersistenceProof.Verified;
+            receipt["persistenceStateKnown"] = proof != PersistenceProof.Unknown;
+        }
 
         /// <summary>
-        /// <c>persisted</c> after a rollback that failed. Until the restoring transaction commits, every property is still as the
-        /// batch wrote it, so the values are persisted. Once it commits the state is no longer known.
+        /// The proof after a verification failure whose rollback ran. A rollback that was verified as a whole, or that restored every
+        /// property and confirmed each one, proves the requested values are gone. Anything less leaves the state unknown.
         /// </summary>
-        internal static object PersistedAfterRollbackFailure(bool restoreCommitted)
-            => restoreCommitted ? (object)UnknownPersisted : (object)true;
+        internal static PersistenceProof ProofAfterRollback(bool rollbackVerified, Report report)
+            => rollbackVerified || (report != null && report.NotRestored.Count == 0 && report.Restored.Count > 0)
+                ? PersistenceProof.NotPersisted
+                : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof after a rollback that failed. Until the restoring transaction commits, every property is still as the batch wrote it,
+        /// so the earlier proof stands. Once it commits, nothing confirms the state.
+        /// </summary>
+        internal static PersistenceProof ProofAfterFailedRollback(bool restoreCommitted, PersistenceProof earlier)
+            => restoreCommitted ? PersistenceProof.Unknown : earlier;
 
         /// <summary>
         /// The parenthesis the "unrelated part changed" reason adds: the names of the parts that differ, never their content.

@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- **`genexus_properties set` reports the commit and the persisted state when it fails after the batch committed.** A failed read-back, a rollback that was refused or could not be verified, or an unexpected error after the commit now carries `committed:true` and `persisted` (`true`, `false`, or `"unknown"` when nothing could confirm the values), so a caller can tell whether the new values stayed in the object. The terse error projection keeps both fields, and `genexus_lifecycle action=result` returns them for an operation that ended in such an error. A property set waits up to 90 seconds for its answer, up from 50, so a WorkWithPlus apply-on-save that takes close to a minute still returns inline.
+- **`genexus_properties set` says whether the new values stayed when it fails after the batch committed.** A failed read-back, a rollback that was refused or could not be verified, or an unexpected error after the commit now carries `committed: true`, `persisted` (`true` or `false`) and `persistenceStateKnown` (`false` when no read could settle the state). A single-property set reports the same fields. The terse error projection keeps them, and `genexus_lifecycle action=result` returns them for an operation that ended in such an error. A property set that reports progress waits up to 90 seconds for its answer, instead of 60; without a progress token the wait stays at 50 seconds.
 
 ### Internal
 

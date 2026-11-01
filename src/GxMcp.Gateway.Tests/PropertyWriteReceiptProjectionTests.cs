@@ -6,13 +6,13 @@ using Xunit;
 namespace GxMcp.Gateway.Tests
 {
     /// <summary>
-    /// A property write that failed after its batch committed reports <c>committed</c> and <c>persisted</c> at the top of its
-    /// envelope. The terse projection keeps both, and a tracked operation keeps them in the result it stores, so
-    /// <c>action=result</c> shows whether the values landed.
+    /// A property write that fails after its batch committed reports <c>committed</c>, <c>persisted</c> (a boolean) and
+    /// <c>persistenceStateKnown</c> in the error envelope. The terse projection keeps all three. A tracked operation keeps the
+    /// envelope the worker wrote, nested under its <c>result</c>, which is the shape <c>action=result</c> returns.
     /// </summary>
     public class PropertyWriteReceiptProjectionTests
     {
-        private static JObject FailedAfterCommit(JToken persisted)
+        private static JObject FailedAfterCommit(bool persisted, bool stateKnown)
         {
             return new JObject
             {
@@ -23,27 +23,41 @@ namespace GxMcp.Gateway.Tests
                     ["message"] = "The saved property could not be read back."
                 },
                 ["committed"] = true,
-                ["persisted"] = persisted
+                ["persisted"] = persisted,
+                ["persistenceStateKnown"] = stateKnown
             };
         }
 
         [Fact]
-        public void TerseProjectionKeepsCommittedAndTheUnknownPersistedValue()
+        public void TerseProjectionKeepsCommittedPersistedAndTheFlagOfAnUnknownWrite()
         {
-            var trimmed = McpRouter.TrimErrorEnvelope(FailedAfterCommit("unknown"), verbose: false);
+            var trimmed = McpRouter.TrimErrorEnvelope(FailedAfterCommit(persisted: false, stateKnown: false), verbose: false);
 
             Assert.True((bool)trimmed["committed"]!);
-            Assert.Equal("unknown", (string)trimmed["persisted"]!);
+            Assert.False((bool)trimmed["persisted"]!);
+            Assert.False((bool)trimmed["persistenceStateKnown"]!);
             Assert.Equal("PropertyVerificationFailed", (string)trimmed["code"]!);
         }
 
         [Fact]
-        public void TerseProjectionKeepsFalseWhenTheRollbackWasVerified()
+        public void ATimeoutOfAMutationSaysItsPersistenceIsNotKnown()
         {
-            var trimmed = McpRouter.TrimErrorEnvelope(FailedAfterCommit(false), verbose: false);
+            // The timeout envelope keeps persisted null (the #656 contract) and says the state is not known.
+            var timeout = new JObject { ["status"] = "error" };
 
-            Assert.True((bool)trimmed["committed"]!);
+            Program.MarkMutationOutcomeUnknown(timeout);
+
+            Assert.Equal(JTokenType.Null, timeout["persisted"].Type);
+            Assert.False((bool)timeout["persistenceStateKnown"]!);
+        }
+
+        [Fact]
+        public void TerseProjectionKeepsAKnownNotPersistedState()
+        {
+            var trimmed = McpRouter.TrimErrorEnvelope(FailedAfterCommit(persisted: false, stateKnown: true), verbose: false);
+
             Assert.False((bool)trimmed["persisted"]!);
+            Assert.True((bool)trimmed["persistenceStateKnown"]!);
         }
 
         [Fact]
@@ -52,13 +66,19 @@ namespace GxMcp.Gateway.Tests
             var tracker = new OperationTracker(TimeSpan.FromMinutes(5));
             string opId = tracker.StartOperation("prop-receipt-1", "genexus_properties", new JObject { ["action"] = "set" }, "cid-prop-1");
 
-            tracker.CompleteFromWorker("prop-receipt-1", FailedAfterCommit("unknown"));
+            // The worker answers with its JSON-RPC envelope: the receipt sits under result, not at the top of the message.
+            tracker.CompleteFromWorker("prop-receipt-1", new JObject
+            {
+                ["id"] = 7,
+                ["result"] = FailedAfterCommit(persisted: true, stateKnown: true)
+            });
             var result = tracker.BuildOperationResult(opId);
 
             Assert.Equal("Failed", (string)result["status"]!);
-            var worker = (JObject)result["workerPayload"]!;
-            Assert.True((bool)worker["committed"]!);
-            Assert.Equal("unknown", (string)worker["persisted"]!);
+            var receipt = (JObject)((JObject)result["workerPayload"]!)["result"]!;
+            Assert.True((bool)receipt["committed"]!);
+            Assert.True((bool)receipt["persisted"]!);
+            Assert.True((bool)receipt["persistenceStateKnown"]!);
         }
     }
 }

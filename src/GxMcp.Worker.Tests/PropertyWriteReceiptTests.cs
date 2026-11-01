@@ -5,65 +5,87 @@ using Xunit;
 namespace GxMcp.Worker.Tests
 {
     /// <summary>
-    /// The receipt of a property write whose batch transaction committed. Once the commit is in, an error says so, and its
-    /// <c>persisted</c> value says whether the requested values are still in the object: a boolean when a read settled it,
-    /// <c>"unknown"</c> when none could. These are plain decisions, so they are pinned here without a Knowledge Base.
+    /// The receipt of a property write whose batch transaction committed: <c>committed</c> is always true, <c>persisted</c> is a
+    /// boolean that says whether the requested values are in the object, and <c>persistenceStateKnown</c> says whether a read settled
+    /// it. These decisions are plain values, pinned here without a Knowledge Base. The production paths that build the receipt are
+    /// exercised by PropertyRollbackProductionTests.
     /// </summary>
     public class PropertyWriteReceiptTests
     {
         [Fact]
-        public void MarkCommittedSaysTheBatchCommittedAndKeepsThePersistedValueAsAJsonBoolean()
+        public void AVerifiedProofWritesPersistedTrueAndAKnownState()
         {
             var receipt = new JObject();
 
-            PropertyRollbackRestore.MarkCommitted(receipt, true);
+            PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.PersistenceProof.Verified);
 
             Assert.True((bool)receipt["committed"]);
             Assert.Equal(JTokenType.Boolean, receipt["persisted"].Type);
             Assert.True((bool)receipt["persisted"]);
+            Assert.True((bool)receipt["persistenceStateKnown"]);
         }
 
         [Fact]
-        public void AVerifiedRollbackAfterAFailedVerificationSaysTheValuesAreNotPersisted()
-        {
-            object persisted = PropertyRollbackRestore.PersistedAfterVerificationFailure(rollbackVerified: true);
-
-            Assert.Equal(false, persisted);
-        }
-
-        [Fact]
-        public void AnUnverifiedRollbackAfterAFailedVerificationSaysUnknown()
-        {
-            object persisted = PropertyRollbackRestore.PersistedAfterVerificationFailure(rollbackVerified: false);
-
-            Assert.Equal("unknown", persisted);
-        }
-
-        [Fact]
-        public void ARollbackThatNeverCommittedLeavesTheValuesPersisted()
-        {
-            object persisted = PropertyRollbackRestore.PersistedAfterRollbackFailure(restoreCommitted: false);
-
-            Assert.Equal(true, persisted);
-        }
-
-        [Fact]
-        public void ARollbackThatCommittedButCouldNotBeConfirmedSaysUnknown()
-        {
-            object persisted = PropertyRollbackRestore.PersistedAfterRollbackFailure(restoreCommitted: true);
-
-            Assert.Equal("unknown", persisted);
-        }
-
-        [Fact]
-        public void TheUnknownValueIsTheStringTheReceiptCarries()
+        public void ANotPersistedProofWritesPersistedFalseAndAKnownState()
         {
             var receipt = new JObject();
 
-            PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.UnknownPersisted);
+            PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.PersistenceProof.NotPersisted);
 
-            Assert.Equal(JTokenType.String, receipt["persisted"].Type);
-            Assert.Equal("unknown", (string)receipt["persisted"]);
+            Assert.False((bool)receipt["persisted"]);
+            Assert.True((bool)receipt["persistenceStateKnown"]);
+        }
+
+        [Fact]
+        public void AnUnknownStateWritesPersistedFalseAndNeverAString()
+        {
+            var receipt = new JObject();
+
+            PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.PersistenceProof.Unknown);
+
+            Assert.Equal(JTokenType.Boolean, receipt["persisted"].Type);
+            Assert.False((bool)receipt["persisted"]);
+            Assert.False((bool)receipt["persistenceStateKnown"]);
+        }
+
+        [Fact]
+        public void AVerifiedRollbackProvesTheRequestedValuesAreGone()
+        {
+            var nothingLeft = new PropertyRollbackRestore.Report(new[] { "MasterPage" }, new string[0]);
+
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.NotPersisted,
+                PropertyRollbackRestore.ProofAfterRollback(rollbackVerified: true, report: null));
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.NotPersisted,
+                PropertyRollbackRestore.ProofAfterRollback(rollbackVerified: false, report: nothingLeft));
+        }
+
+        [Fact]
+        public void AnUnverifiedRollbackWithAPropertyNotRestoredLeavesTheStateUnknown()
+        {
+            var someLeft = new PropertyRollbackRestore.Report(new string[0], new[] { "SOAP" });
+
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.Unknown,
+                PropertyRollbackRestore.ProofAfterRollback(rollbackVerified: false, report: someLeft));
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.Unknown,
+                PropertyRollbackRestore.ProofAfterRollback(rollbackVerified: false, report: null));
+        }
+
+        [Fact]
+        public void ARollbackThatFailsBeforeItsCommitKeepsTheProofOfTheVerificationItRanFor()
+        {
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.Verified,
+                PropertyRollbackRestore.ProofAfterFailedRollback(restoreCommitted: false, earlier: PropertyRollbackRestore.PersistenceProof.Verified));
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.NotPersisted,
+                PropertyRollbackRestore.ProofAfterFailedRollback(restoreCommitted: false, earlier: PropertyRollbackRestore.PersistenceProof.NotPersisted));
+        }
+
+        [Fact]
+        public void ARollbackThatCommittedButCouldNotBeConfirmedIsUnknownWhateverTheEarlierProof()
+        {
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.Unknown,
+                PropertyRollbackRestore.ProofAfterFailedRollback(restoreCommitted: true, earlier: PropertyRollbackRestore.PersistenceProof.Verified));
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.Unknown,
+                PropertyRollbackRestore.ProofAfterFailedRollback(restoreCommitted: true, earlier: PropertyRollbackRestore.PersistenceProof.NotPersisted));
         }
     }
 }

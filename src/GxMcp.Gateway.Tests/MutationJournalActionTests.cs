@@ -328,5 +328,40 @@ namespace GxMcp.Gateway.Tests
 
             Assert.False(Program.IsTerminalPersistedReread(mapped));
         }
+
+        [Fact]
+        public void ANestedResultPersistedMapIsNotAConfirmationAndDoesNotThrow()
+        {
+            // The form a lifecycle read returns: the worker's envelope under workerPayload, and the receipt under its result.
+            var nested = new JObject
+            {
+                ["status"] = "Completed",
+                ["workerPayload"] = new JObject
+                {
+                    ["result"] = new JObject
+                    {
+                        ["persisted"] = new JObject { ["Description"] = "Yes" },
+                        ["rereadConfirmed"] = true
+                    }
+                }
+            };
+
+            Assert.False(Program.IsTerminalPersistedReread(nested));
+        }
+
+        [Fact]
+        public void ANestedResultPersistedTrueWithAReadIsAConfirmation()
+        {
+            var nested = new JObject
+            {
+                ["status"] = "Completed",
+                ["workerPayload"] = new JObject
+                {
+                    ["result"] = new JObject { ["persisted"] = true, ["rereadConfirmed"] = true }
+                }
+            };
+
+            Assert.True(Program.IsTerminalPersistedReread(nested));
+        }
     }
 }
