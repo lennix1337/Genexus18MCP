@@ -45,8 +45,8 @@ namespace GxMcp.Gateway.Tests
 
             var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
 
-            Assert.Equal("PropertyRollbackUnreconciled", (string)trimmed["code"]);
-            Assert.Equal("Inspect the parts listed in changedParts, restore them, then retry.", (string)trimmed["hint"]);
+            Assert.Equal("PropertyRollbackUnreconciled", (string)trimmed["code"]!);
+            Assert.Equal("Inspect the parts listed in changedParts, restore them, then retry.", (string)trimmed["hint"]!);
             Assert.True(JToken.DeepEquals(new JArray("WebForm"), trimmed["changedParts"]));
         }
 
