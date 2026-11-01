@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $attributes = @(& git -C $root check-attr text eol whitespace -- CHANGELOG.md README.md scripts/release.ps1)
@@ -6,7 +6,7 @@ $attributeText = $attributes -join "`n"
 if ($attributeText -notmatch 'CHANGELOG\.md: text: unset' -or $attributeText -notmatch 'CHANGELOG\.md: eol: unspecified' -or $attributeText -notmatch 'CHANGELOG\.md: whitespace: cr-at-eol') { throw 'CHANGELOG.md must retain the repository CRLF exception without Git renormalization.' }
 if ($attributeText -notmatch 'README\.md:.*eol: lf') { throw 'README.md must use the repository LF default.' }
 if ($attributeText -notmatch 'scripts/release\.ps1:.*eol: lf') { throw 'PowerShell source must use the repository LF default.' }
-foreach ($relativePath in @('release.ps1', 'scripts/release-status.ps1', 'scripts/release-preflight.ps1', 'scripts/check-build-warning-baseline.ps1', 'scripts/release-contract.ps1', 'scripts/release-doctor.ps1', 'scripts/verify-release-publication.ps1')) {
+foreach ($relativePath in @('release.ps1', 'scripts/release-status.ps1', 'scripts/release-preflight.ps1', 'scripts/check-build-warning-baseline.ps1', 'scripts/release-contract.ps1', 'scripts/release-doctor.ps1', 'scripts/verify-release-publication.ps1', 'scripts/release-candidate-ci.ps1')) {
     $bytes = [IO.File]::ReadAllBytes((Join-Path $root ($relativePath -replace '/', '\')))
     if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
         throw "$relativePath must be UTF-8 with BOM for Windows PowerShell compatibility."

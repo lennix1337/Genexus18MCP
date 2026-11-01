@@ -448,11 +448,32 @@ persistence goes through `Artech.Udm.Framework.EntityManager.UpdateParent` in
   hint, and nothing is written for it. A single-part read is made by the object's type and name too, so a Transaction whose name a Table shares answers `IndexEntryStale`, not `AmbiguousName`.
 - A failed object carries `code`, `hint` and a plain-text `message` as fields of its entry in
   `objects[]`. The error envelope is not stored as text in `message`.
-- An object type that lists no part is not written by `format=native`. It answers
+- A WorkWithPlus template (`WorkWithPlus for Web Template`) is written with its properties, not
+  with parts. Its file has the layout of the official text: the header `WorkWithPlusforWebTemplate <Name>`
+  (the type keyword has no spaces, so the header reads back), a `#Properties` section with one quoted
+  value per property in the official order (`Name`, `Description`, `TemplateCategory`,
+  `TemplateCategoryOrder`, `TemplateType`, `TemplateXml`, `MainTemplate`, `InstanceType`,
+  `PreviewImage`, `IsDefault`), tabs for indentation, a blank line after each property and LF line endings
+  (the official export writes CRLF). The values are read from the SDK object that the identity of the index
+  entry resolves to, in the SDK thread, and not from the index's values; a value the SDK does not hold is left
+  out of the file, not written empty. The manifest entry reads `parts: ["Properties"]`. A named template is
+  exported. A template whose type or XML the SDK does not give, or whose read raises an error, is an error of
+  that object alone.
+- Differences from the official text, all in this export: the LF line endings; the escapes. A double quote
+  is `\"`, as the official text writes it. A backslash, CR, LF and TAB are written `\\`, `\r`, `\n` and
+  `\t`: only `\"` was seen in the official text, so the others are this export's convention, and the
+  tests read them back with a reader written for them. A DesignSystem keeps its own
+  native envelope.
+- A native import of a tree skips a WorkWithPlus template file (`WorkWithPlusforWebTemplate`, or any spelling of
+  the same type that `ObjectCreateTypes.IsWorkWithPlusTemplate` recognises) with `WwpTemplateNotImported`. The file
+  is counted in `templatesNotImported`, it is not a failure, nothing is written for it, and the batch goes on even
+  with `stopOnError`; a dry run and `listOnly` show it the same way. A template named in `targets` is an error with
+  `WwpTemplateImportRefused`, which stops the batch with `stopOnError`. Change a template with
+  `genexus_properties action=set`.
+- An object type other than the template that lists no part is not written by `format=native`. It answers
   `ObjectHasNoTextParts` for `part=Source` and for `part=all` alike. The other targets of the same
   export still export. With any named target, including a module or folder whose children include it, it makes the reply `partial`. Without named targets (KB-wide, or narrowed only by `type`, `module` or `pathPrefix`) it is counted in `noTextParts`, the reply stays `ok`, and the files of deleted objects are removed only by a complete export. In the object list, `status: skipped` also marks it; the summary `skipped` counts the unchanged files and the objects passed by `skip`. Read its properties with
-  `genexus_properties action=get` and change them with `action=set`. Writing them as text in the
-  export is not implemented.
+  `genexus_properties action=get` and change them with `action=set`.
 - A native export writes one object per `Type:Name`. The index keeps one object per `Type:Name`, so a second object with the same type and name, in another module or folder, is found only by its GUID or EntityKey. When both are chosen, the one the request chose is written (named, or picked by a filter), and a homonym that came only as a dependency (`includeDependencies`) gives way to it; between two of the same kind, the first by path is written. The other answers `HomonymInSameTree` (an error; the reply is `partial`) and is not written. Export it into a separate root (`outputPath`). A table projection does not compete for the name: it is written under `#tables`.
 - A DesignSystem exported with `format=native` is wrapped as `DesignSystem <Name> { ... }`.
   Reading that envelope gives the same source back.

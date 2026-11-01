@@ -30,6 +30,8 @@ namespace GxMcp.Worker.Services
         private readonly Func<string, IEnumerable<string>, string, string, string, string, string> _readPartsText;
         // An explicit target that the index does not hold is looked up here (the SDK in production).
         private readonly Func<TextSelector, SearchIndex.IndexEntry> _sdkEntryLookup;
+        // The properties of a WorkWithPlus template, read when the object has no text part (ObjectService.ReadWwpTemplateProperties).
+        private readonly Func<string, string, string, string, string, string> _readTemplateProperties;
 
         internal SdkTextTreeService(
             TextTreeSelectionService selector,
@@ -64,7 +66,8 @@ namespace GxMcp.Worker.Services
             IndexCacheService indexCacheService,
             Func<string, string, string, string, string, string, string> readPartText,
             Func<TextSelector, SearchIndex.IndexEntry> sdkEntryLookup,
-            Func<string, IEnumerable<string>, string, string, string, string, string> readPartsText)
+            Func<string, IEnumerable<string>, string, string, string, string, string> readPartsText,
+            Func<string, string, string, string, string, string> readTemplateProperties = null)
         {
             _selector = selector;
             _objectService = objectService;
@@ -74,6 +77,8 @@ namespace GxMcp.Worker.Services
             _readPartsText = readPartsText
                 ?? ((target, parts, type, guid, entityKey, path) => _objectService.ReadObjectSourceParts(target, parts, type, guid, entityKey, path));
             _sdkEntryLookup = sdkEntryLookup ?? (explicitTarget => LookupSdkEntry(explicitTarget));
+            _readTemplateProperties = readTemplateProperties
+                ?? ((target, type, guid, entityKey, path) => _objectService.ReadWwpTemplateProperties(target, type, guid, entityKey, path));
         }
 
         internal static bool IsNativeFormat(JObject args)

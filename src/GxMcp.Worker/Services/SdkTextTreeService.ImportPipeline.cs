@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
 using Newtonsoft.Json.Linq;
 
@@ -21,6 +22,7 @@ namespace GxMcp.Worker.Services
             public int Succeeded;
             public int Failed;
             public int Processed;
+            public int TemplatesNotImported;
             public bool StoppedOnError;
             public string CancelledResponse;
         }
@@ -160,6 +162,11 @@ namespace GxMcp.Worker.Services
             }
             if (!MatchesImportSelector(type, name, target, args)) return;
             state.Processed++;
+            if (ObjectCreateTypes.IsWorkWithPlusTemplate(type))
+            {
+                AddWwpTemplateRefusal(state, file, name, type, NamesImportObject(type, name, target, args));
+                return;
+            }
 
             string selectedPart = string.IsNullOrWhiteSpace(args["part"]?.ToString()) ? null : args["part"].ToString();
             if (!SelectNativeImportPart(parts, selectedPart, name, type, file, state)) return;
@@ -290,6 +297,39 @@ namespace GxMcp.Worker.Services
             return false;
         }
 
+        private const string WwpTemplateImportRefusedCode = "WwpTemplateImportRefused";
+        private const string WwpTemplateNotImportedCode = "WwpTemplateNotImported";
+
+        // The native import does not write templates: their data are SDK properties, changed with genexus_properties. A tree the
+        // export wrote holds templates, so a template file of a tree is skipped with its own code. It is counted apart, it is not
+        // a failure, and it does not stop the batch. A template the request names as a target is an error, and stops with stopOnError.
+        private static void AddWwpTemplateRefusal(NativeImportState state, string file, string name, string type, bool namedTarget)
+        {
+            var result = new JObject
+            {
+                ["name"] = name,
+                ["type"] = type,
+                ["file"] = MakeRelative(state.Root, file)
+            };
+            if (namedTarget)
+            {
+                state.Failed++;
+                result["status"] = "error";
+                result["code"] = WwpTemplateImportRefusedCode;
+                result["message"] = "'" + name + "' is a WorkWithPlus template: the native import does not write templates, so nothing was written to the KB.";
+                result["hint"] = "Change the template's properties with genexus_properties action=set, TemplateXml included.";
+                state.Results.Add(result);
+                if (state.Options.StopOnError) state.StoppedOnError = true;
+                return;
+            }
+            state.TemplatesNotImported++;
+            result["status"] = "skipped";
+            result["code"] = WwpTemplateNotImportedCode;
+            result["message"] = "'" + name + "' is a WorkWithPlus template: the native import does not write templates, so the file is skipped and nothing was written to the KB.";
+            result["hint"] = "Change the template's properties with genexus_properties action=set. Naming the template as a target makes this an error.";
+            state.Results.Add(result);
+        }
+
         private static void AddNativeImportError(NativeImportState state, string file, string message)
         {
             state.Results.Add(new JObject
@@ -316,6 +356,7 @@ namespace GxMcp.Worker.Services
                 ["planned"] = state.Files.Count,
                 ["succeeded"] = state.Succeeded,
                 ["failed"] = state.Failed,
+                ["templatesNotImported"] = state.TemplatesNotImported,
                 ["skipped"] = Math.Min(state.Options.Skip, state.Files.Count),
                 ["remaining"] = Math.Max(0, state.Files.Count - Math.Min(state.Options.Skip, state.Files.Count) - state.Processed),
                 ["stoppedOnError"] = state.StoppedOnError,
