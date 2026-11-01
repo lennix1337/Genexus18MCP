@@ -124,7 +124,7 @@ namespace GxMcp.Worker.Tests
         {
             string manifest = Directory.GetFiles(root, "*", SearchOption.TopDirectoryOnly)
                 .Single(path => !path.EndsWith(".gx", StringComparison.OrdinalIgnoreCase) && File.ReadAllText(path).Contains("GeneXusSdkTextTree"));
-            return JObject.Parse(File.ReadAllText(manifest))["objects"]!.Count(item => (string?)item["name"] == name);
+            return JObject.Parse(File.ReadAllText(manifest))["objects"]!.Count(item => (string)item["name"] == name);
         }
 
         private static string NewTempDirectory()
