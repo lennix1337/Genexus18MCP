@@ -47,7 +47,7 @@ namespace GxMcp.Worker.Services
             if (!TrySelectEntries(target, args, allowAll: false, out entries, out selectionError, includeChildren))
                 return McpResponse.Err(code: "ObjectSelectionFailed", message: selectionError, target: target);
             if (entries.Count == 0)
-                return McpResponse.Err(code: "NoObjectsMatched", message: "No KB objects matched the delete selector.", hint: "Use targets[] or name with an exact object identity.");
+                return McpResponse.Err(code: "NoObjectsMatched", message: "No KB objects matched the delete selector.", hint: "Use targets[] or name with the object's Type:Name; a GUID or EntityKey selects nothing here (export by identity with format=native).");
 
             var results = new JArray();
             int succeeded = 0;

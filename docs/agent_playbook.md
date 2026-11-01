@@ -426,6 +426,49 @@ The facade's empty `KBObject.Parent`/`Module` setters are misleading; runtime
 persistence goes through `Artech.Udm.Framework.EntityManager.UpdateParent` in
 `src/GxMcp.Worker/Helpers/ObjectMover.cs`, with full snapshot verification.
 
+### Text-tree formats (native export)
+
+- `genexus_io action=export_kb_to_text format=native` (`SdkTextTreeService`) writes each
+  part inside a `<Type> <Name> { ... }` envelope, with the source the SDK holds. Folder
+  names are plain (`WWPBaseObjects/WWPTemplates/Selection`). The official GeneXus text names
+  folders with an `@` keyword instead. That convention is an external reference, and no test
+  in this repository covers it.
+- `module.toml` is written once, at the module root (`WWPBaseObjects/module.toml`), never
+  inside a folder. The root is the path of the module's own index entry, so a folder above the
+  module that carries its name does not move it. `ModuleIdentifier` is the module's GUID from its
+  index entry, or its EntityKey when the entry has no GUID. When the index does not hold the module, the SDK is asked for it by name; no test
+  covers that answer. With no identifier no file is written, and an earlier one stays as it is. A file is removed only by a complete export (`mode=all`,
+  no targets, no `name`, `type`, `module`, `pathPrefix`, `limit`, `ignore` or `skip`, no failed object, no stop; an object without text parts is counted, not failed); any other export
+  keeps it.
+- A target the index does not hold is looked up in the SDK by its GUID, its EntityKey or its
+  name, as `genexus_read` does. The entry found takes the request's `type`, `module`,
+  `pathPrefix`, `ignore` and `limit` filters, as an indexed entry does. Such an object is exported without its dependencies, even with `includeDependencies`.
+- Each object is read by the identity its index entry holds. A read that resolves another name
+  or type, or finds no object, is reported for that object as `IndexEntryStale`, with the index
+  hint, and nothing is written for it. A single-part read is made by the object's type and name too, so a Transaction whose name a Table shares answers `IndexEntryStale`, not `AmbiguousName`.
+- A failed object carries `code`, `hint` and a plain-text `message` as fields of its entry in
+  `objects[]`. The error envelope is not stored as text in `message`.
+- An object type that lists no part is not written by `format=native`. It answers
+  `ObjectHasNoTextParts` for `part=Source` and for `part=all` alike. The other targets of the same
+  export still export. With any named target, including a module or folder whose children include it, it makes the reply `partial`. Without named targets (KB-wide, or narrowed only by `type`, `module` or `pathPrefix`) it is counted in `noTextParts`, the reply stays `ok`, and the files of deleted objects are removed only by a complete export. In the object list, `status: skipped` also marks it; the summary `skipped` counts the unchanged files and the objects passed by `skip`. Read its properties with
+  `genexus_properties action=get` and change them with `action=set`. Writing them as text in the
+  export is not implemented.
+- A native export writes one object per `Type:Name`. The index keeps one object per `Type:Name`, so a second object with the same type and name, in another module or folder, is found only by its GUID or EntityKey. When both are chosen, the one the request chose is written (named, or picked by a filter), and a homonym that came only as a dependency (`includeDependencies`) gives way to it; between two of the same kind, the first by path is written. The other answers `HomonymInSameTree` (an error; the reply is `partial`) and is not written. Export it into a separate root (`outputPath`). A table projection does not compete for the name: it is written under `#tables`.
+- A DesignSystem exported with `format=native` is wrapped as `DesignSystem <Name> { ... }`.
+  Reading that envelope gives the same source back.
+- The official GeneXus DesignSystem text is not the native format. The native reader recognizes
+  `#Properties` as a native part. An official `#DesignStyles` block is dropped when the text also
+  has a native part, and is read as `Source` text when it has none. Do not import official text
+  with `format=native`. To move a DesignSystem to or from the official GeneXus MCP server, use that
+  server's export and import.
+- With `includeChildren` (on by default, in `delete_kb_objects` and the export) a folder or module name
+  selects the children of every folder or module with that name, the object that carries that name wherever it is, and every object of a module with that name. Narrow it with `module` or
+  `pathPrefix`. The GUID or EntityKey of a folder or module selects nothing: only objects are
+  selected by identity. Only `format=native` selects by GUID or EntityKey; `delete_kb_objects` and the standard export select by name and answer `NoObjectsMatched` for an identity. `ignore` takes a GUID or EntityKey on every path, since it only removes entries. A folder or module GUID or EntityKey in `ignore` excludes nothing.
+- Without `format=native`, export takes the `ObjectTextService` path. This section does not describe
+  that output. That path does not look up a target the index does not hold in the SDK; it keeps its
+  own replies for an object without text parts. That is a written limit, not covered by the tests.
+
 ### Control-bound events
 
 Write the layout or PatternInstance before the Events part. A control-bound

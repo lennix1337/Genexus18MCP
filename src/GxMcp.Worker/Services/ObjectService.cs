@@ -3172,6 +3172,20 @@ namespace GxMcp.Worker.Services
                 (!string.IsNullOrWhiteSpace(entityKey) ? entityKey : guid);
         }
 
+        // An EntityKey given as the target names one object by identity, as an explicit entityKey does. It is
+        // refused when an explicit entityKey names another object, as a conflicting GUID is in NormalizeResolutionTarget.
+        internal static bool NormalizeEntityKeyTarget(string target, ref string entityKey)
+        {
+            string value = target?.Trim();
+            if (!TryParseEntityKey(value, out _, out _)) return true;
+            if (string.IsNullOrWhiteSpace(entityKey))
+            {
+                entityKey = value;
+                return true;
+            }
+            return TextSelectorParser.SameEntityKey(entityKey, value);
+        }
+
         internal static bool NormalizeResolutionTarget(ref string target, ref string type, ref string guid)
         {
             target = target?.Trim();
@@ -3281,6 +3295,7 @@ namespace GxMcp.Worker.Services
             // Parse name syntax once before every resolution strategy, including
             // explicit identities; conflicting selectors must not select a homonym.
             if (!NormalizeResolutionTarget(ref target, ref typeFilter, ref guid)) return null;
+            if (!NormalizeEntityKeyTarget(target, ref entityKey)) return null;
             var sw = Stopwatch.StartNew();
             var kb = _kbService.GetKB();
             if (kb == null) return null;
@@ -4357,6 +4372,8 @@ namespace GxMcp.Worker.Services
                     ["parts"] = partsObj
                 };
                 if (variablesProjection != null) result["variables"] = variablesProjection;
+                // With no part read, the parts the object lists tell a type without text parts from a failed read.
+                if (partsObj.Count == 0) WithAvailableParts(result, () => GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj));
                 return result.ToString();
             }
             catch (Exception ex)
@@ -5312,24 +5329,55 @@ namespace GxMcp.Worker.Services
         /// Batch text projections use this seam to plan all output files first and write them in
         /// one controlled pass, while keeping SDK resolution and STA ownership in ObjectService.
         /// </summary>
-        internal string ReadObjectPartText(string target, string partName = null, string typeFilter = null)
+        internal string ReadObjectPartText(string target, string partName = null, string typeFilter = null,
+            string guid = null, string entityKey = null, string path = null)
         {
             try
             {
-                var obj = FindObject(target, typeFilter);
-                if (obj == null) return HealingService.FormatNotFoundError(target, GetLoadedIndexOrNull());
-                return ReadObjectSourceInternal(
+                // Resolves like ReadObjectSourceParts (identity included) and reports a miss the same way.
+                var obj = FindObject(target, typeFilter, guid, entityKey, path);
+                if (obj == null) return FormatReadNotFound(target);
+                return WithObjectIdentity(ReadObjectSourceInternal(
                     obj,
                     string.IsNullOrWhiteSpace(partName) ? "Source" : partName,
                     0,
                     int.MaxValue,
                     "mcp",
-                    false);
+                    false), obj.Name, obj.TypeDescriptor?.Name);
             }
             catch (Exception ex)
             {
                 return McpResponse.Err(code: "ReadPartFailed", message: "Part read failed: " + ex.Message, target: target);
             }
+        }
+
+        // The export compares the object a read resolved with its index entry, so the reply names that object.
+        internal static string WithObjectIdentity(string reply, string objectName, string objectType)
+        {
+            try
+            {
+                JObject response = JObject.Parse(reply);
+                response["objectName"] = objectName;
+                response["objectType"] = objectType;
+                return response.ToString();
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return reply;
+            }
+        }
+
+        // The parts an object lists, as the reply's availableParts. A listing that fails, or gives no list, leaves the
+        // field out: the reply then says nothing about the object's parts, so it is never taken for a type without parts.
+        internal static JObject WithAvailableParts(JObject reply, Func<IEnumerable<string>> listParts)
+        {
+            try
+            {
+                IEnumerable<string> parts = listParts();
+                if (parts != null) reply["availableParts"] = new JArray(parts);
+            }
+            catch { }
+            return reply;
         }
 
         /// <summary>
@@ -5757,15 +5805,9 @@ namespace GxMcp.Worker.Services
                     result["error"] = $"Part '{partName}' not found in {obj.Name}";
                     result["objectName"] = obj.Name;
                     result["objectType"] = obj.TypeDescriptor?.Name;
-                    try
-                    {
-                        var avail = GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj);
-                        if (avail != null && avail.Length > 0)
-                        {
-                            result["availableParts"] = new JArray(avail);
-                        }
-                    }
-                    catch { }
+                    // The list is there whenever the object can be read, empty for a type without parts: a reply without it
+                    // cannot tell a type without parts from a part name that does not exist.
+                    WithAvailableParts(result, () => GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj));
                     string typeName = obj.TypeDescriptor?.Name ?? "object";
                     string available = result["availableParts"] is JArray parts && parts.Count > 0
                         ? $" Valid parts for {typeName}: {string.Join(", ", parts.Values<string>())}."
