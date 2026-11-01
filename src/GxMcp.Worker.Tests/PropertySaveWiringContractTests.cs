@@ -30,6 +30,8 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(1, SourceAssert.Count(src, "snapshot.ComparePropertyVerification(restored)"));
             Assert.Equal(1, SourceAssert.Count(src, "ResetOrWriteBack(rollback.RequestedNames"));
             Assert.Equal(1, SourceAssert.Count(src, "CanResetObjectProperty(current, rollback.NativeNames[name])"));
+            Assert.Equal(1, SourceAssert.Count(src, "((dynamic)obj).CanResetValue(nativeName)"));
+            Assert.Equal(0, SourceAssert.Count(src, "CanResetProperty"));
         }
 
         [Fact]
