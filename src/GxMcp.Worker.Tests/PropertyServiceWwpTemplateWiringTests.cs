@@ -258,6 +258,37 @@ namespace GxMcp.Worker.Tests
             => new JObject { ["TemplateXml"] = new JObject { ["find"] = find, ["replace"] = replace } };
 
         [Theory]
+        [InlineData("wwptemplate_templatexml")]
+        [InlineData(" WWPTemplate_TemplateXml ")]
+        public void APatchUnderAnotherSpellingOfTheSdkNameIsCheckedAsTheXmlAndNeverWritten(string name)
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+            var batch = new JObject { [name] = new JObject { ["find"] = "<table name=\"TableMain\" class=\"SynthOld\" />", ["replace"] = "<table name=\"TableMain\"" } };
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", batch, dryRun: false));
+
+            Assert.Equal("WwpTemplateInvalid", json["error"]?["code"]?.ToString());
+            Assert.Equal("XmlMalformed", json["error"]?["violations"]?[0]?["check"]?.ToString());
+            Assert.Empty(service.Writes);
+        }
+
+        [Theory]
+        [InlineData("wwptemplate_templatexml")]
+        [InlineData(" WWPTemplate_TemplateXml ")]
+        public void APatchUnderAnotherSpellingOfTheSdkNameIsPreviewedUnderTheSdkName(string name)
+        {
+            var service = new FakeTemplateTarget(WwpTemplateXml.ObjectType, "Trn.Selection", StoredXml);
+            var batch = new JObject { [name] = new JObject { ["find"] = "class=\"SynthOld\"", ["replace"] = "class=\"SynthNew\"" } };
+
+            JObject json = JObject.Parse(service.SetProperties("SynthTemplate", batch, dryRun: true));
+
+            Assert.Equal("DryRun", json["code"]?.ToString());
+            var validated = Assert.Single(service.Validations);
+            Assert.Equal("WWPTemplate_TemplateXml", validated.Name);
+            Assert.Contains("class=\"SynthNew\"", validated.Value);
+        }
+
+        [Theory]
         [InlineData("TemplateXml")]
         [InlineData("WWPTemplate_TemplateXml")]
         public void ADryRunOfATemplateXmlPatchPreviewsTheSummaryAndNeitherTheXmlNorItsOldValue(string name)
