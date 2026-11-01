@@ -49,6 +49,16 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void AnObjectValueOnAnotherPropertyWithAPropertyNameIsNotRefusedAsAPatch()
+        {
+            var routed = JObject.FromObject(new PropertiesRouter().ConvertToolCall("genexus_properties", JObject.Parse(@"{
+                ""action"": ""set"", ""name"": ""SynthObject"", ""propertyName"": ""Description"",
+                ""properties"": { ""Description"": { ""find"": ""SynthOld"", ""replace"": ""SynthNew"" } } }"))!);
+
+            Assert.Equal("SynthOld", routed["properties"]?["Description"]?["find"]?.ToString());
+        }
+
+        [Fact]
         public void ATextValueWithAPropertyNameIsNotRefusedAsAPatch()
         {
             var routed = JObject.FromObject(new PropertiesRouter().ConvertToolCall("genexus_properties", JObject.Parse(@"{
@@ -63,7 +73,10 @@ namespace GxMcp.Gateway.Tests
         {
             string help = ToolHelpCatalog.Get("genexus_properties") ?? string.Empty;
 
-            foreach (string expected in new[] { "\"find\"", "replaceAll", "expectedCount", "NoMatch", "Ambiguous", "WwpTemplateInvalid", "`dryRun`" })
+            foreach (string expected in new[]
+            {
+                "`replaceAll: true` every match is replaced", "`patch` block", "`NoMatch`", "`Ambiguous`", "`WwpTemplateInvalid`"
+            })
                 Assert.Contains(expected, help);
         }
     }
