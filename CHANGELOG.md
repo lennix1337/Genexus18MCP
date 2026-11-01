@@ -44,6 +44,8 @@
 
 ### Fixed
 
+- **A name qualified by a module (`Module.Name`) selects only the object of that module, for a batch delete and for an export.** Before, the name matched any object with the same last name, so a batch delete of one module's object could delete a same-named object of another module. A single delete whose qualified name resolves to another module's object is now refused with `ObjectModuleMismatch`, and nothing is written.
+
 - **`genexus_save_as` of a Data Provider keeps its output SDT.** The clone was made part by part and came back with an empty `OutputSDT`, so it no longer produced its collection. The output is read from the source and set on the clone through the typed output API, reported as `created.propertiesCloned`; a clone that cannot take it is rolled back like one that cannot take a part.
 
 - **A WorkWithPlus template write that would leave the template failing these checks is refused before anything is written.** A `genexus_properties set` (single, batch or `dryRun`) and an `object_atomic` write that change `WWPTemplate_Type` or `WWPTemplate_TemplateXml` are refused when the type is empty or is not a known type of WorkWithPlus 16.2, when the XML is empty, malformed, declares a DTD or has another root than the one of its type, and when a stored value cannot be read (`WwpTemplateInvalid`, with a `violations` list). These checks filter the form of the template: they do not run the editor's own validators. Refs https://github.com/lennix1337/Genexus18MCP/issues/794
