@@ -379,15 +379,6 @@ namespace GxMcp.Worker.Helpers
             return GetVariablesAsText(varPart);
         }
 
-        // The text after a variable's name in the declaration GetVariablesAsText writes: the array suffix, the type and the collection suffix.
-        internal static string DeclarationOf(VariablesPart varPart, global::Artech.Genexus.Common.Variable v)
-        {
-            string typeRepr = ResolveTypeRepresentation(varPart.Model, v);
-            string arraySuffix = VariableDimensionSupport.FormatDeclarationSuffix(v);
-            string collectionSuffix = v.IsCollection ? " Collection" : "";
-            return arraySuffix + " : " + typeRepr + collectionSuffix;
-        }
-
         public static string GetVariablesAsText(VariablesPart varPart)
         {
             var sb = new System.Text.StringBuilder();

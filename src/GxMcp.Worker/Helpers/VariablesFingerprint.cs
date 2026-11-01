@@ -9,8 +9,8 @@ namespace GxMcp.Worker.Helpers
     /// <summary>
     /// The variables of an object as the text that the property write and its rollback compare. The declarations of the variables are not
     /// part of the properties of any part, so a save that deletes a variable, or its description, changes no part that the comparison sees.
-    /// The text has one line per variable, in name order: the variable, its declaration as the variable editor writes it, and its
-    /// description. It is null when the variables cannot be read, and the comparison then leaves them out instead of counting them as changed.
+    /// The text has one line per variable, in name order: the variable, its declaration and its description. It is null when the variables
+    /// cannot be read, and the comparison then leaves them out instead of counting them as changed.
     /// </summary>
     internal static class VariablesFingerprint
     {
@@ -45,7 +45,14 @@ namespace GxMcp.Worker.Helpers
             return text.ToString();
         }
 
-        private static string OneLine(string text) => (text ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ');
+        // The declaration after a variable's name, from the stored type only. No model query is made, so a lookup that fails on one read and
+        // not on the other cannot make the two texts differ. Attribute, domain and SDT bindings and array dimensions are not part of it.
+        internal static string DeclarationOf(string typeName, int length, int decimals, bool collection)
+            => " : " + typeName + "(" + length + (decimals > 0 ? "," + decimals : "") + ")" + (collection ? " Collection" : "");
+
+        // A description on one line, with its line endings and trailing spaces normalized: the same text is the same description.
+        private static string OneLine(string text) =>
+            (text ?? string.Empty).Replace("\r\n", "\n").TrimEnd().Replace('\r', '\n').Replace('\n', ' ');
 
         // The variables of the object, read from its variables part. A description the SDK does not expose throws here, and then the
         // whole text is unknown: a missing description is never taken for a deleted one.
@@ -55,7 +62,7 @@ namespace GxMcp.Worker.Helpers
             if (part == null) return new VariableFact[0];
             return part.Variables
                 .Cast<global::Artech.Genexus.Common.Variable>()
-                .Select(v => new VariableFact(v.Name, VariableInjector.DeclarationOf(part, v), v.Description))
+                .Select(v => new VariableFact(v.Name, DeclarationOf(v.Type.ToString(), v.Length, v.Decimals, v.IsCollection), v.Description))
                 .ToList();
         }
     }

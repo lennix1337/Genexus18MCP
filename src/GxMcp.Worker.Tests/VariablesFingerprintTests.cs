@@ -75,6 +75,33 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ADescriptionThatDiffersOnlyInLineEndingsOrTrailingSpacesIsTheSameText()
+        {
+            string plain = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"));
+
+            Assert.Equal(plain, Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador\r\n")));
+            Assert.Equal(plain, Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador\n")));
+            Assert.Equal(plain, Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador   ")));
+        }
+
+        [Fact]
+        public void AMultiLineDescriptionIsOneLineWithTheSameTextInEitherLineEnding()
+        {
+            string windows = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Linha um\r\nLinha dois"));
+
+            Assert.Equal(windows, Fingerprint(new VariableFact("Count", " : Numeric(4)", "Linha um\nLinha dois")));
+            Assert.Equal("&Count : Numeric(4) // Linha um Linha dois\n", windows);
+        }
+
+        [Fact]
+        public void TheDeclarationIsWrittenFromTheStoredTypeLengthDecimalsAndCollection()
+        {
+            Assert.Equal(" : Numeric(8)", VariablesFingerprint.DeclarationOf("Numeric", 8, 0, false));
+            Assert.Equal(" : Numeric(8,2)", VariablesFingerprint.DeclarationOf("Numeric", 8, 2, false));
+            Assert.Equal(" : SDT(10) Collection", VariablesFingerprint.DeclarationOf("SDT", 10, 0, true));
+        }
+
+        [Fact]
         public void TheSdkReaderGivesNoTextWhenTheObjectCannotBeRead()
         {
             // The production reader is the default one: an object whose parts cannot be read is unknown, never an empty text.
