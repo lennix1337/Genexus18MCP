@@ -118,6 +118,21 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void AnUnexpectedFailureAfterTheCommitCarriesTheReceiptWithItsStatusInAnyCase()
+        {
+            // The catch of a simple write answers "Error" with a capital letter; the receipt must mark it all the same.
+            MethodInfo receipt = typeof(PropertyService).GetMethod("CommittedReceipt", BindingFlags.NonPublic | BindingFlags.Static);
+
+            JObject failed = JObject.Parse((string)receipt.Invoke(null, new object[]
+            {
+                "{\"status\":\"Error\",\"message\":\"unexpected\"}"
+            }));
+
+            Assert.True((bool)failed["committed"]);
+            Assert.False((bool)failed["persistenceStateKnown"]);
+        }
+
+        [Fact]
         public void ASimpleRouteSuccessReachesTheCallerAsItWasVerified()
         {
             // A verified write is a success. The receipt marks only errors, so the reply keeps its values and its verification.

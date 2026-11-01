@@ -1580,7 +1580,7 @@ namespace GxMcp.Worker.Services
         private static string CommittedReceipt(string envelope)
         {
             var receipt = JObject.Parse(envelope);
-            if (!string.Equals(receipt["status"]?.ToString(), "error", StringComparison.Ordinal)) return envelope;
+            if (!string.Equals(receipt["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase)) return envelope;
             PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.ProofOfVerificationRefusal(receipt["error"]?["code"]?.ToString()));
             return receipt.ToString(Newtonsoft.Json.Formatting.None);
         }
