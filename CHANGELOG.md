@@ -105,6 +105,8 @@
 
 - **The `genexus_create` schema type list names `DesignSystem`.** The create already saves an empty DesignSystem through the same SDK path as the other object types, but the schema type list left it out. The help and the `NoDesignSystem` hint now say that a DesignSystem is created with its parts empty (Documentation, Source, Styles, Tokens). Refs https://github.com/lennix1337/Genexus18MCP/issues/793
 
+- **An error answer over the 80k budget keeps its code and write receipt.** An error with long lists, such as a refused `genexus_edit`, went over the budget and came back as the generic budget message, without `code`, `persisted` or `rollbackVerified`. Now its lists and long text are shortened, the error object and the write receipt stay whole, and the answer says it was shortened (`isTruncated`, `gatewayTruncationHint`). Successful answers over the budget keep the budget message.
+
 ### Internal
 
 - **CI reports whitespace problems on the lines a pull request adds (#757).** `scripts/ci/check-whitespace.ps1` runs `git diff --check` over `base...head` in the `changes` job and emits `::warning` annotations; since phase 2 the `changes` job runs it with `-Enforce`, so a finding fails the job (the script alone stays advisory). A diff it cannot classify (unknown commit, no merge base, a result other than clean or exit 2 with diagnostics) is a fatal error, never a clean pass, and non-PR events print an explicit notice. `scripts/tests/test-check-whitespace.ps1` covers clean, findings, fail-closed and skipped paths. Phase 2 (blocking) followed four pull requests with no findings.
