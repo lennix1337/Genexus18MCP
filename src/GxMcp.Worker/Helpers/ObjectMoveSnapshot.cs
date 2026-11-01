@@ -202,6 +202,13 @@ namespace GxMcp.Worker.Helpers
             try { current = Capture(obj); }
             catch (Exception ex) { return Comparison.Failed(new[] { "SnapshotReadFailed: " + ex.Message }, null); }
 
+            return ComparePropertyVerificationWith(current);
+        }
+
+        // The comparison behind ComparePropertyVerification, against a snapshot already taken. It works on snapshots built from plain
+        // data, so the rules of the verification can be exercised without an SDK object.
+        internal Comparison ComparePropertyVerificationWith(ObjectMoveSnapshot current)
+        {
             var changed = new List<string>();
             if (!_objectXml.SequenceEqual(current._objectXml))
             {
