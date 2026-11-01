@@ -236,6 +236,19 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ErrorMessageOverTheVerdictLimit_IsCutOnlyInTheVerdictAlone()
+        {
+            JObject payload = Refusal(items: 0, itemChars: 0);
+            ((JObject)payload["error"]!)["message"] = new string('m', 90000);
+
+            JObject truncated = Truncate(payload, "genexus_edit");
+
+            Assert.Equal(503, ((string?)truncated["error"]!["message"])!.Length);
+            Assert.Contains("reduced this error to its verdict", (string?)truncated["gatewayTruncationHint"] ?? "");
+            Assert.True(SizeOf(truncated) <= Budget);
+        }
+
+        [Fact]
         public void SuccessOverBudget_KeepsTheBudgetPhrase()
         {
             JObject truncated = Truncate(Refusal(items: 12, itemChars: 7000, error: false), "genexus_edit");
