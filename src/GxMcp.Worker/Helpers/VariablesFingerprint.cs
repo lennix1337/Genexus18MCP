@@ -9,8 +9,10 @@ namespace GxMcp.Worker.Helpers
     /// <summary>
     /// The variables of an object as the text that the property write and its rollback compare. The declarations of the variables are not
     /// part of the properties of any part, so a save that deletes a variable, or its description, changes no part that the comparison sees.
-    /// The text has one line per variable, in name order: the variable, its declaration and its description. It is null when the variables
-    /// cannot be read, and the comparison then leaves them out instead of counting them as changed.
+    /// The text has one line per variable, in name order: the variable, its declaration and its description. Standard variables are left
+    /// out: GeneXus defines them, so a save may add or drop them without the write having changed them. Auto-defined variables stay in: the
+    /// source relies on them, so their removal is a change the write made. It is null when the variables cannot be read, and the comparison
+    /// then leaves them out instead of counting them as changed.
     /// </summary>
     internal static class VariablesFingerprint
     {
@@ -32,11 +34,12 @@ namespace GxMcp.Worker.Helpers
             }
         }
 
-        /// <summary>The text of the given variables: one line each, in name order, the description on one line.</summary>
+        /// <summary>The text of the given variables: one line each, in name order, the description on one line. Standard variables are not written.</summary>
         internal static string Of(IEnumerable<VariableFact> variables)
         {
             var text = new System.Text.StringBuilder();
             foreach (VariableFact variable in (variables ?? Enumerable.Empty<VariableFact>())
+                .Where(v => !v.Standard)
                 .OrderBy(v => v.Name, StringComparer.OrdinalIgnoreCase))
             {
                 text.Append('&').Append(variable.Name).Append(variable.Declaration)
@@ -62,19 +65,22 @@ namespace GxMcp.Worker.Helpers
             if (part == null) return new VariableFact[0];
             return part.Variables
                 .Cast<global::Artech.Genexus.Common.Variable>()
-                .Select(v => new VariableFact(v.Name, DeclarationOf(v.Type.ToString(), v.Length, v.Decimals, v.IsCollection), v.Description))
+                .Select(v => new VariableFact(
+                    v.Name, DeclarationOf(v.Type.ToString(), v.Length, v.Decimals, v.IsCollection), v.Description, v.IsStandard))
                 .ToList();
         }
     }
 
-    /// <summary>One variable as the variables text reads it: its name, the declaration that follows the name, and its description.</summary>
+    /// <summary>One variable as the variables text reads it: its name, the declaration that follows the name, its description, and whether
+    /// GeneXus defines it as a standard variable (a standard variable is left out of the text).</summary>
     internal sealed class VariableFact
     {
-        internal VariableFact(string name, string declaration, string description)
+        internal VariableFact(string name, string declaration, string description, bool standard = false)
         {
             Name = name;
             Declaration = declaration;
             Description = description;
+            Standard = standard;
         }
 
         internal string Name { get; }
@@ -82,5 +88,7 @@ namespace GxMcp.Worker.Helpers
         internal string Declaration { get; }
 
         internal string Description { get; }
+
+        internal bool Standard { get; }
     }
 }

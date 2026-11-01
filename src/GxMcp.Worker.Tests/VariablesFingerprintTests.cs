@@ -44,6 +44,41 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void AStandardVariableIsLeftOutSoItsRemovalOnSaveIsNotAChange()
+        {
+            string before = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"), new VariableFact("Pad", " : Character(40)", "", standard: true));
+            string after = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"));
+
+            Assert.Equal(after, before);
+        }
+
+        [Fact]
+        public void AStandardVariableDoesNotAppearInTheText()
+        {
+            Assert.Equal(
+                "&Count : Numeric(4) // Contador\n",
+                Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"), new VariableFact("Pad", " : Character(40)", "Padrao", standard: true)));
+        }
+
+        [Fact]
+        public void AStandardVariableWithAnOutdatedDescriptionIsNotADifference()
+        {
+            string before = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"), new VariableFact("Pad", " : Character(40)", "Antiga", standard: true));
+            string after = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"), new VariableFact("Pad", " : Character(40)", "Nova", standard: true));
+
+            Assert.Equal(before, after);
+        }
+
+        [Fact]
+        public void ADeletedVariableStillChangesTheFingerprintWhenAStandardVariableIsPresent()
+        {
+            string before = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"), new VariableFact("Name", " : Character(40)", ""), new VariableFact("Pad", " : Character(40)", "", standard: true));
+            string after = Fingerprint(new VariableFact("Count", " : Numeric(4)", "Contador"), new VariableFact("Pad", " : Character(40)", "", standard: true));
+
+            Assert.NotEqual(before, after);
+        }
+
+        [Fact]
         public void TheOrderOfTheVariablesDoesNotChangeTheFingerprint()
         {
             string ordered = Fingerprint(new VariableFact("Count", " : Numeric(4)", "A"), new VariableFact("Name", " : Character(40)", "B"));
@@ -117,6 +152,14 @@ namespace GxMcp.Worker.Tests
 
             Assert.Equal(1, SourceAssert.Count(src, "part.Variables"));
             Assert.Equal(1, SourceAssert.Count(src, "v.Description"));
+        }
+
+        [Fact]
+        public void TheSdkReaderReadsTheStandardFlagOfEachVariable()
+        {
+            string src = RepoSource.WithoutComments(RepoSource.Read("src", "GxMcp.Worker", "Helpers", "VariablesFingerprint.cs"));
+
+            Assert.Equal(1, SourceAssert.Count(src, "v.IsStandard"));
         }
     }
 }
