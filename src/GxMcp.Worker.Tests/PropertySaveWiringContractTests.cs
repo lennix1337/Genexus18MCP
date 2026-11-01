@@ -39,6 +39,15 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void TheBatchWriteIsCheckedWithThePartsAndTheVariablesTogether()
+        {
+            // The batch write checks the parts and the variables text through CompareWritten. Going back to CompareParts would leave a deleted
+            // variable unseen by the write, so the call is pinned.
+            Assert.Equal(1, SourceAssert.Count(PropertySource(), "snapshot.CompareWritten(fresh)"));
+            Assert.Equal(0, SourceAssert.Count(PropertySource(), "snapshot.CompareParts(fresh)"));
+        }
+
+        [Fact]
         public void AResetIsChosenOnlyForAValueWrittenToTheObjectItself()
         {
             Assert.Equal(1, SourceAssert.Count(PropertySource(), "ReferenceEquals(propertyContainer, obj) && IsPropertyDefaultSafe(obj, nativeName)"));
