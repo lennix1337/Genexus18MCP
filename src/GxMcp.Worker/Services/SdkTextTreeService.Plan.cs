@@ -298,8 +298,7 @@ namespace GxMcp.Worker.Services
             return new ReadFailure
             {
                 Code = NoTextPartsCode,
-                Message = "'" + entry.Name + "' (" + entry.Type + ") has no text parts to export: its data are SDK properties "
-                    + "(WorkWithPlus templates keep them in WWPTemplate_* properties, for example).",
+                Message = "'" + entry.Name + "' (" + entry.Type + ") has no text parts to export: its data are SDK properties.",
                 Hint = "Read the properties with genexus_properties action=get and change them with action=set. The native export does not write them."
             };
         }
