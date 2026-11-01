@@ -1415,6 +1415,37 @@ namespace GxMcp.Worker.Services
         }
 
         /// <summary>
+        /// A target written Module.Name names the object of that module. True when the module the object found lives in is
+        /// the one the target names, or when the target is not written that way: a bare name, an identity, or a longer
+        /// folder path, which is not checked here.
+        /// </summary>
+        internal static bool QualifierNamesModule(string target, string moduleName)
+        {
+            string name = (target ?? string.Empty).Trim();
+            int colon = name.IndexOf(':');
+            if (colon > 0 && !TryParseEntityKey(name, out _, out _)) name = name.Substring(colon + 1);
+            int dot = name.IndexOf('.');
+            if (dot <= 0 || name.IndexOf('.', dot + 1) >= 0) return true;
+            return string.Equals(name.Substring(0, dot), moduleName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>The refusal for a target that names another module than the one the object found lives in.</summary>
+        internal static string DeleteModuleMismatchResponse(string target, string objName, string foundModule)
+        {
+            return McpResponse.Err(
+                code: "ObjectModuleMismatch",
+                message: "The name '" + target + "' names a module that does not hold the object found. Nothing was deleted.",
+                hint: "Name the object with the module that holds it, or with its bare name when that name is unique in the KB.",
+                target: objName,
+                extra: new JObject
+                {
+                    ["foundModule"] = foundModule ?? string.Empty,
+                    ["wouldDelete"] = false,
+                    ["persisted"] = false
+                });
+        }
+
+        /// <summary>
         /// What a delete learns from the KB before it writes anything: the envelope that ends the call (KB not open,
         /// or confirm missing), or whether the target was found and the identity of what was found.
         /// </summary>
@@ -1427,6 +1458,9 @@ namespace GxMcp.Worker.Services
             public string Name { get; set; }
             public string TypeName { get; set; }
             public Guid Guid { get; set; }
+            // The module that holds the object found, or null when it sits in none. A target written Module.Name is checked
+            // against it before any write.
+            public string ModuleName { get; set; }
         }
 
         private Func<string, string, bool, bool, DeleteResolution> _deleteTargetResolver;
@@ -1473,8 +1507,15 @@ namespace GxMcp.Worker.Services
                 Object = obj,
                 Name = obj.Name,
                 TypeName = obj.TypeDescriptor?.Name ?? "Unknown",
-                Guid = obj.Guid
+                Guid = obj.Guid,
+                ModuleName = ModuleNameOf(obj)
             };
+        }
+
+        private static string ModuleNameOf(KBObject obj)
+        {
+            try { return obj?.Module?.Name; }
+            catch (Exception) { return null; }
         }
 
         public string DeleteObject(string target, string typeFilter, bool confirm, bool dryRun = false, string expectedVersion = null)
@@ -1544,6 +1585,9 @@ namespace GxMcp.Worker.Services
                 // spelling, is refused here, before the version check and any transaction.
                 if (IsDeleteRefusedForType(objType))
                     return DeleteNotSupportedForTypeResponse(objName, objType);
+                // A target written Module.Name deletes only the object of that module: a homonym in another module is refused.
+                if (!QualifierNamesModule(target, resolution.ModuleName))
+                    return DeleteModuleMismatchResponse(target, objName, resolution.ModuleName);
                 string qualifiedName = GetQualifiedObjectName(obj);
                 string versionBefore = WriteService.ComputeVersionToken(obj);
                 if (!string.IsNullOrWhiteSpace(expectedVersion)

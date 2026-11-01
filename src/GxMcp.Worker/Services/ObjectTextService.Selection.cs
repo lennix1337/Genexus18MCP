@@ -215,7 +215,7 @@ namespace GxMcp.Worker.Services
         }
 
         private static bool SelectorMatches(TextSelector selector, TextFileEntry item)
-            => item != null && TextSelectorParser.Matches(selector, item.Name, item.Type);
+            => item != null && TextSelectorParser.Matches(selector, item.Name, item.Type, new[] { item.Module });
 
         private static string ValidateTextFile(string path, string part)
         {
