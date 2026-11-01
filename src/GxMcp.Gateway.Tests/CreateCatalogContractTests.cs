@@ -17,9 +17,11 @@ namespace GxMcp.Gateway.Tests
         public void Schema_ListsDesignSystemAmongTheCreatableTypes()
         {
             JObject tool = CreateTool();
-            string summary = (string)tool["description"];
-            string typeProperty = (string)tool["inputSchema"]["properties"]["type"]["description"];
+            string? summary = (string?)tool["description"];
+            string? typeProperty = (string?)tool["inputSchema"]?["properties"]?["type"]?["description"];
 
+            Assert.NotNull(summary);
+            Assert.NotNull(typeProperty);
             Assert.Contains("DesignSystem", summary);
             Assert.Contains("DesignSystem", typeProperty);
         }
@@ -27,16 +29,18 @@ namespace GxMcp.Gateway.Tests
         [Fact]
         public void Help_NamesDesignSystemWithItsPartsEmpty()
         {
-            string help = ToolHelpCatalog.Get("genexus_create");
+            string? help = ToolHelpCatalog.Get("genexus_create");
 
+            Assert.NotNull(help);
             Assert.Contains("`DesignSystem` — created with its parts empty (Documentation, Source, Styles, Tokens).", help);
         }
 
         [Fact]
         public void Help_RefusesWorkWithPlusTemplatesInEveryModeWithTheirErrorCodesAndTheIde()
         {
-            string help = ToolHelpCatalog.Get("genexus_create");
+            string? help = ToolHelpCatalog.Get("genexus_create");
 
+            Assert.NotNull(help);
             Assert.Contains("WorkWithPlus for Web Template", help);
             Assert.Contains("UnsupportedObjectType", help);
             Assert.Contains("AtomicCreateValidationFailed", help);
@@ -47,7 +51,7 @@ namespace GxMcp.Gateway.Tests
         private static JObject CreateTool()
         {
             var tools = JArray.Parse(RepoSource.Read("src", "GxMcp.Gateway", "tool_definitions.json"));
-            return (JObject)tools.Single(t => (string)t["name"] == "genexus_create");
+            return (JObject)tools.Single(t => (string?)t["name"] == "genexus_create");
         }
     }
 }
