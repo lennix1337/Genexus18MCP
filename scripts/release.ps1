@@ -23,6 +23,8 @@ if ($NoBump) {
 }
 
 $root = Split-Path -Parent $PSScriptRoot
+$contract = Join-Path $root 'scripts\release-contract.ps1'
+if (Test-Path -LiteralPath $contract -PathType Leaf) { . $contract }
 $canonical = Join-Path $root 'release.ps1'
 if (-not (Test-Path -LiteralPath $canonical -PathType Leaf)) { throw "Canonical release script not found: $canonical" }
 
@@ -32,16 +34,20 @@ if (-not [string]::IsNullOrWhiteSpace($BumpType)) {
         $targetVersion = $BumpType
     } elseif ($BumpType -in @('patch', 'minor', 'major')) {
         $package = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
-        if ($package.version -notmatch '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$') {
-            throw "Cannot calculate $BumpType from package.json version '$($package.version)'. Pass an explicit semver to .\release.ps1."
+        if (Get-Command Get-GxMcpNextSemVer -ErrorAction SilentlyContinue) {
+            $targetVersion = Get-GxMcpNextSemVer -CurrentVersion ([string]$package.version) -Bump $BumpType
+        } else {
+            if ($package.version -notmatch '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$') {
+                throw "Cannot calculate $BumpType from package.json version '$($package.version)'. Pass an explicit semver to .\release.ps1."
+            }
+            $major = [int]$Matches.major; $minor = [int]$Matches.minor; $patchValue = [int]$Matches.patch
+            switch ($BumpType) {
+                'major' { $major++; $minor = 0; $patchValue = 0 }
+                'minor' { $minor++; $patchValue = 0 }
+                'patch' { $patchValue++ }
+            }
+            $targetVersion = "$major.$minor.$patchValue"
         }
-        $major = [int]$Matches.major; $minor = [int]$Matches.minor; $patchValue = [int]$Matches.patch
-        switch ($BumpType) {
-            'major' { $major++; $minor = 0; $patchValue = 0 }
-            'minor' { $minor++; $patchValue = 0 }
-            'patch' { $patchValue++ }
-        }
-        $targetVersion = "$major.$minor.$patchValue"
     } else {
         throw "BumpType must be patch, minor, major, or an explicit semver like 3.0.1."
     }
