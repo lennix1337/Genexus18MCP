@@ -70,7 +70,9 @@ namespace GxMcp.Worker.Tests
 
             Assert.Contains("new Artech.Architecture.Common.Objects.QualifiedName(StripDomainQualifier(rawValue).Trim())", src);
             Assert.Contains("requested = StripDomainQualifier(requested);", src);
-            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(src, @"IsDomainReadAlias\((targetPropName|req), n\)").Count);
+            // Both get paths read through FindListedItem, which applies the idBasedOn-excluding alias once for every name.
+            Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(src, @"IsDomainReadAlias\(requested, n\)").Count);
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(src, @"FindListedItem\(props, (targetPropName|req), officialAliases\)").Count);
             Assert.DoesNotContain("IsDomainPropertyName(targetPropName) && IsDomainPropertyName(n)", src);
             Assert.DoesNotContain("IsDomainPropertyName(req) && IsDomainPropertyName(n)", src);
         }
