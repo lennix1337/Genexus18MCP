@@ -148,3 +148,11 @@ The `Name` attribute of the root is not checked. In that export 23 roots have no
 `object_atomic` (create and update) writes the properties of a template through the same decision, before its first value is written. The rollback of a failed write restores the values the object had, and does not pass through the check.
 
 The check reads the XML and the type only. It does not run the validators of WorkWithPlus, so a template that passes can still be rejected by its editor for other reasons. A written value is still confirmed by an independent read after the save, as before.
+
+A `set` can change part of the template XML instead of sending all of it. The value of `TemplateXml` (or `WWPTemplate_TemplateXml`) is then an object: `{"find": "<exact text>", "replace": "<new text>", "replaceAll": false, "expectedCount": 1}`. The call reads the stored XML itself, in the same command, and matches `find` byte for byte (no culture rules):
+
+- without `replaceAll` the text must occur once; `expectedCount` states another number of occurrences, and all of them are replaced;
+- with `replaceAll: true` every occurrence is replaced, and `expectedCount`, when sent, must equal the number found;
+- no occurrence fails with `NoMatch`; a count that differs fails with `Ambiguous`. Both leave the template unchanged and name the read that gives the exact text.
+
+The result is checked exactly as a whole XML, so the refusals above apply to it (`WwpTemplateInvalid`). A `dryRun` returns a `patch` block (`occurrences`, `replaced`, `beforeLength`, `afterLength` and a short `context`) and the same verdict, without the XML. A patch goes alone in `properties`: a `propertyName` or `value` sent with it, or a text value for the same property, is refused. `expectedVersion` stays optional, as in every batch set: the call reads the XML it patches, and the transaction checks the version against that read.
