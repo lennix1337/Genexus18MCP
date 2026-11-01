@@ -454,17 +454,22 @@ persistence goes through `Artech.Udm.Framework.EntityManager.UpdateParent` in
   value per property in the official order (`Name`, `Description`, `TemplateCategory`,
   `TemplateCategoryOrder`, `TemplateType`, `TemplateXml`, `MainTemplate`, `InstanceType`,
   `PreviewImage`, `IsDefault`), tabs for indentation, a blank line after each property and LF line endings
-  (the official export writes CRLF). The values are read fresh through the identity of the index entry,
-  in the SDK thread; the manifest entry reads `parts: ["Properties"]`. A named template is exported. A
-  template whose properties cannot be read is an error of that object alone.
+  (the official export writes CRLF). The values are read from the SDK object that the identity of the index
+  entry resolves to, in the SDK thread, and not from the index's values; a value the SDK does not hold is left
+  out of the file, not written empty. The manifest entry reads `parts: ["Properties"]`. A named template is
+  exported. A template whose type or XML the SDK does not give, or whose read raises an error, is an error of
+  that object alone.
 - Differences from the official text, all in this export: the LF line endings; the escapes. A double quote
   is `\"`, as the official text writes it. A backslash, CR, LF and TAB are written `\\`, `\r`, `\n` and
   `\t`: only `\"` was seen in the official text, so the others are this export's convention, and the
   tests read them back with a reader written for them. A DesignSystem keeps its own
   native envelope.
-- A native import refuses a WorkWithPlus template file (`WorkWithPlusforWebTemplate`) on its own, with
-  `WwpTemplateImportRefused`, before any part reaches the KB, and the rest of the batch goes on unless
-  `stopOnError`. A dry run refuses it too. Change a template with `genexus_properties action=set`.
+- A native import of a tree skips a WorkWithPlus template file (`WorkWithPlusforWebTemplate`, or any spelling of
+  the same type that `ObjectCreateTypes.IsWorkWithPlusTemplate` recognises) with `WwpTemplateNotImported`. The file
+  is counted in `templatesNotImported`, it is not a failure, nothing is written for it, and the batch goes on even
+  with `stopOnError`; a dry run and `listOnly` show it the same way. A template named in `targets` is an error with
+  `WwpTemplateImportRefused`, which stops the batch with `stopOnError`. Change a template with
+  `genexus_properties action=set`.
 - An object type other than the template that lists no part is not written by `format=native`. It answers
   `ObjectHasNoTextParts` for `part=Source` and for `part=all` alike. The other targets of the same
   export still export. With any named target, including a module or folder whose children include it, it makes the reply `partial`. Without named targets (KB-wide, or narrowed only by `type`, `module` or `pathPrefix`) it is counted in `noTextParts`, the reply stays `ok`, and the files of deleted objects are removed only by a complete export. In the object list, `status: skipped` also marks it; the summary `skipped` counts the unchanged files and the objects passed by `skip`. Read its properties with
