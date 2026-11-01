@@ -88,11 +88,15 @@ namespace GxMcp.Worker.Helpers
             => restoreCommitted ? PersistenceProof.Unknown : earlier;
 
         /// <summary>
-        /// The proof of a verification refusal, by its error code. A read-back that found another value (<c>PropertyNotPersisted</c>) shows
-        /// the requested value is not in the object. Any other refusal leaves the state unknown.
+        /// The proof of a verification refusal, by its error code. A read-back that found another value (<c>PropertyNotPersisted</c>), or a
+        /// type change that the SDK kept as it was (<c>UnsupportedOperation</c>), shows the requested value is not in the object. Any other
+        /// refusal leaves the state unknown.
         /// </summary>
         internal static PersistenceProof ProofOfVerificationRefusal(string errorCode)
-            => string.Equals(errorCode, "PropertyNotPersisted", StringComparison.Ordinal) ? PersistenceProof.NotPersisted : PersistenceProof.Unknown;
+            => string.Equals(errorCode, "PropertyNotPersisted", StringComparison.Ordinal)
+                || string.Equals(errorCode, "UnsupportedOperation", StringComparison.Ordinal)
+                ? PersistenceProof.NotPersisted
+                : PersistenceProof.Unknown;
 
         /// <summary>
         /// The proof of a read-back that did not confirm the property. Only a read that says the value is not there proves it is not in the

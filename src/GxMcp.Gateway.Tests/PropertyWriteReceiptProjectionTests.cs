@@ -47,7 +47,7 @@ namespace GxMcp.Gateway.Tests
 
             Program.MarkMutationOutcomeUnknown(timeout);
 
-            Assert.Equal(JTokenType.Null, timeout["persisted"].Type);
+            Assert.Equal(JTokenType.Null, timeout["persisted"]?.Type);
             Assert.False((bool)timeout["persistenceStateKnown"]!);
         }
 

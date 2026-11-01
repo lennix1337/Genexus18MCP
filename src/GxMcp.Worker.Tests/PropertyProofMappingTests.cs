@@ -14,6 +14,13 @@ namespace GxMcp.Worker.Tests
                 PropertyRollbackRestore.ProofOfVerificationRefusal("PropertyNotPersisted"));
         }
 
+        [Fact]
+        public void ATypeTheSdkKeptProvesTheRequestedTypeIsNotInTheObject()
+        {
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.NotPersisted,
+                PropertyRollbackRestore.ProofOfVerificationRefusal("UnsupportedOperation"));
+        }
+
         [Theory]
         [InlineData("PropertyVerificationUnavailable")]
         [InlineData("PropertyWriteFailed")]
