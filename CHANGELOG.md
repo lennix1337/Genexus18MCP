@@ -9,6 +9,8 @@
 
 ### Changed
 
+- **A WorkWithPlus template exports with its properties.** `genexus_io action=export_kb_to_text format=native` writes a `WorkWithPlus for Web Template` object as a `WorkWithPlusforWebTemplate` file with its properties (`Name`, `Description`, `TemplateCategory`, `TemplateCategoryOrder`, `TemplateType`, `TemplateXml`, `MainTemplate`, `InstanceType`, `PreviewImage` and `IsDefault`), in the order of the official text, read from the SDK object that the index entry identifies, and reports it as `exported`. A value the SDK does not hold is left out, not written empty. The file uses LF line endings where the official text uses CRLF; `docs/agent_playbook.md` describes the escapes. A named template exports; one whose type or XML the SDK does not give is an error of that object alone, and other object types without text parts keep `ObjectHasNoTextParts`. A native import of a tree skips a template file with `WwpTemplateNotImported`: nothing is written for it, it is not counted as a failure, and the batch goes on even with `stopOnError`. A template named in `targets` is an error (`WwpTemplateImportRefused`). Templates are still changed with `genexus_properties`.
+
 ### Fixed
 
 ### Internal
@@ -52,7 +54,6 @@
 - **`validate: best-effort` no longer skips the confirming read of a PatternInstance write.** It still skips the early comparison with the request, but the write ends with an independent read of the saved instance that sets `persistenceState` and `versionToken`. A saved instance that differs from the request now returns `status: partial` with `PatternVerificationMismatch` where it used to return `WriteApplied`. A WorkWithPlus edit is verified before its commit whatever `validate` says.
 
 - **A successful WorkWithPlus pattern edit returns the transaction receipt instead of the generic write fields.** The response no longer carries `changed`, `details`, `mutation`, `patternName`, `persistedHash` and `persistedSnippetTruncated`; confirm the write with `persisted`, `verified` and `commitCompleted`, and read the instance to see the saved content. The other keys keep their names and types.
-- **A WorkWithPlus template exports with its properties.** `genexus_io action=export_kb_to_text format=native` writes a `WorkWithPlus for Web Template` object as a `WorkWithPlusforWebTemplate` file with its properties (`Name`, `Description`, `TemplateCategory`, `TemplateCategoryOrder`, `TemplateType`, `TemplateXml`, `MainTemplate`, `InstanceType`, `PreviewImage` and `IsDefault`), in the order of the official text, read from the SDK object that the index entry identifies, and reports it as `exported`. A value the SDK does not hold is left out, not written empty. The file uses LF line endings where the official text uses CRLF; `docs/agent_playbook.md` describes the escapes. A named template exports; one whose type or XML the SDK does not give is an error of that object alone, and other object types without text parts keep `ObjectHasNoTextParts`. A native import of a tree skips a template file with `WwpTemplateNotImported`: nothing is written for it, it is not counted as a failure, and the batch goes on even with `stopOnError`. A template named in `targets` is an error (`WwpTemplateImportRefused`). Templates are still changed with `genexus_properties`.
 
 ### Fixed
 
