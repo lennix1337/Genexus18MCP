@@ -245,6 +245,18 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void SuccessOverBudget_TerseKeepsTheOldShape()
+        {
+            JObject truncated = Truncate(Refusal(items: 12, itemChars: 7000, error: false), "genexus_edit");
+
+            JObject trimmed = McpRouter.TrimErrorEnvelope(truncated, verbose: false);
+
+            Assert.StartsWith("Response exceeded 80k token budget", (string?)trimmed["message"]);
+            Assert.Null(trimmed["isTruncated"]);
+            Assert.Null(trimmed["gatewayTruncationHint"]);
+        }
+
+        [Fact]
         public void SmallErrorEnvelope_IsReturnedAsItWas()
         {
             JObject payload = Refusal(items: 3, itemChars: 100);
