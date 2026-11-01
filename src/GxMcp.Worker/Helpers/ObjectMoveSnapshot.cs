@@ -236,6 +236,9 @@ namespace GxMcp.Worker.Helpers
                     name = expectedPart?.Name ?? currentPart?.Name ?? key;
                 changed.Add(name);
 
+                // Only the text parts show their lines. A changed XML part is named by its part alone, as a property difference is.
+                if (!ShowsLines(key, _parts, current._parts)) continue;
+
                 expected.TryGetValue(key, out byte[] expectedBytes);
                 actual.TryGetValue(key, out byte[] actualBytes);
                 string expectedText = expectedBytes == null ? string.Empty : Encoding.UTF8.GetString(expectedBytes);
@@ -258,6 +261,14 @@ namespace GxMcp.Worker.Helpers
             result.ChangedLines = changedLines;
             result.NotComparedParts = PropertyVerificationScope.NotComparedOf(_parts.Values.Concat(current._parts.Values).Select(part => part.Name));
             return result;
+        }
+
+        // The text parts (VerificationFormat "source") are the only parts whose differing lines are shown.
+        private static bool ShowsLines(string key, IDictionary<string, PartSnapshot> expectedParts, IDictionary<string, PartSnapshot> actualParts)
+        {
+            expectedParts.TryGetValue(key, out PartSnapshot expectedPart);
+            actualParts.TryGetValue(key, out PartSnapshot actualPart);
+            return string.Equals((expectedPart ?? actualPart)?.VerificationFormat, "source", StringComparison.Ordinal);
         }
 
         // The parts the property verification compares, as bytes keyed like the snapshot.
@@ -715,7 +726,7 @@ namespace GxMcp.Worker.Helpers
             public string[] ChangedPartKeys { get; }
             public JArray PropertyDifferences { get; }
 
-            /// <summary>The differing lines of the changed parts, set only by <see cref="ObjectMoveSnapshot.ComparePropertyVerification"/>.</summary>
+            /// <summary>The differing lines of the changed text parts, set only by <see cref="ObjectMoveSnapshot.ComparePropertyVerification"/>.</summary>
             public JArray ChangedLines { get; set; } = new JArray();
 
             /// <summary>The parts restored but not compared, set only by <see cref="ObjectMoveSnapshot.ComparePropertyVerification"/>.</summary>

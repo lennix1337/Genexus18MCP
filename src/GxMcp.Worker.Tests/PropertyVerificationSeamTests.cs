@@ -70,6 +70,7 @@ namespace GxMcp.Worker.Tests
             Assert.False(result.Equal);
             Assert.Single(result.ChangedParts);
             Assert.StartsWith("Properties: ", result.ChangedParts[0].ToString());
+            Assert.Empty(result.ChangedLines);
         }
 
         [Fact]
@@ -98,6 +99,19 @@ namespace GxMcp.Worker.Tests
             Assert.False(result.Equal);
             Assert.Equal("Events", result.ChangedParts[0].ToString());
             Assert.NotEmpty(result.ChangedLines);
+        }
+
+        [Fact]
+        public void AChangedXmlPartIsNamedButItsLinesAreNotShown()
+        {
+            var expected = Snapshot(UrlAccessYes, string.Empty, Part("layout", "Layout", "xml", "<Layout>a</Layout>\n"));
+            var actual = Snapshot(UrlAccessYes, string.Empty, Part("layout", "Layout", "xml", "<Layout>b</Layout>\n"));
+
+            var result = expected.ComparePropertyVerificationWith(actual);
+
+            Assert.False(result.Equal);
+            Assert.Equal("Layout", result.ChangedParts[0].ToString());
+            Assert.Empty(result.ChangedLines);
         }
 
         [Fact]
