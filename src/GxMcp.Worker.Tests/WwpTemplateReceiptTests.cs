@@ -10,8 +10,6 @@ namespace GxMcp.Worker.Tests
     // fills them is tested in WwpTemplateWiringTests; these tests read the shape the caller receives.
     public sealed class WwpTemplateReceiptTests
     {
-        private static readonly Guid OtherObjectType = new Guid("3f0c2a5e-9b1d-4c7a-8e61-0d2b4f9a7c15");
-
         [Fact]
         public void ASingleSetOfAnAliasReportsTheSdkNameBothAsNativeNameAndInNativeNames()
         {
@@ -44,20 +42,20 @@ namespace GxMcp.Worker.Tests
             };
             var result = new JObject();
 
-            PropertyService.NoteNativeNames(result, WwpTemplateXml.ObjectType, properties, nativeNames);
+            PropertyService.NoteNativeNames(result, true, properties, nativeNames);
 
             Assert.Equal("WWPTemplate_Type", result["nativeNames"]?["TemplateType"]?.ToString());
             Assert.Null(result["nativeNames"]?["Description"]);
         }
 
         [Fact]
-        public void ABatchOfAnotherObjectTypeReportsNoNativeNames()
+        public void ABatchOnAnObjectWithoutSdkNamesReportsNoNativeNames()
         {
             var properties = new JObject { ["TemplateType"] = "Trn.View" };
             var nativeNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["TemplateType"] = "WWPTemplate_Type" };
             var result = new JObject();
 
-            PropertyService.NoteNativeNames(result, OtherObjectType, properties, nativeNames);
+            PropertyService.NoteNativeNames(result, false, properties, nativeNames);
 
             Assert.Null(result["nativeNames"]);
         }
@@ -69,7 +67,7 @@ namespace GxMcp.Worker.Tests
             var nativeNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["WWPTemplate_Type"] = "WWPTemplate_Type" };
             var result = new JObject();
 
-            PropertyService.NoteNativeNames(result, WwpTemplateXml.ObjectType, properties, nativeNames);
+            PropertyService.NoteNativeNames(result, true, properties, nativeNames);
 
             Assert.Null(result["nativeNames"]);
         }
