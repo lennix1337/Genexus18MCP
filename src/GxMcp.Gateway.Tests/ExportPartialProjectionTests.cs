@@ -3,25 +3,14 @@ using Xunit;
 
 namespace GxMcp.Gateway.Tests
 {
-    // A partial native export reaches the client with each object's own reply, including the ObjectHasNoTextParts
-    // reason of an object without text parts. The gateway shapes genexus_io results without projecting their
-    // objects, and a partial export is not an error envelope, so its replies are not trimmed away.
+    // A partial native export reaches the client with each object's own reply: its code and hint are fields, so a
+    // client branches on them without parsing the message. The gateway shapes genexus_io results without projecting
+    // their objects, and a partial export is not an error envelope, so its replies are not trimmed away.
     public class ExportPartialProjectionTests
     {
         [Fact]
         public void A_partial_export_reaches_the_client_with_each_objects_reply_and_is_not_an_error()
         {
-            var noTextParts = new JObject
-            {
-                ["status"] = "error",
-                ["target"] = "SynthTemplate",
-                ["error"] = new JObject
-                {
-                    ["code"] = "ObjectHasNoTextParts",
-                    ["message"] = "'SynthTemplate' (WorkWithPlus for Web Template) has no text parts to export.",
-                    ["hint"] = "Read the properties with genexus_properties action=get and change them with action=set."
-                }
-            };
             var payload = new JObject
             {
                 ["status"] = "partial",
@@ -39,7 +28,9 @@ namespace GxMcp.Gateway.Tests
                             ["name"] = "SynthTemplate",
                             ["type"] = "WorkWithPlus for Web Template",
                             ["status"] = "error",
-                            ["message"] = noTextParts.ToString()
+                            ["message"] = "'SynthTemplate' (WorkWithPlus for Web Template) has no text parts to export: its data are SDK properties.",
+                            ["code"] = "ObjectHasNoTextParts",
+                            ["hint"] = "Read the properties with genexus_properties action=get and change them with action=set. The native export does not write them."
                         },
                         new JObject
                         {
@@ -61,10 +52,12 @@ namespace GxMcp.Gateway.Tests
 
             Assert.False(shaped["isError"]?.Value<bool>());
             JObject inner = JObject.Parse(shaped["content"]?[0]?["text"]?.ToString() ?? "{}");
-            Assert.Equal("partial", (string)inner["status"]);
+            Assert.Equal("partial", (string?)inner["status"]);
             JArray objects = (JArray)inner["result"]!["objects"]!;
             Assert.Equal(2, objects.Count);
-            Assert.Contains("ObjectHasNoTextParts", (string)objects[0]!["message"]!);
+            Assert.Equal("ObjectHasNoTextParts", (string)objects[0]!["code"]!);
+            Assert.Contains("genexus_properties action=get", (string)objects[0]!["hint"]!);
+            Assert.DoesNotContain("{", (string)objects[0]!["message"]!);
             Assert.Equal("ok", (string)objects[1]!["status"]!);
         }
     }
