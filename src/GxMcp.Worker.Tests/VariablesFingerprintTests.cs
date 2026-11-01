@@ -1,4 +1,7 @@
 using System;
+using System.Runtime.Serialization;
+using Artech.Architecture.Common.Objects;
+using GxMcp.TestSupport;
 using GxMcp.Worker.Helpers;
 using Xunit;
 
@@ -69,6 +72,24 @@ namespace GxMcp.Worker.Tests
             string text = VariablesFingerprint.Capture(null, _ => throw new InvalidOperationException("the variables cannot be read"));
 
             Assert.Null(text);
+        }
+
+        [Fact]
+        public void TheSdkReaderGivesNoTextWhenTheObjectCannotBeRead()
+        {
+            // The production reader is the default one: an object whose parts cannot be read is unknown, never an empty text.
+            var unreadable = (KBObject)FormatterServices.GetUninitializedObject(typeof(KBObject));
+
+            Assert.Null(VariablesFingerprint.Capture(unreadable));
+        }
+
+        [Fact]
+        public void TheSdkReaderReadsEveryVariableAndItsDescription()
+        {
+            string src = RepoSource.WithoutComments(RepoSource.Read("src", "GxMcp.Worker", "Helpers", "VariablesFingerprint.cs"));
+
+            Assert.Equal(1, SourceAssert.Count(src, "part.Variables"));
+            Assert.Equal(1, SourceAssert.Count(src, "v.Description"));
         }
     }
 }
