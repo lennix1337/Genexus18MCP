@@ -167,7 +167,7 @@ namespace GxMcp.Worker.Services
             if (string.Equals(entry.Type, "ThemeClass", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(entry.Type, "DataStoreCategory", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(entry.Type, "GeneratorCategory", StringComparison.OrdinalIgnoreCase)) return;
-            // Two homonyms are two plan entries: the key is the object, not its Tipo:Nome.
+            // Two homonyms are two plan entries: the key is the object, not its Type:Name.
             if (seen.Add(TextTreeSelectionService.ObjectKey(entry))) entries.Add(Tuple.Create(entry, role));
         }
 
@@ -240,7 +240,7 @@ namespace GxMcp.Worker.Services
             }
             try
             {
-                // The index identity (GUID, EntityKey, path) travels with the Tipo:Nome, as it does in the multi-part
+                // The index identity (GUID, EntityKey, path) travels with the Type:Name, as it does in the multi-part
                 // read: a bare name would be ambiguous between homonyms of other types (Transaction and its Table).
                 string typedName = (entry.Type ?? string.Empty) + ":" + entry.Name;
                 JObject response = ParseEnvelope(_readPartText(typedName, part, entry.Type, entry.Guid, entry.EntityKey, entry.Path));

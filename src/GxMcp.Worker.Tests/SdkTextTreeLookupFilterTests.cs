@@ -148,7 +148,7 @@ namespace GxMcp.Worker.Tests
             }.ToString();
         }
 
-        // The read is asked for Tipo:Nome, so the object's name is what follows its type.
+        // The read is asked for Type:Name, so the object's name is what follows its type.
         private static string NameOf(string typedName)
         {
             return typedName.Substring(typedName.IndexOf(':') + 1);
