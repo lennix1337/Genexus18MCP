@@ -26,7 +26,8 @@ namespace GxMcp.Worker.Tests
                     ["TemplateXml"] = "<selection Name=\"SynthTemplate\" instanceType=\"WebPanel\"><table name=\"TableMain\" /></selection>",
                     ["MainTemplate"] = "Main",
                     ["InstanceType"] = "WebPanel",
-                    ["PreviewImage"] = string.Empty
+                    ["PreviewImage"] = string.Empty,
+                    ["IsDefault"] = "False"
                 }
             }.ToString();
         }

@@ -21,11 +21,11 @@ namespace GxMcp.Worker.Services
         };
 
         // The SDK property each name reads. The WWPTemplate_* names are the aliases of WwpTemplatePropertyRules; Description
-        // is the object's own property. Null for the name, which is the object's name, and for a property the SDK does not hold.
+        // and IsDefault are the object's own properties. Null for the name, which is the object's name, and for any other name.
         internal static string SdkNameOf(string property)
         {
             if (property == null || property == NameProperty) return null;
-            if (property == "Description") return "Description";
+            if (property == "Description" || property == "IsDefault") return property;
             return WwpTemplatePropertyRules.Aliases.TryGetValue(property, out string native) ? native : null;
         }
 

@@ -68,6 +68,7 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("WWPTemplate_MainTemplate", WwpTemplateDocument.SdkNameOf("MainTemplate"));
             Assert.Equal("WWPTemplate_InstanceType", WwpTemplateDocument.SdkNameOf("InstanceType"));
             Assert.Equal("WWPTemplate_PreviewImage", WwpTemplateDocument.SdkNameOf("PreviewImage"));
+            Assert.Equal("IsDefault", WwpTemplateDocument.SdkNameOf("IsDefault"));
         }
 
         [Fact]

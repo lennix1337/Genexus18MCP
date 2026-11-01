@@ -42,6 +42,8 @@ namespace GxMcp.Worker.Tests
             "",
             "\t\tPreviewImage = \"\"",
             "",
+            "\t\tIsDefault = \"False\"",
+            "",
             "\t\t",
             "\t#End",
             "",
