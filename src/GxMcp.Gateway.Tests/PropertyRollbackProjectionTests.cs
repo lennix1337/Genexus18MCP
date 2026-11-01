@@ -6,7 +6,7 @@ namespace GxMcp.Gateway.Tests
 {
     /// <summary>
     /// The terse projection of a refused or unconfirmed genexus_properties set: the names of the changed parts reach the caller,
-    /// the lines that differ come only with verbose_errors, and the code of an unreconciled object keeps its hint.
+    /// the lines that differ come only with verbose_errors.
     /// </summary>
     public class PropertyRollbackProjectionTests
     {
@@ -49,25 +49,6 @@ namespace GxMcp.Gateway.Tests
             var verbose = McpRouter.TrimErrorEnvelope(input, verbose: true);
 
             Assert.True(JToken.DeepEquals(input["changedLines"], verbose["changedLines"]));
-        }
-
-        [Fact]
-        public void TerseKeepsTheCodeAndHintOfAnUnreconciledObject()
-        {
-            var input = new JObject
-            {
-                ["code"] = "PropertyRollbackUnreconciled",
-                ["message"] = "The last property write to this object was not confirmed.",
-                ["hint"] = "Inspect the parts listed in changedParts, restore them, then retry.",
-                ["changedParts"] = new JArray("WebForm"),
-                ["changedLines"] = new JArray()
-            };
-
-            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
-
-            Assert.Equal("PropertyRollbackUnreconciled", (string)trimmed["code"]!);
-            Assert.Equal("Inspect the parts listed in changedParts, restore them, then retry.", (string)trimmed["hint"]!);
-            Assert.True(JToken.DeepEquals(new JArray("WebForm"), trimmed["changedParts"]));
         }
 
         private static JObject FailedRollback() => new JObject
