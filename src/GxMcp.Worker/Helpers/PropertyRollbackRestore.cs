@@ -100,6 +100,76 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
+        /// The reset variant of the first step. A property that had no explicit value before the batch is reset to its
+        /// default, not written back with its effective value, which would make it explicit on the object. A name that the
+        /// SDK will not reset is left out, so it is reported as not restored. Other names keep the rule of
+        /// <see cref="WriteBack"/>.
+        /// </summary>
+        internal static IReadOnlyList<string> ResetOrWriteBack(IEnumerable<string> requestedNames, IDictionary<string, string> previousValues,
+            ISet<string> wereDefault, Func<string, bool> canReset, Action<string> resetOne, Action<string, string> restoreOne)
+        {
+            var written = new List<string>();
+            foreach (string name in requestedNames)
+            {
+                try
+                {
+                    if (wereDefault != null && wereDefault.Contains(name))
+                    {
+                        if (canReset == null || !canReset(name)) continue;
+                        resetOne(name);
+                        written.Add(name);
+                        continue;
+                    }
+                    if (!previousValues.TryGetValue(name, out string previous) || previous == null) continue;
+                    restoreOne(name, previous);
+                    written.Add(name);
+                }
+                catch (Exception ex)
+                {
+                    ExceptionRoot.Log("Rollback could not write property '" + name + "' back", ex);
+                }
+            }
+            return written;
+        }
+
+        /// <summary>
+        /// The confirmation after the reset variant. A property that was default before the batch counts as restored when it
+        /// was written, when it reads back its previous value (if one was read), and when it is default again. The others
+        /// follow the rule of <see cref="Confirm"/>.
+        /// </summary>
+        internal static Report ConfirmWithDefaults(IEnumerable<string> requestedNames, IDictionary<string, string> previousValues,
+            ISet<string> wereDefault, IEnumerable<string> written, Func<string, string> readBack, Func<string, bool> isDefaultNow)
+        {
+            var writtenNames = new HashSet<string>(written);
+            var restored = new List<string>();
+            var notRestored = new List<string>();
+            foreach (string name in requestedNames)
+            {
+                previousValues.TryGetValue(name, out string previous);
+                bool wasDefault = wereDefault != null && wereDefault.Contains(name);
+                bool confirmed = writtenNames.Contains(name) && (wasDefault
+                    ? (previous == null || ReadsBackAs(name, previous, readBack)) && IsDefaultNow(name, isDefaultNow)
+                    : previous != null && ReadsBackAs(name, previous, readBack));
+                if (confirmed) restored.Add(name);
+                else notRestored.Add(name);
+            }
+            return new Report(restored, notRestored);
+        }
+
+        private static bool IsDefaultNow(string name, Func<string, bool> isDefaultNow)
+        {
+            try
+            {
+                return isDefaultNow != null && isDefaultNow(name);
+            }
+            catch (Exception ex)
+            {
+                ExceptionRoot.Log("Rollback could not read whether property '" + name + "' is default", ex);
+                return false;
+            }
+        }
+
+        /// <summary>
         /// True when reading the property back gives its previous value. A read that throws is logged and counts as not
         /// confirmed, so one property's failed read cannot take the whole rollback report down.
         /// </summary>

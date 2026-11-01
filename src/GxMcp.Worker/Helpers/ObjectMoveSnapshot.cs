@@ -166,6 +166,68 @@ namespace GxMcp.Worker.Helpers
                 : Comparison.Failed(changed, current.Hash, changedKeys);
         }
 
+        /// <summary>
+        /// The comparison that decides whether a property rollback put the object back. It is the object comparison of
+        /// <see cref="Compare(KBObject, string, Guid?, string[])"/> with the representation noise of the two normalized parts
+        /// removed (<see cref="PropertyPartNormalizer"/>). The move, SDT and variable rollbacks keep the strict comparison.
+        /// </summary>
+        public Comparison ComparePropertyVerification(KBObject obj)
+        {
+            if (obj == null)
+                return Comparison.Failed(new[] { "ObjectMissing" }, null);
+
+            ObjectMoveSnapshot current;
+            try { current = Capture(obj); }
+            catch (Exception ex) { return Comparison.Failed(new[] { "SnapshotReadFailed: " + ex.Message }, null); }
+
+            var changed = new List<string>();
+            JArray propertyDifferences = null;
+            if (!_objectXml.SequenceEqual(current._objectXml))
+            {
+                string beforeXml = Encoding.UTF8.GetString(_objectXml);
+                string afterXml = Encoding.UTF8.GetString(current._objectXml);
+                var propertyPaths = DiffObjectXml(beforeXml, afterXml, null, null);
+                if (propertyPaths.Length > 0)
+                {
+                    changed.Add("Properties: " + string.Join(", ", propertyPaths));
+                    propertyDifferences = DescribePropertyDifferences(beforeXml, afterXml, propertyPaths);
+                }
+            }
+
+            var expected = _parts.ToDictionary(p => p.Key, p => NormalizedPart(p.Value), StringComparer.OrdinalIgnoreCase);
+            var actual = current._parts.ToDictionary(p => p.Key, p => NormalizedPart(p.Value), StringComparer.OrdinalIgnoreCase);
+            string[] changedKeys = FindChangedPartKeys(expected, actual);
+            var changedLines = new JArray();
+            foreach (string key in changedKeys)
+            {
+                PartSnapshot expectedPart;
+                PartSnapshot currentPart;
+                string name;
+                if (_parts.TryGetValue(key, out expectedPart) && !current._parts.ContainsKey(key))
+                    name = expectedPart.Name + " (missing)";
+                else if (current._parts.TryGetValue(key, out currentPart) && !_parts.ContainsKey(key))
+                    name = currentPart.Name + " (unexpected)";
+                else
+                    name = expectedPart?.Name ?? currentPart?.Name ?? key;
+                changed.Add(name);
+
+                expected.TryGetValue(key, out byte[] expectedBytes);
+                actual.TryGetValue(key, out byte[] actualBytes);
+                string expectedText = expectedBytes == null ? string.Empty : Encoding.UTF8.GetString(expectedBytes);
+                string actualText = actualBytes == null ? string.Empty : Encoding.UTF8.GetString(actualBytes);
+                foreach (JToken line in ChangedLines.Describe(name, expectedText, actualText, Math.Max(0, ChangedLines.DefaultMaxLines - changedLines.Count)))
+                    changedLines.Add(line);
+            }
+
+            if (changed.Count == 0) return Comparison.Verified(current.Hash);
+            var failed = Comparison.Failed(changed, current.Hash, changedKeys, propertyDifferences);
+            failed.ChangedLines = changedLines;
+            return failed;
+        }
+
+        private static byte[] NormalizedPart(PartSnapshot part)
+            => Utf8(PropertyPartNormalizer.Normalize(part.Name, Encoding.UTF8.GetString(part.VerificationData ?? new byte[0])));
+
         internal JArray DescribeDifferences(KBObject obj, params string[] ignoredPartNames)
         {
             var result = new JArray();
@@ -615,6 +677,9 @@ namespace GxMcp.Worker.Helpers
             public string PersistedHash { get; }
             public string[] ChangedPartKeys { get; }
             public JArray PropertyDifferences { get; }
+
+            /// <summary>The differing lines of the changed parts, set only by <see cref="ObjectMoveSnapshot.ComparePropertyVerification"/>.</summary>
+            public JArray ChangedLines { get; set; } = new JArray();
 
             public static Comparison Verified(string hash) => new Comparison(true, null, hash);
             public static Comparison Failed(IEnumerable<string> changedParts, string hash, IEnumerable<string> changedPartKeys = null, JArray propertyDifferences = null) => new Comparison(false, changedParts, hash, changedPartKeys, propertyDifferences);
