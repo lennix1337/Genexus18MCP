@@ -277,6 +277,27 @@ function Test-GxMcpReleaseLegacyVersion {
     return [int]$Matches.major -lt 3
 }
 
+function Get-GxMcpNextSemVer {
+    param(
+        [Parameter(Mandatory = $true)][string]$CurrentVersion,
+        [Parameter(Mandatory = $true)][ValidateSet('major', 'minor', 'patch')][string]$Bump
+    )
+
+    $normalized = $CurrentVersion.Trim().TrimStart('v')
+    $match = [regex]::Match($normalized, '^(\d+)\.(\d+)\.(\d+)')
+    if (-not $match.Success) {
+        throw "Version '$CurrentVersion' is not strict semver (X.Y.Z)."
+    }
+    $major = [int]$match.Groups[1].Value
+    $minor = [int]$match.Groups[2].Value
+    $patch = [int]$match.Groups[3].Value
+    switch ($Bump.ToLowerInvariant()) {
+        'major' { return "$($major + 1).0.0" }
+        'minor' { return "$major.$($minor + 1).0" }
+        'patch' { return "$major.$minor.$($patch + 1)" }
+    }
+}
+
 function Get-GxMcpReleaseRequiredAssetNames {
     param(
         [Parameter(Mandatory = $true)][string]$Version,
@@ -1011,6 +1032,48 @@ function Test-GxMcpReleaseRequiredChecks {
         Valid = $problems.Count -eq 0
         Problems = @($problems)
         Error = if ($problems.Count -eq 0) { $null } else { 'required checks are not green: ' + ($problems -join '; ') }
+    }
+}
+
+function Get-GxMcpReleaseRequiredChecksReport {
+    param([Parameter(Mandatory = $true)][string]$Commit)
+
+    $branchRaw = @(gh api 'repos/{owner}/{repo}/branches/main' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $branchRaw.Count -eq 0) {
+        return [pscustomobject]@{ Valid = $false; Error = 'Could not read the main branch protection; refusing to publish without verifying required CI.'; Required = @(); CheckRuns = @(); Statuses = @() }
+    }
+    $rulesRaw = @(gh api 'repos/{owner}/{repo}/rules/branches/main' 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        return [pscustomobject]@{ Valid = $false; Error = 'Could not read the main branch rules; refusing to publish without verifying required CI.'; Required = @(); CheckRuns = @(); Statuses = @() }
+    }
+    $rules = if ($rulesRaw.Count -gt 0) { ($rulesRaw -join [Environment]::NewLine) | ConvertFrom-Json } else { @() }
+    $required = @(Get-GxMcpReleaseRequiredCheckContexts -Branch (($branchRaw -join [Environment]::NewLine) | ConvertFrom-Json) -Rules $rules)
+    $runLines = @(gh api --paginate "repos/{owner}/{repo}/commits/$Commit/check-runs?per_page=100" --jq '.check_runs[] | [.id,.name,.status,(.conclusion // ""),(.app.id // 0),(.started_at // ""),.head_sha] | @tsv' 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        return [pscustomobject]@{ Valid = $false; Error = "Could not read check runs for $Commit. A commit GitHub does not know yet has none: run release.ps1 -PrepareOnly, push that SHA as a candidate branch/PR so CI runs on it, then rerun."; Required = $required; CheckRuns = @(); Statuses = @() }
+    }
+    $statusLines = @(gh api "repos/{owner}/{repo}/commits/$Commit/status?per_page=100" --jq '.statuses[] | [.context,.state] | @tsv' 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        return [pscustomobject]@{ Valid = $false; Error = "Could not read commit statuses for $Commit."; Required = $required; CheckRuns = @(); Statuses = @() }
+    }
+    $checkRuns = @($runLines | Where-Object { $_ } | ForEach-Object {
+        $parts = ([string]$_) -split "`t"
+        if ($parts.Count -lt 7) {
+            return [pscustomobject]@{ Valid = $false; Error = "Unexpected check-run record for $Commit; refusing to publish without verifying required CI."; Required = $required; CheckRuns = @(); Statuses = @() }
+        }
+        [pscustomobject]@{ id = $parts[0]; name = $parts[1]; status = $parts[2]; conclusion = $parts[3]; app_id = $parts[4]; started_at = $parts[5]; head_sha = $parts[6] }
+    })
+    $statuses = @($statusLines | Where-Object { $_ } | ForEach-Object {
+        $parts = ([string]$_) -split "`t"
+        [pscustomobject]@{ context = $parts[0]; state = $parts[1] }
+    })
+    $verdict = Test-GxMcpReleaseRequiredChecks -RequiredContexts $required -CheckRuns $checkRuns -Statuses $statuses -Commit $Commit
+    return [pscustomobject]@{
+        Valid = [bool]$verdict.Valid
+        Error = if ($verdict.Valid) { $null } else { "Required CI is not green on $Commit ($($verdict.Error)). Wait for or fix CI, then rerun the same version. For an unpublished release commit, run release.ps1 -PrepareOnly, push that SHA as a candidate branch/PR so CI runs on it, then rerun." }
+        Required = $required
+        CheckRuns = $checkRuns
+        Statuses = $statuses
     }
 }
 
