@@ -48,9 +48,14 @@ foreach ($expectedParam in @('Minor', 'Patch', 'NoAutoCandidate')) {
         throw "Canonical release script is missing parameter: -$expectedParam"
     }
 }
+$candidateCiScript = Join-Path $root 'scripts\release-candidate-ci.ps1'
+if (-not (Test-Path -LiteralPath $candidateCiScript -PathType Leaf)) { throw 'release-candidate-ci.ps1 is missing.' }
+$ciTokens = $null; $ciErrors = $null
+$ciAst = [System.Management.Automation.Language.Parser]::ParseFile($candidateCiScript, [ref]$ciTokens, [ref]$ciErrors)
+if ($ciErrors.Count) { throw $ciErrors[0] }
 foreach ($funcName in @('Ensure-ReleaseCandidateCi', 'Wait-ReleaseRequiredChecksGreen', 'Cleanup-ReleaseCandidate', 'Test-ReleaseRequiredChecksQuiet')) {
-    $fnDef = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $funcName }, $true)
-    if (-not $fnDef) { throw "Canonical release script is missing candidate CI function: $funcName" }
+    $fnDef = $ciAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $funcName }, $true)
+    if (-not $fnDef) { throw "Candidate CI script is missing function: $funcName" }
 }
 $minorPatchRun = & pwsh -NoProfile -File (Join-Path $root 'release.ps1') -Minor -Patch -DryRun 2>&1
 if ($LASTEXITCODE -eq 0 -or ($minorPatchRun -join "`n") -notmatch 'Cannot specify both -Minor and -Patch') {

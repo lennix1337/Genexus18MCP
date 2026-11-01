@@ -102,28 +102,17 @@ if (-not (Test-Path -LiteralPath $statusPackagePath -PathType Leaf)) {
 }
 $currentPackageVersion = [string](Get-Content -LiteralPath $statusPackagePath -Raw | ConvertFrom-Json).version
 if ($Minor -or $Patch) {
-    $semverMatch = [regex]::Match($currentPackageVersion, '^(\d+)\.(\d+)\.(\d+)')
-    if (-not $semverMatch.Success) {
-        throw "Current package.json version '$currentPackageVersion' is not strict semver (X.Y.Z)."
-    }
-    $majorNum = [int]$semverMatch.Groups[1].Value
-    $minorNum = [int]$semverMatch.Groups[2].Value
-    $patchNum = [int]$semverMatch.Groups[3].Value
-    if ($Minor) {
-        $Version = "$majorNum.$($minorNum + 1).0"
-    } elseif ($Patch) {
-        $Version = "$majorNum.$minorNum.$($patchNum + 1)"
-    }
+    $bumpType = if ($Minor) { 'minor' } else { 'patch' }
+    $Version = Get-GxMcpNextSemVer -CurrentVersion $currentPackageVersion -Bump $bumpType
 } elseif ($versionWasImplicit) {
     $Version = $currentPackageVersion
 }
 $Version = ([string]$Version).Trim().TrimStart('v')
 $AutoCandidate = (-not $NoAutoCandidate) -and (-not $PrepareOnly)
-$script:candidateReleaseBranch = $null
-$script:candidateReleasePr = $null
 $releaseDryRunBeforeIssueHelpers = $DryRun
 $releaseCloseIssuesBeforeIssueHelpers = $CloseIssues
 . (Join-Path $root 'scripts/release-issues.ps1') -DefineOnly
+. (Join-Path $root 'scripts/release-candidate-ci.ps1')
 $DryRun = $releaseDryRunBeforeIssueHelpers
 $CloseIssues = $releaseCloseIssuesBeforeIssueHelpers
 $statusToken = if ([string]::IsNullOrWhiteSpace($Version)) { 'pending' } else { $Version -replace '[^0-9A-Za-z.-]', '-' }
@@ -156,6 +145,11 @@ $statusState = [ordered]@{
     nextAction = 'inspect-status'
     exitCode = $null
     error = $null
+    candidate = [ordered]@{
+        branch = $null
+        prNumber = $null
+        prUrl = $null
+    }
     issues = [ordered]@{
         discovered = @()
         validated = @()
@@ -876,208 +870,9 @@ function Assert-ReleaseBaseFresh {
 function Assert-ReleaseRequiredChecksGreen {
     param([Parameter(Mandatory = $true)][string]$Commit)
 
-    $branchRaw = @(gh api 'repos/{owner}/{repo}/branches/main' 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $branchRaw.Count -eq 0) {
-        Fail "Could not read the main branch protection; refusing to publish without verifying required CI."
-    }
-    $rulesRaw = @(gh api 'repos/{owner}/{repo}/rules/branches/main' 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        Fail "Could not read the main branch rules; refusing to publish without verifying required CI."
-    }
-    $rules = if ($rulesRaw.Count -gt 0) { ($rulesRaw -join [Environment]::NewLine) | ConvertFrom-Json } else { @() }
-    $required = @(Get-GxMcpReleaseRequiredCheckContexts -Branch (($branchRaw -join [Environment]::NewLine) | ConvertFrom-Json) -Rules $rules)
-    $runLines = @(gh api --paginate "repos/{owner}/{repo}/commits/$Commit/check-runs?per_page=100" --jq '.check_runs[] | [.id,.name,.status,(.conclusion // ""),(.app.id // 0),(.started_at // ""),.head_sha] | @tsv' 2>$null)
-    if ($LASTEXITCODE -ne 0) { Fail "Could not read check runs for $Commit. A commit GitHub does not know yet has none: run release.ps1 -PrepareOnly, push that SHA as a candidate branch/PR so CI runs on it, then rerun." }
-    $statusLines = @(gh api "repos/{owner}/{repo}/commits/$Commit/status?per_page=100" --jq '.statuses[] | [.context,.state] | @tsv' 2>$null)
-    if ($LASTEXITCODE -ne 0) { Fail "Could not read commit statuses for $Commit." }
-    $checkRuns = @($runLines | Where-Object { $_ } | ForEach-Object {
-        $parts = ([string]$_) -split "`t"
-        if ($parts.Count -lt 7) { Fail "Unexpected check-run record for $Commit; refusing to publish without verifying required CI." }
-        [pscustomobject]@{ id = $parts[0]; name = $parts[1]; status = $parts[2]; conclusion = $parts[3]; app_id = $parts[4]; started_at = $parts[5]; head_sha = $parts[6] }
-    })
-    $statuses = @($statusLines | Where-Object { $_ } | ForEach-Object {
-        $parts = ([string]$_) -split "`t"
-        [pscustomobject]@{ context = $parts[0]; state = $parts[1] }
-    })
-    $verdict = Test-GxMcpReleaseRequiredChecks -RequiredContexts $required -CheckRuns $checkRuns -Statuses $statuses -Commit $Commit
-    if (-not $verdict.Valid) { Fail "Required CI is not green on $Commit ($($verdict.Error)). Wait for or fix CI, then rerun the same version. For an unpublished release commit, run release.ps1 -PrepareOnly, push that SHA as a candidate branch/PR so CI runs on it, then rerun." }
-    Ok "Required checks ($($required -join ', ')) are green on $Commit."
-}
-
-function Test-ReleaseRequiredChecksQuiet {
-    param([Parameter(Mandatory = $true)][string]$Commit)
-
-    try {
-        $branchRaw = @(gh api 'repos/{owner}/{repo}/branches/main' 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $branchRaw.Count -eq 0) {
-            return [pscustomobject]@{ Valid = $false; Error = 'Could not read main branch protection.'; Required = @(); CheckRuns = @() }
-        }
-        $rulesRaw = @(gh api 'repos/{owner}/{repo}/rules/branches/main' 2>$null)
-        $rules = if ($LASTEXITCODE -eq 0 -and $rulesRaw.Count -gt 0) { ($rulesRaw -join [Environment]::NewLine) | ConvertFrom-Json } else { @() }
-        $required = @(Get-GxMcpReleaseRequiredCheckContexts -Branch (($branchRaw -join [Environment]::NewLine) | ConvertFrom-Json) -Rules $rules)
-        $runLines = @(gh api --paginate "repos/{owner}/{repo}/commits/$Commit/check-runs?per_page=100" --jq '.check_runs[] | [.id,.name,.status,(.conclusion // ""),(.app.id // 0),(.started_at // ""),.head_sha] | @tsv' 2>$null)
-        if ($LASTEXITCODE -ne 0) {
-            return [pscustomobject]@{ Valid = $false; Error = "Could not read check runs for $Commit."; Required = $required; CheckRuns = @() }
-        }
-        $statusLines = @(gh api "repos/{owner}/{repo}/commits/$Commit/status?per_page=100" --jq '.statuses[] | [.context,.state] | @tsv' 2>$null)
-        $checkRuns = @($runLines | Where-Object { $_ } | ForEach-Object {
-            $parts = ([string]$_) -split "`t"
-            if ($parts.Count -ge 7) {
-                [pscustomobject]@{ id = $parts[0]; name = $parts[1]; status = $parts[2]; conclusion = $parts[3]; app_id = $parts[4]; started_at = $parts[5]; head_sha = $parts[6] }
-            }
-        })
-        $statuses = @($statusLines | Where-Object { $_ } | ForEach-Object {
-            $parts = ([string]$_) -split "`t"
-            if ($parts.Count -ge 2) {
-                [pscustomobject]@{ context = $parts[0]; state = $parts[1] }
-            }
-        })
-        $verdict = Test-GxMcpReleaseRequiredChecks -RequiredContexts $required -CheckRuns $checkRuns -Statuses $statuses -Commit $Commit
-        return [pscustomobject]@{ Valid = [bool]$verdict.Valid; Error = [string]$verdict.Error; Required = $required; CheckRuns = $checkRuns }
-    } catch {
-        return [pscustomobject]@{ Valid = $false; Error = $_.Exception.Message; Required = @(); CheckRuns = @() }
-    }
-}
-
-function Ensure-ReleaseCandidateCi {
-    param(
-        [Parameter(Mandatory = $true)][string]$Commit,
-        [Parameter(Mandatory = $true)][string]$Tag,
-        [switch]$DryRun
-    )
-
-    $candidateBranch = "candidate/$Tag"
-    $script:candidateReleaseBranch = $candidateBranch
-
-    if ($DryRun) {
-        Warn "[DRY-RUN] would push $Commit to refs/heads/$candidateBranch and ensure a PR exists to trigger CI."
-        return
-    }
-
-    Step "Pushing candidate branch $candidateBranch for CI"
-    Invoke-Cmd 'git' @('push', 'origin', "$($Commit):refs/heads/$candidateBranch")
-    Ok "Pushed candidate branch $candidateBranch ($Commit)."
-
-    $prListRaw = @(gh pr list --head $candidateBranch --state all --json number,state,url 2>$null)
-    $prs = if ($LASTEXITCODE -eq 0 -and $prListRaw.Count -gt 0) {
-        ($prListRaw -join [Environment]::NewLine) | ConvertFrom-Json
-    } else { @() }
-
-    $openPr = @($prs | Where-Object { [string]$_.state -ieq 'OPEN' } | Select-Object -First 1)
-    if ($openPr.Count -gt 0) {
-        $script:candidateReleasePr = [int]$openPr[0].number
-        Ok "Candidate PR already open: #$($script:candidateReleasePr) ($($openPr[0].url))."
-    } elseif ($prs.Count -gt 0) {
-        $closedPr = $prs[0]
-        $script:candidateReleasePr = [int]$closedPr.number
-        Invoke-Cmd 'gh' @('pr', 'reopen', [string]$script:candidateReleasePr)
-        Ok "Reopened candidate PR #$($script:candidateReleasePr) for CI."
-    } else {
-        $prOut = @(gh pr create --head $candidateBranch --base main --title "release candidate: $Tag" --body "Automated release candidate verification for $Tag ($Commit)." 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $prOut.Count -eq 0) {
-            Fail "Could not create candidate PR for $candidateBranch to trigger required CI."
-        }
-        $createdUrl = ($prOut -join ' ').Trim()
-        $prNumMatch = [regex]::Match($createdUrl, '/pull/(\d+)')
-        if ($prNumMatch.Success) {
-            $script:candidateReleasePr = [int]$prNumMatch.Groups[1].Value
-        }
-        Ok "Created candidate PR for CI: $createdUrl"
-    }
-}
-
-function Wait-ReleaseRequiredChecksGreen {
-    param(
-        [Parameter(Mandatory = $true)][string]$Commit,
-        [int]$TimeoutSeconds = 900,
-        [int]$PollSeconds = 10
-    )
-
-    Step "Waiting for candidate CI to be green on $Commit"
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $lastError = $null
-
-    while ($sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-        $result = Test-ReleaseRequiredChecksQuiet -Commit $Commit
-        if ($result.Valid) {
-            $sw.Stop()
-            Ok "Candidate CI is green on $Commit ($([int]$sw.Elapsed.TotalSeconds)s elapsed)."
-            return
-        }
-
-        $lastError = $result.Error
-        if ($result.CheckRuns) {
-            $failedRun = @($result.CheckRuns | Where-Object {
-                [string]$_.head_sha -ceq $Commit -and
-                [string]$_.status -eq 'completed' -and
-                [string]$_.conclusion -in @('failure', 'timed_out', 'action_required', 'cancelled')
-            } | Select-Object -First 1)
-            if ($failedRun.Count -gt 0) {
-                Fail "Candidate CI failed terminally on $Commit (check '$($failedRun[0].name)' concluded '$($failedRun[0].conclusion)'). Inspect CI logs, fix, and rerun."
-            }
-        }
-
-        Write-Host "    Candidate CI pending ($($result.Error)); waiting $($PollSeconds)s... ($([int]$sw.Elapsed.TotalSeconds)/${TimeoutSeconds}s)" -ForegroundColor DarkGray
-        Start-Sleep -Seconds $PollSeconds
-    }
-
-    Fail "Timed out waiting for candidate CI on $Commit after $TimeoutSeconds seconds ($lastError)."
-}
-
-function Cleanup-ReleaseCandidate {
-    param(
-        [Parameter(Mandatory = $true)][string]$Tag
-    )
-
-    $candidateBranch = "candidate/$Tag"
-    Step "Cleaning up candidate branch and PR ($candidateBranch)"
-
-    $closedPr = $false
-    if ($script:candidateReleasePr) {
-        try {
-            Invoke-Cmd 'gh' @('pr', 'close', [string]$script:candidateReleasePr, '--delete-branch')
-            $closedPr = $true
-            Ok "Candidate PR #$($script:candidateReleasePr) closed and remote branch $candidateBranch deleted."
-        } catch {
-            Warn "Could not close candidate PR #${script:candidateReleasePr}: $($_.Exception.Message)"
-        }
-    }
-
-    if (-not $closedPr) {
-        try {
-            $prsRaw = @(gh pr list --head $candidateBranch --state open --json number 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $prsRaw.Count -gt 0) {
-                $openPrs = ($prsRaw -join [Environment]::NewLine) | ConvertFrom-Json
-                foreach ($p in $openPrs) {
-                    Invoke-Cmd 'gh' @('pr', 'close', [string]$p.number, '--delete-branch')
-                    Ok "Closed candidate PR #$($p.number) and deleted $candidateBranch."
-                    $closedPr = $true
-                }
-            }
-        } catch {
-            Warn "Could not clean up candidate PR via search: $($_.Exception.Message)"
-        }
-    }
-
-    if (-not $closedPr) {
-        try {
-            $remoteCheck = @(& git ls-remote --heads origin "refs/heads/$candidateBranch" 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $remoteCheck.Count -gt 0) {
-                Invoke-Cmd 'git' @('push', 'origin', ":refs/heads/$candidateBranch")
-                Ok "Deleted remote candidate branch $candidateBranch."
-            }
-        } catch {
-            Warn "Could not delete remote candidate branch ${candidateBranch}: $($_.Exception.Message)"
-        }
-    }
-
-    try {
-        $localExists = (& git branch --list $candidateBranch 2>$null).Trim()
-        if ($localExists) {
-            Invoke-Cmd 'git' @('branch', '-D', $candidateBranch)
-            Ok "Deleted local branch $candidateBranch."
-        }
-    } catch { }
+    $report = Get-GxMcpReleaseRequiredChecksReport -Commit $Commit
+    if (-not $report.Valid) { Fail $report.Error }
+    Ok "Required checks ($($report.Required -join ', ')) are green on $Commit."
 }
 
 # Last gate before the release becomes visible. Re-reads everything that can go stale
