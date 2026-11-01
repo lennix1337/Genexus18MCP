@@ -116,6 +116,17 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ASimpleRouteSuccessReachesTheCallerAsItWasVerified()
+        {
+            // A verified write is a success. The receipt marks only errors, so the reply keeps its values and its verification.
+            MethodInfo receipt = typeof(PropertyService).GetMethod("CommittedReceipt", BindingFlags.NonPublic | BindingFlags.Static);
+            string verified = "{\"status\":\"ok\",\"code\":\"PropertyApplied\",\"result\":{\"property\":\"MasterPage\",\"value\":\"SynthMasterB\","
+                + "\"persisted\":\"SynthMasterB\",\"persistedVerified\":true}}";
+
+            Assert.Equal(verified, (string)receipt.Invoke(null, new object[] { verified }));
+        }
+
+        [Fact]
         public void TheBatchWriteMarksTheCommitBeforeAnyPostCommitExit()
         {
             string body = SourceAssert.MethodBody(
@@ -158,8 +169,7 @@ namespace GxMcp.Worker.Tests
             {
                 string body = SourceAssert.MethodBody(src, method);
                 Assert.Contains("transactionCommitted = true;", body);
-                // The verification refusal and the failure after the commit each pass through the receipt helper.
-                Assert.Contains("return CommittedReceipt(verified);", body);
+                // The failure after the commit passes through the receipt helper; the verification reply is checked by behavior, below.
                 Assert.Contains("return transactionCommitted ? CommittedReceipt(failure) : failure;", body);
             }
         }

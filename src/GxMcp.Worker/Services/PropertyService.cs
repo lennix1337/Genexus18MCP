@@ -1578,11 +1578,13 @@ namespace GxMcp.Worker.Services
             return null;
         }
 
-        // The envelope of a simple-route write whose transaction committed. A verification refusal that found another value says the
-        // value is not in the object; any other answer, or a failure after the commit, leaves the state unknown.
+        // The envelope of a simple-route write whose transaction committed. A success is returned as it is: its verified values are in the
+        // object. An error gets the receipt: a verification refusal that found another value says the value is not in the object; any other
+        // error, or a failure after the commit, leaves the state unknown.
         private static string CommittedReceipt(string envelope)
         {
             var receipt = JObject.Parse(envelope);
+            if (!string.Equals(receipt["status"]?.ToString(), "error", StringComparison.Ordinal)) return envelope;
             bool notPersisted = string.Equals(receipt["error"]?["code"]?.ToString(), "PropertyNotPersisted", StringComparison.Ordinal);
             PropertyRollbackRestore.MarkCommitted(receipt,
                 notPersisted ? PropertyRollbackRestore.PersistenceProof.NotPersisted : PropertyRollbackRestore.PersistenceProof.Unknown);
