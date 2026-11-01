@@ -82,10 +82,25 @@ namespace GxMcp.Gateway
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly object _processLock = new object();
         private readonly TimeSpan _workerIdleTimeout;
+        private readonly WorkerStateMachine _stateMachine = new WorkerStateMachine();
+        private readonly WorkerSupervisionTracker _supervisionTracker = new WorkerSupervisionTracker();
+
+        public WorkerLifecycleState State => _stateMachine.CurrentState;
+        public WorkerStateMachine StateMachine => _stateMachine;
+        public WorkerSupervisionTracker SupervisionTracker => _supervisionTracker;
+
         private Task? _writerTask;
         private Task? _healthCheckTask;
-        private DateTime _lastResponse = DateTime.UtcNow;
-        private DateTime _lastActivityUtc = DateTime.UtcNow;
+        private DateTime _lastResponse
+        {
+            get => _supervisionTracker.LastResponseUtc;
+            set => _supervisionTracker.LastResponseUtc = value;
+        }
+        private DateTime _lastActivityUtc
+        {
+            get => _supervisionTracker.LastActivityUtc;
+            set => _supervisionTracker.LastActivityUtc = value;
+        }
         private NamedPipeServerStream? _pipeServer;
         private StreamReader? _pipeReader;
         private StreamWriter? _pipeWriter;
@@ -97,8 +112,12 @@ namespace GxMcp.Gateway
         public Task SdkReadyTask => _sdkReady.Task;
         public bool IsSdkReady => _sdkReady.Task.IsCompleted;
         private string _lastOperationInfo = "None";
-        private bool _isStarting;
-        private WorkerStopReason _stopReason = WorkerStopReason.None;
+        private bool _isStarting => _stateMachine.IsStarting;
+        private WorkerStopReason _stopReason
+        {
+            get => _stateMachine.StopReason;
+            set => _stateMachine.StopReason = value;
+        }
         // Guards OnWorkerExited so it fires exactly once per worker, whether the exit is
         // observed via the async Process.Exited event OR forced synchronously by StopProcess.
         // StopProcess disposes the Process right after Kill, which suppresses the Exited
@@ -123,13 +142,6 @@ namespace GxMcp.Gateway
         private int _inFlightCommands;
         private int _queuedCommands;
         private ManualResetEventSlim? _commandWriterGateForTest;
-        // BUG-03: start timestamp of each in-flight command, keyed by JSON-RPC id.
-        // Populated when a command that counts as activity is written to the pipe,
-        // removed on normal completion (CompleteInFlight) or send failure. The health
-        // check uses the OLDEST surviving entry to detect a worker wedged mid-command
-        // (crashed processes are already handled elsewhere; this is for a worker that's
-        // alive but never responds).
-        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _inFlightStartTimes = new();
         private readonly TimeSpan _wedgedCommandTimeout;
         // A worker with an old in-flight command is only "wedged" if it has ALSO gone silent
         // (no stdout/stderr) this long. Below it, an old-but-chatty command is treated as
@@ -141,11 +153,6 @@ namespace GxMcp.Gateway
         // notification refreshes _lastBuildActiveUtcTicks, and both reap guards refuse to
         // act while that signal is fresher than this window (2× heartbeat interval + margin).
         private static readonly TimeSpan BuildActiveGraceWindow = TimeSpan.FromSeconds(90);
-        // 0 = never signalled (IsBuildActive short-circuits on it).
-        private long _lastBuildActiveUtcTicks;
-        // Index walks are background STA work too; keep idle and heap-recycle
-        // decisions from killing a Worker after the client has detached.
-        private long _lastIndexActiveUtcTicks;
         // Proactive idle heap-recycle ceiling (bytes; 0 = disabled) and a grace so we only
         // recycle a worker that has been genuinely idle, not one momentarily between commands.
         private readonly long _heapRecycleBytes;
@@ -676,7 +683,11 @@ namespace GxMcp.Gateway
                                 {
                                     MarkActivity();
                                     Interlocked.Increment(ref _inFlightCommands);
-                                    _inFlightStartTimes[id] = DateTime.UtcNow;
+                                    _supervisionTracker.TrackInFlightStart(id);
+                                    if (_stateMachine.CurrentState == WorkerLifecycleState.Ready)
+                                    {
+                                        _stateMachine.TransitionTo(WorkerLifecycleState.Busy);
+                                    }
                                 }
 
                                 await WaitForPipeReadyAsync(id, _cts.Token);
@@ -996,9 +1007,38 @@ namespace GxMcp.Gateway
             return string.Empty;
         }
 
+        private void WireSharedConnectionEvents(SharedWorkerConnection connection)
+        {
+            connection.LineReceived += line =>
+            {
+                _lastResponse = DateTime.UtcNow;
+                try
+                {
+                    HandleWorkerRpcResponse(line, out JObject? parsed);
+                    if (parsed != null) RaiseRpcResponse(line, parsed);
+                }
+                catch (Exception ex) { Program.Log("[Gateway] shared Worker response handling failed: " + ex.Message); }
+            };
+            connection.SupervisionReceived += supervision =>
+            {
+                try { ObserveSharedSupervision(supervision); }
+                catch (Exception ex) { Program.Log("[Gateway] shared supervision report handling failed: " + ex.Message); }
+            };
+            connection.Disconnected += failure =>
+            {
+                if (_cts.IsCancellationRequested) return;
+                ObserveFailureDiagnostic(failure?.ToString());
+                ObserveStartupDiagnostic(failure?.Message);
+                Volatile.Write(ref _exitConfirmed, 1);
+                FireWorkerExitedOnce(WorkerStopReason.None);
+            };
+            connection.WorkerRestarted += diagnostic => ObserveFailureDiagnostic("shared Worker child restarted: " + (string.IsNullOrWhiteSpace(diagnostic) ? "no failure detail" : diagnostic));
+        }
+
         private void StartShared(string workerPath, string workerInstallationPath, string workerDriver, string workerMajor, string? legacyProvider)
         {
             var watch = System.Diagnostics.Stopwatch.StartNew();
+            _stateMachine.TransitionTo(WorkerLifecycleState.PipeConnecting);
             SpawnedExePath = workerPath;
             try { SpawnedExeBuiltAtUtc = File.GetLastWriteTimeUtc(workerPath); } catch { SpawnedExeBuiltAtUtc = null; }
             SharedWorkerConnection? connection = null;
@@ -1008,38 +1048,10 @@ namespace GxMcp.Gateway
                     workerInstallationPath ?? string.Empty, workerDriver, workerMajor, legacyProvider);
                 _sharedIdentity = SharedWorkerIdentity.Create(workerPath, Kb.Path, workerInstallationPath, workerDriver, workerMajor, Configuration.CurrentConfigPath);
                 _sharedConnection = connection;
-                connection.LineReceived += line =>
-                {
-                    _lastResponse = DateTime.UtcNow;
-                    try
-                    {
-                        HandleWorkerRpcResponse(line, out JObject? parsed);
-                        if (parsed != null) RaiseRpcResponse(line, parsed);
-                    }
-                    catch (Exception ex) { Program.Log("[Gateway] shared Worker response handling failed: " + ex.Message); }
-                };
-                // Issue #335: the broker is the only party that can report the child's
-                // state, so its supervision report is subscribed here and nowhere else.
-                // Absent on an older broker, which simply means no supervision data.
-                connection.SupervisionReceived += supervision =>
-                {
-                    try { ObserveSharedSupervision(supervision); }
-                    catch (Exception ex) { Program.Log("[Gateway] shared supervision report handling failed: " + ex.Message); }
-                };
-                connection.Disconnected += failure =>
-                {
-                    if (_cts.IsCancellationRequested) return;
-                    ObserveFailureDiagnostic(failure?.ToString());
-                    ObserveStartupDiagnostic(failure?.Message);
-                    Volatile.Write(ref _exitConfirmed, 1);
-                    FireWorkerExitedOnce(WorkerStopReason.None);
-                };
-                connection.WorkerRestarted += diagnostic =>
-                {
-                    ObserveFailureDiagnostic("shared Worker child restarted: " + (string.IsNullOrWhiteSpace(diagnostic) ? "no failure detail" : diagnostic));
-                };
-                if (connection.AttachInfo?.SdkReady == true)
-                    _sdkReady.TrySetResult(true);
+                _stateMachine.TransitionTo(WorkerLifecycleState.SdkInitializing);
+                WireSharedConnectionEvents(connection);
+                if (connection.AttachInfo?.SdkReady == true && _sdkReady.TrySetResult(true))
+                    _stateMachine.TransitionTo(WorkerLifecycleState.Ready);
                 _lastPid = connection.WorkerPid ?? 0;
                 SpawnedAtUtc = DateTime.UtcNow;
                 watch.Stop();
@@ -1067,7 +1079,7 @@ namespace GxMcp.Gateway
                     return;
                 }
 
-                _isStarting = true;
+                _stateMachine.TransitionTo(WorkerLifecycleState.Starting);
             }
 
             try
@@ -1397,6 +1409,7 @@ namespace GxMcp.Gateway
                     _pipeWriter.AutoFlush = true;
                 }
                 Program.Log("[Gateway] Worker stdio command channel initialized.");
+                _stateMachine.TransitionTo(WorkerLifecycleState.SdkInitializing);
                 _pipeReady.TrySetResult(true);
 
                 if (_healthCheckTask == null || _healthCheckTask.IsCompleted)
@@ -1421,7 +1434,10 @@ namespace GxMcp.Gateway
             {
                 lock (_processLock)
                 {
-                    _isStarting = false;
+                    if (_stateMachine.CurrentState == WorkerLifecycleState.Starting)
+                    {
+                        _stateMachine.TransitionTo(WorkerLifecycleState.Crashed);
+                    }
                 }
             }
         }
@@ -1597,6 +1613,11 @@ namespace GxMcp.Gateway
         private void FireWorkerExitedOnce(WorkerStopReason reason)
         {
             if (Interlocked.Exchange(ref _exitNotified, 1) != 0) return;
+            _stateMachine.TransitionTo(
+                reason == WorkerStopReason.SdkCompatibilityRejected || (_lastExitCode != 0 && _lastExitCode != int.MinValue)
+                    ? WorkerLifecycleState.Crashed
+                    : WorkerLifecycleState.Exited,
+                reason);
             Volatile.Write(ref _stopping, 1);
             _ownershipLease?.Dispose();
             _ownershipLease = null;
@@ -1627,6 +1648,7 @@ namespace GxMcp.Gateway
 
         private void StopProcess(WorkerStopReason reason)
         {
+            _stateMachine.TransitionTo(WorkerLifecycleState.Stopping, reason);
             Volatile.Write(ref _stopping, 1);
             if (IsSharedHostMode && _sharedConnection != null)
             {
@@ -1665,7 +1687,7 @@ namespace GxMcp.Gateway
                 _pipeReady.TrySetCanceled();
                 Interlocked.Exchange(ref _queuedCommands, 0);
                 Interlocked.Exchange(ref _inFlightCommands, 0);
-                _inFlightStartTimes.Clear();
+                _supervisionTracker.ClearInFlight();
 
                 if (_process != null)
                 {
@@ -1710,6 +1732,8 @@ namespace GxMcp.Gateway
 
         private void StopSharedConnection(WorkerStopReason reason)
         {
+            _stateMachine.TransitionTo(WorkerLifecycleState.Stopping, reason);
+            Volatile.Write(ref _stopping, 1);
             try { _cts.Cancel(); } catch (ObjectDisposedException) { }
             SharedWorkerConnection? connection;
             lock (_processLock)
@@ -1721,7 +1745,7 @@ namespace GxMcp.Gateway
                 _pipeReady.TrySetCanceled();
                 Interlocked.Exchange(ref _queuedCommands, 0);
                 Interlocked.Exchange(ref _inFlightCommands, 0);
-                _inFlightStartTimes.Clear();
+                _supervisionTracker.ClearInFlight();
             }
             try { connection?.Dispose(); } catch { }
             Volatile.Write(ref _exitConfirmed, 1);
@@ -1730,7 +1754,7 @@ namespace GxMcp.Gateway
 
         private void MarkActivity()
         {
-            _lastActivityUtc = DateTime.UtcNow;
+            _supervisionTracker.MarkActivity();
         }
 
         // True when the worker should be proactively recycled for heap: recycling is enabled,
@@ -1752,46 +1776,46 @@ namespace GxMcp.Gateway
 
         // issue #113 — true while a background build recently announced itself via
         // notifications/worker/build_active (heartbeat every 20s during a build).
-        private bool IsBuildActive()
-        {
-            return IsBackgroundActivityFresh(Volatile.Read(ref _lastBuildActiveUtcTicks));
-        }
+        private bool IsBuildActive() => _supervisionTracker.IsBuildActive(BuildActiveGraceWindow);
 
-        private bool IsIndexActive()
-        {
-            return IsBackgroundActivityFresh(Volatile.Read(ref _lastIndexActiveUtcTicks));
-        }
-
-        private static bool IsBackgroundActivityFresh(long ticks)
-        {
-            return ticks != 0 && DateTime.UtcNow - new DateTime(ticks) < BuildActiveGraceWindow;
-        }
+        private bool IsIndexActive() => _supervisionTracker.IsIndexActive(BuildActiveGraceWindow);
 
         private bool ShouldStopForIdle()
         {
-            if (_workerIdleTimeout <= TimeSpan.Zero)
-            {
-                return false;
-            }
+            return _supervisionTracker.ShouldStopForIdle(
+                _workerIdleTimeout,
+                Volatile.Read(ref _queuedCommands),
+                Volatile.Read(ref _inFlightCommands),
+                _isStarting,
+                BuildActiveGraceWindow);
+        }
 
-            if (Volatile.Read(ref _queuedCommands) > 0 || Volatile.Read(ref _inFlightCommands) > 0)
+        private void HandleWorkerNotification(string? method, JObject payload)
+        {
+            if (string.Equals(method, "notifications/worker/sdk_ready", StringComparison.Ordinal))
             {
-                return false;
+                if (_sdkReady.TrySetResult(true))
+                {
+                    _stateMachine.TransitionTo(WorkerLifecycleState.Ready);
+                    Program.Log($"[Gateway] worker SDK ready (KB '{Kb?.Alias}').");
+                }
             }
-
-            if (_isStarting)
+            else if (string.Equals(method, "notifications/worker/build_active", StringComparison.Ordinal))
             {
-                return false;
+                _supervisionTracker.MarkBuildActive();
             }
-
-            // A background build keeps the worker busy even with nothing in flight or
-            // queued — never idle-reap (or heap-recycle) mid-build. issue #113.
-            if (IsBuildActive() || IsIndexActive())
+            else if (string.Equals(method, "notifications/worker/index_active", StringComparison.Ordinal))
             {
-                return false;
+                _supervisionTracker.MarkIndexActive();
             }
-
-            return DateTime.UtcNow - _lastActivityUtc >= _workerIdleTimeout;
+            else if (string.Equals(method, "notifications/worker/persist_jobs_request", StringComparison.Ordinal))
+            {
+                TryPersistJobsForSoftReload(payload["params"] as JObject);
+            }
+            else if (string.Equals(method, "notifications/worker/jobs_restored", StringComparison.Ordinal))
+            {
+                TryReloadJobsAfterSoftReload(payload["params"] as JObject);
+            }
         }
 
         private void HandleWorkerRpcResponse(string json, out JObject? payload)
@@ -1803,39 +1827,7 @@ namespace GxMcp.Gateway
                 var id = payload["id"]?.ToString();
                 if (string.IsNullOrWhiteSpace(id))
                 {
-                    // Notification path — handle soft-reload persist request inline so
-                    // the JobRegistry survives the worker's clean exit (FR#20).
-                    var method = payload["method"]?.ToString();
-                    if (string.Equals(method, "notifications/worker/sdk_ready", StringComparison.Ordinal))
-                    {
-                        if (_sdkReady.TrySetResult(true))
-                            Program.Log($"[Gateway] worker SDK ready (KB '{Kb?.Alias}').");
-                    }
-                    else if (string.Equals(method, "notifications/worker/build_active", StringComparison.Ordinal))
-                    {
-                        // issue #42 (P3a) — a background build is running. It is not an
-                        // in-flight RPC, so bump the activity clock explicitly to keep
-                        // ShouldStopForIdle / ShouldRecycleForHeap from reaping the
-                        // worker mid-build.
-                        MarkActivity();
-                        Volatile.Write(ref _lastBuildActiveUtcTicks, DateTime.UtcNow.Ticks);
-                    }
-                    else if (string.Equals(method, "notifications/worker/index_active", StringComparison.Ordinal))
-                    {
-                        // A lite/delta index walk is background STA work and may have no
-                        // in-flight RPC after the initiating command returned. Treat its
-                        // heartbeat as activity for both idle reap guards.
-                        MarkActivity();
-                        Volatile.Write(ref _lastIndexActiveUtcTicks, DateTime.UtcNow.Ticks);
-                    }
-                    else if (string.Equals(method, "notifications/worker/persist_jobs_request", StringComparison.Ordinal))
-                    {
-                        TryPersistJobsForSoftReload(payload["params"] as JObject);
-                    }
-                    else if (string.Equals(method, "notifications/worker/jobs_restored", StringComparison.Ordinal))
-                    {
-                        TryReloadJobsAfterSoftReload(payload["params"] as JObject);
-                    }
+                    HandleWorkerNotification(payload["method"]?.ToString(), payload);
                     return;
                 }
 
@@ -1843,17 +1835,13 @@ namespace GxMcp.Gateway
                 {
                     MarkActivity();
                     CompleteInFlight(id);
-                    // A pipe-level RPC error proves only transport, not SDK readiness.
-                    // Accept readiness from a valid success response or sdk_ready notification.
-                    if (payload["error"] == null && payload.TryGetValue("result", out _))
-                        _sdkReady.TrySetResult(true);
+                    if (payload["error"] == null && payload.TryGetValue("result", out _) && _sdkReady.TrySetResult(true))
+                        _stateMachine.TransitionTo(WorkerLifecycleState.Ready);
                 }
             }
             catch (Exception ex)
             {
                 payload = null;
-                // Never swallow silently — a parse failure here always meant a bug upstream
-                // (worker emitted malformed JSON-RPC) but historically nobody saw it.
                 Program.Log($"[Gateway] HandleWorkerRpcResponse error: {ex.Message}");
             }
         }
@@ -1912,7 +1900,7 @@ namespace GxMcp.Gateway
         {
             if (!string.IsNullOrEmpty(id))
             {
-                _inFlightStartTimes.TryRemove(id, out _);
+                _supervisionTracker.CompleteInFlight(id);
             }
 
             while (true)
@@ -1920,13 +1908,23 @@ namespace GxMcp.Gateway
                 var current = Volatile.Read(ref _inFlightCommands);
                 if (current <= 0)
                 {
+                    UpdateOperationalState();
                     return;
                 }
 
                 if (Interlocked.CompareExchange(ref _inFlightCommands, current - 1, current) == current)
                 {
+                    UpdateOperationalState();
                     return;
                 }
+            }
+        }
+
+        private void UpdateOperationalState()
+        {
+            if (Volatile.Read(ref _inFlightCommands) == 0 && _stateMachine.CurrentState == WorkerLifecycleState.Busy)
+            {
+                _stateMachine.TransitionTo(WorkerLifecycleState.Ready);
             }
         }
 
@@ -1937,20 +1935,7 @@ namespace GxMcp.Gateway
         // and from the 45s "unresponsive" log warning (informational only, no action).
         internal bool HasWedgedCommand(out TimeSpan oldestAge)
         {
-            oldestAge = TimeSpan.Zero;
-            DateTime oldestStart = DateTime.MaxValue;
-            bool any = false;
-            foreach (var kv in _inFlightStartTimes)
-            {
-                if (kv.Value < oldestStart)
-                {
-                    oldestStart = kv.Value;
-                    any = true;
-                }
-            }
-            if (!any) return false;
-            oldestAge = DateTime.UtcNow - oldestStart;
-            return oldestAge >= _wedgedCommandTimeout;
+            return _supervisionTracker.HasWedgedCommand(_wedgedCommandTimeout, out oldestAge);
         }
 
         // --- Test seams (BUG-03) -------------------------------------------------
@@ -1961,13 +1946,13 @@ namespace GxMcp.Gateway
         // the same way RegisterForTest/SetDrainingForTest do for WorkerPool.
         internal void SeedInFlightForTest(string id, DateTime startUtc)
         {
-            _inFlightStartTimes[id] = startUtc;
+            _supervisionTracker.TrackInFlightStart(id, startUtc);
             Interlocked.Increment(ref _inFlightCommands);
         }
 
         internal void CompleteInFlightForTest(string id) => CompleteInFlight(id);
 
-        internal int InFlightStartTimesCountForTest => _inFlightStartTimes.Count;
+        internal int InFlightStartTimesCountForTest => _supervisionTracker.InFlightCount;
 
         /// <summary>
         /// Commands currently retained in the Gateway-side command channel, including
@@ -2038,7 +2023,7 @@ namespace GxMcp.Gateway
 
         // issue #113 — seed the build-active signal and drive ShouldStopForIdle without
         // a live process/pipe, mirroring the SetHeapProbeForTest pattern.
-        internal void MarkBuildActiveForTest(DateTime utcUtc) => Volatile.Write(ref _lastBuildActiveUtcTicks, utcUtc.Ticks);
+        internal void MarkBuildActiveForTest(DateTime utcUtc) => _supervisionTracker.MarkBuildActive(utcUtc);
 
         internal bool ShouldStopForIdleForTest() => ShouldStopForIdle();
     }
