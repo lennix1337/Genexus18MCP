@@ -71,11 +71,12 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
-        /// The proof after a verification failure whose rollback ran. A rollback that was verified as a whole, or that restored every
-        /// property and confirmed each one, proves the requested values are gone. Anything less leaves the state unknown.
+        /// The proof after a verification failure whose rollback ran. The requested values are gone only when every requested property was
+        /// written back and read back with its previous value. The whole-object check is reported beside it, but it does not decide: a
+        /// property the rollback did not confirm keeps the state unknown.
         /// </summary>
-        internal static PersistenceProof ProofAfterRollback(bool rollbackVerified, Report report)
-            => rollbackVerified || (report != null && report.NotRestored.Count == 0 && report.Restored.Count > 0)
+        internal static PersistenceProof ProofAfterRollback(Report report)
+            => report != null && report.Restored.Count > 0 && report.NotRestored.Count == 0
                 ? PersistenceProof.NotPersisted
                 : PersistenceProof.Unknown;
 

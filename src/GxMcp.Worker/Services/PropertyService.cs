@@ -1402,7 +1402,7 @@ namespace GxMcp.Worker.Services
                 report.AddTo(outcome);
                 // The parts that still differ from the snapshot, by name only: without them an unverified rollback cannot be told from damage.
                 if (restoredComparison != null && !restoredComparison.Equal) outcome["changedParts"] = restoredComparison.ChangedParts;
-                PropertyRollbackRestore.MarkCommitted(outcome, PropertyRollbackRestore.ProofAfterRollback(verified, report));
+                PropertyRollbackRestore.MarkCommitted(outcome, PropertyRollbackRestore.ProofAfterRollback(report));
                 return Models.McpResponse.Err(code: "PropertyVerificationFailed", target: target,
                     message: reason + PropertyRollbackRestore.DescribeSourceFailures(sourceFailures) + (verified ? " The complete object snapshot was restored and verified."
                         : " Snapshot restoration could not be verified; inspect the object before writing again."),

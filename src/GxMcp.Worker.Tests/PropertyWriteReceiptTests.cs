@@ -50,25 +50,28 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void AVerifiedRollbackProvesTheRequestedValuesAreGone()
+        public void ARollbackThatRestoredEveryPropertyProvesTheRequestedValuesAreGone()
         {
-            var nothingLeft = new PropertyRollbackRestore.Report(new[] { "MasterPage" }, new string[0]);
+            var allRestored = new PropertyRollbackRestore.Report(new[] { "MasterPage" }, new string[0]);
 
-            Assert.Equal(PropertyRollbackRestore.PersistenceProof.NotPersisted,
-                PropertyRollbackRestore.ProofAfterRollback(rollbackVerified: true, report: null));
-            Assert.Equal(PropertyRollbackRestore.PersistenceProof.NotPersisted,
-                PropertyRollbackRestore.ProofAfterRollback(rollbackVerified: false, report: nothingLeft));
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.NotPersisted, PropertyRollbackRestore.ProofAfterRollback(allRestored));
         }
 
         [Fact]
-        public void AnUnverifiedRollbackWithAPropertyNotRestoredLeavesTheStateUnknown()
+        public void APropertyTheRollbackDidNotConfirmLeavesTheStateUnknown()
         {
-            var someLeft = new PropertyRollbackRestore.Report(new string[0], new[] { "SOAP" });
+            // The whole-object check does not decide: one property the rollback did not confirm keeps the state unknown.
+            var someLeft = new PropertyRollbackRestore.Report(new[] { "MasterPage" }, new[] { "SOAP" });
 
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.Unknown, PropertyRollbackRestore.ProofAfterRollback(someLeft));
+        }
+
+        [Fact]
+        public void NoReportOrAnEmptyOneProvesNothing()
+        {
+            Assert.Equal(PropertyRollbackRestore.PersistenceProof.Unknown, PropertyRollbackRestore.ProofAfterRollback(null));
             Assert.Equal(PropertyRollbackRestore.PersistenceProof.Unknown,
-                PropertyRollbackRestore.ProofAfterRollback(rollbackVerified: false, report: someLeft));
-            Assert.Equal(PropertyRollbackRestore.PersistenceProof.Unknown,
-                PropertyRollbackRestore.ProofAfterRollback(rollbackVerified: false, report: null));
+                PropertyRollbackRestore.ProofAfterRollback(new PropertyRollbackRestore.Report(new string[0], new string[0])));
         }
 
         [Fact]
