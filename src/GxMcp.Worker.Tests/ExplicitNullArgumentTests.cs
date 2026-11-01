@@ -149,8 +149,9 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(1, SourceAssert.Count(dispatcher, "JsonUtil.IsSupplied(args?[\"targets\"])"));
             Assert.Equal(1, SourceAssert.Count(theme, "JsonUtil.IsSupplied(request[\"properties\"])"));
             Assert.Equal(1, SourceAssert.Count(editBuild, "JsonUtil.IsSupplied(args[\"patch\"])"));
-            Assert.Equal(1, SourceAssert.Count(atomic, "JsonUtil.IsSupplied(args?[\"rules\"])"));
-            Assert.Equal(1, SourceAssert.Count(atomic, "JsonUtil.IsSupplied(args?[\"source\"])"));
+            // The atomic call site is used twice: by the save that writes the parts, and by the property-only save decision.
+            Assert.Equal(2, SourceAssert.Count(atomic, "JsonUtil.IsSupplied(args?[\"rules\"])"));
+            Assert.Equal(2, SourceAssert.Count(atomic, "JsonUtil.IsSupplied(args?[\"source\"])"));
 
             // And the form that caused the reports is gone from each of them.
             Assert.DoesNotContain("args?[\"targets\"] != null", dispatcher);
