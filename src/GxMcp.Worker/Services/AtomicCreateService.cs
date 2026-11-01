@@ -251,6 +251,9 @@ namespace GxMcp.Worker.Services
 
             if (string.IsNullOrWhiteSpace(spec.Type))
                 spec.Errors.Add(new JObject { ["field"] = "type", ["errors"] = new JArray("type is required (e.g. Procedure, Transaction, WebPanel).") });
+            // Refused in the spec, not at the write, so a dryRun cannot preview a template that the real call would refuse.
+            if (ObjectCreateTypes.IsWorkWithPlusTemplate(spec.Type))
+                spec.Errors.Add(new JObject { ["field"] = "type", ["errors"] = new JArray(ObjectCreateTypes.WorkWithPlusTemplateHint) });
             if (string.IsNullOrWhiteSpace(spec.Name))
                 spec.Errors.Add(new JObject { ["field"] = "name", ["errors"] = new JArray("name is required.") });
             if (spec.Mode != "create" && spec.Mode != "update" && spec.Mode != "auto")

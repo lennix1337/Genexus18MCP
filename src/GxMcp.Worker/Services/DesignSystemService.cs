@@ -128,7 +128,7 @@ namespace GxMcp.Worker.Services
                 }
 
                 if (dso == null)
-                    return McpResponse.Err("NoDesignSystem", "This KB has no Design System Object.", "DSOs are created in the GeneXus IDE; nothing to read.");
+                    return McpResponse.Err("NoDesignSystem", "This KB has no Design System Object.", "Create one with genexus_create type=DesignSystem, or in the GeneXus IDE, then read it again.");
             }
 
             try

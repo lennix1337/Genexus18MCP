@@ -644,7 +644,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Create KB objects (Transaction, Procedure, WebPanel, SDT, API, Domain, Dashboard, Folder, Module) and generate popups, SD panels, templates and scaffolds. Full guidance: genexus://kb/tool-help/genexus_create",
+      "description": "Create KB objects (Transaction, Procedure, WebPanel, SDT, API, Domain, DesignSystem, Dashboard, Folder, Module) and generate popups, SD panels, templates and scaffolds. Full guidance: genexus://kb/tool-help/genexus_create",
       "inputSchema": {
         "properties": {
           "action": {

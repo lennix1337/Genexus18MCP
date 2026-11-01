@@ -497,6 +497,15 @@ namespace GxMcp.Worker.Services
             bool dryRun = options?["dryRun"]?.ToObject<bool?>() ?? false;
             try
             {
+                // A WorkWithPlus template is refused by name first, whatever the state of the Knowledge Base.
+                if (ObjectCreateTypes.IsWorkWithPlusTemplate(type))
+                {
+                    return McpResponse.Err(
+                        code: "UnsupportedObjectType",
+                        message: "Unsupported object type: " + type,
+                        hint: ObjectCreateTypes.WorkWithPlusTemplateHint);
+                }
+
                 var kb = _kbService.GetKB();
                 if (kb == null) return McpResponse.Err(code: "NoKb", message: "No KB open");
 
@@ -528,7 +537,7 @@ namespace GxMcp.Worker.Services
                     return McpResponse.Err(
                         code: "UnsupportedObjectType",
                         message: "Unsupported object type: " + type,
-                        hint: "Known types: Transaction, Procedure, WebPanel, SDPanel, SDT, DataProvider, DataSelector, Domain, Attribute, Table, Index, ExternalObject, Image, Theme, ThemeClass, DesignSystem, ColorPalette, Menu, Menubar, Stencil, UserControl, WorkPanel, Report, Dashboard, Query, WorkflowDiagram, ConversationalFlows, TestSuite, API, URLRewrite, MiniApp, SuperApp, OfflineDatabase, DataView, Group, Language, TranslationMessage, WorkWithDevices, WorkWithWeb.");
+                        hint: ObjectCreateTypes.SupportedTypesHint);
                 }
 
                 // Pre-flight duplicate check: gives a clear, structured error before the SDK throws.
@@ -872,6 +881,10 @@ namespace GxMcp.Worker.Services
         {
             seededDescription = null;
             typedMeta = null;
+
+            // A WorkWithPlus template is refused by name first, as in CreateObject. The atomic create path reaches it here.
+            if (ObjectCreateTypes.IsWorkWithPlusTemplate(type))
+                throw new ArgumentException("Unsupported object type: " + type + ". " + ObjectCreateTypes.WorkWithPlusTemplateHint);
 
             var kb = _kbService.GetKB();
             if (kb == null) throw new Exception("KB not opened");
@@ -2520,7 +2533,7 @@ namespace GxMcp.Worker.Services
         /// then falls back to reading the matching static Guid field on
         /// <c>Artech.Genexus.Common.ObjClass</c> via reflection. Returns Guid.Empty when unknown.
         /// </summary>
-        private static Guid ResolveObjectTypeGuid(string type)
+        internal static Guid ResolveObjectTypeGuid(string type)
         {
             if (string.IsNullOrWhiteSpace(type)) return Guid.Empty;
             string key = NormalizeTypeAlias(type);
@@ -2559,46 +2572,59 @@ namespace GxMcp.Worker.Services
                 || ResolutionTypeMatches(obj.GetType().Name, requestedType));
         }
 
+        /// <summary>
+        /// The object types with a typed SDK wrapper, each read through its KBObjectDescriptor when it is looked up. A name
+        /// outside this table falls back to ObjClass. The lookup is case-insensitive. ObjectCreateTypesTests checks that
+        /// every name here is in the supported-type list.
+        /// </summary>
+        internal static readonly IReadOnlyDictionary<string, Func<Guid>> TypedDescriptorIds =
+            new Dictionary<string, Func<Guid>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Module"] = () => KBObjectDescriptor.Get<Artech.Architecture.Common.Objects.Module>().Id,
+                ["Procedure"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Procedure>().Id,
+                ["Transaction"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Transaction>().Id,
+                ["WebPanel"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.WebPanel>().Id,
+                ["SDT"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.SDT>().Id,
+                ["DataProvider"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.DataProvider>().Id,
+                ["Attribute"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Attribute>().Id,
+                ["Table"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Table>().Id,
+                ["Domain"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Domain>().Id,
+                ["DataSelector"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.DataSelector>().Id,
+                ["DataView"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.DataView>().Id,
+                ["Index"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Index>().Id,
+                ["ExternalObject"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.ExternalObject>().Id,
+                ["Theme"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Theme>().Id,
+                ["Image"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Image>().Id,
+                ["Menu"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Menu>().Id,
+                ["Menubar"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Menubar>().Id,
+                ["Stencil"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Stencil>().Id,
+                ["UserControl"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.UserControl>().Id,
+                ["WorkPanel"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.WorkPanel>().Id,
+                ["Report"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Report>().Id,
+                ["API"] = () => ResolveOptionalDescriptorId("API"),
+                ["URLRewrite"] = () => ResolveOptionalDescriptorId("URLRewrite"),
+                ["MiniApp"] = () => ResolveOptionalDescriptorId("MiniApp"),
+                ["SuperApp"] = () => ResolveOptionalDescriptorId("SuperApp"),
+                ["DesignSystem"] = () => ResolveOptionalDescriptorId("DesignSystem"),
+                ["ColorPalette"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.ColorPalette>().Id,
+                ["OfflineDatabase"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.OfflineDatabase>().Id,
+                ["Group"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Group>().Id,
+                ["Language"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Language>().Id,
+            };
+
         private static Guid ResolveFromTypedDescriptor(string type)
         {
+            if (!TypedDescriptorIds.TryGetValue(type, out Func<Guid> descriptorId)) return Guid.Empty;
+
             try
             {
-                if (type.Equals("Module", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Architecture.Common.Objects.Module>().Id;
-                if (type.Equals("Procedure", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Procedure>().Id;
-                if (type.Equals("Transaction", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Transaction>().Id;
-                if (type.Equals("WebPanel", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.WebPanel>().Id;
-                if (type.Equals("SDT", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.SDT>().Id;
-                if (type.Equals("DataProvider", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.DataProvider>().Id;
-                if (type.Equals("Attribute", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Attribute>().Id;
-                if (type.Equals("Table", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Table>().Id;
-                if (type.Equals("Domain", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Domain>().Id;
-                if (type.Equals("DataSelector", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.DataSelector>().Id;
-                if (type.Equals("DataView", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.DataView>().Id;
-                if (type.Equals("Index", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Index>().Id;
-                if (type.Equals("ExternalObject", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.ExternalObject>().Id;
-                if (type.Equals("Theme", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Theme>().Id;
-                if (type.Equals("Image", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Image>().Id;
-                if (type.Equals("Menu", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Menu>().Id;
-                if (type.Equals("Menubar", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Menubar>().Id;
-                if (type.Equals("Stencil", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Stencil>().Id;
-                if (type.Equals("UserControl", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.UserControl>().Id;
-                if (type.Equals("WorkPanel", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.WorkPanel>().Id;
-                if (type.Equals("Report", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Report>().Id;
-                if (type.Equals("API", StringComparison.OrdinalIgnoreCase)) return ResolveOptionalDescriptorId("API");
-                if (type.Equals("URLRewrite", StringComparison.OrdinalIgnoreCase)) return ResolveOptionalDescriptorId("URLRewrite");
-                if (type.Equals("MiniApp", StringComparison.OrdinalIgnoreCase)) return ResolveOptionalDescriptorId("MiniApp");
-                if (type.Equals("SuperApp", StringComparison.OrdinalIgnoreCase)) return ResolveOptionalDescriptorId("SuperApp");
-                if (type.Equals("DesignSystem", StringComparison.OrdinalIgnoreCase)) return ResolveOptionalDescriptorId("DesignSystem");
-                if (type.Equals("ColorPalette", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.ColorPalette>().Id;
-                if (type.Equals("OfflineDatabase", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.OfflineDatabase>().Id;
-                if (type.Equals("Group", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Group>().Id;
-                if (type.Equals("Language", StringComparison.OrdinalIgnoreCase)) return KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Language>().Id;
+                return descriptorId();
             }
             catch (Exception ex)
             {
                 Logger.Error("ResolveFromTypedDescriptor failed for " + type + ": " + ex.Message);
+                return Guid.Empty;
             }
-            return Guid.Empty;
         }
 
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Guid> _optionalDescriptorIds =
