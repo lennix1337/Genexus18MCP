@@ -133,17 +133,7 @@ namespace GxMcp.Worker.Services
                     phases.Add(new JObject { ["phase"] = "properties", ["status"] = "ok" });
                 }
 
-                // A save that only writes the properties of an existing object is a property write: it does not run the pattern
-                // on save either (see PropertyApplyOnSaveRule). A save that also writes variables, rules or source runs as before.
-                bool propertyOnlySave = existing != null && args?["properties"] is JObject
-                    && !(args?["variables"] is JArray atomicVariables && atomicVariables.Count > 0)
-                    && !Helpers.JsonUtil.IsSupplied(args?["rules"]) && !Helpers.JsonUtil.IsSupplied(args?["source"]);
-                using (IDisposable suppression = propertyOnlySave
-                    ? PropertyApplyOnSaveRule.Begin(obj, null, ((JObject)args["properties"]).Properties().Select(p => p.Name))
-                    : null)
-                {
-                    obj.EnsureSave(check: false);
-                }
+                obj.EnsureSave(check: false);
                 WriteService.NotePerTargetWrite(name);
 
                 bool validate = args?["validate"]?.ToObject<bool?>() ?? false;
