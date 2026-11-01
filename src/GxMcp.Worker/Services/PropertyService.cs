@@ -1282,17 +1282,13 @@ namespace GxMcp.Worker.Services
                     if (string.Equals(verificationEnvelope["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase))
                         return RollbackPropertySnapshot(target, obj, snapshot, rollback,
                             verificationEnvelope["error"]?["message"]?.ToString() ?? "Property verification failed.",
-                            string.Equals(verificationEnvelope["error"]?["code"]?.ToString(), "PropertyNotPersisted", StringComparison.Ordinal)
-                                ? PropertyRollbackRestore.PersistenceProof.NotPersisted
-                                : PropertyRollbackRestore.PersistenceProof.Unknown);
+                            PropertyRollbackRestore.ProofOfVerificationRefusal(verificationEnvelope["error"]?["code"]?.ToString()));
 
                     var diff = verificationEnvelope["result"] as JObject;
                     if (diff == null || diff["persistedVerified"]?.ToObject<bool>() != true)
                         return RollbackPropertySnapshot(target, obj, snapshot, rollback,
                             $"The saved property '{propName}' could not be confirmed.",
-                            diff != null && diff["persistedVerified"]?.ToObject<bool?>() == false
-                                ? PropertyRollbackRestore.PersistenceProof.NotPersisted
-                                : PropertyRollbackRestore.PersistenceProof.Unknown);
+                            PropertyRollbackRestore.ProofOfUnconfirmedRead(diff?["persistedVerified"]?.ToObject<bool?>()));
                     verifiedBefore[propName] = diff["before"]?.ToString() ?? string.Empty;
                     verifiedRequested[propName] = diff["requested"]?.ToString() ?? requested;
                     verifiedPersisted[propName] = diff["persisted"]?.ToString() ?? string.Empty;
@@ -1305,7 +1301,7 @@ namespace GxMcp.Worker.Services
                         "The property save changed an unrelated object part"
                         + PropertyRollbackRestore.DescribeChangedParts(partsComparison?.ChangedParts.Values<string>())
                         + " or the parts could not be verified.",
-                        PropertyRollbackRestore.PersistenceProof.Verified);
+                        PropertyRollbackRestore.ProofOfChangedParts());
 
                 var result = new JObject { ["properties"] = properties };
                 NoteNativeNames(result, objectTypeId, properties, nativeNames);
@@ -1585,9 +1581,7 @@ namespace GxMcp.Worker.Services
         {
             var receipt = JObject.Parse(envelope);
             if (!string.Equals(receipt["status"]?.ToString(), "error", StringComparison.Ordinal)) return envelope;
-            bool notPersisted = string.Equals(receipt["error"]?["code"]?.ToString(), "PropertyNotPersisted", StringComparison.Ordinal);
-            PropertyRollbackRestore.MarkCommitted(receipt,
-                notPersisted ? PropertyRollbackRestore.PersistenceProof.NotPersisted : PropertyRollbackRestore.PersistenceProof.Unknown);
+            PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.ProofOfVerificationRefusal(receipt["error"]?["code"]?.ToString()));
             return receipt.ToString(Newtonsoft.Json.Formatting.None);
         }
 

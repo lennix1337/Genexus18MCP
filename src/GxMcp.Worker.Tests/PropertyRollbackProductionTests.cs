@@ -148,11 +148,11 @@ namespace GxMcp.Worker.Tests
             string batch = SourceAssert.MethodBody(src, "public string SetProperties(string target, JObject properties,");
 
             // Refused, verified-restore and failed-restore exits each write the receipt. The four callers of the rollback each pass a proof:
-            // two pick it with a ternary (two occurrences each), the other two pass one. The batch's own failure exit after the commit
-            // passes one more. A proof argument removed from any caller changes this count.
+            // three pick it through a function of PropertyRollbackRestore, which the mapping tests cover; the first read-back failure passes
+            // a literal, and the batch's own failure exit after the commit passes one more. A proof argument removed from a caller changes this count.
             Assert.Equal(3, SourceAssert.Count(rollback, "PropertyRollbackRestore.MarkCommitted("));
             Assert.Equal(4, SourceAssert.Count(batch, "RollbackPropertySnapshot(target, obj, snapshot, rollback,"));
-            Assert.Equal(7, SourceAssert.Count(batch, "PersistenceProof."));
+            Assert.Equal(2, SourceAssert.Count(batch, "PersistenceProof."));
         }
 
         [Fact]

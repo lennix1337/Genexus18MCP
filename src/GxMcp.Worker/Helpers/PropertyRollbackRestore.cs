@@ -87,6 +87,25 @@ namespace GxMcp.Worker.Helpers
             => restoreCommitted ? PersistenceProof.Unknown : earlier;
 
         /// <summary>
+        /// The proof of a verification refusal, by its error code. A read-back that found another value (<c>PropertyNotPersisted</c>) shows
+        /// the requested value is not in the object. Any other refusal leaves the state unknown.
+        /// </summary>
+        internal static PersistenceProof ProofOfVerificationRefusal(string errorCode)
+            => string.Equals(errorCode, "PropertyNotPersisted", StringComparison.Ordinal) ? PersistenceProof.NotPersisted : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof of a read-back that did not confirm the property. Only a read that says the value is not there proves it is not in the
+        /// object; a read that confirmed it, or no answer at all, leaves the state unknown.
+        /// </summary>
+        internal static PersistenceProof ProofOfUnconfirmedRead(bool? persistedVerified)
+            => persistedVerified == false ? PersistenceProof.NotPersisted : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof when every requested value was read back as requested and only an unrelated part then changed: the values are in the object.
+        /// </summary>
+        internal static PersistenceProof ProofOfChangedParts() => PersistenceProof.Verified;
+
+        /// <summary>
         /// The parenthesis the "unrelated part changed" reason adds: the names of the parts that differ, never their content.
         /// Empty when no name is known, so the reason reads as it did before.
         /// </summary>
