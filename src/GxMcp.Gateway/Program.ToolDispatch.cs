@@ -951,7 +951,7 @@ namespace GxMcp.Gateway
                                 try { sObj = JObject.Parse(pjv.ToString()); } catch { }
                             }
                             string? sStatus = sObj?["Status"]?.ToString() ?? sObj?["status"]?.ToString();
-                            if (!string.IsNullOrEmpty(sStatus) && !string.Equals(sStatus, "Running", StringComparison.OrdinalIgnoreCase))
+                            if (ApplyPatchValidation.IsEndState(sStatus))
                             {
                                 terminal = sObj;
                                 break;

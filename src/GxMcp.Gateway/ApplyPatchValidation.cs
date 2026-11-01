@@ -5,10 +5,21 @@ namespace GxMcp.Gateway
     /// <summary>
     /// Verdict of <c>genexus_apply_pattern validate=true</c>. The pattern is valid only when its validation build
     /// ends <c>Succeeded</c> with no itemized error. Any other end state (<c>Failed</c>, <c>Cancelled</c>,
-    /// <c>Error</c>, <c>ReorgRequired</c>) and a build that reports no end state are failures.
+    /// <c>Error</c>, <c>ReorgRequired</c>) is a failure, and so is a missing one.
     /// </summary>
     internal static class ApplyPatchValidation
     {
+        /// <summary>
+        /// True for a build status that ends the wait: the worker's terminal statuses, compared without case.
+        /// <c>Queued</c>, <c>Running</c> and a missing status keep the poll going.
+        /// </summary>
+        internal static bool IsEndState(string? status)
+            => string.Equals(status, "Succeeded", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "Error", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "ReorgRequired", StringComparison.OrdinalIgnoreCase);
+
         /// <summary>Writes the verdict into the validation block: its status, the build's end state and a reorganization that stopped it.</summary>
         internal static void WriteVerdict(JObject block, JObject terminal, int errorCount)
         {
