@@ -15,7 +15,7 @@
 
 ### Internal
 
-- Property rollback helpers without SDK types: `PropertyApplyOnSaveRule` (when a write suppresses the apply-on-save step), `PropertyPartNormalizer` (representation noise of WebForm and Documentation, used only by the property rollback comparison through `ObjectMoveSnapshot.ComparePropertyVerification`), `ChangedLines` (differing lines for verbose errors) and the reset variant of `PropertyRollbackRestore`. Tests: `PropertyApplyOnSaveRuleTests`, `PropertyPartNormalizerTests`, `ChangedLinesTests`, `PropertyRollbackResetTests` (Worker) and `PropertyRollbackProjectionTests` (Gateway); `FreshReadPropertyContractTests` expects the three independent read sites of the property write path.
+- Property rollback helpers without SDK types: `PropertyApplyOnSaveRule` (when a write suppresses the apply-on-save step), `PropertyVerificationScope` (the parts the property rollback compares: WebForm and Documentation are restored but not compared), `ChangedLines` (differing lines for verbose errors) and the reset variant of `PropertyRollbackRestore`. Tests: `PropertyApplyOnSaveRuleTests`, `PropertyVerificationScopeTests`, `ChangedLinesTests`, `PropertyRollbackResetTests` (Worker) and `PropertyRollbackProjectionTests` (Gateway); `FreshReadPropertyContractTests` expects the three independent read sites of the property write path.
 
 ## v4.2.0 - 2026-11-01
 

@@ -51,6 +51,17 @@ namespace GxMcp.Gateway.Tests
             Assert.True(JToken.DeepEquals(input["changedLines"], verbose["changedLines"]));
         }
 
+        [Fact]
+        public void TerseKeepsTheNamesOfThePartsThatWereNotCompared()
+        {
+            var input = FailedRollback();
+            input["notComparedParts"] = new JArray("WebForm", "Documentation");
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            Assert.True(JToken.DeepEquals(input["notComparedParts"], trimmed["notComparedParts"]));
+        }
+
         private static JObject FailedRollback() => new JObject
         {
             ["code"] = "PropertyVerificationFailed",

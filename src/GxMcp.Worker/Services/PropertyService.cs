@@ -1399,7 +1399,7 @@ namespace GxMcp.Worker.Services
                 var report = PropertyRollbackRestore.ConfirmWithDefaults(rollback.RequestedNames, rollback.PreviousValues, rollback.WereDefault, writtenBack,
                     name => restored == null ? null : ReadPropertyValueAt(restored, rollback.NativeNames[name], rollback.ControlName),
                     name => restored != null && IsPropertyDefaultSafe(restored, rollback.NativeNames[name]));
-                // The verification ignores the representation noise of the normalized parts; the move keeps the strict comparison.
+                // WebForm and Documentation are restored with the object but not compared: the receipt names them.
                 var restoredComparison = restored == null ? null : snapshot.ComparePropertyVerification(restored);
                 bool verified = restoredComparison != null && restoredComparison.Equal;
                 var outcome = new JObject { ["rollbackAttempted"] = true, ["rollbackVerified"] = verified };
@@ -1412,6 +1412,8 @@ namespace GxMcp.Worker.Services
                     outcome["changedParts"] = restoredComparison.ChangedParts;
                     outcome["changedLines"] = restoredComparison.ChangedLines;
                 }
+                if (restoredComparison != null && restoredComparison.NotComparedParts.Length > 0)
+                    outcome["notComparedParts"] = new JArray(restoredComparison.NotComparedParts);
                 return Models.McpResponse.Err(code: "PropertyVerificationFailed", target: target,
                     message: reason + PropertyRollbackRestore.DescribeSourceFailures(sourceFailures) + (verified ? " The complete object snapshot was restored and verified."
                         : " Snapshot restoration could not be verified; inspect the object before writing again."),

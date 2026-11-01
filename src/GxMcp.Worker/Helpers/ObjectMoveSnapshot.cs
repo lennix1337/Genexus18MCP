@@ -166,10 +166,12 @@ namespace GxMcp.Worker.Helpers
                 : Comparison.Failed(changed, current.Hash, changedKeys);
         }
 
+
         /// <summary>
         /// The comparison that decides whether a property rollback put the object back. It is the object comparison of
-        /// <see cref="Compare(KBObject, string, Guid?, string[])"/> with the representation noise of the two normalized parts
-        /// removed (<see cref="PropertyPartNormalizer"/>). The move, SDT and variable rollbacks keep the strict comparison.
+        /// <see cref="Compare(KBObject, string, Guid?, string[])"/> over the parts that <see cref="PropertyVerificationScope"/>
+        /// compares. The parts it leaves out are restored all the same and are listed in NotComparedParts. The move, SDT and
+        /// variable rollbacks keep the strict comparison of every part.
         /// </summary>
         public Comparison ComparePropertyVerification(KBObject obj)
         {
@@ -181,21 +183,17 @@ namespace GxMcp.Worker.Helpers
             catch (Exception ex) { return Comparison.Failed(new[] { "SnapshotReadFailed: " + ex.Message }, null); }
 
             var changed = new List<string>();
-            JArray propertyDifferences = null;
             if (!_objectXml.SequenceEqual(current._objectXml))
             {
                 string beforeXml = Encoding.UTF8.GetString(_objectXml);
                 string afterXml = Encoding.UTF8.GetString(current._objectXml);
                 var propertyPaths = DiffObjectXml(beforeXml, afterXml, null, null);
                 if (propertyPaths.Length > 0)
-                {
                     changed.Add("Properties: " + string.Join(", ", propertyPaths));
-                    propertyDifferences = DescribePropertyDifferences(beforeXml, afterXml, propertyPaths);
-                }
             }
 
-            var expected = _parts.ToDictionary(p => p.Key, p => NormalizedPart(p.Value), StringComparer.OrdinalIgnoreCase);
-            var actual = current._parts.ToDictionary(p => p.Key, p => NormalizedPart(p.Value), StringComparer.OrdinalIgnoreCase);
+            var expected = ComparedParts(_parts);
+            var actual = ComparedParts(current._parts);
             string[] changedKeys = FindChangedPartKeys(expected, actual);
             var changedLines = new JArray();
             foreach (string key in changedKeys)
@@ -219,14 +217,18 @@ namespace GxMcp.Worker.Helpers
                     changedLines.Add(line);
             }
 
-            if (changed.Count == 0) return Comparison.Verified(current.Hash);
-            var failed = Comparison.Failed(changed, current.Hash, changedKeys, propertyDifferences);
-            failed.ChangedLines = changedLines;
-            return failed;
+            Comparison result = changed.Count == 0
+                ? Comparison.Verified(current.Hash)
+                : Comparison.Failed(changed, current.Hash, changedKeys);
+            result.ChangedLines = changedLines;
+            result.NotComparedParts = PropertyVerificationScope.NotComparedOf(_parts.Values.Concat(current._parts.Values).Select(part => part.Name));
+            return result;
         }
 
-        private static byte[] NormalizedPart(PartSnapshot part)
-            => Utf8(PropertyPartNormalizer.Normalize(part.Name, Encoding.UTF8.GetString(part.VerificationData ?? new byte[0])));
+        // The parts the property verification compares, as bytes keyed like the snapshot.
+        private static Dictionary<string, byte[]> ComparedParts(IDictionary<string, PartSnapshot> parts)
+            => parts.Where(part => PropertyVerificationScope.IsCompared(part.Value.Name))
+                .ToDictionary(part => part.Key, part => part.Value.VerificationData ?? new byte[0], StringComparer.OrdinalIgnoreCase);
 
         internal JArray DescribeDifferences(KBObject obj, params string[] ignoredPartNames)
         {
@@ -680,6 +682,9 @@ namespace GxMcp.Worker.Helpers
 
             /// <summary>The differing lines of the changed parts, set only by <see cref="ObjectMoveSnapshot.ComparePropertyVerification"/>.</summary>
             public JArray ChangedLines { get; set; } = new JArray();
+
+            /// <summary>The parts restored but not compared, set only by <see cref="ObjectMoveSnapshot.ComparePropertyVerification"/>.</summary>
+            public string[] NotComparedParts { get; set; } = new string[0];
 
             public static Comparison Verified(string hash) => new Comparison(true, null, hash);
             public static Comparison Failed(IEnumerable<string> changedParts, string hash, IEnumerable<string> changedPartKeys = null, JArray propertyDifferences = null) => new Comparison(false, changedParts, hash, changedPartKeys, propertyDifferences);
