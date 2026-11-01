@@ -23,6 +23,11 @@ namespace GxMcp.Gateway.Routers
 
             if (action.Equals("set", System.StringComparison.OrdinalIgnoreCase))
             {
+                // A TemplateXml patch is one value of the properties map, and the batch ignores a propertyName or value sent
+                // with it. Refusing here keeps the call from writing something other than what was asked.
+                if (SendsTemplateXmlPatchWithSingleProperty(args))
+                    throw new UsageException("InvalidPropertyBatch",
+                        "A TemplateXml patch goes inside properties; propertyName and value cannot be sent with it.");
                 return new
                 {
                     module = "Property",
@@ -102,5 +107,20 @@ namespace GxMcp.Gateway.Routers
                 reconcileTimedOutWrite = args?["reconcileTimedOutWrite"]?.ToObject<bool?>() ?? false
             };
         }
+
+        private static bool SendsTemplateXmlPatchWithSingleProperty(JObject? args)
+        {
+            bool singleSent = IsSent(args?["propertyName"]) || IsSent(args?["value"]);
+            return singleSent && args?["properties"] is JObject properties
+                && properties.Properties().Any(p => p.Value is JObject && IsTemplateXmlName(p.Name));
+        }
+
+        // The official name and the SDK name of the template XML of a WorkWithPlus template.
+        private static bool IsTemplateXmlName(string name)
+            => string.Equals(name.Trim(), "TemplateXml", System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name.Trim(), "WWPTemplate_TemplateXml", System.StringComparison.OrdinalIgnoreCase);
+
+        // A key sent as JSON null is not sent.
+        private static bool IsSent(JToken? token) => token != null && token.Type != JTokenType.Null;
     }
 }
