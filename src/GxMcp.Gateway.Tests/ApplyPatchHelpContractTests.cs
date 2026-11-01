@@ -15,6 +15,8 @@ namespace GxMcp.Gateway.Tests
             Assert.Contains("`validation.buildStatus`", help);
             Assert.Contains("`validation.reorgRequired`", help);
             Assert.Contains("marks the apply response as an error", help);
+            Assert.Contains("A build that is still `Queued` or `Running` is awaited.", help);
+            Assert.Contains("a build that reports no end state, or does not finish within 180 seconds, is `timeout`", help);
         }
     }
 }
