@@ -686,7 +686,7 @@ namespace GxMcp.Worker.Services
                 if (spec.Properties != null && spec.Properties.Count > 0)
                 {
                     currentField = "properties";
-                    PropertyService.ApplyPropertiesDirect(obj, spec.Properties);
+                    _propertyService.ApplyPropertiesDirect(obj, spec.Properties);
                     var propResults = new JObject();
                     foreach (var p in spec.Properties.Properties())
                     {

@@ -15,7 +15,7 @@ namespace GxMcp.Worker.Services
         internal const string SourceProperty = "WWPTemplate_TemplateXml";
         internal static readonly Guid ObjectType = new Guid("083f1b21-5715-45e1-8a8d-ceadef141e02");
 
-        private static XDocument Parse(string source)
+        internal static XDocument Parse(string source)
         {
             using (var input = new StringReader(source ?? string.Empty))
             using (var reader = XmlReader.Create(input, new XmlReaderSettings

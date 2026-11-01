@@ -129,7 +129,7 @@ namespace GxMcp.Worker.Services
 
                 if (args?["properties"] is JObject properties)
                 {
-                    PropertyService.ApplyPropertiesDirect(obj, properties);
+                    _properties.ApplyPropertiesDirect(obj, properties);
                     phases.Add(new JObject { ["phase"] = "properties", ["status"] = "ok" });
                 }
 
