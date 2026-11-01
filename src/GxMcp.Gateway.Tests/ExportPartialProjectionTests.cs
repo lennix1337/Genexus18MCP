@@ -60,5 +60,46 @@ namespace GxMcp.Gateway.Tests
             Assert.DoesNotContain("{", (string)objects[0]!["message"]!);
             Assert.Equal("ok", (string)objects[1]!["status"]!);
         }
+
+        [Fact]
+        public void A_partial_import_reaches_the_client_with_the_refusal_of_each_template_file()
+        {
+            var payload = new JObject
+            {
+                ["status"] = "partial",
+                ["code"] = "ObjectTextNativeImportPartial",
+                ["result"] = new JObject
+                {
+                    ["format"] = "native",
+                    ["failed"] = 1,
+                    ["objects"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["name"] = "SynthTemplate",
+                            ["type"] = "WorkWithPlusforWebTemplate",
+                            ["status"] = "error",
+                            ["code"] = "WwpTemplateImportRefused",
+                            ["message"] = "'SynthTemplate' is a WorkWithPlus template: the native import does not write templates, so nothing was written to the KB.",
+                            ["hint"] = "Change the template's properties with genexus_properties action=set, TemplateXml included."
+                        }
+                    }
+                }
+            };
+
+            var shaped = Program.BuildToolResultContent(payload, false, "genexus_io", new JObject
+            {
+                ["action"] = "import_text_to_kb",
+                ["format"] = "native",
+                ["projection"] = "minimal"
+            });
+
+            Assert.False(shaped["isError"]?.Value<bool>());
+            JObject inner = JObject.Parse(shaped["content"]?[0]?["text"]?.ToString() ?? "{}");
+            Assert.Equal("partial", (string?)inner["status"]);
+            JObject item = (JObject)((JArray)inner["result"]!["objects"]!)[0];
+            Assert.Equal("WwpTemplateImportRefused", (string)item["code"]!);
+            Assert.Contains("genexus_properties action=set", (string)item["hint"]!);
+        }
     }
 }
