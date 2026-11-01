@@ -391,7 +391,7 @@ namespace GxMcp.Gateway
             }
         }
 
-        public JObject BuildOperationResult(string operationId)
+        public JObject BuildOperationResult(string operationId, bool verboseRequested = false)
         {
             if (!_operations.TryGetValue(operationId, out var record))
                 return BuildNotFound(operationId);
@@ -402,7 +402,8 @@ namespace GxMcp.Gateway
 
                 if (record.WorkerPayload != null)
                 {
-                    bool verbose = record.ToolArguments?["verbose_errors"]?.ToObject<bool?>() == true;
+                    // The line detail is kept when the call or this result request asked for verbose_errors.
+                    bool verbose = verboseRequested || record.ToolArguments?["verbose_errors"]?.ToObject<bool?>() == true;
                     payload["workerPayload"] = verbose ? record.WorkerPayload.DeepClone() : WithoutLineDetail(record.WorkerPayload);
                 }
                 else if (string.Equals(record.Status, "Running", StringComparison.OrdinalIgnoreCase))

@@ -616,7 +616,8 @@ namespace GxMcp.Gateway
                         if (string.IsNullOrWhiteSpace(until))
                             until = waitUntilDone ? "terminal" : "change";
                         JObject opPayload = string.Equals(lifecycleAction, "result", StringComparison.OrdinalIgnoreCase)
-                            ? _operationTracker.BuildOperationResult(operationId)
+                            ? _operationTracker.BuildOperationResult(operationId,
+                                verboseRequested: args?["verbose_errors"]?.ToObject<bool?>() == true)
                             : await _operationTracker.WaitForOperationAsync(
                                 operationId, waitSeconds, until, transportCancellation);
                         // A result request is a terminal-state read, but callers may still
