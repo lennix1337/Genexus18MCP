@@ -4,8 +4,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Artech.Architecture.Common.Objects;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
 
 namespace GxMcp.Worker.Services
@@ -27,12 +29,15 @@ namespace GxMcp.Worker.Services
         private readonly KbService _kbService;
         private readonly IndexCacheService _indexCacheService;
         private readonly object _operationTracker; // Gateway-owned; loosely typed here.
+        private Func<object> _kbProvider;
 
         public DoctorService(KbService kbService, IndexCacheService indexCacheService, object operationTracker = null)
         {
             _kbService = kbService;
             _indexCacheService = indexCacheService;
             _operationTracker = operationTracker;
+            // KbObject reads the handle only. GetKB would start the background auto-open of GX_KB_PATH.
+            _kbProvider = () => _kbService?.KbObject;
         }
 
         public string Diagnose()
@@ -361,6 +366,80 @@ namespace GxMcp.Worker.Services
             }
             catch { /* swallow — telemetry is best-effort */ }
             return result;
+        }
+
+        /// <summary>
+        /// The WorkWithPlus template block that genexus_doctor asks for by action WwpTemplates. It reads the KB
+        /// through the SDK, so the Gateway asks only a Worker that is already running. The block says KbNotOpen when no
+        /// KB is open in that Worker.
+        /// </summary>
+        public string WwpTemplatesResponse()
+        {
+            return McpResponse.Ok(code: "DoctorWwpTemplatesOk", result: BuildWwpTemplatesBlock());
+        }
+
+        /// <summary>
+        /// Builds the block. It never throws: a failure becomes an unavailable block with its reason, and a template
+        /// whose properties cannot be read is counted as unreadable without affecting the others.
+        /// </summary>
+        internal JObject BuildWwpTemplatesBlock(PatternRegistry registry = null)
+        {
+            try
+            {
+                var manifest = (registry ?? PatternRegistry.Current).FindById(PatternRegistry.WorkWithPlusPatternId);
+                if (!IsWorkWithPlusInstalled(manifest)) return WwpTemplatesUnavailable("WorkWithPlusNotInstalled");
+
+                object raw = _kbProvider();
+                if (raw == null) return WwpTemplatesUnavailable("KbNotOpen");
+                var kb = raw as KnowledgeBase;
+                if (kb == null) return WwpTemplatesUnavailable("UnsupportedDriver");
+
+                var objects = kb.DesignModel.Objects;
+                var records = new List<WwpTemplateHealth.TemplateRecord>();
+                foreach (var key in objects.GetKeys(WwpTemplateXml.ObjectType).OrderBy(k => k.ToString()).ToArray())
+                {
+                    try
+                    {
+                        var obj = objects.Get(key);
+                        records.Add(new WwpTemplateHealth.TemplateRecord
+                        {
+                            Name = obj.Name,
+                            Type = obj.GetPropertyValue<string>("WWPTemplate_Type"),
+                            TemplateXml = obj.GetPropertyValue<string>(WwpTemplateXml.SourceProperty)
+                        });
+                    }
+                    catch (Exception)
+                    {
+                        records.Add(new WwpTemplateHealth.TemplateRecord { Unreadable = true });
+                    }
+                }
+                return WwpTemplateHealth.Summarize(records);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Doctor WorkWithPlus template block failed: " + ex.Message);
+                return WwpTemplatesUnavailable("ReadFailed");
+            }
+        }
+
+        /// <summary>
+        /// A WorkWithPlus package is installed when its pattern manifest was discovered on disk. The registry always
+        /// holds a placeholder for WorkWithPlus, and the placeholder has no manifest path.
+        /// </summary>
+        internal static bool IsWorkWithPlusInstalled(PatternManifest manifest)
+        {
+            return manifest != null && !string.IsNullOrWhiteSpace(manifest.ManifestPath);
+        }
+
+        /// <summary>Test seam: replaces the KB lookup, so the no-KB and unsupported-driver answers can be checked.</summary>
+        internal void SetKbProviderForTest(Func<object> provider)
+        {
+            _kbProvider = provider;
+        }
+
+        private static JObject WwpTemplatesUnavailable(string reason)
+        {
+            return new JObject { ["available"] = false, ["reason"] = reason };
         }
 
         private static JObject SafeBlock(Func<JObject> build, List<string> warnings, string blockName)

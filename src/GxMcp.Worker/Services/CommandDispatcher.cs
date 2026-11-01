@@ -595,12 +595,14 @@ namespace GxMcp.Worker.Services
 
                 // D21: health/status polls must never be starved behind an in-flight
                 // long SDK op (build/index/edit) on the single STA queue.
-                // - doctor: filesystem + loaded-assembly checks only (no KB/COM touch).
+                // - doctor: filesystem + loaded-assembly checks only (no KB/COM touch). The
+                //   WwpTemplates action reads KB objects through the SDK, so it stays on the STA
+                //   thread with the other SDK commands.
                 // - build Status/Result: lock-guarded read of the in-memory _tasks
                 //   dict (the very "is my build done?" poll that must not queue behind
                 //   the build it's asking about).
                 if (method == "doctor")
-                    return true;
+                    return !string.Equals(action, "WwpTemplates", StringComparison.OrdinalIgnoreCase);
                 if (method == "build" && (action == "Status" || action == "Result"))
                     return true;
 
@@ -3532,7 +3534,10 @@ namespace GxMcp.Worker.Services
 
         private string Handle_Doctor(JObject request, string method, string action, string target, string payload, JObject args)
         {
-            // genexus_doctor — health/triage envelope. No args.
+            // genexus_doctor — health/triage envelope. No args. The Gateway asks for the WorkWithPlus
+            // template block by action; any other call returns the full envelope.
+            if (string.Equals(action, "WwpTemplates", StringComparison.OrdinalIgnoreCase))
+                return _doctorService.WwpTemplatesResponse();
             return _doctorService.Diagnose();
         }
 

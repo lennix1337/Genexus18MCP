@@ -57,7 +57,7 @@ namespace GxMcp.Worker.Services
             {
                 case "ping": return true;
                 case "health": return action == "GetReport";
-                case "doctor": return true; // Handler has no actions and only inspects files/loaded assemblies.
+                case "doctor": return true; // Handler only reads: files, loaded assemblies and WorkWithPlus template objects.
                 case "build": return action == "Status" || action == "Result";
                 case "control": return action == "Cancel";
                 case "read": return action == "ExtractFullObject" || action == "ExtractSource" || action == "ExtractParts" || action == "CertifyRecovery" || action == "GetVariables" || action == "GetAttribute";
