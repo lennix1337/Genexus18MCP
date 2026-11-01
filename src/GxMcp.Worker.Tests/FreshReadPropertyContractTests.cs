@@ -80,8 +80,8 @@ namespace GxMcp.Worker.Tests
         {
             string body = SourceAssert.MethodBody(PropertySource(), "public string SetProperties(string target, JObject properties");
 
-            int precondition = body.IndexOf("if (dryRun || !string.IsNullOrWhiteSpace(expectedVersion))", StringComparison.Ordinal);
-            Assert.True(precondition >= 0, "the independent read must cover dryRun as well as expectedVersion");
+            int precondition = body.IndexOf("if (dryRun || patching || !string.IsNullOrWhiteSpace(expectedVersion))", StringComparison.Ordinal);
+            Assert.True(precondition >= 0, "the independent read must cover dryRun, a template patch and expectedVersion");
 
             int firstRead = body.IndexOf("FindFreshTarget(obj)", StringComparison.Ordinal);
             int preview = body.IndexOf("if (dryRun)", StringComparison.Ordinal);

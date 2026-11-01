@@ -1087,8 +1087,10 @@ namespace GxMcp.Worker.Services
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
 
                 // The write reads the persisted object independently inside its transaction. A preview
-                // needs the same read, or it would promise a write that cannot be verified.
-                if (dryRun || !string.IsNullOrWhiteSpace(expectedVersion))
+                // needs the same read, or it would promise a write that cannot be verified. A TemplateXml
+                // patch replaces text of the XML stored now, so it takes that read too.
+                bool patching = string.IsNullOrEmpty(controlName) && WwpTemplateXmlPatch.HasPatch(TargetTypeOf(obj), properties);
+                if (dryRun || patching || !string.IsNullOrWhiteSpace(expectedVersion))
                 {
                     obj = FindFreshTarget(obj);
                     if (obj == null)
@@ -1130,6 +1132,18 @@ namespace GxMcp.Worker.Services
                 // The template decision (aliases, conflicts and the checks of a WorkWithPlus template) is the same for a dry run
                 // and for a write. It is taken once the version has matched, before any value is read for the write.
                 var objectTypeId = string.IsNullOrEmpty(controlName) ? TargetTypeOf(obj) : Guid.Empty;
+                // A patch becomes the XML it produces, read here from the object this call holds. From here on the batch holds
+                // whole values, so the template checks and the write see what a whole XML would give them.
+                var request = properties;
+                WwpTemplateXmlPatch.Outcome patch = WwpTemplateXmlPatch.Apply(objectTypeId, request,
+                    () => ReadStoredProperty(obj, WwpTemplatePropertyRules.XmlProperty, null));
+                if (patch.RefusalCode != null)
+                    return Models.McpResponse.Err(code: patch.RefusalCode, message: patch.RefusalMessage, hint: patch.RefusalHint,
+                        target: target, extra: patch.RefusalExtra);
+                if (patch.Unchanged)
+                    return Models.McpResponse.Ok(target: target, code: "WriteNoChange",
+                        result: new JObject { ["details"] = "The patch leaves TemplateXml unchanged; nothing was written.", ["patch"] = patch.Patches });
+                properties = patch.Properties;
                 bool reportsSdkNames = objectTypeId == WwpTemplateXml.ObjectType || (string.IsNullOrEmpty(controlName) && IsWebPanelTarget(obj));
                 var wiring = WwpTemplateWiring.Write(objectTypeId,
                     properties.Properties().Select(p => new KeyValuePair<string, string>(p.Name, p.Value?.ToString() ?? string.Empty)),
@@ -1183,14 +1197,15 @@ namespace GxMcp.Worker.Services
                 {
                     var preview = new JObject
                     {
-                        ["before"] = JObject.FromObject(beforeValues),
-                        ["requested"] = properties.DeepClone(),
+                        ["before"] = WwpTemplateXmlPatch.Omit(JObject.FromObject(beforeValues), patch.Patches),
+                        ["requested"] = WwpTemplateXmlPatch.Omit(request, patch.Patches),
                         ["versionToken"] = beforeVersion,
                         ["preservedParts"] = snapshot.PreservedParts,
                         ["persisted"] = false,
                         ["independentReadVerified"] = true,
                         ["implicitOperations"] = new JArray()
                     };
+                    if (patch.Patches.Count > 0) preview["patch"] = patch.Patches;
                     NoteNativeNames(preview, reportsSdkNames, properties, nativeNames);
                     return Models.McpResponse.Ok(target: target, code: "DryRun", result: preview);
                 }
@@ -1284,9 +1299,7 @@ namespace GxMcp.Worker.Services
                     PreviousValues = previousValues,
                     NativeNames = nativeNames
                 };
-                var verifiedBefore = new JObject();
-                var verifiedRequested = new JObject();
-                var verifiedPersisted = new JObject();
+                var checks = new List<(string Name, string Before, string Requested, string Persisted)>();
                 foreach (var p in properties.Properties())
                 {
                     string propName = p.Name;
@@ -1310,9 +1323,8 @@ namespace GxMcp.Worker.Services
                         return RollbackPropertySnapshot(target, obj, snapshot, rollback,
                             $"The saved property '{propName}' could not be confirmed.",
                             PropertyRollbackRestore.ProofOfUnconfirmedRead(diff?["persistedVerified"]?.ToObject<bool?>()));
-                    verifiedBefore[propName] = diff["before"]?.ToString() ?? string.Empty;
-                    verifiedRequested[propName] = diff["requested"]?.ToString() ?? requested;
-                    verifiedPersisted[propName] = diff["persisted"]?.ToString() ?? string.Empty;
+                    checks.Add((propName, diff["before"]?.ToString() ?? string.Empty, diff["requested"]?.ToString() ?? requested,
+                        diff["persisted"]?.ToString() ?? string.Empty));
                 }
 
                 var fresh = _objectService.FindObjectFreshByIdentity(obj);
@@ -1324,15 +1336,11 @@ namespace GxMcp.Worker.Services
                         + " or the parts could not be verified.",
                         PropertyRollbackRestore.ProofOfChangedParts());
 
-                var result = new JObject { ["properties"] = properties };
+                var result = new JObject { ["properties"] = WwpTemplateXmlPatch.Omit(request, patch.Patches) };
                 NoteNativeNames(result, reportsSdkNames, properties, nativeNames);
-                if (verifiedPersisted.Count == properties.Count)
-                {
-                    result["before"] = verifiedBefore;
-                    result["requested"] = verifiedRequested;
-                    result["persisted"] = verifiedPersisted;
-                    result["persistedVerified"] = true;
-                }
+                if (patch.Patches.Count > 0) result["patch"] = patch.Patches;
+                foreach (JProperty field in WwpTemplateXmlPatch.VerifiedReceipt(checks, patch.Patches).Properties())
+                    result[field.Name] = field.Value;
                 result["versionToken"] = WriteService.ComputeVersionToken(fresh);
                 result["preservedParts"] = snapshot.PreservedParts;
                 result["implicitOperations"] = new JArray();

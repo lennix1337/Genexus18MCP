@@ -48,5 +48,28 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("PropertyNotFound", (string?)output["code"]);
             Assert.Null(output["violations"]);
         }
+
+        [Fact]
+        public void ATemplatePatchThatFindsNothingKeepsItsNextStepInsteadOfTheNearMatchInspection()
+        {
+            const string noMatch = @"{status:'error',target:'SynthTemplate',
+                error:{code:'NoMatch',message:'The find text was not found in TemplateXml. Nothing was written.'},
+                suggested_next_step:{action:'read_template_xml',hint:'genexus_properties action=get propertyName=TemplateXml'}}";
+
+            var output = McpRouter.TrimErrorEnvelope(JObject.Parse(noMatch), verbose: false);
+
+            Assert.Equal("NoMatch", (string?)output["code"]);
+            Assert.Equal("read_template_xml", (string?)output["suggested_next_step"]?["action"]);
+        }
+
+        [Fact]
+        public void ANoMatchOfAnEditPatchStillGetsTheNearMatchInspection()
+        {
+            const string editNoMatch = @"{status:'error',target:'SynthSource',error:{code:'NoMatch',message:'Patch NoMatch.'}}";
+
+            var output = McpRouter.TrimErrorEnvelope(JObject.Parse(editNoMatch), verbose: false);
+
+            Assert.Equal("inspect_near_match", (string?)output["suggested_next_step"]?["action"]);
+        }
     }
 }

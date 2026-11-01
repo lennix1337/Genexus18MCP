@@ -28,12 +28,15 @@ namespace GxMcp.Worker.Services
                 ["PreviewImage"] = "WWPTemplate_PreviewImage"
             };
 
-        // The SDK property a requested name stands for. Names that are not aliases, and every name on another
-        // object type, come back unchanged.
+        // The SDK property a requested name stands for. Aliases and SDK names match without case or spacing, so every spelling
+        // reaches the checks and the write as the one name the SDK holds. Other names, and every name on another object type,
+        // come back unchanged.
         internal static string NativeName(Guid objectType, string requested)
         {
             if (objectType != WwpTemplateXml.ObjectType || requested == null) return requested;
-            return Aliases.TryGetValue(requested.Trim(), out string native) ? native : requested;
+            string name = requested.Trim();
+            if (Aliases.TryGetValue(name, out string native)) return native;
+            return Aliases.Values.FirstOrDefault(sdkName => string.Equals(sdkName, name, StringComparison.OrdinalIgnoreCase)) ?? requested;
         }
 
         // Two names in one call that resolve to the same SDK property, such as an alias and the name it stands for.
