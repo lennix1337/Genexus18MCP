@@ -177,6 +177,8 @@ namespace GxMcp.Worker.Services
             bool includeTableProjections = args["includeTableProjections"]?.ToObject<bool?>() ?? false;
             List<string> requestedParts = ResolveRequestedParts(args);
             string part = requestedParts.Count == 1 ? requestedParts[0] : "all";
+            // The objects the request chose (named, or picked by a filter), as opposed to those a dependency brought in.
+            var chosenKeys = new HashSet<string>(selected.Select(TextTreeSelectionService.ObjectKey), StringComparer.OrdinalIgnoreCase);
             List<ExportPlan> plan = BuildPlan(selected, includeDependencies, includeTableProjections, part, root);
             foreach (ExportPlan item in plan)
             {
@@ -209,7 +211,7 @@ namespace GxMcp.Worker.Services
                 OldMetadata = LoadManifestMetadata(root),
                 OldPackages = LoadManifestArray(root, "packages"),
                 PlanKeys = new HashSet<string>(plan.Select(item => ManifestKey(item.Entry)), StringComparer.OrdinalIgnoreCase),
-                HomonymIndexes = FindHomonymIndexes(plan)
+                HomonymIndexes = FindHomonymIndexes(plan, chosenKeys)
             };
             state.Skipped = Math.Min(options.Skip, plan.Count);
             return true;
@@ -246,20 +248,39 @@ namespace GxMcp.Worker.Services
                 isEntityKey ? explicitTarget.Name : null);
         }
 
-        // The native tree keeps one object per Type:Name, and the manifest and the validator key it that way. Of the plan
-        // entries that share a Type:Name, the first is written and each later one is reported instead.
-        private static HashSet<int> FindHomonymIndexes(List<ExportPlan> plan)
+        // The native tree keeps one object per Type:Name, and the manifest and the validator key it that way. Of the objects
+        // that share a Type:Name, the one the request chose is written, ahead of one that came only as a dependency; between
+        // two of the same kind, the first by path. The others are reported instead. A table projection is not an object of
+        // its own: it is written under #tables and never competes for the name.
+        private static HashSet<int> FindHomonymIndexes(List<ExportPlan> plan, HashSet<string> chosenKeys)
         {
-            var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var result = new HashSet<int>();
+            var groups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
             for (int index = 0; index < plan.Count; index++)
             {
-                if (!keys.Add(ManifestKey(plan[index].Entry))) result.Add(index);
+                if (plan[index].IsTableProjection) continue;
+                string key = ManifestKey(plan[index].Entry);
+                if (key == null) continue;
+                if (!groups.TryGetValue(key, out List<int> members)) groups[key] = members = new List<int>();
+                members.Add(index);
+            }
+            var result = new HashSet<int>();
+            foreach (List<int> members in groups.Values)
+            {
+                if (members.Count < 2) continue;
+                int winner = members
+                    .OrderBy(member => chosenKeys.Contains(TextTreeSelectionService.ObjectKey(plan[member].Entry)) ? 0 : 1)
+                    .ThenBy(member => TextTreePath.NormalizePath(plan[member].Entry.Path) ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .First();
+                foreach (int member in members)
+                {
+                    if (member != winner) result.Add(member);
+                }
             }
             return result;
         }
 
         private const string HomonymCode = "HomonymInSameTree";
+        private const string HomonymHint = "The native tree keeps one object per Type:Name: export the other homonym into a separate root (outputPath).";
 
         private static ReadFailure HomonymFailure(ExportPlan item)
         {
@@ -267,7 +288,7 @@ namespace GxMcp.Worker.Services
             {
                 Code = HomonymCode,
                 Message = "'" + item.Entry.Name + "' (" + item.Entry.Type + ") is a homonym of an object planned earlier in this export.",
-                Hint = "The native tree keeps one object per Type:Name: export the other homonym into a separate root (outputPath)."
+                Hint = HomonymHint
             };
         }
 
@@ -278,8 +299,8 @@ namespace GxMcp.Worker.Services
             foreach (ExportPlan item in state.Plan)
             {
                 int index = planResults.Count;
-                bool homonym = state.HomonymIndexes.Contains(index);
-                planResults.Add(new JObject
+                bool homonym = index >= offset && state.HomonymIndexes.Contains(index);
+                var planItem = new JObject
                 {
                     ["name"] = item.Entry.Name,
                     ["type"] = item.Entry.Type,
@@ -287,8 +308,15 @@ namespace GxMcp.Worker.Services
                     ["part"] = item.Part,
                     ["file"] = item.RelativePath,
                     ["status"] = index < offset ? "skipped" : homonym ? "error" : "planned",
-                    ["reason"] = index < offset ? "skip" : homonym ? HomonymCode : "listOnly"
-                });
+                    ["reason"] = index < offset ? "skip" : "listOnly"
+                };
+                // The code and the hint the export gives this object, so a client reads the same fields in either response.
+                if (homonym)
+                {
+                    planItem["code"] = HomonymCode;
+                    planItem["hint"] = HomonymHint;
+                }
+                planResults.Add(planItem);
             }
             return McpResponse.Ok(code: "ObjectTextNativeExportPlan", result: new JObject
             {

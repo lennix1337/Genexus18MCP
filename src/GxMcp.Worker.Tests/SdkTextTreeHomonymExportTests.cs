@@ -78,6 +78,181 @@ namespace GxMcp.Worker.Tests
             }
         }
 
+        // A table projection is not a homonym of its table: the Transaction and its Table are both written, and the projection
+        // goes under #tables. The export answers ok.
+        [Fact]
+        public void A_transaction_and_its_table_export_ok_and_the_projection_is_written_under_tables()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = JObject.Parse(TransactionService().Execute("export_kb_to_text", null, new JObject
+                {
+                    ["outputPath"] = root,
+                    ["mode"] = "all",
+                    ["includeTableProjections"] = true,
+                    ["includeModuleMetadata"] = false
+                }, CancellationToken.None));
+
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
+                Assert.Equal(3, (int)response["result"]!["exported"]!);
+                Assert.Single(Directory.GetFiles(Path.Combine(root, "src", "#tables"), "SynthTrn.gx"));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // Two real homonyms are still refused with table projections on: the projection rule does not weaken the barrier.
+        [Fact]
+        public void Two_real_homonyms_stay_refused_with_table_projections_on()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = JObject.Parse(BuildService().Execute("export_kb_to_text", GuidInA + ";" + GuidInB,
+                    new JObject { ["outputPath"] = root, ["mode"] = "all", ["includeTableProjections"] = true }, CancellationToken.None));
+
+                Assert.Equal("partial", (string)response["status"]);
+                Assert.Equal(1, (int)response["result"]!["exported"]!);
+                JObject second = response["result"]!["objects"]!.Cast<JObject>().Single(item => (string)item["code"] == "HomonymInSameTree");
+                Assert.Contains("SynthB", (string)second["file"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // SynthB.SynthDup is named by GUID, and SynthCaller calls SynthDup, so SynthA.SynthDup comes in as a dependency. The
+        // object the request named is written; the dependency is the one reported.
+        [Fact]
+        public void A_named_homonym_wins_over_a_dependency_with_the_same_name()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = JObject.Parse(DependencyService().Execute("export_kb_to_text", null, new JObject
+                {
+                    ["outputPath"] = root,
+                    ["mode"] = "all",
+                    ["targets"] = new JArray(GuidInB, "SynthCaller"),
+                    ["includeDependencies"] = true,
+                    ["includeModuleMetadata"] = false,
+                    ["includeModulePackages"] = false
+                }, CancellationToken.None));
+
+                Assert.Equal("partial", (string)response["status"]);
+                JObject refused = response["result"]!["objects"]!.Cast<JObject>().Single(item => (string)item["code"] == "HomonymInSameTree");
+                Assert.Contains("SynthA", (string)refused["file"]!);
+                string[] written = Directory.GetFiles(root, "SynthDup.gx", SearchOption.AllDirectories);
+                Assert.Single(written);
+                Assert.Contains("SynthB", written[0]);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // A list-only export answers the second homonym with the code the export gives it, and writes nothing.
+        [Fact]
+        public void ListOnly_marks_the_second_homonym_with_the_same_code_as_the_export()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = JObject.Parse(BuildService().Execute("export_kb_to_text", GuidInA + ";" + GuidInB,
+                    new JObject { ["outputPath"] = root, ["mode"] = "all", ["listOnly"] = true }, CancellationToken.None));
+
+                JObject second = response["result"]!["objects"]!.Cast<JObject>().Single(item => (string)item["code"] == "HomonymInSameTree");
+                Assert.Equal("error", (string)second["status"]);
+                Assert.Contains("SynthB", (string)second["file"]!);
+                JObject first = response["result"]!["objects"]!.Cast<JObject>().Single(item => (string)item["code"] == null);
+                Assert.Equal("planned", (string)first["status"]);
+                Assert.Empty(Directory.GetFiles(root, "*", SearchOption.AllDirectories));
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // A Transaction and its root Table, both indexed, as a KB-wide export sees them.
+        private static SdkTextTreeService TransactionService()
+        {
+            var transaction = new SearchIndex.IndexEntry
+            {
+                Type = "Transaction",
+                Name = "SynthTrn",
+                Module = "SynthCore",
+                Parent = "SynthCore",
+                ParentPath = "SynthCore",
+                ParentFolderPath = "Root Module/SynthCore",
+                Path = "SynthCore/SynthTrn",
+                Guid = "80000000-0000-4000-8000-00000000000a",
+                RootTable = "SynthTrn"
+            };
+            var table = new SearchIndex.IndexEntry
+            {
+                Type = "Table",
+                Name = "SynthTrn",
+                Module = "SynthCore",
+                Parent = "SynthCore",
+                ParentPath = "SynthCore",
+                ParentFolderPath = "Root Module/SynthCore",
+                Path = "SynthCore/SynthTrn",
+                Guid = "80000000-0000-4000-8000-00000000000b"
+            };
+            var cache = new IndexCacheService();
+            cache.LoadFromEntries(new[] { transaction, table });
+            cache.MarkIndexComplete(2);
+            return new SdkTextTreeService(
+                new TextTreeSelectionService(cache),
+                new ObjectService(null, null),
+                cache,
+                (target, part, type, guid, entityKey, path) => new JObject
+                {
+                    ["source"] = "Synth " + part,
+                    ["objectName"] = target.Substring(target.IndexOf(':') + 1),
+                    ["objectType"] = type
+                }.ToString());
+        }
+
+        // SynthA.SynthDup is indexed and SynthCaller calls SynthDup; the SDK answers the GUID of SynthB.SynthDup.
+        private static SdkTextTreeService DependencyService()
+        {
+            var caller = new SearchIndex.IndexEntry
+            {
+                Type = "Procedure",
+                Name = "SynthCaller",
+                Module = "SynthC",
+                Parent = "Folder",
+                ParentPath = "SynthC/Folder",
+                ParentFolderPath = "Root Module/SynthC/Folder",
+                Path = "SynthC/Folder/SynthCaller",
+                Guid = "40000000-0000-4000-8000-00000000000c",
+                Calls = new List<string> { "SynthDup" }
+            };
+            SearchIndex.IndexEntry entryB = Procedure("SynthB", GuidInB);
+            var cache = new IndexCacheService();
+            cache.LoadFromEntries(new[] { Procedure("SynthA", GuidInA), caller });
+            cache.MarkIndexComplete(2);
+            return new SdkTextTreeService(
+                new TextTreeSelectionService(cache),
+                new ObjectService(null, null),
+                cache,
+                (target, part, type, guid, entityKey, path) => new JObject
+                {
+                    ["source"] = "Synth text",
+                    ["objectName"] = target.Substring(target.IndexOf(':') + 1),
+                    ["objectType"] = type
+                }.ToString(),
+                explicitTarget => explicitTarget.Name == GuidInB ? entryB : null);
+        }
+
         // The index holds SynthA.SynthDup; the SDK answers the GUID of SynthB.SynthDup, the homonym the index does not keep.
         private static SdkTextTreeService BuildService()
         {
