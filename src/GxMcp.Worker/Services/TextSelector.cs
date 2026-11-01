@@ -84,13 +84,16 @@ namespace GxMcp.Worker.Services
                     || string.Equals(selector.Name, "[all]", StringComparison.OrdinalIgnoreCase));
         }
 
-        internal static bool Matches(TextSelector selector, SearchIndex.IndexEntry entry)
+        // An entry is selected by its name and type. Its GUID or EntityKey selects it only when the caller allows
+        // identity: the native export does; the delete and the legacy export select by name and type alone.
+        internal static bool Matches(TextSelector selector, SearchIndex.IndexEntry entry, bool allowIdentity = false)
         {
             if (entry == null) return false;
             if (Matches(selector, entry.Name, entry.Type)) return true;
-            // A GUID or EntityKey names one object whatever its type, so it selects that entry too. A folder or
-            // module is a container: selecting it by identity would also select its same-named children elsewhere.
-            return selector != null
+            // A GUID or EntityKey names one object whatever its type. A folder or module is a container: selecting
+            // it by identity would also select its same-named children elsewhere.
+            return allowIdentity
+                && selector != null
                 && !IsContainer(entry)
                 && !string.IsNullOrWhiteSpace(selector.Name)
                 && (string.IsNullOrWhiteSpace(selector.Type) || string.Equals(selector.Type, entry.Type, StringComparison.OrdinalIgnoreCase))

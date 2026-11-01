@@ -121,7 +121,9 @@ namespace GxMcp.Worker.Services
             }
 
             List<TextSelector> explicitTargets = ExplicitTargets(target, args);
-            bool selectionOk = _selector.TrySelectEntries(target, args, allowAll: true, out List<SearchIndex.IndexEntry> selected, out string selectionError, options.IncludeChildren);
+            // The native export is the only path that selects an object by its GUID or EntityKey.
+            bool selectionOk = _selector.TrySelectEntries(target, args, allowAll: true, out List<SearchIndex.IndexEntry> selected, out string selectionError,
+                options.IncludeChildren, allowIdentity: true);
             // The index is read after the selection, which may itself have loaded it.
             SearchIndex loadedIndex = _indexCacheService?.TryGetLoadedIndex();
             bool indexReady = loadedIndex?.Objects != null && loadedIndex.Objects.Count > 0;
@@ -143,13 +145,13 @@ namespace GxMcp.Worker.Services
             var lookedUp = new List<SearchIndex.IndexEntry>();
             foreach (TextSelector explicitTarget in explicitTargets)
             {
-                if (indexReady && loadedIndex.Objects.Values.Any(entry => TextSelectorParser.Matches(explicitTarget, entry))) continue;
-                if (selected.Any(entry => TextSelectorParser.Matches(explicitTarget, entry))) continue;
+                if (indexReady && loadedIndex.Objects.Values.Any(entry => TextSelectorParser.Matches(explicitTarget, entry, allowIdentity: true))) continue;
+                if (selected.Any(entry => TextSelectorParser.Matches(explicitTarget, entry, allowIdentity: true))) continue;
                 SearchIndex.IndexEntry found = _sdkEntryLookup(explicitTarget);
                 if (found == null) unresolved.Add(explicitTarget);
                 else lookedUp.Add(found);
             }
-            selected = TextTreeSelectionService.AddLookedUp(selected, lookedUp, args);
+            selected = TextTreeSelectionService.AddLookedUp(selected, lookedUp, args, allowIdentity: true);
             if (selected.Count == 0)
             {
                 if (unresolved.Count > 0)

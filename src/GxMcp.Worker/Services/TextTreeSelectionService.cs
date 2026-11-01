@@ -15,8 +15,10 @@ namespace GxMcp.Worker.Services
             _indexCacheService = indexCacheService;
         }
 
+        // allowIdentity is true only for the native export: a GUID or EntityKey selects an object there. The delete and
+        // the legacy export select by name and type, so a GUID selects nothing on those paths.
         internal bool TrySelectEntries(string target, JObject args, bool allowAll,
-            out List<SearchIndex.IndexEntry> selected, out string error, bool includeChildren = false)
+            out List<SearchIndex.IndexEntry> selected, out string error, bool includeChildren = false, bool allowIdentity = false)
         {
             selected = new List<SearchIndex.IndexEntry>();
             error = null;
@@ -41,19 +43,19 @@ namespace GxMcp.Worker.Services
                 return false;
             }
 
-            TextTreeFilters filters = TextTreeFilters.Read(args);
+            TextTreeFilters filters = TextTreeFilters.Read(args, allowIdentity);
             IEnumerable<SearchIndex.IndexEntry> baseEntries = index.Objects.Values;
             IEnumerable<SearchIndex.IndexEntry> query = baseEntries
                 .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.Name))
                 .Where(entry => !IsContainerEntry(entry));
-            if (selectors.Count > 0) query = query.Where(entry => selectors.Any(selector => TextSelectorParser.Matches(selector, entry)));
+            if (selectors.Count > 0) query = query.Where(entry => selectors.Any(selector => TextSelectorParser.Matches(selector, entry, allowIdentity)));
             query = query.Where(filters.Accepts);
 
             if (includeChildren && selectors.Count > 0)
             {
                 List<SearchIndex.IndexEntry> containers = baseEntries
                     .Where(IsContainerEntry)
-                    .Where(entry => selectors.Any(selector => TextSelectorParser.Matches(selector, entry)))
+                    .Where(entry => selectors.Any(selector => TextSelectorParser.Matches(selector, entry, allowIdentity)))
                     .ToList();
                 if (containers.Count > 0)
                 {
@@ -79,9 +81,10 @@ namespace GxMcp.Worker.Services
         internal static List<SearchIndex.IndexEntry> AddLookedUp(
             IEnumerable<SearchIndex.IndexEntry> selected,
             IEnumerable<SearchIndex.IndexEntry> lookedUp,
-            JObject args)
+            JObject args,
+            bool allowIdentity = false)
         {
-            TextTreeFilters filters = TextTreeFilters.Read(args);
+            TextTreeFilters filters = TextTreeFilters.Read(args, allowIdentity);
             if (filters.IgnoresAll) return new List<SearchIndex.IndexEntry>();
             IEnumerable<SearchIndex.IndexEntry> found = lookedUp.Where(entry => entry != null
                 && !string.IsNullOrWhiteSpace(entry.Name)
@@ -90,15 +93,24 @@ namespace GxMcp.Worker.Services
             return Finish(selected.Concat(found), filters.Limit);
         }
 
+        // One object reached by two selectors is one entry. Two homonyms (same type and name, other folder or module)
+        // are two objects, so the key carries the GUID, or the path when there is no GUID.
         private static List<SearchIndex.IndexEntry> Finish(IEnumerable<SearchIndex.IndexEntry> query, int limit)
         {
             List<SearchIndex.IndexEntry> selected = query
-                .GroupBy(entry => (entry.Type ?? string.Empty) + ":" + (entry.Name ?? string.Empty), StringComparer.OrdinalIgnoreCase)
+                .GroupBy(ObjectKey, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First())
                 .OrderBy(entry => entry.Type ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(entry => entry.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(entry => TextTreePath.NormalizePath(entry.Path) ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .ToList();
             return limit > 0 ? selected.Take(limit).ToList() : selected;
+        }
+
+        internal static string ObjectKey(SearchIndex.IndexEntry entry)
+        {
+            string place = string.IsNullOrWhiteSpace(entry.Guid) ? TextTreePath.NormalizePath(entry.Path) : entry.Guid;
+            return (entry.Type ?? string.Empty) + "|" + (place ?? string.Empty) + "|" + (entry.Name ?? string.Empty);
         }
 
         // The filters one request puts on the entries it selects. An entry the SDK finds for an explicit target passes
@@ -109,13 +121,15 @@ namespace GxMcp.Worker.Services
             private readonly string _module;
             private readonly string _pathPrefix;
             private readonly List<TextSelector> _ignored;
+            private readonly bool _allowIdentity;
 
-            private TextTreeFilters(JObject args)
+            private TextTreeFilters(JObject args, bool allowIdentity)
             {
                 _type = args?["type"]?.ToString();
                 _module = args?["module"]?.ToString();
                 _pathPrefix = TextTreePath.NormalizePath(args?["pathPrefix"]?.ToString());
                 _ignored = TextSelectorParser.ParseMany(args?["ignore"]);
+                _allowIdentity = allowIdentity;
                 Limit = args?["limit"]?.ToObject<int?>() ?? 0;
             }
 
@@ -123,7 +137,7 @@ namespace GxMcp.Worker.Services
 
             internal bool IgnoresAll => _ignored.Any(TextSelectorParser.IsAll);
 
-            internal static TextTreeFilters Read(JObject args) => new TextTreeFilters(args);
+            internal static TextTreeFilters Read(JObject args, bool allowIdentity = false) => new TextTreeFilters(args, allowIdentity);
 
             internal bool Accepts(SearchIndex.IndexEntry entry)
             {
@@ -131,7 +145,7 @@ namespace GxMcp.Worker.Services
                 if (!string.IsNullOrWhiteSpace(_type) && !string.Equals(entry.Type, _type, StringComparison.OrdinalIgnoreCase)) return false;
                 if (!string.IsNullOrWhiteSpace(_module) && !string.Equals(entry.Module, _module, StringComparison.OrdinalIgnoreCase)) return false;
                 if (!string.IsNullOrWhiteSpace(_pathPrefix) && !TextTreePath.NormalizePath(entry.Path).StartsWith(_pathPrefix, StringComparison.OrdinalIgnoreCase)) return false;
-                return !_ignored.Any(selector => TextSelectorParser.Matches(selector, entry));
+                return !_ignored.Any(selector => TextSelectorParser.Matches(selector, entry, _allowIdentity));
             }
         }
 

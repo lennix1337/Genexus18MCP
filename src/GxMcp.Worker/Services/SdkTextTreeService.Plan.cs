@@ -167,8 +167,8 @@ namespace GxMcp.Worker.Services
             if (string.Equals(entry.Type, "ThemeClass", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(entry.Type, "DataStoreCategory", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(entry.Type, "GeneratorCategory", StringComparison.OrdinalIgnoreCase)) return;
-            string key = (entry.Type ?? string.Empty) + ":" + entry.Name;
-            if (seen.Add(key)) entries.Add(Tuple.Create(entry, role));
+            // Two homonyms are two plan entries: the key is the object, not its Tipo:Nome.
+            if (seen.Add(TextTreeSelectionService.ObjectKey(entry))) entries.Add(Tuple.Create(entry, role));
         }
 
         // What the export reports for one object that could not be read: a code, a plain message and a hint. The

@@ -59,17 +59,18 @@ namespace GxMcp.Worker.Tests
         [Theory]
         [InlineData(ProcBGuid)]
         [InlineData(ProcBGuid + "-object")]
-        public void An_object_identity_selects_only_that_object(string target)
+        public void An_object_identity_selects_only_that_object_on_the_native_export(string target)
         {
-            ObjectTextService service = BuildService();
+            TextTreeSelectionService selection = BuildSelection();
 
-            bool selected = service.TrySelectEntries(
+            bool selected = selection.TrySelectEntries(
                 target,
                 new JObject(),
                 allowAll: false,
                 out List<SearchIndex.IndexEntry> entries,
                 out string error,
-                includeChildren: true);
+                includeChildren: true,
+                allowIdentity: true);
 
             Assert.True(selected, error);
             Assert.Equal(new[] { "SynthProcB" }, entries.Select(entry => entry.Name).ToArray());
@@ -162,7 +163,11 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(new[] { "SynthProcB" }, entries.Select(entry => entry.Name).ToArray());
         }
 
-        private static ObjectTextService BuildService()
+        private static ObjectTextService BuildService() => new ObjectTextService(null, BuildIndex());
+
+        private static TextTreeSelectionService BuildSelection() => new TextTreeSelectionService(BuildIndex());
+
+        private static IndexCacheService BuildIndex()
         {
             var entries = new[]
             {
@@ -176,7 +181,7 @@ namespace GxMcp.Worker.Tests
             var cache = new IndexCacheService();
             cache.LoadFromEntries(entries);
             cache.MarkIndexComplete(entries.Length);
-            return new ObjectTextService(null, cache);
+            return cache;
         }
 
         private static SearchIndex.IndexEntry Module(string name, string guid)

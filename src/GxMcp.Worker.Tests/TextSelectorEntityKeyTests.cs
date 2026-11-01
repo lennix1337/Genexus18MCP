@@ -52,9 +52,11 @@ namespace GxMcp.Worker.Tests
                 EntityKey = TypeGuid + "-9001"
             };
 
-            Assert.True(TextSelectorParser.Matches(new TextSelector { Name = TypeGuid + ":9001" }, entry));
-            Assert.True(TextSelectorParser.Matches(new TextSelector { Name = "EntityKey(" + TypeGuid + ", 9001)" }, entry));
-            Assert.False(TextSelectorParser.Matches(new TextSelector { Name = "EntityKey(" + TypeGuid + ", 9002)" }, entry));
+            Assert.True(TextSelectorParser.Matches(new TextSelector { Name = TypeGuid + ":9001" }, entry, allowIdentity: true));
+            Assert.True(TextSelectorParser.Matches(new TextSelector { Name = "EntityKey(" + TypeGuid + ", 9001)" }, entry, allowIdentity: true));
+            Assert.False(TextSelectorParser.Matches(new TextSelector { Name = "EntityKey(" + TypeGuid + ", 9002)" }, entry, allowIdentity: true));
+            // Without identity (the delete and the legacy export) the same EntityKey selects nothing.
+            Assert.False(TextSelectorParser.Matches(new TextSelector { Name = TypeGuid + ":9001" }, entry));
         }
     }
 }
