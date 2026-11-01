@@ -193,6 +193,93 @@ namespace GxMcp.Worker.Tests
             }
         }
 
+        // A module named as a target selects the templates under it as explicit targets: each one is an error and the reply
+        // is partial. The module filter, with no target named, counts the same template in noTextParts and stays ok.
+        [Fact]
+        public void A_named_module_makes_its_template_an_error_and_the_reply_partial()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = JObject.Parse(BuildModuleService().Execute("export_kb_to_text", null, new JObject
+                {
+                    ["outputPath"] = root,
+                    ["mode"] = "all",
+                    ["targets"] = new JArray("SynthModule")
+                }, CancellationToken.None));
+
+                Assert.Equal("partial", (string)response["status"]);
+                Assert.Equal(1, (int)response["result"]!["failed"]!);
+                Assert.Equal(0, (int)response["result"]!["noTextParts"]!);
+                Assert.Equal(1, (int)response["result"]!["exported"]!);
+                Assert.Equal("ObjectHasNoTextParts", (string)ObjectReply(response, "SynthTemplate")["code"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        [Fact]
+        public void A_module_filter_without_named_targets_counts_the_template_and_keeps_the_reply_ok()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                JObject response = JObject.Parse(BuildModuleService().Execute("export_kb_to_text", null, new JObject
+                {
+                    ["outputPath"] = root,
+                    ["mode"] = "all",
+                    ["module"] = "SynthModule"
+                }, CancellationToken.None));
+
+                Assert.Equal("ok", (string)response["status"]);
+                Assert.Equal(0, (int)response["result"]!["failed"]!);
+                Assert.Equal(1, (int)response["result"]!["noTextParts"]!);
+                Assert.Equal(1, (int)response["result"]!["exported"]!);
+                Assert.Equal(0, (int)response["result"]!["remaining"]!);
+            }
+            finally
+            {
+                DeleteTree(root);
+            }
+        }
+
+        // The export checks for cancellation before each object. The first template is counted before the next check, so
+        // the cancelled reply keeps the count of the objects without text parts that the export already passed.
+        [Fact]
+        public void A_cancelled_native_export_reports_the_objects_without_text_parts_it_already_counted()
+        {
+            string root = NewTempDirectory();
+            var cancellation = new CancellationTokenSource();
+            try
+            {
+                SdkTextTreeService service = BuildService(
+                    new[] { SynthEntry("SynthAlpha"), SynthEntry("SynthZulu") },
+                    (target, part, type, guid, entityKey, path) =>
+                    {
+                        string name = target.Substring(target.IndexOf(':') + 1);
+                        if (name == "SynthAlpha") cancellation.Cancel();
+                        return Reply("PartNotFound", new JArray(), name).ToString();
+                    });
+
+                JObject response = JObject.Parse(service.Execute("export_kb_to_text", null, new JObject
+                {
+                    ["outputPath"] = root,
+                    ["mode"] = "all"
+                }, cancellation.Token));
+
+                Assert.Equal("Cancelled", (string)response["code"]);
+                Assert.Equal(1, (int)response["result"]!["noTextParts"]!);
+                Assert.Equal(0, (int)response["result"]!["exported"]!);
+            }
+            finally
+            {
+                cancellation.Dispose();
+                DeleteTree(root);
+            }
+        }
+
         // A KB-wide export counts an object without text parts as skipped, so the rest of the export still completes and
         // a deleted object's file is removed. The earlier export wrote SynthDeleted; the later one no longer holds it.
         [Fact]
@@ -222,6 +309,59 @@ namespace GxMcp.Worker.Tests
             {
                 DeleteTree(root);
             }
+        }
+
+        // A module with a template (no text part) and a procedure (text). A target named after the module selects the objects
+        // it holds through includeChildren, as it does for any module.
+        private static SdkTextTreeService BuildModuleService()
+        {
+            var module = new SearchIndex.IndexEntry
+            {
+                Type = "Module",
+                Name = "SynthModule",
+                Module = "SynthModule",
+                Path = "SynthModule",
+                Guid = "70000000-0000-4000-8000-00000000000a",
+                EntityKey = "70000000-0000-4000-8000-00000000000a-module"
+            };
+            var template = new SearchIndex.IndexEntry
+            {
+                Type = "WorkWithPlus for Web Template",
+                Name = "SynthTemplate",
+                Module = "SynthModule",
+                Parent = "Selection",
+                ParentPath = "SynthModule/Selection",
+                ParentFolderPath = "Root Module/SynthModule/Selection",
+                Path = "SynthModule/Selection/SynthTemplate",
+                Guid = "70000000-0000-4000-8000-00000000000b",
+                EntityKey = "70000000-0000-4000-8000-00000000000b-9001"
+            };
+            var procedure = new SearchIndex.IndexEntry
+            {
+                Type = "Procedure",
+                Name = "SynthProcedure",
+                Module = "SynthModule",
+                Parent = "Procs",
+                ParentPath = "SynthModule/Procs",
+                ParentFolderPath = "Root Module/SynthModule/Procs",
+                Path = "SynthModule/Procs/SynthProcedure",
+                Guid = "70000000-0000-4000-8000-00000000000c",
+                EntityKey = "70000000-0000-4000-8000-00000000000c-9001"
+            };
+            var cache = new IndexCacheService();
+            cache.LoadFromEntries(new[] { module, template, procedure });
+            cache.MarkIndexComplete(3);
+            return new SdkTextTreeService(
+                new TextTreeSelectionService(cache),
+                new ObjectService(null, null),
+                cache,
+                (target, part, type, guid, entityKey, path) =>
+                {
+                    string name = target.Substring(target.IndexOf(':') + 1);
+                    return name == "SynthTemplate"
+                        ? Reply("PartNotFound", new JArray()).ToString()
+                        : new JObject { ["source"] = "Synth text", ["objectName"] = name, ["objectType"] = type }.ToString();
+                });
         }
 
         // The template has no text part; the other objects answer their text, as the read does for a Procedure.

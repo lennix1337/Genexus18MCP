@@ -326,7 +326,7 @@ namespace GxMcp.Worker.Services
                 if (ct.IsCancellationRequested)
                 {
                     state.CancelledResponse = BuildCancelled(state.Root, state.Results, state.ManifestItems,
-                        state.Plan.Count, state.Exported, state.Skipped, state.Failed, state.FilesWritten, state.BytesWritten);
+                        state.Plan.Count, state.Exported, state.Skipped, state.NoTextParts, state.Failed, state.FilesWritten, state.BytesWritten);
                     return;
                 }
                 ExportNativeObject(state, args, state.Plan[index], index);

@@ -422,7 +422,7 @@ namespace GxMcp.Worker.Services
                 return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", string.Empty).ToLowerInvariant();
         }
 
-        private static string BuildCancelled(string root, JArray results, JArray manifestItems, int planned, int exported, int skipped, int failed, int filesWritten, long bytesWritten)
+        private static string BuildCancelled(string root, JArray results, JArray manifestItems, int planned, int exported, int skipped, int noTextParts, int failed, int filesWritten, long bytesWritten)
         {
             return McpResponse.Ok(code: "Cancelled", result: new JObject
             {
@@ -431,6 +431,7 @@ namespace GxMcp.Worker.Services
                 ["planned"] = planned,
                 ["exported"] = exported,
                 ["skipped"] = skipped,
+                ["noTextParts"] = noTextParts,
                 ["failed"] = failed,
                 ["filesWritten"] = filesWritten,
                 ["bytesWritten"] = bytesWritten,
