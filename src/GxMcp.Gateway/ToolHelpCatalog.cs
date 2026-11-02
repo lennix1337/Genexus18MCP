@@ -283,6 +283,8 @@ namespace GxMcp.Gateway
                 "- `projection` and resolved `joins` are not exposed by the GeneXus 18 U16 public SDK. Requests return a technical reason in `unsupportedParts`, never a misleading empty value.\n" +
                 "- Base table and Transaction are returned only when attribute coverage resolves them unambiguously. Declared indexes may be listed, but this read never runs Specify to claim which index is used.\n\n" +
                 "- `structure.expressionKind: 'semanticProjection'` means the complete view was composed from typed SDK elements; U16's raw structure `ToString()` is not returned because it leaks internal collection type names.\n\n" +
+                "## File objects\n" +
+                "- For `type: 'File'`, `parts.WikiBlob` holds the property XML only (FileName, IsDefault...), not the stored content. The read carries `_meta.blobContentHint` and `_meta.suggested_next` pointing at `genexus_io action=read_blob`; use `outputPath` for large files, since inline output is capped.\n\n" +
                 "## Pagination\n" +
                 "- `offset` and `limit` apply to the **source** part for large objects.\n" +
                 "- `_meta.partial: true` and `_meta.nextOffset` signal more content available.\n\n" +

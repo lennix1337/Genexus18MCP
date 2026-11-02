@@ -3989,6 +3989,26 @@ namespace GxMcp.Worker.Services
             return identity;
         }
 
+        /// <summary>
+        /// A File's <c>WikiBlob</c> part reads as property XML through <c>genexus_read</c>; the stored
+        /// bytes only come out of <c>genexus_io read_blob</c> under the same part name (issue #824).
+        /// Returns the <c>_meta</c> block that points there, or null for other object types.
+        /// </summary>
+        internal static JObject BuildFileBlobHint(string typeName, string objectName)
+        {
+            if (!string.Equals(typeName, "File", StringComparison.OrdinalIgnoreCase)) return null;
+            return new JObject
+            {
+                ["blobContentHint"] = "WikiBlob here is the File's property XML, not its stored content. Read the content with genexus_io action=read_blob; pass outputPath for large files (inline output is capped).",
+                ["suggested_next"] = new JObject
+                {
+                    ["tool"] = "genexus_io",
+                    ["args"] = new JObject { ["action"] = "read_blob", ["name"] = objectName, ["type"] = "File" },
+                    ["why"] = "Returns the File's stored bytes; genexus_read only shows its property XML under WikiBlob."
+                }
+            };
+        }
+
         public string ExtractAllParts(string target, string client = "ide", string typeFilter = null,
             string guid = null, string entityKey = null, string path = null, string correlationId = null)
         {
@@ -4039,6 +4059,9 @@ namespace GxMcp.Worker.Services
                         }
                     } catch { }
                 }
+
+                var blobHint = BuildFileBlobHint(obj.TypeDescriptor?.Name, obj.Name);
+                if (blobHint != null) result["_meta"] = blobHint;
 
                 Logger.Info(string.Format("ExtractAllParts for {0} complete in {1}ms", obj.Name, sw.ElapsedMilliseconds));
                 return result.ToString();
