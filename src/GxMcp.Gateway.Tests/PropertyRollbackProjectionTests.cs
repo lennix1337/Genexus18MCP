@@ -1,0 +1,77 @@
+using GxMcp.Gateway;
+using Newtonsoft.Json.Linq;
+using Xunit;
+
+namespace GxMcp.Gateway.Tests
+{
+    /// <summary>
+    /// The terse projection of a refused or unconfirmed genexus_properties set: the names of the changed parts reach the caller,
+    /// the lines that differ come only with verbose_errors.
+    /// </summary>
+    public class PropertyRollbackProjectionTests
+    {
+        [Fact]
+        public void TerseKeepsTheChangedPartNamesAndLeavesOutTheDifferingLines()
+        {
+            var input = FailedRollback();
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            Assert.True(JToken.DeepEquals(input["changedParts"], trimmed["changedParts"]));
+            Assert.Null(trimmed["changedLines"]);
+        }
+
+        [Fact]
+        public void TerseKeepsThePartNamesOfAnUnverifiedRollback()
+        {
+            var input = new JObject
+            {
+                ["code"] = "PropertyVerificationFailed",
+                ["message"] = "The property was not persisted as requested.",
+                ["rollbackAttempted"] = true,
+                ["rollbackVerified"] = false,
+                ["changedParts"] = new JArray("Events"),
+                ["changedLines"] = new JArray(new JObject { ["part"] = "Events", ["side"] = "actual", ["line"] = "&SynthCount = 1" })
+            };
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            Assert.True(JToken.DeepEquals(input["changedParts"], trimmed["changedParts"]));
+            Assert.Equal(false, (bool?)trimmed["rollbackVerified"]);
+            Assert.Null(trimmed["changedLines"]);
+        }
+
+        [Fact]
+        public void VerboseKeepsTheDifferingLines()
+        {
+            var input = FailedRollback();
+
+            var verbose = McpRouter.TrimErrorEnvelope(input, verbose: true);
+
+            Assert.True(JToken.DeepEquals(input["changedLines"], verbose["changedLines"]));
+        }
+
+        [Fact]
+        public void TerseKeepsTheNamesOfThePartsThatWereNotCompared()
+        {
+            var input = FailedRollback();
+            input["notComparedParts"] = new JArray("WebForm", "Documentation");
+
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+
+            Assert.True(JToken.DeepEquals(input["notComparedParts"], trimmed["notComparedParts"]));
+        }
+
+        private static JObject FailedRollback() => new JObject
+        {
+            ["code"] = "PropertyVerificationFailed",
+            ["message"] = "The saved property 'MasterPage' could not be independently read back.",
+            ["rollbackAttempted"] = true,
+            ["rollbackVerified"] = false,
+            ["propertiesRestored"] = new JArray("MasterPage"),
+            ["propertiesNotRestored"] = new JArray(),
+            ["changedParts"] = new JArray("Documentation", "WebForm"),
+            ["changedLines"] = new JArray(new JObject { ["part"] = "WebForm", ["side"] = "before", ["line"] = "<table name=\"T\" />" })
+        };
+    }
+}

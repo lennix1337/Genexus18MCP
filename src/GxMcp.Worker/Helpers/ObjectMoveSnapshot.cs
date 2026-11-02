@@ -23,6 +23,12 @@ namespace GxMcp.Worker.Helpers
         private readonly byte[] _objectXml;
         private readonly byte[] _objectRestoreData;
 
+        /// <summary>
+        /// The variables text when the snapshot was taken, compared by the property verification and the write verification. Null when it
+        /// could not be read: the comparison then leaves the variables out instead of counting them as changed.
+        /// </summary>
+        internal string VariablesText { get; private set; }
+
         private ObjectMoveSnapshot(Dictionary<string, PartSnapshot> parts, byte[] objectXml, byte[] objectRestoreData)
         {
             _parts = parts;
@@ -63,9 +69,11 @@ namespace GxMcp.Worker.Helpers
             byte[] objectRestoreData = SerializeEntityData(obj);
             if (objectRestoreData == null)
                 throw new MissingMethodException(obj.GetType().FullName, "SerializeData");
-            return new ObjectMoveSnapshot(parts,
+            var snapshot = new ObjectMoveSnapshot(parts,
                 Utf8(NormalizeObjectXml(obj.SerializeToXml() ?? string.Empty)),
                 objectRestoreData);
+            snapshot.VariablesText = VariablesFingerprint.Capture(obj);
+            return snapshot;
         }
 
         public Comparison Compare(KBObject obj, params string[] ignoredPartNames)
@@ -141,6 +149,12 @@ namespace GxMcp.Worker.Helpers
             try { current = Capture(obj); }
             catch (Exception ex) { return Comparison.Failed(new[] { "SnapshotReadFailed: " + ex.Message }, null); }
 
+            return ComparePartsWith(current, ignoredPartNames);
+        }
+
+        // The parts comparison of CompareParts, against a snapshot already taken.
+        private Comparison ComparePartsWith(ObjectMoveSnapshot current, string[] ignoredPartNames)
+        {
             var ignored = new HashSet<string>(ignoredPartNames ?? new string[0], StringComparer.OrdinalIgnoreCase);
             Func<KeyValuePair<string, PartSnapshot>, bool> include = p => !ignored.Contains(p.Value.Name);
             var expectedFingerprints = _parts.Where(include)
@@ -165,6 +179,128 @@ namespace GxMcp.Worker.Helpers
                 ? Comparison.Verified(current.Hash)
                 : Comparison.Failed(changed, current.Hash, changedKeys);
         }
+
+        // The check after a property write: the parts, as CompareParts compares them, and the variables text, which no part carries. The
+        // variables are left out, and listed in NotComparedParts, when their text cannot be read on either side.
+        public Comparison CompareWritten(KBObject obj)
+        {
+            if (obj == null)
+                return Comparison.Failed(new[] { "ObjectMissing" }, null);
+
+            ObjectMoveSnapshot current;
+            try { current = Capture(obj); }
+            catch (Exception ex) { return Comparison.Failed(new[] { "SnapshotReadFailed: " + ex.Message }, null); }
+
+            return CompareWrittenWith(current);
+        }
+
+        internal Comparison CompareWrittenWith(ObjectMoveSnapshot current)
+        {
+            Comparison parts = ComparePartsWith(current, null);
+            var changed = new List<string>(parts.ChangedParts.Values<string>());
+            bool variablesCompared = VariablesText != null && current.VariablesText != null;
+            if (variablesCompared && !string.Equals(VariablesText, current.VariablesText, StringComparison.Ordinal))
+                changed.Add("Variables");
+
+            Comparison result = changed.Count == 0
+                ? Comparison.Verified(current.Hash)
+                : Comparison.Failed(changed, current.Hash, parts.ChangedPartKeys);
+            result.NotComparedParts = variablesCompared ? new string[0] : new[] { "Variables" };
+            return result;
+        }
+
+
+        /// <summary>
+        /// The comparison that decides whether a property rollback put the object back. It is the object comparison of
+        /// <see cref="Compare(KBObject, string, Guid?, string[])"/> over the parts that <see cref="PropertyVerificationScope"/>
+        /// compares. The parts it leaves out are restored all the same and are listed in NotComparedParts. The move, SDT and
+        /// variable rollbacks keep the strict comparison of every part.
+        /// </summary>
+        public Comparison ComparePropertyVerification(KBObject obj)
+        {
+            if (obj == null)
+                return Comparison.Failed(new[] { "ObjectMissing" }, null);
+
+            ObjectMoveSnapshot current;
+            try { current = Capture(obj); }
+            catch (Exception ex) { return Comparison.Failed(new[] { "SnapshotReadFailed: " + ex.Message }, null); }
+
+            return ComparePropertyVerificationWith(current);
+        }
+
+        // The comparison behind ComparePropertyVerification, against a snapshot already taken. It works on snapshots built from plain
+        // data, so the rules of the verification can be exercised without an SDK object.
+        internal Comparison ComparePropertyVerificationWith(ObjectMoveSnapshot current)
+        {
+            var changed = new List<string>();
+            if (!_objectXml.SequenceEqual(current._objectXml))
+            {
+                string beforeXml = Encoding.UTF8.GetString(_objectXml);
+                string afterXml = Encoding.UTF8.GetString(current._objectXml);
+                var propertyPaths = DiffObjectXml(beforeXml, afterXml, null, null);
+                if (propertyPaths.Length > 0)
+                    changed.Add("Properties: " + string.Join(", ", propertyPaths));
+            }
+
+            var expected = ComparedParts(_parts);
+            var actual = ComparedParts(current._parts);
+            string[] changedKeys = FindChangedPartKeys(expected, actual);
+            var changedLines = new JArray();
+            foreach (string key in changedKeys)
+            {
+                PartSnapshot expectedPart;
+                PartSnapshot currentPart;
+                string name;
+                if (_parts.TryGetValue(key, out expectedPart) && !current._parts.ContainsKey(key))
+                    name = expectedPart.Name + " (missing)";
+                else if (current._parts.TryGetValue(key, out currentPart) && !_parts.ContainsKey(key))
+                    name = currentPart.Name + " (unexpected)";
+                else
+                    name = expectedPart?.Name ?? currentPart?.Name ?? key;
+                changed.Add(name);
+
+                // Only the text parts show their lines. A changed XML part is named by its part alone, as a property difference is.
+                if (!ShowsLines(key, _parts, current._parts)) continue;
+
+                expected.TryGetValue(key, out byte[] expectedBytes);
+                actual.TryGetValue(key, out byte[] actualBytes);
+                string expectedText = expectedBytes == null ? string.Empty : Encoding.UTF8.GetString(expectedBytes);
+                string actualText = actualBytes == null ? string.Empty : Encoding.UTF8.GetString(actualBytes);
+                foreach (JToken line in ChangedLines.Describe(name, expectedText, actualText, Math.Max(0, ChangedLines.DefaultMaxLines - changedLines.Count)))
+                    changedLines.Add(line);
+            }
+
+            // The declarations of the variables are compared as text: the part's properties alone do not show them. A text that cannot be
+            // read on either side is left out and listed as not compared; it is never a difference.
+            bool variablesCompared = VariablesText != null && current.VariablesText != null;
+            if (variablesCompared && !string.Equals(VariablesText, current.VariablesText, StringComparison.Ordinal))
+            {
+                changed.Add("Variables");
+                foreach (JToken line in ChangedLines.Describe("Variables", VariablesText, current.VariablesText, Math.Max(0, ChangedLines.DefaultMaxLines - changedLines.Count)))
+                    changedLines.Add(line);
+            }
+
+            Comparison result = changed.Count == 0
+                ? Comparison.Verified(current.Hash)
+                : Comparison.Failed(changed.Distinct(StringComparer.OrdinalIgnoreCase), current.Hash, changedKeys);
+            result.ChangedLines = changedLines;
+            string[] notCompared = PropertyVerificationScope.NotComparedOf(_parts.Values.Concat(current._parts.Values).Select(part => part.Name));
+            result.NotComparedParts = variablesCompared ? notCompared : notCompared.Concat(new[] { "Variables" }).ToArray();
+            return result;
+        }
+
+        // The text parts (VerificationFormat "source") are the only parts whose differing lines are shown.
+        private static bool ShowsLines(string key, IDictionary<string, PartSnapshot> expectedParts, IDictionary<string, PartSnapshot> actualParts)
+        {
+            expectedParts.TryGetValue(key, out PartSnapshot expectedPart);
+            actualParts.TryGetValue(key, out PartSnapshot actualPart);
+            return string.Equals((expectedPart ?? actualPart)?.VerificationFormat, "source", StringComparison.Ordinal);
+        }
+
+        // The parts the property verification compares, as bytes keyed like the snapshot.
+        private static Dictionary<string, byte[]> ComparedParts(IDictionary<string, PartSnapshot> parts)
+            => parts.Where(part => PropertyVerificationScope.IsCompared(part.Value.Name))
+                .ToDictionary(part => part.Key, part => part.Value.VerificationData ?? new byte[0], StringComparer.OrdinalIgnoreCase);
 
         internal JArray DescribeDifferences(KBObject obj, params string[] ignoredPartNames)
         {
@@ -615,6 +751,12 @@ namespace GxMcp.Worker.Helpers
             public string PersistedHash { get; }
             public string[] ChangedPartKeys { get; }
             public JArray PropertyDifferences { get; }
+
+            /// <summary>The differing lines of the changed text parts, set only by <see cref="ObjectMoveSnapshot.ComparePropertyVerification"/>.</summary>
+            public JArray ChangedLines { get; set; } = new JArray();
+
+            /// <summary>The parts restored but not compared, set only by <see cref="ObjectMoveSnapshot.ComparePropertyVerification"/>.</summary>
+            public string[] NotComparedParts { get; set; } = new string[0];
 
             public static Comparison Verified(string hash) => new Comparison(true, null, hash);
             public static Comparison Failed(IEnumerable<string> changedParts, string hash, IEnumerable<string> changedPartKeys = null, JArray propertyDifferences = null) => new Comparison(false, changedParts, hash, changedPartKeys, propertyDifferences);
