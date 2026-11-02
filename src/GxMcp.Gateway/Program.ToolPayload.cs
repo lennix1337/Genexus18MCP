@@ -598,6 +598,8 @@ namespace GxMcp.Gateway
             payload["reconciliationRequired"] = true;
             payload["retrySafe"] = false;
             payload["persisted"] = JValue.CreateNull();
+            // The state flag of the sibling receipts: nothing confirmed the persistence, so it is not known.
+            payload["persistenceStateKnown"] = false;
             payload["commitState"] = "Indeterminate";
             payload["rereadConfirmed"] = false;
         }

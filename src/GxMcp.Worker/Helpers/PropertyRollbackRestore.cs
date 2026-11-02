@@ -44,6 +44,72 @@ namespace GxMcp.Worker.Helpers
         internal static Report NothingRestored(IEnumerable<string> requestedNames)
             => new Report(new string[0], (requestedNames ?? Enumerable.Empty<string>()).ToList());
 
+        /// <summary>What the read-back proved about the requested values, once the batch write has committed.</summary>
+        internal enum PersistenceProof
+        {
+            /// <summary>Every requested value was read back as requested: the values are in the object.</summary>
+            Verified,
+
+            /// <summary>The object was read back and the requested values are not in it, or a rollback restored every property.</summary>
+            NotPersisted,
+
+            /// <summary>No read settled it.</summary>
+            Unknown
+        }
+
+        /// <summary>
+        /// Marks an error receipt whose batch write has committed: <c>committed</c> is true, <c>persisted</c> is a boolean that is false
+        /// only when a read showed the requested values are not in the object, and <c>persistenceStateKnown</c> says whether a read settled
+        /// it. An unknown state carries <c>persisted:true</c> and <c>persistenceStateKnown:false</c>, as the receipts of the Conditions and
+        /// DataProviderParameters routes do: the value may be in the object, so a reader decides on <c>persistenceStateKnown</c> first.
+        /// </summary>
+        internal static void MarkCommitted(JObject receipt, PersistenceProof proof)
+        {
+            receipt["committed"] = true;
+            receipt["persisted"] = proof != PersistenceProof.NotPersisted;
+            receipt["persistenceStateKnown"] = proof != PersistenceProof.Unknown;
+        }
+
+        /// <summary>
+        /// The proof after a verification failure whose rollback ran. The requested values are gone only when every requested property was
+        /// written back and read back with its previous value. The whole-object check is reported beside it, but it does not decide: a
+        /// property the rollback did not confirm keeps the state unknown.
+        /// </summary>
+        internal static PersistenceProof ProofAfterRollback(Report report)
+            => report != null && report.Restored.Count > 0 && report.NotRestored.Count == 0
+                ? PersistenceProof.NotPersisted
+                : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof after a rollback that failed. Until the restoring transaction commits, every property is still as the batch wrote it,
+        /// so the earlier proof stands. Once it commits, nothing confirms the state.
+        /// </summary>
+        internal static PersistenceProof ProofAfterFailedRollback(bool restoreCommitted, PersistenceProof earlier)
+            => restoreCommitted ? PersistenceProof.Unknown : earlier;
+
+        /// <summary>
+        /// The proof of a verification refusal, by its error code. A read-back that found another value (<c>PropertyNotPersisted</c>), or a
+        /// type change that the SDK kept as it was (<c>UnsupportedOperation</c>), shows the requested value is not in the object. Any other
+        /// refusal leaves the state unknown.
+        /// </summary>
+        internal static PersistenceProof ProofOfVerificationRefusal(string errorCode)
+            => string.Equals(errorCode, "PropertyNotPersisted", StringComparison.Ordinal)
+                || string.Equals(errorCode, "UnsupportedOperation", StringComparison.Ordinal)
+                ? PersistenceProof.NotPersisted
+                : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof of a read-back that did not confirm the property. Only a read that says the value is not there proves it is not in the
+        /// object; a read that confirmed it, or no answer at all, leaves the state unknown.
+        /// </summary>
+        internal static PersistenceProof ProofOfUnconfirmedRead(bool? persistedVerified)
+            => persistedVerified == false ? PersistenceProof.NotPersisted : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof when every requested value was read back as requested and only an unrelated part then changed: the values are in the object.
+        /// </summary>
+        internal static PersistenceProof ProofOfChangedParts() => PersistenceProof.Verified;
+
         /// <summary>
         /// The parenthesis the "unrelated part changed" reason adds: the names of the parts that differ, never their content.
         /// Empty when no name is known, so the reason reads as it did before.

@@ -301,5 +301,84 @@ namespace GxMcp.Gateway.Tests
             complete["status"] = "Running";
             Assert.False(Program.IsTerminalPersistedReread(complete));
         }
+
+        [Fact]
+        public void AnUnknownPersistedIsNotAConfirmationAndDoesNotThrow()
+        {
+            var unknown = new JObject
+            {
+                ["status"] = "Completed",
+                ["persisted"] = "unknown",
+                ["rereadConfirmed"] = true
+            };
+
+            Assert.False(Program.IsTerminalPersistedReread(unknown));
+        }
+
+        [Fact]
+        public void AReceiptWhoseStateIsNotKnownConfirmsNothingWhateverItsPersistedFieldSays()
+        {
+            // The unknown state of a write receipt carries persisted true, as the sibling routes do; only persistenceStateKnown tells it apart.
+            var unknown = new JObject
+            {
+                ["status"] = "Completed",
+                ["persisted"] = true,
+                ["persistenceStateKnown"] = false,
+                ["rereadConfirmed"] = true
+            };
+
+            Assert.False(Program.IsTerminalPersistedReread(unknown));
+            unknown["persistenceStateKnown"] = true;
+            Assert.True(Program.IsTerminalPersistedReread(unknown));
+        }
+
+        [Fact]
+        public void APerPropertyPersistedMapIsNotAConfirmationAndDoesNotThrow()
+        {
+            // The success receipt of a property write carries persisted as the map of values read back, not as a boolean.
+            var mapped = new JObject
+            {
+                ["status"] = "Completed",
+                ["persisted"] = new JObject { ["Description"] = "Yes" },
+                ["rereadConfirmed"] = true
+            };
+
+            Assert.False(Program.IsTerminalPersistedReread(mapped));
+        }
+
+        [Fact]
+        public void ANestedResultPersistedMapIsNotAConfirmationAndDoesNotThrow()
+        {
+            // The form a lifecycle read returns: the worker's envelope under workerPayload, and the receipt under its result.
+            var nested = new JObject
+            {
+                ["status"] = "Completed",
+                ["workerPayload"] = new JObject
+                {
+                    ["result"] = new JObject
+                    {
+                        ["persisted"] = new JObject { ["Description"] = "Yes" },
+                        ["rereadConfirmed"] = true
+                    }
+                }
+            };
+
+            Assert.False(Program.IsTerminalPersistedReread(nested));
+        }
+
+        [Fact]
+        public void ANestedResultPersistedTrueWithAReadIsAConfirmation()
+        {
+            var nested = new JObject
+            {
+                ["status"] = "Completed",
+                ["workerPayload"] = new JObject
+                {
+                    ["result"] = new JObject { ["persisted"] = true, ["rereadConfirmed"] = true }
+                }
+            };
+
+            Assert.True(Program.IsTerminalPersistedReread(nested));
+        }
     }
 }
