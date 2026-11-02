@@ -1981,8 +1981,9 @@ namespace GxMcp.Gateway
                 // issue #542: Structure writer rollback evidence (which members the SDK
                 // refused, whether a revert was attempted, and why it could not be verified).
                 "unappliedMembers", "rollbackAttempted", "rollbackError",
-                // genexus_properties set: which written properties the rollback put back (names only).
-                "propertiesRestored", "propertiesNotRestored",
+                // genexus_properties set: which written properties the rollback put back (names only), and whether the
+                // batch's transaction committed; its persisted value is listed with the patch receipt fields above.
+                "committed", "persistenceStateKnown", "propertiesRestored", "propertiesNotRestored",
                 "reReadConfirmed", "commentOnly", "commentStyle", "before", "after",
                 "matchedCount", "implicitOperations", "diagnosticContext",
                 // Patch safety evidence: retain the distinction between a save attempt
@@ -2042,7 +2043,7 @@ namespace GxMcp.Gateway
                 // destination resolved or stopped, the parent the SDK actually left, the persist path it
                 // answered to, what changed, and the compensation that proves nothing was left behind.
                 "placement", "expectedParent", "actualParent", "strategy", "strategyDetail",
-                "changedParts", "propertyDifferences", "compensation",
+                "changedParts", "notComparedParts", "propertyDifferences", "compensation",
                 // genexus_delete_object refusal and dryRun: wouldDelete=false says the object was not deleted, and
                 // foundModule is the module of the object found for a Module.Name target that another module refused.
                 "wouldDelete", "foundModule",
@@ -2305,6 +2306,11 @@ namespace GxMcp.Gateway
         // notifications/progress on HeartbeatIntervalSeconds and can safely
         // respect the full MaxLongPollSeconds.
         public const int SafeLongPollSecondsWithoutProgress = 50;
+
+        // A genexus_properties set can take 50 to 54 s on one real host. With a progressToken the client receives notifications/progress,
+        // so a property set may wait this long for the answer. Without a token the window above still caps the wait: the client closes
+        // the transport after about 60 s of silence.
+        public const int PropertySetWaitSecondsWithProgress = 90;
         public const int HeartbeatIntervalSeconds = 15;
 
         /// <summary>

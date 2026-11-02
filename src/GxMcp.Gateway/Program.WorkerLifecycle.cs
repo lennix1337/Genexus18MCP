@@ -981,7 +981,7 @@ namespace GxMcp.Gateway
                     && ((toolArgs?["wait"]?.ToObject<int?>() ?? toolArgs?["wait_seconds"]?.ToObject<int?>() ?? 0) > 0);
                 int effectiveTimeoutMs = timeoutMs;
                 if (noClientProgressToken && !string.IsNullOrWhiteSpace(operationId) && !lifecycleStatusWait)
-                    effectiveTimeoutMs = Math.Min(timeoutMs, McpRouter.SafeLongPollSecondsWithoutProgress * 1000);
+                    effectiveTimeoutMs = ResolveNoProgressTimeoutMs(timeoutMs);
                 bool workerCompleted = await McpRouter.AwaitWithHeartbeat(
                     pending.CompletionSource.Task, effectiveTimeoutMs, progressToken, heartbeat, toolName,
                     cancellationToken: cancellationToken);
@@ -1152,8 +1152,29 @@ namespace GxMcp.Gateway
             return Math.Max(1800, workerTimeout + 300);
         }
 
+        /// <summary>
+        /// A <c>genexus_properties</c> set: a write that can run the WorkWithPlus apply-on-save inside the call, so it can take
+        /// longer than the windows a read gets.
+        /// </summary>
+        internal static bool IsPropertySetCall(string? toolName, JObject? args)
+            => string.Equals(toolName, "genexus_properties", StringComparison.OrdinalIgnoreCase)
+               && string.Equals(args?["action"]?.ToString(), "set", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The synchronous wait for a call with no client progress token: capped at <see cref="McpRouter.SafeLongPollSecondsWithoutProgress"/>
+        /// for every tool, property sets included. A tracked operation that outlives the cap is answered as still running, and it keeps
+        /// running. The longer property ceiling of <see cref="GetToolTimeoutMs"/> takes effect only when the client reports progress.
+        /// </summary>
+        internal static int ResolveNoProgressTimeoutMs(int timeoutMs)
+            => Math.Min(timeoutMs, McpRouter.SafeLongPollSecondsWithoutProgress * 1000);
+
         internal static int GetToolTimeoutMs(string? toolName, JObject? args)
         {
+            // A property set can run the apply-on-save inside the call, so its ceiling is the property window, not the default.
+            // Without a progress token the no-progress cap still applies (see ResolveNoProgressTimeoutMs).
+            if (IsPropertySetCall(toolName, args))
+                return McpRouter.PropertySetWaitSecondsWithProgress * 1000;
+
             if (toolName == "genexus_lifecycle" || toolName == "genexus_analyze" || toolName == "genexus_test")
             {
                 if (toolName == "genexus_lifecycle"

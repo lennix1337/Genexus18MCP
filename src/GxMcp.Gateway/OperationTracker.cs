@@ -368,7 +368,30 @@ namespace GxMcp.Gateway
             }
         }
 
-        public JObject BuildOperationResult(string operationId)
+        // The line detail of a rollback receipt (changedLines) is for verbose_errors callers only. The stored payload keeps it.
+        private static JToken WithoutLineDetail(JToken payload)
+        {
+            JToken copy = payload.DeepClone();
+            RemoveLineDetail(copy);
+            return copy;
+        }
+
+        private static void RemoveLineDetail(JToken token)
+        {
+            if (token is JObject obj)
+            {
+                obj.Remove("changedLines");
+                foreach (JToken child in obj.PropertyValues())
+                    RemoveLineDetail(child);
+            }
+            else if (token is JArray array)
+            {
+                foreach (JToken child in array)
+                    RemoveLineDetail(child);
+            }
+        }
+
+        public JObject BuildOperationResult(string operationId, bool verboseRequested = false)
         {
             if (!_operations.TryGetValue(operationId, out var record))
                 return BuildNotFound(operationId);
@@ -379,7 +402,9 @@ namespace GxMcp.Gateway
 
                 if (record.WorkerPayload != null)
                 {
-                    payload["workerPayload"] = record.WorkerPayload.DeepClone();
+                    // The line detail is kept when the call or this result request asked for verbose_errors.
+                    bool verbose = verboseRequested || record.ToolArguments?["verbose_errors"]?.ToObject<bool?>() == true;
+                    payload["workerPayload"] = verbose ? record.WorkerPayload.DeepClone() : WithoutLineDetail(record.WorkerPayload);
                 }
                 else if (string.Equals(record.Status, "Running", StringComparison.OrdinalIgnoreCase))
                 {

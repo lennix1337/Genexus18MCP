@@ -870,6 +870,7 @@ namespace GxMcp.Worker.Services
 
         public string SetProperty(string target, string propName, string value, string controlName = null, string typeFilter = null)
         {
+            bool transactionCommitted = false;
             try
             {
                 if (string.IsNullOrEmpty(controlName) && string.Equals(propName?.Trim(), "Formula", StringComparison.OrdinalIgnoreCase))
@@ -1024,9 +1025,9 @@ namespace GxMcp.Worker.Services
                         }
 
                         try { if (container != obj) container.Dirty = true; } catch { }
-                        obj.EnsureSave();
-                        trans.Commit();
+                        PropertyApplyOnSaveRule.Save(obj, controlName, new[] { propName }, () => trans.Commit());
                         committed = true;
+                        transactionCommitted = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
@@ -1045,7 +1046,7 @@ namespace GxMcp.Worker.Services
                 // structured PropertyNotPersisted envelope; a confirmed match attaches the
                 // before/requested/persisted diff block to the success response.
                 string verified = VerifyPropertyPersisted(target, propName, value, controlName, typeFilter, beforeVal, obj);
-                if (verified != null) return ReportRequestedName(verified, requestedName, propName);
+                if (verified != null) return CommittedReceipt(ReportRequestedName(verified, requestedName, propName));
 
                 var applied = SingleSetReceipt(requestedName, propName, value);
                 return Models.McpResponse.Ok(target: target, code: "PropertyApplied", result: applied);
@@ -1061,13 +1062,16 @@ namespace GxMcp.Worker.Services
             }
             catch (Exception ex)
             {
-                return "{\"status\":\"Error\",\"message\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                string failure = "{\"status\":\"Error\",\"message\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                return transactionCommitted ? CommittedReceipt(failure) : failure;
             }
         }
 
         public string SetProperties(string target, JObject properties, string controlName = null, string typeFilter = null,
             string expectedVersion = null, bool dryRun = false, bool rollbackOnFailure = true)
         {
+            // Set once the batch's transaction commits: an error after that point reports committed:true.
+            bool transactionCommitted = false;
             try
             {
                 if (properties == null || properties.Count == 0)
@@ -1117,6 +1121,7 @@ namespace GxMcp.Worker.Services
                 var beforeValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 // Unlike beforeValues, keeps null for a value that could not be read: the rollback never writes back an unread value.
                 var previousValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var wereDefault = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 string beforeVersion = VersionOf(obj);
                 if (!string.IsNullOrWhiteSpace(expectedVersion)
                     && !string.Equals(expectedVersion, beforeVersion, StringComparison.Ordinal))
@@ -1178,6 +1183,8 @@ namespace GxMcp.Worker.Services
                     }
                     string previousValue = ReadStoredProperty(obj, nativeName, controlName);
                     previousValues[propName] = previousValue;
+                    // Only a value written to the object itself can be reset. A value in another container is written back instead.
+                    if (string.IsNullOrEmpty(controlName) && ReferenceEquals(propertyContainer, obj) && IsPropertyDefaultSafe(obj, nativeName)) wereDefault.Add(propName);
                     beforeValues[propName] = previousValue ?? string.Empty;
                 }
 
@@ -1270,10 +1277,13 @@ namespace GxMcp.Worker.Services
                         }
 
                         try { if (container != obj) container.Dirty = true; } catch { }
-                        obj.EnsureSave();
-                        WriteService.StampObjectRevisionDates(obj, obj.Model);
-                        trans.Commit();
+                        PropertyApplyOnSaveRule.Save(obj, controlName, properties.Properties().Select(p => p.Name), () =>
+                        {
+                            WriteService.StampObjectRevisionDates(obj, obj.Model);
+                            trans.Commit();
+                        });
                         committed = true;
+                        transactionCommitted = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
@@ -1289,6 +1299,7 @@ namespace GxMcp.Worker.Services
                 var rollback = new PropertyRollbackContext
                 {
                     ControlName = controlName,
+                    WereDefault = wereDefault,
                     RequestedNames = properties.Properties().Select(p => p.Name).ToList(),
                     PreviousValues = previousValues,
                     NativeNames = nativeNames
@@ -1303,28 +1314,32 @@ namespace GxMcp.Worker.Services
                         controlName, typeFilter, before, obj);
                     if (verification == null)
                         return RollbackPropertySnapshot(target, obj, snapshot, rollback,
-                            $"The saved property '{propName}' could not be independently read back.");
+                            $"The saved property '{propName}' could not be independently read back.",
+                            PropertyRollbackRestore.PersistenceProof.Unknown);
 
                     var verificationEnvelope = JObject.Parse(verification);
                     if (string.Equals(verificationEnvelope["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase))
                         return RollbackPropertySnapshot(target, obj, snapshot, rollback,
-                            verificationEnvelope["error"]?["message"]?.ToString() ?? "Property verification failed.");
+                            verificationEnvelope["error"]?["message"]?.ToString() ?? "Property verification failed.",
+                            PropertyRollbackRestore.ProofOfVerificationRefusal(verificationEnvelope["error"]?["code"]?.ToString()));
 
                     var diff = verificationEnvelope["result"] as JObject;
                     if (diff == null || diff["persistedVerified"]?.ToObject<bool>() != true)
                         return RollbackPropertySnapshot(target, obj, snapshot, rollback,
-                            $"The saved property '{propName}' could not be confirmed.");
+                            $"The saved property '{propName}' could not be confirmed.",
+                            PropertyRollbackRestore.ProofOfUnconfirmedRead(diff?["persistedVerified"]?.ToObject<bool?>()));
                     checks.Add((propName, diff["before"]?.ToString() ?? string.Empty, diff["requested"]?.ToString() ?? requested,
                         diff["persisted"]?.ToString() ?? string.Empty));
                 }
 
                 var fresh = _objectService.FindObjectFreshByIdentity(obj);
-                var partsComparison = fresh == null ? null : snapshot.CompareParts(fresh);
+                var partsComparison = fresh == null ? null : snapshot.CompareWritten(fresh);
                 if (partsComparison == null || !partsComparison.Equal)
                     return RollbackPropertySnapshot(target, obj, snapshot, rollback,
                         "The property save changed an unrelated object part"
                         + PropertyRollbackRestore.DescribeChangedParts(partsComparison?.ChangedParts.Values<string>())
-                        + " or the parts could not be verified.");
+                        + " or the parts could not be verified.",
+                        PropertyRollbackRestore.ProofOfChangedParts());
 
                 var result = new JObject { ["properties"] = WwpTemplateXmlPatch.Omit(request, patch.Patches) };
                 NoteNativeNames(result, reportsSdkNames, properties, nativeNames);
@@ -1333,6 +1348,8 @@ namespace GxMcp.Worker.Services
                     result[field.Name] = field.Value;
                 result["versionToken"] = WriteService.ComputeVersionToken(fresh);
                 result["preservedParts"] = snapshot.PreservedParts;
+                if (partsComparison.NotComparedParts.Length > 0)
+                    result["notComparedParts"] = new JArray(partsComparison.NotComparedParts);
                 result["implicitOperations"] = new JArray();
                 return Models.McpResponse.Ok(target: target, code: "PropertiesApplied", result: result);
             }
@@ -1345,7 +1362,13 @@ namespace GxMcp.Worker.Services
             }
             catch (Exception ex)
             {
-                return "{\"status\":\"Error\",\"message\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                // The envelope of an unexpected failure keeps its shape; after the commit it also says what was persisted.
+                string failure = "{\"status\":\"Error\",\"message\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                if (!transactionCommitted) return failure;
+                var receipt = JObject.Parse(failure);
+                // A failure after the commit leaves the written values in place, but nothing confirmed them.
+                PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.PersistenceProof.Unknown);
+                return receipt.ToString(Newtonsoft.Json.Formatting.None);
             }
         }
 
@@ -1365,7 +1388,8 @@ namespace GxMcp.Worker.Services
                 errorExtra: diagnostic);
         }
 
-        private string RollbackPropertySnapshot(string target, KBObject written, ObjectMoveSnapshot snapshot, PropertyRollbackContext rollback, string reason)
+        private string RollbackPropertySnapshot(string target, KBObject written, ObjectMoveSnapshot snapshot, PropertyRollbackContext rollback, string reason,
+            PropertyRollbackRestore.PersistenceProof proof)
         {
             bool restoreCommitted = false;
             try
@@ -1377,12 +1401,14 @@ namespace GxMcp.Worker.Services
                     // Nothing was attempted: every property is still as the batch wrote it.
                     var refused = new JObject();
                     PropertyRollbackRestore.NothingRestored(rollback.RequestedNames).AddTo(refused);
+                    PropertyRollbackRestore.MarkCommitted(refused, proof);
                     return Models.McpResponse.Err(code: "PropertyRollbackUnsafe", target: target,
                         message: reason + " The persisted version could not be tied to this write; automatic rollback was refused.",
                         extra: refused);
                 }
                 IReadOnlyList<string> writtenBack = new string[0];
                 IReadOnlyList<string> sourceFailures = new string[0];
+                IDisposable suppression = null;
                 using (var tx = written.Model.KB.BeginTransaction())
                 {
                     bool committed = false;
@@ -1390,10 +1416,15 @@ namespace GxMcp.Worker.Services
                     {
                         snapshot.RestoreObject(current);
                         // The object snapshot does not carry the properties back: each written property goes back to its
-                        // previous value through the write path, before the save.
-                        writtenBack = PropertyRollbackRestore.WriteBack(rollback.RequestedNames, rollback.PreviousValues,
+                        // previous value through the write path, before the save. A property that had no explicit value before
+                        // the batch is reset to its default instead, so it does not become explicit on the object.
+                        writtenBack = PropertyRollbackRestore.ResetOrWriteBack(rollback.RequestedNames, rollback.PreviousValues, rollback.WereDefault,
+                            name => CanResetObjectProperty(current, rollback.NativeNames[name]),
+                            name => ResetObjectProperty(current, rollback.NativeNames[name]),
                             (name, previous) => RestorePropertyValue(current, rollback.NativeNames[name], previous, rollback.ControlName));
                         current.Dirty = true;
+                        // The restoring saves do not run the pattern on save: the snapshot is what the object must be after them.
+                        suppression = PropertyApplyOnSaveRule.BeginForRollback(current, rollback.ControlName);
                         current.Save();
                         snapshot.RestoreParts(current);
                         sourceFailures = snapshot.RestoreSourceTexts(current);
@@ -1401,20 +1432,36 @@ namespace GxMcp.Worker.Services
                         committed = true;
                         restoreCommitted = true;
                     }
-                    finally { if (!committed) try { tx.Rollback(); } catch { } }
+                    finally
+                    {
+                        // A flag the SDK refuses to restore must not keep the transaction open: the rollback runs either way.
+                        try { suppression?.Dispose(); }
+                        finally { if (!committed) try { tx.Rollback(); } catch { } }
+                    }
                 }
                 // Each property counts as restored only when reading it again on this fresh copy gives its previous value.
                 var restored = _objectService.FindObjectFreshByIdentity(current);
-                var report = PropertyRollbackRestore.Confirm(rollback.RequestedNames, rollback.PreviousValues, writtenBack,
-                    name => restored == null ? null : ReadPropertyValueAt(restored, rollback.NativeNames[name], rollback.ControlName));
-                var restoredComparison = restored == null ? null : snapshot.Compare(restored);
+                var report = PropertyRollbackRestore.ConfirmWithDefaults(rollback.RequestedNames, rollback.PreviousValues, rollback.WereDefault, writtenBack,
+                    name => restored == null ? null : ReadPropertyValueAt(restored, rollback.NativeNames[name], rollback.ControlName),
+                    name => restored != null && IsPropertyDefaultSafe(restored, rollback.NativeNames[name]));
+                // WebForm and Documentation are restored with the object but not compared: the receipt names them.
+                var restoredComparison = restored == null ? null : snapshot.ComparePropertyVerification(restored);
                 bool verified = restoredComparison != null && restoredComparison.Equal;
                 var outcome = new JObject { ["rollbackAttempted"] = true, ["rollbackVerified"] = verified };
                 report.AddTo(outcome);
                 // The parts that still differ from the snapshot, by name only: without them an unverified rollback cannot be told from damage.
-                if (restoredComparison != null && !restoredComparison.Equal) outcome["changedParts"] = restoredComparison.ChangedParts;
+                // The parts that still differ from the snapshot, by name, and the lines that differ. The terse projection keeps the
+                // names and leaves the lines out; verbose_errors shows both.
+                if (restoredComparison != null && !restoredComparison.Equal)
+                {
+                    outcome["changedParts"] = restoredComparison.ChangedParts;
+                    outcome["changedLines"] = restoredComparison.ChangedLines;
+                }
+                if (restoredComparison != null && restoredComparison.NotComparedParts.Length > 0)
+                    outcome["notComparedParts"] = new JArray(restoredComparison.NotComparedParts);
+                PropertyRollbackRestore.MarkCommitted(outcome, PropertyRollbackRestore.ProofAfterRollback(report));
                 return Models.McpResponse.Err(code: "PropertyVerificationFailed", target: target,
-                    message: reason + PropertyRollbackRestore.DescribeSourceFailures(sourceFailures) + (verified ? " The complete object snapshot was restored and verified."
+                    message: reason + PropertyRollbackRestore.DescribeSourceFailures(sourceFailures) + (verified ? PropertyRollbackRestore.DescribeVerified(restoredComparison?.NotComparedParts)
                         : " Snapshot restoration could not be verified; inspect the object before writing again."),
                     extra: outcome);
             }
@@ -1423,17 +1470,51 @@ namespace GxMcp.Worker.Services
                 var failed = new JObject { ["rollbackAttempted"] = true, ["rollbackVerified"] = false };
                 // Until the restoring transaction commits every property is still as written; after that the state is unknown, so no list is offered.
                 if (!restoreCommitted) PropertyRollbackRestore.NothingRestored(rollback.RequestedNames).AddTo(failed);
+                PropertyRollbackRestore.MarkCommitted(failed, PropertyRollbackRestore.ProofAfterFailedRollback(restoreCommitted, proof));
                 return Models.McpResponse.Err(code: "PropertyRollbackFailed", target: target,
                     message: reason + " Snapshot restoration failed: " + ex.Message,
                     extra: failed);
             }
         }
 
+        // The SDK's answer: true when the property has no explicit value on the object and reads its default.
+        internal static bool IsPropertyDefaultSafe(object obj, string nativeName)
+        {
+            try
+            {
+                return (bool)((dynamic)obj).IsPropertyDefault(nativeName);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[PROPERTY] default state of '" + nativeName + "' could not be read: " + ex.Message);
+                return false;
+            }
+        }
+
+        // The SDK's public reset check is PropertiesObject.CanResetValue. A refusal, or a member the SDK does not have, answers
+        // false, and the rollback writes the previous value back instead of leaving the new one behind.
+        private static bool CanResetObjectProperty(KBObject obj, string nativeName)
+        {
+            try
+            {
+                return (bool)((dynamic)obj).CanResetValue(nativeName);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[PROPERTY] reset of '" + nativeName + "' could not be checked: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static void ResetObjectProperty(KBObject obj, string nativeName)
+            => ((dynamic)obj).ResetProperty(nativeName);
+
         // What a batch rollback needs from the write it undoes: the requested names in request order, the value each
         // property had before the write (null when it was not read) and the native name each one was written under.
         private sealed class PropertyRollbackContext
         {
             internal string ControlName { get; set; }
+            internal ISet<string> WereDefault { get; set; }
             internal IReadOnlyList<string> RequestedNames { get; set; }
             internal IDictionary<string, string> PreviousValues { get; set; }
             internal IDictionary<string, string> NativeNames { get; set; }
@@ -1581,6 +1662,17 @@ namespace GxMcp.Worker.Services
                 return $"InvalidPropertyValue: '{rawValue}' cannot be converted to {targetType.Name} for '{propName}'.";
 
             return null;
+        }
+
+        // The envelope of a simple-route write whose transaction committed. A success is returned as it is: its verified values are in the
+        // object. An error gets the receipt: a verification refusal that found another value says the value is not in the object; any other
+        // error, or a failure after the commit, leaves the state unknown.
+        private static string CommittedReceipt(string envelope)
+        {
+            var receipt = JObject.Parse(envelope);
+            if (!string.Equals(receipt["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase)) return envelope;
+            PropertyRollbackRestore.MarkCommitted(receipt, PropertyRollbackRestore.ProofOfVerificationRefusal(receipt["error"]?["code"]?.ToString()));
+            return receipt.ToString(Newtonsoft.Json.Formatting.None);
         }
 
         // issue #59 — re-read the property from a freshly-resolved object after the SDK
@@ -2016,6 +2108,7 @@ namespace GxMcp.Worker.Services
         // the property bag and verify on re-read. An empty value sets NoneRef (clears).
         private string SetWebPanelReferenceProperty(KBObject obj, dynamic container, string target, string propName, string value, string controlName, string typeFilter)
         {
+            bool transactionCommitted = false;
             try
             {
                 object newRef;
@@ -2045,9 +2138,9 @@ namespace GxMcp.Worker.Services
                     {
                         container.SetPropertyValue(propName, newRef);
                         try { if (container != obj) container.Dirty = true; } catch { }
-                        obj.EnsureSave();
-                        trans.Commit();
+                        PropertyApplyOnSaveRule.Save(obj, controlName, new[] { propName }, () => trans.Commit());
                         committed = true;
+                        transactionCommitted = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
@@ -2059,17 +2152,18 @@ namespace GxMcp.Worker.Services
 
                 string requested = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
                 string verified = VerifyPropertyPersisted(target, propName, requested, controlName, typeFilter, beforeVal, obj);
-                if (verified != null) return verified;
+                if (verified != null) return CommittedReceipt(verified);
 
                 return Models.McpResponse.Ok(target: target, code: "PropertyApplied", result: new JObject { ["property"] = propName, ["value"] = requested });
             }
             catch (Exception ex)
             {
-                return Models.McpResponse.Err(
+                string failure = Models.McpResponse.Err(
                     code: "PropertyWriteFailed",
                     message: ex.InnerException?.Message ?? ex.Message,
                     hint: "Check the worker log for the SDK stack trace.",
                     target: target);
+                return transactionCommitted ? CommittedReceipt(failure) : failure;
             }
         }
 
@@ -2079,6 +2173,7 @@ namespace GxMcp.Worker.Services
         // DataProviderOutputReference). Passing an empty value clears the output.
         private string SetDataProviderOutputSdt(KBObject obj, string target, string value)
         {
+            bool transactionCommitted = false;
             try
             {
                 if (!string.Equals(obj.TypeDescriptor?.Name, "DataProvider", StringComparison.OrdinalIgnoreCase))
@@ -2145,9 +2240,9 @@ namespace GxMcp.Worker.Services
                         // The IPropertyBag is the KBObject itself (PropertiesObject) — obj.Properties
                         // is only an enumerable projection of descriptors, not the bag.
                         setOutput.Invoke(null, new object[] { obj, outputRef });
-                        obj.EnsureSave();
-                        trans.Commit();
+                        PropertyApplyOnSaveRule.Save(obj, null, new[] { "OutputSDT" }, () => trans.Commit());
                         committed = true;
+                        transactionCommitted = true;
                         WriteService.NotePerTargetWrite(target);
                         InvalidatePropertyCache(obj);
                     }
@@ -2166,18 +2261,19 @@ namespace GxMcp.Worker.Services
                     typeFilter: "DataProvider",
                     beforeVal: beforeOutput,
                     original: obj);
-                if (verified != null) return verified;
+                if (verified != null) return CommittedReceipt(verified);
 
                 return Models.McpResponse.Ok(target: target, code: "PropertyApplied",
                     result: new JObject { ["property"] = "OutputSDT", ["value"] = requestedOutput });
             }
             catch (Exception ex)
             {
-                return Models.McpResponse.Err(
+                string failure = Models.McpResponse.Err(
                     code: "OutputSdtWriteFailed",
                     message: ex.InnerException?.Message ?? ex.Message,
                     hint: "Check the worker log for the SDK stack trace.",
                     target: target);
+                return transactionCommitted ? CommittedReceipt(failure) : failure;
             }
         }
 

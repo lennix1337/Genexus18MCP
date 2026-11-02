@@ -44,6 +44,72 @@ namespace GxMcp.Worker.Helpers
         internal static Report NothingRestored(IEnumerable<string> requestedNames)
             => new Report(new string[0], (requestedNames ?? Enumerable.Empty<string>()).ToList());
 
+        /// <summary>What the read-back proved about the requested values, once the batch write has committed.</summary>
+        internal enum PersistenceProof
+        {
+            /// <summary>Every requested value was read back as requested: the values are in the object.</summary>
+            Verified,
+
+            /// <summary>The object was read back and the requested values are not in it, or a rollback restored every property.</summary>
+            NotPersisted,
+
+            /// <summary>No read settled it.</summary>
+            Unknown
+        }
+
+        /// <summary>
+        /// Marks an error receipt whose batch write has committed: <c>committed</c> is true, <c>persisted</c> is a boolean that is false
+        /// only when a read showed the requested values are not in the object, and <c>persistenceStateKnown</c> says whether a read settled
+        /// it. An unknown state carries <c>persisted:true</c> and <c>persistenceStateKnown:false</c>, as the receipts of the Conditions and
+        /// DataProviderParameters routes do: the value may be in the object, so a reader decides on <c>persistenceStateKnown</c> first.
+        /// </summary>
+        internal static void MarkCommitted(JObject receipt, PersistenceProof proof)
+        {
+            receipt["committed"] = true;
+            receipt["persisted"] = proof != PersistenceProof.NotPersisted;
+            receipt["persistenceStateKnown"] = proof != PersistenceProof.Unknown;
+        }
+
+        /// <summary>
+        /// The proof after a verification failure whose rollback ran. The requested values are gone only when every requested property was
+        /// written back and read back with its previous value. The whole-object check is reported beside it, but it does not decide: a
+        /// property the rollback did not confirm keeps the state unknown.
+        /// </summary>
+        internal static PersistenceProof ProofAfterRollback(Report report)
+            => report != null && report.Restored.Count > 0 && report.NotRestored.Count == 0
+                ? PersistenceProof.NotPersisted
+                : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof after a rollback that failed. Until the restoring transaction commits, every property is still as the batch wrote it,
+        /// so the earlier proof stands. Once it commits, nothing confirms the state.
+        /// </summary>
+        internal static PersistenceProof ProofAfterFailedRollback(bool restoreCommitted, PersistenceProof earlier)
+            => restoreCommitted ? PersistenceProof.Unknown : earlier;
+
+        /// <summary>
+        /// The proof of a verification refusal, by its error code. A read-back that found another value (<c>PropertyNotPersisted</c>), or a
+        /// type change that the SDK kept as it was (<c>UnsupportedOperation</c>), shows the requested value is not in the object. Any other
+        /// refusal leaves the state unknown.
+        /// </summary>
+        internal static PersistenceProof ProofOfVerificationRefusal(string errorCode)
+            => string.Equals(errorCode, "PropertyNotPersisted", StringComparison.Ordinal)
+                || string.Equals(errorCode, "UnsupportedOperation", StringComparison.Ordinal)
+                ? PersistenceProof.NotPersisted
+                : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof of a read-back that did not confirm the property. Only a read that says the value is not there proves it is not in the
+        /// object; a read that confirmed it, or no answer at all, leaves the state unknown.
+        /// </summary>
+        internal static PersistenceProof ProofOfUnconfirmedRead(bool? persistedVerified)
+            => persistedVerified == false ? PersistenceProof.NotPersisted : PersistenceProof.Unknown;
+
+        /// <summary>
+        /// The proof when every requested value was read back as requested and only an unrelated part then changed: the values are in the object.
+        /// </summary>
+        internal static PersistenceProof ProofOfChangedParts() => PersistenceProof.Verified;
+
         /// <summary>
         /// The parenthesis the "unrelated part changed" reason adds: the names of the parts that differ, never their content.
         /// Empty when no name is known, so the reason reads as it did before.
@@ -97,6 +163,105 @@ namespace GxMcp.Worker.Helpers
                 else notRestored.Add(name);
             }
             return new Report(restored, notRestored);
+        }
+
+        /// <summary>
+        /// The reset variant of the first step. A property that had no explicit value before the batch is reset to its
+        /// default when the SDK allows it, not written back with its effective value, which would make it explicit on the
+        /// object. When the SDK refuses the reset, the property is written back to its previous value, so the new value does
+        /// not stay behind; the confirmation then reports it as not restored, because it is no longer default. Other names
+        /// keep the rule of <see cref="WriteBack"/>.
+        /// </summary>
+        internal static IReadOnlyList<string> ResetOrWriteBack(IEnumerable<string> requestedNames, IDictionary<string, string> previousValues,
+            ISet<string> wereDefault, Func<string, bool> canReset, Action<string> resetOne, Action<string, string> restoreOne)
+        {
+            // The batch goes back in reverse order: a property written later can change what the properties before it read back as
+            // (a WebComponent flag, for one, hides the master page), so the later ones are undone first. A name whose step throws is
+            // tried once more after the others.
+            var written = new List<string>();
+            var failed = new List<string>();
+            foreach (string name in (requestedNames ?? Enumerable.Empty<string>()).Reverse())
+            {
+                if (RestoreOne(name, previousValues, wereDefault, canReset, resetOne, restoreOne)) written.Add(name);
+                else failed.Add(name);
+            }
+            foreach (string name in failed)
+            {
+                if (RestoreOne(name, previousValues, wereDefault, canReset, resetOne, restoreOne)) written.Add(name);
+            }
+            return written;
+        }
+
+        // One step of the reset variant: a default property is reset when the SDK allows it, any other property is written back
+        // to its previous value. Returns false when nothing was written; a step that throws is logged and counts as nothing written.
+        private static bool RestoreOne(string name, IDictionary<string, string> previousValues, ISet<string> wereDefault,
+            Func<string, bool> canReset, Action<string> resetOne, Action<string, string> restoreOne)
+        {
+            try
+            {
+                if (wereDefault != null && wereDefault.Contains(name) && canReset != null && canReset(name))
+                {
+                    resetOne(name);
+                    return true;
+                }
+                if (!previousValues.TryGetValue(name, out string previous) || previous == null) return false;
+                restoreOne(name, previous);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ExceptionRoot.Log("Rollback could not write property '" + name + "' back", ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// The sentence of a rollback whose compared parts match their snapshot again. It names the parts that were restored but not
+        /// compared, so the message never claims more than the comparison checked.
+        /// </summary>
+        internal static string DescribeVerified(IEnumerable<string> notCompared)
+        {
+            string[] names = (notCompared ?? Enumerable.Empty<string>()).ToArray();
+            return names.Length == 0
+                ? " The compared parts were restored and verified."
+                : " The compared parts were restored and verified; " + string.Join(", ", names) + " were restored but not compared.";
+        }
+
+        /// <summary>
+        /// The confirmation after the reset variant. A property that was default before the batch counts as restored when it
+        /// was written, when it reads back its previous value (if one was read), and when it is default again. The others
+        /// follow the rule of <see cref="Confirm"/>.
+        /// </summary>
+        internal static Report ConfirmWithDefaults(IEnumerable<string> requestedNames, IDictionary<string, string> previousValues,
+            ISet<string> wereDefault, IEnumerable<string> written, Func<string, string> readBack, Func<string, bool> isDefaultNow)
+        {
+            var writtenNames = new HashSet<string>(written);
+            var restored = new List<string>();
+            var notRestored = new List<string>();
+            foreach (string name in requestedNames)
+            {
+                previousValues.TryGetValue(name, out string previous);
+                bool wasDefault = wereDefault != null && wereDefault.Contains(name);
+                bool confirmed = writtenNames.Contains(name) && (wasDefault
+                    ? (previous == null || ReadsBackAs(name, previous, readBack)) && IsDefaultNow(name, isDefaultNow)
+                    : previous != null && ReadsBackAs(name, previous, readBack));
+                if (confirmed) restored.Add(name);
+                else notRestored.Add(name);
+            }
+            return new Report(restored, notRestored);
+        }
+
+        private static bool IsDefaultNow(string name, Func<string, bool> isDefaultNow)
+        {
+            try
+            {
+                return isDefaultNow != null && isDefaultNow(name);
+            }
+            catch (Exception ex)
+            {
+                ExceptionRoot.Log("Rollback could not read whether property '" + name + "' is default", ex);
+                return false;
+            }
         }
 
         /// <summary>

@@ -87,6 +87,14 @@ namespace GxMcp.Worker.Services
 
         // Rule strings must be non-empty; a missing trailing ';' is a warning, not
         // an error (the IDE tolerates it), so it never blocks an otherwise valid plan.
+        // The save of an existing object that writes only object properties: no variables, no rules and no source in the same call.
+        internal static bool IsPropertyOnlySave(bool exists, ParsedSpec spec)
+            => exists
+               && spec.Properties != null && spec.Properties.Count > 0
+               && (spec.Variables == null || spec.Variables.Count == 0)
+               && string.IsNullOrWhiteSpace(spec.RulesText)
+               && string.IsNullOrWhiteSpace(spec.Source);
+
         internal static void ValidateRules(ParsedSpec spec)
         {
             if (string.IsNullOrWhiteSpace(spec.RulesText)) return;
@@ -697,7 +705,14 @@ namespace GxMcp.Worker.Services
 
                 // SINGLE ATOMIC SAVE FOR THE ENTIRE OBJECT
                 currentField = "save";
-                obj.EnsureSave(check: false);
+                // A save that only writes the properties of an existing object is a property write: it does not run the pattern on
+                // save either (see PropertyApplyOnSaveRule). Any other save runs as before.
+                using (IDisposable suppression = IsPropertyOnlySave(exists, spec)
+                    ? PropertyApplyOnSaveRule.Begin(obj, null, spec.Properties.Properties().Select(p => p.Name))
+                    : null)
+                {
+                    obj.EnsureSave(check: false);
+                }
                 WriteService.NotePerTargetWrite(spec.Name);
 
                 try

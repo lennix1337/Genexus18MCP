@@ -173,13 +173,20 @@ namespace GxMcp.Gateway
                 || status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase)
                 || status.Equals("Success", StringComparison.OrdinalIgnoreCase)
                 || status.Equals("CompletedWithWarnings", StringComparison.OrdinalIgnoreCase);
-            bool persisted = evidence["persisted"]?.Value<bool?>() == true
-                || evidence["result"]?["persisted"]?.Value<bool?>() == true;
+            // persisted is a boolean on an error receipt and the per-property map on a success. A receipt whose persistenceStateKnown is false
+            // says no read settled the state, so it confirms nothing, whatever its persisted field says. Only a JSON true confirms it; the
+            // other shapes read as not persisted instead of throwing a conversion error.
+            bool known = !(IsJsonFalse(evidence["persistenceStateKnown"]) || IsJsonFalse(evidence["result"]?["persistenceStateKnown"]));
+            bool persisted = IsJsonTrue(evidence["persisted"]) || IsJsonTrue(evidence["result"]?["persisted"]);
             bool reread = evidence["rereadConfirmed"]?.Value<bool?>() == true
                 || evidence["result"]?["rereadConfirmed"]?.Value<bool?>() == true
                 || evidence["postSaveVerification"]?["reReadConfirmed"]?.Value<bool?>() == true;
-            return terminal && persisted && reread;
+            return terminal && known && persisted && reread;
         }
+
+        private static bool IsJsonTrue(JToken? value) => value?.Type == JTokenType.Boolean && value.Value<bool>();
+
+        private static bool IsJsonFalse(JToken? value) => value?.Type == JTokenType.Boolean && !value.Value<bool>();
 
         internal static JObject? HandleMutationJournalAction(MutationRecoveryRegistry registry, JObject? args)
         {
