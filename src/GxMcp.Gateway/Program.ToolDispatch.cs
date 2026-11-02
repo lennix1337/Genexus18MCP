@@ -951,7 +951,7 @@ namespace GxMcp.Gateway
                                 try { sObj = JObject.Parse(pjv.ToString()); } catch { }
                             }
                             string? sStatus = sObj?["Status"]?.ToString() ?? sObj?["status"]?.ToString();
-                            if (!string.IsNullOrEmpty(sStatus) && !string.Equals(sStatus, "Running", StringComparison.OrdinalIgnoreCase))
+                            if (ApplyPatchValidation.IsEndState(sStatus))
                             {
                                 terminal = sObj;
                                 break;
@@ -975,22 +975,7 @@ namespace GxMcp.Gateway
                     }
                     else
                     {
-                        int errorCount = terminal["ErrorCount"]?.ToObject<int?>() ?? terminal["errorCount"]?.ToObject<int?>() ?? (terminal["Errors"] as JArray)?.Count ?? 0;
-                        int warningCount = terminal["WarningCount"]?.ToObject<int?>() ?? terminal["warningCount"]?.ToObject<int?>() ?? (terminal["Warnings"] as JArray)?.Count ?? 0;
-                        string termStatus = terminal["Status"]?.ToString() ?? "";
-                        bool buildOk = errorCount == 0
-                            && !string.Equals(termStatus, "Failed", StringComparison.OrdinalIgnoreCase)
-                            && terminal["error"] == null;
-                        vBlock["status"] = buildOk ? "ok" : "failed";
-                        vBlock["errorCount"] = errorCount;
-                        vBlock["warningCount"] = warningCount;
-                        vBlock["taskId"] = taskId;
-                        var errArr = terminal["Errors"] as JArray ?? terminal["errors"] as JArray;
-                        if (errArr != null && errArr.Count > 0)
-                            vBlock["errors"] = new JArray(errArr.Take(10));
-                        var warnArr = terminal["Warnings"] as JArray ?? terminal["warnings"] as JArray;
-                        if (warnArr != null && warnArr.Count > 0)
-                            vBlock["warnings"] = new JArray(warnArr.Take(5));
+                        ApplyPatchValidation.WriteBlock(vBlock, terminal, taskId);
                     }
                 }
 
@@ -1005,8 +990,7 @@ namespace GxMcp.Gateway
                     {
                         c0["text"] = newText;
                     }
-                    if (!string.Equals(vBlock["status"]?.ToString(), "ok", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(vBlock["status"]?.ToString(), "skipped", StringComparison.OrdinalIgnoreCase))
+                    if (ApplyPatchValidation.PromotesToError(vBlock))
                     {
                         innerResult["isError"] = true;
                     }

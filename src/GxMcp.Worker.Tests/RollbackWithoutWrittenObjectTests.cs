@@ -21,7 +21,7 @@ namespace GxMcp.Worker.Tests
             object rollback = NewRollbackContext(new[] { "URLAccess" });
             MethodInfo rollbackMethod = typeof(PropertyService).GetMethod("RollbackPropertySnapshot", BindingFlags.NonPublic | BindingFlags.Instance);
 
-            string response = (string)rollbackMethod.Invoke(service, new object[] { "Target", null, null, rollback, "Reason." });
+            string response = (string)rollbackMethod.Invoke(service, new object[] { "Target", null, null, rollback, "Reason.", null });
 
             Assert.Contains("PropertyRollbackFailed", response);
             Assert.Contains("Snapshot restoration failed", response);
