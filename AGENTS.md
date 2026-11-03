@@ -272,7 +272,7 @@ use the scoped permission below; do not kill unrelated processes.
 
 ## Runtime iteration
 
-The gateway serves Streamable HTTP at `http://127.0.0.1:5000/mcp` by default.
+The gateway serves MCP over stdio by default (`McpStdio: true`). Streamable HTTP is bound at `http://<BindAddress>:<HttpPort>/mcp` only with a shared gateway (`GatewayMode: http-shared` with `McpStdio: false`, or `Server.SharedGateway: true` / `GXMCP_SHARED_GATEWAY=1`). With `HttpPort: 5000` and `McpStdio: true` alone, nothing listens on 5000; the Gateway logs this at startup. Job output is read with `genexus_lifecycle action=result target=op:<id>`, not over HTTP.
 Use the handshake and scratch-KB procedure in `docs/agent_playbook.md` or
 `docs/mcp_debugging_guide.md` when validating SDK behavior. After Worker edits,
 hot-swap with:

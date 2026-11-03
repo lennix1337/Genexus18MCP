@@ -28,7 +28,7 @@ To connect Claude Desktop, Copilot, Cursor, or another MCP-capable client, point
 
 ### HTTP MCP
 
-Use:
+Available only with the shared gateway (`McpStdio: false` or `SharedGateway: true`); with `McpStdio: true` alone nothing listens on `HttpPort`. Use:
 
 - `http://127.0.0.1:5000/mcp`
 - `MCP-Protocol-Version: 2025-11-25`

@@ -171,11 +171,24 @@ namespace GxMcp.Worker.Services
 
             using (new EnvironmentScope(_envManager, requestedEnv))
             {
+                // build force=true re-specifies and regenerates the named object(s). It is directed by
+                // default (includeCallees=none); a shape the SDK flag cannot honour is refused here,
+                // before a dry run or any dispatch, rather than built without the force.
+                bool forceTargets = string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase)
+                    && (args["force"]?.ToObject<bool?>() ?? false);
+                string requestedIncludeCallees = args["includeCallees"]?.ToString();
+                if (forceTargets)
+                {
+                    string forceRejection = BuildService.RejectForceRebuildRequest(action, target, true, requestedIncludeCallees);
+                    if (forceRejection != null) return forceRejection;
+                }
+                string defaultIncludeCallees = forceTargets ? "none" : "transitive";
+
                 bool buildDryRun = (request["dryRun"]?.ToObject<bool?>() ?? false) || (args["dryRun"]?.ToObject<bool?>() ?? false);
                 if (buildDryRun)
                 {
-                    var includeCallees = args["includeCallees"]?.ToString();
-                    if (string.IsNullOrWhiteSpace(includeCallees)) includeCallees = "transitive";
+                    var includeCallees = requestedIncludeCallees;
+                    if (string.IsNullOrWhiteSpace(includeCallees)) includeCallees = defaultIncludeCallees;
                     var cap = args["buildPlanCap"]?.ToObject<int?>() ?? 200;
                     return _buildService.BuildDryRun(
                         action,
@@ -204,7 +217,7 @@ namespace GxMcp.Worker.Services
 
                 var incCallees = args["includeCallees"]?.ToString();
                 var buildCap = args["buildPlanCap"]?.ToObject<int?>() ?? 200;
-                if (string.IsNullOrWhiteSpace(incCallees)) incCallees = "transitive";
+                if (string.IsNullOrWhiteSpace(incCallees)) incCallees = defaultIncludeCallees;
                 bool skipFullDeploy = args["skipFullDeploy"]?.ToObject<bool?>() ?? false;
                 string notifyOnFailure = args["notifyOnFailure"]?.ToString();
                 bool fastIncremental = args["fastIncremental"]?.ToObject<bool?>() ?? false;
@@ -215,7 +228,7 @@ namespace GxMcp.Worker.Services
                     fastIncremental, specifyOnly: false, compileCheck: false,
                     compileCheckCallers: null, compileCheckTruncated: false,
                     compileCheckGraphAvailable: true, fullDeploy: fullDeploy,
-                    queueLifecycle: queueLifecycle);
+                    queueLifecycle: queueLifecycle, forceTargets: forceTargets);
 
                 // Enrich with harvested diagnostics if build failed and log is present
                 return EnrichWithDiagnostics(resultJson);

@@ -31,6 +31,12 @@ namespace GxMcp.Gateway
             /// </summary>
             public string? Received { get; init; }
             /// <summary>
+            /// The schema description of the offending field, set on a type mismatch so the
+            /// message says what the field carries (e.g. lifecycle <c>code</c> is source text,
+            /// not a flag). Null otherwise.
+            /// </summary>
+            public string? Description { get; init; }
+            /// <summary>
             /// Declared argument names, set on an unknown-argument violation so the
             /// caller can see what the tool does accept. Null otherwise.
             /// </summary>
@@ -156,7 +162,8 @@ namespace GxMcp.Gateway
                                 Path = prop.Name,
                                 Expected = declaredType,
                                 Actual = prop.Value.Type.ToString().ToLowerInvariant(),
-                                Received = prop.Value.ToString(Newtonsoft.Json.Formatting.None)
+                                Received = prop.Value.ToString(Newtonsoft.Json.Formatting.None),
+                                Description = propSchema["description"]?.ToString()
                             });
                             continue; // don't also check enum if type is wrong
                         }
@@ -183,12 +190,31 @@ namespace GxMcp.Gateway
 
             if (string.Equals(toolName, "genexus_variable", StringComparison.OrdinalIgnoreCase))
                 ValidateVariableDimensions(args, violations);
+            if (string.Equals(toolName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase))
+                ValidateLifecycleActionArguments(args, violations);
 
             return new ValidationResult
             {
                 Ok = violations.Count == 0,
                 Violations = violations
             };
+        }
+
+        // verification is read only by action=reconcile; any other action would ignore it
+        // silently, so the call is refused and the message names the action it belongs to.
+        private static void ValidateLifecycleActionArguments(JObject? args, List<Violation> violations)
+        {
+            if (args?["verification"] is not JToken verification || verification.Type == JTokenType.Null) return;
+            string action = args["action"]?.ToString() ?? string.Empty;
+            if (string.Equals(action, "reconcile", StringComparison.OrdinalIgnoreCase)) return;
+
+            violations.Add(new Violation
+            {
+                Path = "verification",
+                Expected = "action=reconcile",
+                Actual = "not applicable",
+                Received = verification.ToString(Newtonsoft.Json.Formatting.None)
+            });
         }
 
         private static void ValidateVariableDimensions(JObject? args, List<Violation> violations)
@@ -387,6 +413,9 @@ namespace GxMcp.Gateway
             if (violation.Actual == "missing")
                 return $"required argument '{path}' is missing (expected {violation.Expected}).";
 
+            if (violation.Actual == "not applicable")
+                return $"'{path}' = {violation.Received} is not used by this action; it applies only with {violation.Expected}.";
+
             if (violation.Actual == "unknown argument")
             {
                 string text = $"'{path}' is not an accepted argument";
@@ -409,9 +438,19 @@ namespace GxMcp.Gateway
             string described = violation.Received != null
                 ? $"'{path}' = {received} is {violation.Actual}, not valid; expected {violation.Expected}."
                 : $"'{path}' = {received} is not valid; expected {violation.Expected}.";
+            if (!string.IsNullOrWhiteSpace(violation.Description) && violation.Received != null)
+                described += $" '{path}' means: {TrimDescription(violation.Description)}";
             if (!string.IsNullOrEmpty(violation.Suggestion))
                 described += $" Did you mean '{violation.Suggestion}'?";
             return described;
+        }
+
+        private const int MaxFieldDescriptionLength = 160;
+
+        private static string TrimDescription(string description)
+        {
+            string text = description.Trim();
+            return text.Length <= MaxFieldDescriptionLength ? text : text.Substring(0, MaxFieldDescriptionLength) + "...";
         }
 
         /// <summary>All violations of one call, in order, as a single readable string.</summary>

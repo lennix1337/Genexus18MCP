@@ -477,7 +477,7 @@ namespace GxMcp.Gateway
                         ["status"] = "error",
                         ["code"] = "TargetNotSupported",
                         ["message"] = "action=rebuild does not accept a target; it performs a forced Rebuild All for the entire Knowledge Base.",
-                        ["hint"] = "Use action=build with target=<object> to build a specific object, or omit target to rebuild all objects.",
+                        ["hint"] = "To re-specify and regenerate one object, use action=build with target=<object> and force=true. Without force, build skips the objects the KB considers up to date, so their generated code is not refreshed. Omit target to rebuild the whole Knowledge Base.",
                         ["target"] = lifecycleTarget
                     };
                     return BuildToolTextResponse(idToken, errPayload, isError: true, toolName: toolName, toolArgs: args, payloadOwned: true);
