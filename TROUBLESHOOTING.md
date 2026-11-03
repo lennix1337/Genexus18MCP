@@ -218,15 +218,16 @@ Behavioural anti-ransomware engines (Acronis Active Protection, Defender ASR "ra
 
 Typical signs:
 
-- The hang starts a few seconds to a couple of minutes after a fresh Worker starts, while the source-store backfill is running (hundreds of small `*.bin.gz` files are created and deleted under `%LOCALAPPDATA%GenexusMCPstate<hash>source-store`).
+- The hang starts a few seconds to a couple of minutes after a fresh Worker starts, while the source-store backfill is running (hundreds of small `*.bin.gz` files are created and deleted under `%LOCALAPPDATA%\GenexusMCP\state\<hash>\source-store`).
 - `worker_debug.log` stops at one timestamp and a 0-byte `*_rules.tmp-<guid>` stays in the source-store.
 - The antivirus log shows the Worker as a "suspicious process" and the Gateway as its "suspicious parent process".
 
 Only MCP cache files are touched; no KB file is involved. To fix it, add this folder as trusted in the antivirus (the exact wording varies by product):
 
 ```
-%LOCALAPPDATA%GenexusMCP<InstallDir>GxMcp.Gateway.exe
-<InstallDir>workerGxMcp.Worker.exe
+%LOCALAPPDATA%\GenexusMCP\
+<InstallDir>\GxMcp.Gateway.exe
+<InstallDir>\worker\GxMcp.Worker.exe
 ```
 
 `<InstallDir>` is the folder described in [Corporate install](README.md#corporate-install-fixed-path-asr-friendly). After the exclusion, restart the AI client so a new Gateway and Worker start. If you do not know whether your product reacts, check its protection log around the time of the first hang.
