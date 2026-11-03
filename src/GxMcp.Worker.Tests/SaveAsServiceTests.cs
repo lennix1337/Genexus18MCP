@@ -78,8 +78,14 @@ namespace GxMcp.Worker.Tests
                 return "{\"status\":\"Success\"}";
             }
 
-            public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName)
+            public Exception LookupFailure { get; set; }
+
+            public List<string> LookupTypeFilters { get; } = new List<string>();
+
+            public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName, string typeFilter)
             {
+                LookupTypeFilters.Add(typeFilter);
+                if (LookupFailure != null) throw LookupFailure;
                 SaveAsService.PatternInstanceDescriptor d;
                 return Instances.TryGetValue(sourceName, out d) ? d : null;
             }
@@ -195,30 +201,220 @@ namespace GxMcp.Worker.Tests
             Assert.Empty(cloner.Applies);
         }
 
-        [Fact]
-        public void IncludePatternInstance_OnWwpHost_ClonesPatternAndReturnsBlock()
+        private static SaveAsService.PatternInstanceDescriptor Instance(string host) => new SaveAsService.PatternInstanceDescriptor
         {
-            var cloner = ClonerWith("CustomerH", "Transaction", "Structure", "Rules");
-            cloner.Instances["CustomerH"] = new SaveAsService.PatternInstanceDescriptor
-            {
-                PatternKey = "WorkWithPlus",
-                HostName = "CustomerH"
-            };
+            PatternKey = "WorkWithPlus",
+            HostName = host,
+            InstanceName = "WorkWithPlus" + host
+        };
+
+        // #800: the instance is an object of its own and save_as cannot clone it, so a call that asks to include it
+        // is refused before anything is created, instead of answering SavedAs over a copy without the instance.
+        [Fact]
+        public void IncludePatternInstance_OnHostWithInstance_RefusesBeforeCreatingAnything()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables", "WebForm", "Events");
+            cloner.Instances["HomeH"] = Instance("HomeH");
             var svc = new SaveAsService(cloner);
 
-            var args = new JObject
+            var json = JObject.Parse(svc.SaveAs(new JObject
             {
-                ["name"] = "CustomerH",
-                ["newName"] = "CustomerHCopy",
+                ["name"] = "HomeH",
+                ["newName"] = "HomeHCopy",
                 ["includePatternInstance"] = true
-            };
+            }));
+
+            Assert.Equal("error", json["status"]?.ToString());
+            Assert.Equal("PatternInstanceNotCloneable", json["error"]?["code"]?.ToString());
+            string message = json["error"]?["message"]?.ToString() ?? "";
+            Assert.Contains("'HomeH'", message);
+            Assert.Contains("'WorkWithPlusHomeH'", message);
+            Assert.Contains("nothing was created", message);
+            string hint = json["error"]?["hint"]?.ToString() ?? "";
+            Assert.Contains("without includePatternInstance", hint);
+            Assert.Contains("genexus_apply_pattern name=HomeHCopy pattern=WorkWithPlus", hint);
+            Assert.Contains("default settings, not a copy of the source's", hint);
+            Assert.Contains("genexus_read name=WorkWithPlusHomeH part=PatternInstance", hint);
+            var first = json["error"]?["nextSteps"]?[0];
+            Assert.Equal("genexus_create", first?["tool"]?.ToString());
+            Assert.Equal("save_as", first?["args"]?["action"]?.ToString());
+            Assert.Equal("HomeHCopy", first?["args"]?["newName"]?.ToString());
+            Assert.False(first?["args"]?["includePatternInstance"]?.ToObject<bool>() ?? true);
+            Assert.Equal("genexus_read", json["error"]?["nextSteps"]?[1]?["tool"]?.ToString());
+            Assert.Equal("WorkWithPlusHomeH", json["patternInstance"]?["sourceInstance"]?.ToString());
+            Assert.Empty(cloner.Creates);
+            Assert.Empty(cloner.Clones);
+            Assert.Empty(cloner.Applies);
+            Assert.Empty(cloner.Deletes);
+        }
+
+        [Fact]
+        public void IncludePatternInstance_OnHostWithInstance_DryRunRefusesToo()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables", "WebForm");
+            cloner.Instances["HomeH"] = Instance("HomeH");
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject
+            {
+                ["name"] = "HomeH",
+                ["newName"] = "HomeHCopy",
+                ["includePatternInstance"] = true,
+                ["dryRun"] = true
+            }));
+
+            Assert.Equal("error", json["status"]?.ToString());
+            Assert.Equal("PatternInstanceNotCloneable", json["error"]?["code"]?.ToString());
+            Assert.Empty(cloner.Creates);
+        }
+
+        // The default call (no flag) keeps cloning the parts, and says the clone did not get the instance.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void WithoutTheFlag_HostWithInstance_ClonesThePartsAndNamesTheInstanceItDidNotGet(bool flagGivenAsFalse)
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables", "WebForm");
+            cloner.Instances["HomeH"] = Instance("HomeH");
+            var svc = new SaveAsService(cloner);
+            var args = new JObject { ["name"] = "HomeH", ["newName"] = "HomeHCopy" };
+            if (flagGivenAsFalse) args["includePatternInstance"] = false;
+
             var json = JObject.Parse(svc.SaveAs(args));
 
             Assert.Equal("ok", json["status"]?.ToString());
-            Assert.True(json["result"]?["patternInstance"]?["applied"]?.ToObject<bool>() ?? false);
-            Assert.Equal("WorkWithPlus", json["result"]?["patternInstance"]?["pattern"]?.ToString());
-            Assert.Single(cloner.Applies);
-            Assert.Equal("CustomerHCopy", cloner.Applies[0].name);
+            Assert.Equal("SavedAs", json["code"]?.ToString());
+            var block = json["result"]?["patternInstance"];
+            Assert.NotNull(block);
+            Assert.False(block["cloned"]?.ToObject<bool>() ?? true);
+            Assert.Equal("WorkWithPlus", block["pattern"]?.ToString());
+            Assert.Equal("WorkWithPlusHomeH", block["sourceInstance"]?.ToString());
+            string hint = block["hint"]?.ToString() ?? "";
+            Assert.Contains("genexus_apply_pattern name=HomeHCopy pattern=WorkWithPlus", hint);
+            Assert.Contains("default settings, not a copy of the source's", hint);
+            Assert.Contains("includePatternInstance=true is refused", hint);
+            Assert.Equal(2, ((JArray)json["result"]["created"]["partsCloned"]).Count);
+            Assert.Empty(cloner.Applies);
+            Assert.Empty(cloner.Deletes);
+        }
+
+        [Fact]
+        public void DryRun_WithoutTheFlag_PlanNamesTheInstanceThatIsNotCloned()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables", "WebForm");
+            cloner.Instances["HomeH"] = Instance("HomeH");
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject { ["name"] = "HomeH", ["newName"] = "HomeHCopy", ["dryRun"] = true }));
+
+            Assert.Equal("DryRun", json["code"]?.ToString());
+            var block = json["result"]?["plan"]?["patternInstance"];
+            Assert.NotNull(block);
+            Assert.False(block["cloned"]?.ToObject<bool>() ?? true);
+            Assert.Equal("WorkWithPlusHomeH", block["sourceInstance"]?.ToString());
+            Assert.Empty(cloner.Creates);
+        }
+
+        // A lookup that fails is not "no instance": a call that asked for the instance is refused with the reason.
+        [Fact]
+        public void IncludePatternInstance_WhenTheLookupFails_RefusesInsteadOfAssumingNone()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables");
+            cloner.LookupFailure = new InvalidOperationException("model walk failed");
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject
+            {
+                ["name"] = "HomeH",
+                ["newName"] = "HomeHCopy",
+                ["includePatternInstance"] = true
+            }));
+
+            Assert.Equal("error", json["status"]?.ToString());
+            Assert.Equal("PatternInstanceLookupFailed", json["error"]?["code"]?.ToString());
+            Assert.Contains("model walk failed", json["error"]?["message"]?.ToString() ?? "");
+            Assert.Empty(cloner.Creates);
+        }
+
+        // Without the flag a failing lookup does not stop the clone, but the answer says it could not check, so it
+        // never looks like "no instance".
+        [Fact]
+        public void WithoutTheFlag_WhenTheLookupFails_StillClonesThePartsAndSaysItCouldNotCheck()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables");
+            cloner.LookupFailure = new InvalidOperationException("model walk failed");
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject { ["name"] = "HomeH", ["newName"] = "HomeHCopy" }));
+
+            Assert.Equal("ok", json["status"]?.ToString());
+            var block = json["result"]?["patternInstance"];
+            Assert.NotNull(block);
+            Assert.False(block["checked"]?.ToObject<bool>() ?? true);
+            Assert.False(block["cloned"]?.ToObject<bool>() ?? true);
+            Assert.Equal("model walk failed", block["lookupError"]?.ToString());
+            Assert.Contains("Could not check whether 'HomeH' has a WorkWithPlus instance", block["hint"]?.ToString() ?? "");
+            Assert.Single(cloner.Creates);
+        }
+
+        [Fact]
+        public void DryRun_WithoutTheFlag_WhenTheLookupFails_PlanSaysItCouldNotCheck()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables");
+            cloner.LookupFailure = new InvalidOperationException("model walk failed");
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject { ["name"] = "HomeH", ["newName"] = "HomeHCopy", ["dryRun"] = true }));
+
+            Assert.Equal("DryRun", json["code"]?.ToString());
+            Assert.False(json["result"]?["plan"]?["patternInstance"]?["checked"]?.ToObject<bool>() ?? true);
+            Assert.Empty(cloner.Creates);
+        }
+
+        // The refusal's message is read as one line by the client-facing error shape (#702), so the reason is squeezed
+        // onto one bounded line and "nothing was created" stays on it.
+        [Fact]
+        public void IncludePatternInstance_WhenTheLookupFailsWithSeveralLines_TheMessageStaysOneLine()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables");
+            cloner.LookupFailure = new InvalidOperationException("first line\r\nsecond line\n" + new string('x', 600));
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject { ["name"] = "HomeH", ["newName"] = "HomeHCopy", ["includePatternInstance"] = true }));
+
+            string message = json["error"]?["message"]?.ToString() ?? "";
+            Assert.DoesNotContain("\n", message);
+            Assert.Contains("first line | second line | ", message);
+            Assert.EndsWith("); nothing was created.", message);
+            Assert.True(message.Length < 520, "the reason is bounded: " + message.Length);
+        }
+
+        [Fact]
+        public void The_type_filter_of_the_call_reaches_the_instance_lookup()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables");
+            var svc = new SaveAsService(cloner);
+
+            svc.SaveAs(new JObject { ["name"] = "HomeH", ["newName"] = "HomeHCopy", ["type"] = "WebPanel", ["dryRun"] = true });
+            svc.SaveAs(new JObject { ["name"] = "HomeH", ["newName"] = "HomeHCopy", ["dryRun"] = true });
+
+            Assert.Equal(new string[] { "WebPanel", null }, cloner.LookupTypeFilters.ToArray());
+        }
+
+        // A lookup that gives no name for the instance still refuses, with the generic wording and without the read step.
+        [Fact]
+        public void An_instance_without_a_name_is_refused_with_the_generic_wording()
+        {
+            var cloner = ClonerWith("HomeH", "WebPanel", "Variables");
+            cloner.Instances["HomeH"] = new SaveAsService.PatternInstanceDescriptor { PatternKey = "WorkWithPlus", HostName = "HomeH" };
+            var svc = new SaveAsService(cloner);
+
+            var json = JObject.Parse(svc.SaveAs(new JObject { ["name"] = "HomeH", ["newName"] = "HomeHCopy", ["includePatternInstance"] = true }));
+
+            Assert.Equal("PatternInstanceNotCloneable", json["error"]?["code"]?.ToString());
+            Assert.Contains("'HomeH' has a WorkWithPlus instance, which save_as cannot clone yet", json["error"]?["message"]?.ToString() ?? "");
+            Assert.Single((JArray)json["error"]?["nextSteps"]);
+            Assert.DoesNotContain("genexus_read", json["error"]?["hint"]?.ToString() ?? "");
         }
 
         [Fact]

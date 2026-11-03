@@ -243,7 +243,7 @@ namespace GxMcp.Worker.Tests
 
             public string DeleteTarget(string newName, string typeFilter) { _existing.Remove(newName); return "{\"status\":\"ok\"}"; }
 
-            public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName) => null;
+            public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName, string typeFilter) => null;
 
             public string ApplyWwpPattern(string newName, SaveAsService.PatternInstanceDescriptor sourceInstance) => "{\"status\":\"ok\"}";
         }

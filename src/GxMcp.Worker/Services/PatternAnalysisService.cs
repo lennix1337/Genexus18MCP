@@ -636,6 +636,45 @@ namespace GxMcp.Worker.Services
             return selected.Source as KBObject;
         }
 
+        internal enum LinkedInstanceOutcome { None, Linked, Failed }
+
+        /// <summary>
+        /// What a resolution of the WorkWithPlus instance of a host means for "the instance linked to that host"
+        /// (pure, issue #800): an instance other than the host is linked; no instance, or the host being the instance
+        /// itself, is none; and a resolution that could not tell (no model, a failed child walk, a name match whose
+        /// owner the SDK did not expose) is a failure, never "none".
+        /// </summary>
+        internal static LinkedInstanceOutcome ClassifyLinkedInstance(bool resolved, bool resolvedIsHost, string diagnosticCode)
+        {
+            if (resolved) return resolvedIsHost ? LinkedInstanceOutcome.None : LinkedInstanceOutcome.Linked;
+            return diagnosticCode == "PatternInstanceResolutionFailed" || diagnosticCode == "PatternInstanceOwnershipUnverified"
+                ? LinkedInstanceOutcome.Failed
+                : LinkedInstanceOutcome.None;
+        }
+
+        /// <summary>
+        /// The WorkWithPlus instance linked to <paramref name="host"/> (issue #800): an object of its own, resolved the
+        /// way genexus_wwp resolves it. Null when there is none. A PatternInstance part on the host itself travels
+        /// with the parts, so no separate instance is linked to it. Throws when the resolution cannot tell.
+        /// </summary>
+        internal KBObject FindLinkedWorkWithPlusInstance(KBObject host)
+        {
+            if (host == null) return null;
+            if (FindPatternPart(host, "PatternInstance") != null) return null;
+
+            JObject diagnostic;
+            var resolved = ResolvePatternInstance(host, PatternRegistry.WorkWithPlusPatternId, fresh: false, out diagnostic);
+            switch (ClassifyLinkedInstance(resolved != null, resolved != null && resolved.Guid == host.Guid, diagnostic?["code"]?.ToString()))
+            {
+                case LinkedInstanceOutcome.Linked:
+                    return resolved;
+                case LinkedInstanceOutcome.Failed:
+                    throw new InvalidOperationException(diagnostic?["message"]?.ToString() ?? diagnostic?["code"]?.ToString() ?? "The pattern instance lookup failed.");
+                default:
+                    return null;
+            }
+        }
+
         /// <summary>
         /// The installed pattern specification behind <paramref name="partName"/> of a pattern
         /// instance, as the structural edit preflight reads it; null when it cannot be read

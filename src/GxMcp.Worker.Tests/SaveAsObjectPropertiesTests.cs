@@ -26,7 +26,7 @@ namespace GxMcp.Worker.Tests
             public string CreateObject(string type, string newName) { TargetCreated = true; Calls.Add("create"); return "{\"status\":\"ok\"}"; }
             public string ClonePart(string sourceName, string newName, string partName, string typeFilter) { Calls.Add("part:" + partName); return "{\"status\":\"ok\"}"; }
             public string DeleteTarget(string newName, string typeFilter) { Deletes.Add(newName); TargetCreated = false; return "{\"status\":\"ok\"}"; }
-            public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName) => null;
+            public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName, string typeFilter) => null;
             public string ApplyWwpPattern(string newName, SaveAsService.PatternInstanceDescriptor sourceInstance) => "{\"status\":\"ok\"}";
             public string CloneObjectProperties(string sourceName, string newName, string typeFilter) { Calls.Add("properties"); return PropertiesAnswer; }
         }

@@ -368,6 +368,15 @@ namespace GxMcp.Worker.Services
             return pattern.IsWorkWithPlus || PatternAnalysisService.InstanceBelongsTo(instance, obj) ? instance : null;
         }
 
+        /// <summary>
+        /// The WorkWithPlus instance linked to <paramref name="host"/>: an object of its own, resolved the way
+        /// genexus_wwp resolves it (issue #800). Null when there is none; throws when the resolution cannot tell.
+        /// </summary>
+        internal KBObject FindLinkedWorkWithPlusInstance(KBObject host)
+        {
+            return host == null ? null : Analysis.FindLinkedWorkWithPlusInstance(host);
+        }
+
         private List<PatternManifest> FindExistingPatterns(KBObject parent, PatternManifest requested, Dictionary<Guid, object> instances)
         {
             var found = new List<PatternManifest>();

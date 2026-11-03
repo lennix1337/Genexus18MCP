@@ -41,8 +41,8 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void KBObjectPart_NameProperty_ExistsForPatternInstanceWalk()
         {
-            // SdkObjectCloner.FindWwpInstance walks obj.Parts and inspects p.Name.
-            // Mirrors the detection in PatternApplyService.ApplyPattern.
+            // PatternAnalysisService.FindPatternPart walks obj.Parts and inspects p.Name; the linked-instance lookup
+            // of SdkObjectCloner.FindWwpInstance (issue #800) starts from it.
             var t = typeof(Artech.Architecture.Common.Objects.KBObjectPart);
             var nameProp = t.GetProperty("Name", BindingFlags.Public | BindingFlags.Instance);
             Assert.NotNull(nameProp);

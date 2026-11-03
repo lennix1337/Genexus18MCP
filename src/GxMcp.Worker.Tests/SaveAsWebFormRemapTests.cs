@@ -328,7 +328,7 @@ namespace GxMcp.Worker.Tests
                 return "{\"status\":\"ok\"}";
             }
 
-            public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName) => null;
+            public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName, string typeFilter) => null;
 
             public string ApplyWwpPattern(string newName, SaveAsService.PatternInstanceDescriptor sourceInstance) => "{\"status\":\"ok\"}";
         }
