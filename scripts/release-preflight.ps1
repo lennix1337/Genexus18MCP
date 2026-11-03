@@ -13,6 +13,9 @@ param(
     [string]$ResumeSummaryPath,
     [ValidateRange(30, 7200)][int]$PhaseTimeoutSeconds = 1200,
     [switch]$SkipWarningBaseline,
+    # Semicolon-separated lane names. Runs only those parallel and ProcessSmoke lanes, for CI
+    # lanes that cannot run on a hosted runner (the Worker net48 suite needs the GeneXus SDK).
+    [string]$OnlyLanes,
     [switch]$DryRun
 )
 
@@ -658,57 +661,62 @@ $parallelDefinitions = @(
     [ordered]@{ Name = 'solution build and tests'; Executable = 'dotnet'; Arguments = @('test', (Join-Path $root 'Genexus18MCP.sln'), '-c', 'Release', '--filter', 'Category!=ProcessSmoke', '-v:minimal'); WorkingDirectory = $root }
 )
 
+$selectedLanes = @($OnlyLanes -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+function Test-PreflightLaneSelected([string]$Name) { $selectedLanes.Count -eq 0 -or $selectedLanes -contains $Name }
+$parallelDefinitions = @($parallelDefinitions | Where-Object { Test-PreflightLaneSelected ([string]$_.Name) })
 Invoke-PreflightParallel -Definitions $parallelDefinitions | Out-Null
-$processSmokeResultsPath = Join-Path $env:TEMP ('gxmcp-release-process-smoke-' + [guid]::NewGuid().ToString('N'))
-$processSmokeGateway = Join-Path $root 'src\GxMcp.Gateway\bin\Release\net10.0-windows\GxMcp.Gateway.exe'
-if (-not $DryRun -and -not (Test-Path -LiteralPath $processSmokeGateway -PathType Leaf)) {
-    $summary.status = 'failed'
-    Write-PreflightSummary
-    Write-Error "Process smoke lane did not find the Release Gateway built by the preceding phase: $processSmokeGateway"
-    exit 1
-}
-$processSmokeDefinition = [ordered]@{
-    Name = 'solution process smoke tests'
-    Executable = 'dotnet'
-    Arguments = @(
-        'test', (Join-Path $root 'Genexus18MCP.sln'), '-c', 'Release', '--no-build', '--no-restore',
-        '--filter', 'Category=ProcessSmoke', '--logger', 'trx;LogFilePrefix=process-smoke',
-        '--results-directory', $processSmokeResultsPath, '-v:minimal'
-    )
-    WorkingDirectory = $root
-}
-$previousProcessSmokeGateway = $env:GXMCP_LIVE_GATEWAY_EXE
-try {
-    if (-not $DryRun) { $env:GXMCP_LIVE_GATEWAY_EXE = $processSmokeGateway }
-    Invoke-PreflightPhase @processSmokeDefinition | Out-Null
-} finally {
-    if ($null -eq $previousProcessSmokeGateway) {
-        Remove-Item Env:GXMCP_LIVE_GATEWAY_EXE -ErrorAction SilentlyContinue
-    } else {
-        $env:GXMCP_LIVE_GATEWAY_EXE = $previousProcessSmokeGateway
-    }
-}
-if (-not $DryRun) {
-    $summary.processSmokeResultsPath = $processSmokeResultsPath
-    $summary.processSmokeTestCount = Get-PreflightTrxTestCount -ResultsDirectory $processSmokeResultsPath
-    $summary.processSmokeBinaryFingerprint = Get-GxMcpReleaseProcessSmokeFingerprint -RepositoryRoot $root
-    if ($null -eq $summary.processSmokeBinaryFingerprint) {
+if (Test-PreflightLaneSelected 'solution process smoke tests') {
+    $processSmokeResultsPath = Join-Path $env:TEMP ('gxmcp-release-process-smoke-' + [guid]::NewGuid().ToString('N'))
+    $processSmokeGateway = Join-Path $root 'src\GxMcp.Gateway\bin\Release\net10.0-windows\GxMcp.Gateway.exe'
+    if (-not $DryRun -and -not (Test-Path -LiteralPath $processSmokeGateway -PathType Leaf)) {
         $summary.status = 'failed'
         Write-PreflightSummary
-        # Issue #329: a bare "could not be bound" left the operator to infer both
-        # the cause and the fix. Name the compared paths, the probable cause, and
-        # the command that repairs it.
-        $bindingDetail = Get-GxMcpReleaseProcessSmokeBindingDetail -RepositoryRoot $root
-        Write-Error (Format-GxMcpReleaseProcessSmokeBindingFailure -RepositoryRoot $root -Detail $bindingDetail)
+        Write-Error "Process smoke lane did not find the Release Gateway built by the preceding phase: $processSmokeGateway"
         exit 1
     }
-    if ($summary.processSmokeTestCount -le 0) {
-        $summary.status = 'failed'
+    $processSmokeDefinition = [ordered]@{
+        Name = 'solution process smoke tests'
+        Executable = 'dotnet'
+        Arguments = @(
+            'test', (Join-Path $root 'Genexus18MCP.sln'), '-c', 'Release', '--no-build', '--no-restore',
+            '--filter', 'Category=ProcessSmoke', '--logger', 'trx;LogFilePrefix=process-smoke',
+            '--results-directory', $processSmokeResultsPath, '-v:minimal'
+        )
+        WorkingDirectory = $root
+    }
+    $previousProcessSmokeGateway = $env:GXMCP_LIVE_GATEWAY_EXE
+    try {
+        if (-not $DryRun) { $env:GXMCP_LIVE_GATEWAY_EXE = $processSmokeGateway }
+        Invoke-PreflightPhase @processSmokeDefinition | Out-Null
+    } finally {
+        if ($null -eq $previousProcessSmokeGateway) {
+            Remove-Item Env:GXMCP_LIVE_GATEWAY_EXE -ErrorAction SilentlyContinue
+        } else {
+            $env:GXMCP_LIVE_GATEWAY_EXE = $previousProcessSmokeGateway
+        }
+    }
+    if (-not $DryRun) {
+        $summary.processSmokeResultsPath = $processSmokeResultsPath
+        $summary.processSmokeTestCount = Get-PreflightTrxTestCount -ResultsDirectory $processSmokeResultsPath
+        $summary.processSmokeBinaryFingerprint = Get-GxMcpReleaseProcessSmokeFingerprint -RepositoryRoot $root
+        if ($null -eq $summary.processSmokeBinaryFingerprint) {
+            $summary.status = 'failed'
+            Write-PreflightSummary
+            # Issue #329: a bare "could not be bound" left the operator to infer both
+            # the cause and the fix. Name the compared paths, the probable cause, and
+            # the command that repairs it.
+            $bindingDetail = Get-GxMcpReleaseProcessSmokeBindingDetail -RepositoryRoot $root
+            Write-Error (Format-GxMcpReleaseProcessSmokeBindingFailure -RepositoryRoot $root -Detail $bindingDetail)
+            exit 1
+        }
+        if ($summary.processSmokeTestCount -le 0) {
+            $summary.status = 'failed'
+            Write-PreflightSummary
+            Write-Error 'Process smoke filter selected zero tests; refusing to certify the preflight.'
+            exit 1
+        }
         Write-PreflightSummary
-        Write-Error 'Process smoke filter selected zero tests; refusing to certify the preflight.'
-        exit 1
     }
-    Write-PreflightSummary
 }
 if ($SkipWarningBaseline) {
     Invoke-PreflightPhase -Name 'Release warning baseline' -Executable 'pwsh' -Arguments @() -SkipReason 'disabled by -SkipWarningBaseline' | Out-Null
