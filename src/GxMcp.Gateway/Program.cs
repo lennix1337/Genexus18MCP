@@ -897,6 +897,13 @@ namespace GxMcp.Gateway
                     }
                 });
             }
+            else if (config.Server?.HttpPort > 0)
+            {
+                // #830 item 5: stdio mode without a shared gateway never binds HttpPort, so
+                // http://<bind>:<port>/mcp is refused. Say so at startup rather than leaving
+                // a configured port that nothing answers.
+                Log($"[Gateway] HttpPort {config.Server.HttpPort} is not bound: stdio mode (McpStdio=true) without a shared gateway serves MCP over stdio only. Set GatewayMode=http-shared (McpStdio=false) or Server.SharedGateway=true to serve it.");
+            }
 
             // 2. Start Worker in background
             Log("[Gateway] Initializing Worker lifecycle...");

@@ -55,6 +55,9 @@ namespace GxMcp.Gateway.Routers
                                 skipFullDeploy = args?["skipFullDeploy"]?.ToObject<bool?>() ?? false,
                                 // Item 28 (Tier-S, EXPERIMENTAL) — fastIncremental opt-in.
                                 fastIncremental = args?["fastIncremental"]?.ToObject<bool?>() ?? false,
+                                // Directed forced rebuild of the named object(s); the Worker refuses the
+                                // shapes it cannot honour. Dropping it here would build without the force.
+                                force = args?["force"]?.ToObject<bool?>() ?? false,
                                 dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
                                 deploy = args?["deploy"]?.ToObject<bool?>() ?? false, queueLifecycle = true
                             };

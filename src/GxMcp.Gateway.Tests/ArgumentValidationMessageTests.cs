@@ -168,6 +168,54 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public async Task Lifecycle_ValidateWithCodeBoolean_MessageSaysWhatCodeIsAndWhatItAccepts()
+        {
+            // #830 item 6a: code is source text for action=validate; a boolean flag is the
+            // common slip. The message must say what the field carries, not only its type.
+            var error = await CallError("genexus_lifecycle",
+                "{\"action\":\"validate\",\"code\":true,\"target\":\"P\"}");
+
+            string message = error["message"]!.ToString();
+            Assert.Contains("'code'", message);
+            Assert.Contains("true", message);
+            Assert.Contains("boolean", message);
+            Assert.Contains("expected string", message);
+            Assert.Contains("in-memory code", message);
+        }
+
+        [Fact]
+        public async Task Lifecycle_ValidateWithVerification_IsRefusedAndNamesReconcile()
+        {
+            // #830 item 6a: verification is read only by action=reconcile. Accepting it on
+            // validate would ignore it silently, so the refusal names the action it belongs to.
+            var error = await CallError("genexus_lifecycle",
+                "{\"action\":\"validate\",\"target\":\"P\",\"verification\":\"strict\"}");
+
+            string message = error["message"]!.ToString();
+            Assert.Contains("'verification'", message);
+            Assert.Contains("\"strict\"", message);
+            Assert.Contains("action=reconcile", message);
+        }
+
+        [Fact]
+        public void Lifecycle_ReconcileWithVerification_PassesValidation()
+        {
+            GatewayArgsValidator.ClearCache();
+            var args = JObject.Parse("{\"action\":\"reconcile\",\"target\":\"op:1\",\"confirmed\":true,\"verification\":\"checked the KB\"}");
+
+            Assert.True(GatewayArgsValidator.Validate("genexus_lifecycle", args).Ok);
+        }
+
+        [Fact]
+        public void Lifecycle_ValidateWithCodeString_PassesValidation()
+        {
+            GatewayArgsValidator.ClearCache();
+            var args = JObject.Parse("{\"action\":\"validate\",\"target\":\"P\",\"code\":\"Procedure P\\n\"}");
+
+            Assert.True(GatewayArgsValidator.Validate("genexus_lifecycle", args).Ok);
+        }
+
+        [Fact]
         public void ObjectNameArray_OnAnotherTool_IsNotRewritten()
         {
             var args = new JObject { ["objectName"] = new JArray("A", "B") };

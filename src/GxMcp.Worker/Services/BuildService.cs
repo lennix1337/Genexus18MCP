@@ -944,6 +944,11 @@ namespace GxMcp.Worker.Services
             // (lifecycle action=specify) refuses a target changed since its last build
             // instead of reporting the last build's diagnostics as current.
             [JsonIgnore] internal bool RefuseStaleEnvironmentCopy { get; set; }
+            // build with force=true and one or more named objects: re-specify and regenerate
+            // exactly those objects even when the KB considers them up to date (the SDK's
+            // Rebuild flag: BuildOne.ForceRebuild, SpecifyOneOnly.ForceRebuild). Set only for
+            // a directed Build; RejectForceRebuildRequest refuses the shapes it cannot honour.
+            [JsonIgnore] internal bool ForceRebuildTargets { get; set; }
             // compile_check: spec+gen+compile the targets plus everything that calls
             // them (transitive callers), routed through the targeted BuildOne path so
             // the KB-wide DeveloperMenu regeneration (the dominant cost of a full
@@ -2276,10 +2281,18 @@ namespace GxMcp.Worker.Services
         public string Build(string action, string target, string includeCallees, int buildPlanCap, bool skipFullDeploy, string notifyOnFailure, bool fastIncremental, bool specifyOnly,
                             bool compileCheck, List<string> compileCheckCallers, bool compileCheckTruncated, bool compileCheckGraphAvailable,
                             bool fullDeploy = false, bool compileCheckCallersRequested = true, int compileCheckCallerCap = 0,
-                            bool queueLifecycle = true, bool refuseStaleEnvironmentCopy = false)
+                            bool queueLifecycle = true, bool refuseStaleEnvironmentCopy = false,
+                            bool forceTargets = false)
         {
             string globalRejection = RejectGlobalActionWithTarget(action, target);
             if (globalRejection != null) return globalRejection;
+
+            string forceRejection = RejectForceRebuildRequest(action, target, forceTargets, includeCallees);
+            if (forceRejection != null) return forceRejection;
+            // force re-specifies the named object even when the KB calls it up to date, so the
+            // fastIncremental shortcut (skip spec for clean targets, or answer NoBuildNeeded) must
+            // not decide for it.
+            if (forceTargets) fastIncremental = false;
 
             // issue #37 item 4: fast-fail reorg on a DBA-managed datastore
             // (Reorganize Server tables = No). GeneXus never applies the delta there,
@@ -2478,6 +2491,7 @@ namespace GxMcp.Worker.Services
             status.SpecifyOnly = specifyOnly && targetedBuild;
             if (status.SpecifyOnly) status.ValidatedSource = "environment-copy";
             status.RefuseStaleEnvironmentCopy = status.SpecifyOnly && refuseStaleEnvironmentCopy;
+            status.ForceRebuildTargets = forceTargets && string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase);
             status.SkipFullDeploy = effectiveSkipFullDeploy;
             status.FullDeploy = fullDeploy
                 && string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase);
@@ -2664,7 +2678,7 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Err(
                     code: "TargetNotSupported",
                     message: "action=rebuild does not accept a target; it performs a forced Rebuild All for the entire Knowledge Base. The target would be silently discarded and the whole Knowledge Base rebuilt.",
-                    hint: "Use action=build with target=<object> to build a specific object, or omit target to rebuild all objects.",
+                    hint: RebuildTargetRefusalHint,
                     target: target,
                     extra: new JObject
                     {
@@ -2673,6 +2687,59 @@ namespace GxMcp.Worker.Services
                         ["requestedWorkerAction"] = action,
                         ["legacyCode"] = "RebuildAllTargetNotAllowed"
                     });
+            }
+
+            return null;
+        }
+
+        internal const string RebuildTargetRefusalHint =
+            "To re-specify and regenerate one object, use action=build with target=<object> and force=true. "
+            + "Without force, build skips the objects the KB considers up to date, so their generated code is not refreshed. "
+            + "Omit target to rebuild the whole Knowledge Base.";
+
+        /// <summary>
+        /// Refuses a <c>build</c> with <c>force=true</c> that the SDK's Rebuild flag cannot honour
+        /// for the request as sent. The flag is applied per named object (BuildOne /
+        /// SpecifyOneOnly ForceRebuild), so a request without an object name, one that names an
+        /// object by Type:Name or GUID (the per-object tasks resolve bare names only), or one that
+        /// expands to callees would either do nothing or rebuild more than the caller asked for.
+        /// Returns null when the request can run; the refusal is a structured error, never a
+        /// silent build without the force.
+        /// </summary>
+        internal static string RejectForceRebuildRequest(string action, string target, bool force, string includeCallees)
+        {
+            if (!force || !string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase)) return null;
+
+            var targets = ParseTargets(target);
+            if (targets.Count == 0)
+            {
+                return McpResponse.Err(
+                    code: "ForceRequiresTarget",
+                    message: "action=build force=true re-specifies and regenerates the named object(s); it needs a target.",
+                    hint: "Pass target=<object>. To rebuild the whole Knowledge Base with forced specification, use action=rebuild.",
+                    extra: new JObject { ["action"] = "build", ["force"] = true });
+            }
+
+            var identities = targets.Where(InProcessBuildRunner.HasExplicitTargetIdentity).ToList();
+            if (identities.Count > 0)
+            {
+                return McpResponse.Err(
+                    code: "ForceTargetIdentityUnsupported",
+                    message: "action=build force=true accepts object names only; Type:Name and GUID targets are not supported with force.",
+                    hint: "Pass the object's name as target, without the Type: prefix and without its GUID, and keep force=true.",
+                    target: target,
+                    extra: new JObject { ["action"] = "build", ["force"] = true, ["targets"] = JArray.FromObject(identities) });
+            }
+
+            if (!string.IsNullOrWhiteSpace(includeCallees)
+                && !string.Equals(includeCallees.Trim(), "none", StringComparison.OrdinalIgnoreCase))
+            {
+                return McpResponse.Err(
+                    code: "ForceRequiresIncludeCalleesNone",
+                    message: "action=build force=true regenerates exactly the named object(s); it cannot expand to callees (includeCallees=" + includeCallees.Trim() + ").",
+                    hint: "Pass includeCallees=none, or drop force to build the callees as well.",
+                    target: target,
+                    extra: new JObject { ["action"] = "build", ["force"] = true, ["includeCallees"] = includeCallees.Trim() });
             }
 
             return null;
@@ -3975,7 +4042,9 @@ namespace GxMcp.Worker.Services
                     status.TargetsDone = 0;
                 }
                 string joined = string.Join(";", targets.Select(t => SecurityElement.Escape(t ?? string.Empty)));
-                sb.AppendLine("    <SpecifyOneOnly ObjectNames=\"" + joined + "\" />");
+                // ForceRebuild maps to the SDK's Rebuild flag for the named objects only (SpecifyOneOnly).
+                string forceAttribute = status?.ForceRebuildTargets == true ? " ForceRebuild=\"true\"" : string.Empty;
+                sb.AppendLine("    <SpecifyOneOnly ObjectNames=\"" + joined + "\"" + forceAttribute + " />");
                 bool force = string.Equals(action, "RebuildAll", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(action, "Rebuild", StringComparison.OrdinalIgnoreCase);
                 sb.AppendLine("    <IdeWebBuildAndDeploy ForceRebuild=\"" + (force ? "true" : "false") + "\" CompileMains=\"true\" FailIfReorg=\"true\" DoNotExecuteReorg=\"true\" Output=\"IDE\" EventsSuspended=\"true\" />");

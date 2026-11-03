@@ -314,6 +314,23 @@ namespace GxMcp.Gateway.Tests
             Assert.Contains("GXMCP_PROFILE", error["error"]?["hint"]?.ToString());
         }
 
+        /// <summary>
+        /// #830 item 6b: <c>genexus_kb_version</c> (action=list among them) is hidden from the
+        /// standard profile that generated configs use. The docs name the profiles that expose it;
+        /// this pins that contract so the references cannot drift from the profile lists.
+        /// </summary>
+        [Fact]
+        public void KbVersion_IsExposedByDevopsAndAllOnly_AndTheHintNamesDevops()
+        {
+            Assert.Null(ToolProfileFilter.GetToolNotInProfileError("devops", "genexus_kb_version"));
+            Assert.Null(ToolProfileFilter.GetToolNotInProfileError("all", "genexus_kb_version"));
+
+            var error = ToolProfileFilter.GetToolNotInProfileError("standard", "genexus_kb_version");
+            Assert.NotNull(error);
+            Assert.Equal(new[] { "devops" }, error!["error"]!["availableProfiles"]!.ToObject<string[]>());
+            Assert.Contains("'devops'", error["error"]!["hint"]!.ToString());
+        }
+
         private static readonly string[] DocumentedProfiles = new[]
         {
             "standard",

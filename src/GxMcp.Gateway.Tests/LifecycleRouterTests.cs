@@ -25,6 +25,42 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("RebuildAll", jobj["action"]?.ToString());
         }
 
+        /// <summary>
+        /// #830 item 4: the directed forced rebuild is <c>build</c> with <c>force</c>. The route
+        /// must forward it; dropping it here would build the object without the force.
+        /// </summary>
+        [Fact]
+        public void Lifecycle_Build_Forwards_Force_To_The_Worker()
+        {
+            var router = new SystemRouter();
+            var routed = router.ConvertToolCall("genexus_lifecycle", new JObject
+            {
+                ["action"] = "build",
+                ["target"] = "Customer",
+                ["force"] = true,
+                ["includeCallees"] = "none"
+            });
+
+            var jobj = JObject.FromObject(routed!);
+            Assert.Equal("Build", jobj["module"]?.ToString());
+            Assert.Equal("Build", jobj["action"]?.ToString());
+            Assert.Equal("Customer", jobj["target"]?.ToString());
+            Assert.True(jobj["force"]?.Value<bool>());
+        }
+
+        [Fact]
+        public void Lifecycle_Build_Without_Force_Routes_Force_False()
+        {
+            var router = new SystemRouter();
+            var routed = router.ConvertToolCall("genexus_lifecycle", new JObject
+            {
+                ["action"] = "build",
+                ["target"] = "Customer"
+            });
+
+            Assert.False(JObject.FromObject(routed!)["force"]?.Value<bool>());
+        }
+
         [Fact]
         public async Task Lifecycle_Rebuild_Intercept_With_Target_Rejects_TargetNotSupported()
         {
@@ -62,7 +98,7 @@ namespace GxMcp.Gateway.Tests
 
             Assert.Equal("TargetNotSupported", payload["code"]?.ToString());
             Assert.Contains("action=rebuild does not accept a target", payload["message"]?.ToString());
-            Assert.Contains("Use action=build with target=<object>", payload["hint"]?.ToString());
+            Assert.Contains("action=build with target=<object> and force=true", payload["hint"]?.ToString());
             Assert.Equal("Customer", payload["target"]?.ToString());
         }
 

@@ -435,14 +435,21 @@ function resolveMcpSmokeTarget(cwd) {
     const parsedPort = typeof rawPort === 'number'
         ? rawPort
         : Number.parseInt(String(rawPort ?? ''), 10);
-    const stdioRuntime = gatewayMode === 'stdio-isolated'
-        || gatewayMode === 'stdio'
-        || (server.McpStdio === true && (!Number.isFinite(parsedPort) || parsedPort <= 0));
-    if (stdioRuntime) {
+    // Mirrors the Gateway's useSharedLease rule: stdio serves no HTTP listener even when
+    // HttpPort is set, unless a shared gateway is requested (#830 item 5).
+    const mcpStdio = server.McpStdio !== false;
+    const sharedGatewayRequested = server.SharedGateway === true
+        || process.env.GXMCP_SHARED_GATEWAY === '1'
+        || process.env.GX_MCP_SHARED_GATEWAY === '1';
+    const httpBound = gatewayMode !== 'stdio-isolated'
+        && gatewayMode !== 'stdio'
+        && (!mcpStdio || sharedGatewayRequested)
+        && Number.isFinite(parsedPort) && parsedPort > 0;
+    if (!httpBound) {
         return {
             applicable: false,
             status: 'not_applicable',
-            detail: `MCP HTTP smoke skipped: ${gatewayMode || 'stdio'} runtime has no HTTP listener.`,
+            detail: `MCP HTTP smoke skipped: ${gatewayMode || 'stdio'} runtime has no HTTP listener${gatewayMode ? '' : ' (McpStdio=true without SharedGateway or GXMCP_SHARED_GATEWAY=1)'}.`,
             baseUrl: null
         };
     }

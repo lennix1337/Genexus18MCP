@@ -54,7 +54,7 @@ mutation dispatch. Recovery requires an explicit call:
 {"action":"set_active","targetVersion":"Development","autoUpdate":false,"kb":"test"}
 ```
 
-Use `genexus_kb_version` for that call. A frozen target is refused. Activation
+Use `genexus_kb_version` for that call (it is exposed by the `devops` and `all` tool profiles only). A frozen target is refused. Activation
 with another target or with absent/true `autoUpdate` is refused. Activating a
 version is itself a separate explicit operation, not a dry-run or read.
 

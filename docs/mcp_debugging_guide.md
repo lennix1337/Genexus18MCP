@@ -64,8 +64,19 @@ script or client restart: call `genexus_connection_recover`. It probes every
 open worker, kills and respawns only the unhealthy ones (force=true targets
 all), confirms each replacement is SDK-ready, and clears the semantic cache.
 For out-of-band HTTP access from a terminal, any MCP client pointed at
-`http://127.0.0.1:5000/mcp` works — the gateway must already be running;
-process supervision remains the deployment's responsibility.
+`http://127.0.0.1:<HttpPort>/mcp` works, but only when the gateway serves HTTP:
+the shared gateway (`GatewayMode: http-shared` with `McpStdio: false`, or
+`Server.SharedGateway: true` / `GXMCP_SHARED_GATEWAY=1`). With `McpStdio: true`
+and no shared gateway, `HttpPort` (default 5000) is not bound and nothing answers
+on it; the gateway logs `HttpPort … is not bound` at startup. The gateway must
+already be running; process supervision remains the deployment's responsibility.
+
+### Reading job output
+
+No HTTP endpoint serves job output. Read it with the MCP tool, which is read-only:
+`genexus_lifecycle action=result target=op:<id>` returns the completion payload of a
+finished operation, and `status` with the same target reports progress. When the
+full log is kept on disk, the response carries `fullLogPath`.
 
 ## Common failure modes
 

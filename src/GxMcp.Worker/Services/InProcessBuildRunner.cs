@@ -143,6 +143,10 @@ namespace GxMcp.Worker.Services
                         && targets != null
                         && targets.Count > 0;
                     bool forceRebuild = action != null && action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase);
+                    // build with force=true and named objects: each named object is rebuilt with the
+                    // SDK's Rebuild flag (BuildOne / SpecifyOneOnly ForceRebuild). Whole-KB RebuildAll
+                    // already forces; this flag does not widen to callees (the Worker refuses that shape).
+                    bool forceTargets = status.ForceRebuildTargets && isBuildWithTargets;
 
                     if (action != null && action.Equals("BuildAll", StringComparison.OrdinalIgnoreCase))
                     {
@@ -214,7 +218,7 @@ namespace GxMcp.Worker.Services
                     // BuildOptions.Compile, skipping Specify (~16s) + Generate (~9s). Requires the
                     // .cs to already be current — falls back to full BuildOne on any failure.
                     bool tryCompileOnly =
-                        isBuildWithTargets && !forceRebuild
+                        isBuildWithTargets && !forceRebuild && !forceTargets
                         && string.Equals(Environment.GetEnvironmentVariable("GXMCP_BUILD_COMPILE_ONLY"), "1", StringComparison.Ordinal)
                         && _miRunCompile != null;
                     if (tryCompileOnly)
@@ -241,6 +245,14 @@ namespace GxMcp.Worker.Services
                     // Type:Name and GUID targets so homonyms cannot silently redirect
                     // the build. If that compatibility member is unavailable, return
                     // CouldNotRun and let RunBuild use its external fallback.
+                    if (forceTargets && hasExplicitTargetIdentity)
+                    {
+                        // Defense in depth: BuildService.RejectForceRebuildRequest refuses this shape
+                        // before dispatch. Running it here would silently drop the force.
+                        lineSink("[BUILD-INPROCESS] error: force=true does not run for Type:Name/GUID targets; nothing was rebuilt.", true);
+                        return InProcessBuildOutcome.FailedWithDiagnostics;
+                    }
+
                     if (useBuildOne && hasExplicitTargetIdentity)
                     {
                         if (_miBuildWithTheseOnly == null)
@@ -321,7 +333,7 @@ namespace GxMcp.Worker.Services
                         // all EntityKeys. This amortizes module copying and DeveloperMenu regeneration, running
                         // a single shared specification & MSBuild compilation step.
                         bool isIncludeCalleesNone = string.Equals(status.BuildPlan?.IncludeCallees, "none", StringComparison.OrdinalIgnoreCase);
-                        if (targets.Count > 1 && isIncludeCalleesNone && _miBuildWithTheseOnly != null)
+                        if (targets.Count > 1 && isIncludeCalleesNone && _miBuildWithTheseOnly != null && !forceTargets)
                         {
                             engine.ResetSectionFlags();
                             var withTheseOnlyResult = ExecuteBuildWithTheseOnly(kbHandle, targets, engine, lineSink);
@@ -346,7 +358,7 @@ namespace GxMcp.Worker.Services
                             }
                         }
 
-                        bool tryBatch = targets.Count > 1
+                        bool tryBatch = targets.Count > 1 && !forceTargets
                             && _miBuildBuild != null
                             && _typeDevelopmentWorkingSet != null
                             && _typeBuildOptions != null
@@ -417,11 +429,8 @@ namespace GxMcp.Worker.Services
                             // last MCP edit), skip Specify+Generate and call Run.Compile
                             // directly. On any compile-only failure, fall back to BuildOne
                             // for this target (which regenerates the .cs).
-                            bool targetMaySkipSpecify;
-                            if (skipSpecifyTargets != null)
-                                targetMaySkipSpecify = skipSpecifyTargets.Contains(t, StringComparer.OrdinalIgnoreCase);
-                            else
-                                targetMaySkipSpecify = !EditDirtyTracker.IsDirty(kbPath, t);
+                            bool targetMaySkipSpecify = MaySkipSpecify(
+                                forceTargets, skipSpecifyTargets, t, EditDirtyTracker.IsDirty(kbPath, t));
                             if (_miRunCompile != null && targetMaySkipSpecify)
                             {
                                 lineSink("[BUILD-INPROCESS] '" + t + "' is clean — compile-only fast-fast path.", false);
@@ -434,7 +443,7 @@ namespace GxMcp.Worker.Services
                                 engine.ResetSectionFlags();
                             }
 
-                            if (!ExecuteBuildOne(kbHandle, t, engine, buildCalled: false))
+                            if (!ExecuteBuildOneCore(kbHandle, t, engine, buildCalled: false, forceRebuild: forceTargets))
                             {
                                 // Friction 2026-05-22: BuildOne.Execute may return false even
                                 // when the C# compile already succeeded. The GeneXus build
@@ -479,7 +488,7 @@ namespace GxMcp.Worker.Services
                     // SpecifyOneOnly + IdeWebBuildAndDeploy.
                     if (isBuildWithTargets)
                     {
-                        if (!ExecuteSpecifyOneOnly(kbHandle, targets, engine))
+                        if (!ExecuteSpecifyOneOnly(kbHandle, targets, engine, forceRebuild: forceTargets))
                         {
                             // Spec pass ran and returned false → spc/gen diagnostics are
                             // already on the engine sink. Terminalize with them rather
@@ -853,6 +862,16 @@ namespace GxMcp.Worker.Services
                 && !engine.PreCompileSectionFailed;
         }
 
+        // A forced build re-specifies the named object; the compile-only shortcut and the
+        // skip-spec list would compile the existing .cs instead, so neither may decide for it.
+        internal static bool MaySkipSpecify(bool forceRebuild, IReadOnlyList<string> skipSpecifyTargets, string target, bool dirty)
+        {
+            if (forceRebuild) return false;
+            if (skipSpecifyTargets != null)
+                return skipSpecifyTargets.Contains(target, StringComparer.OrdinalIgnoreCase);
+            return !dirty;
+        }
+
         // Fast per-object build (IDE F5 parity). Returns true on Execute returning
         // true; engine sink already captured any spec/gen/compile diagnostics.
         internal static bool HasExplicitTargetIdentity(string target)
@@ -865,6 +884,11 @@ namespace GxMcp.Worker.Services
         }
 
         private static bool ExecuteBuildOne(object kbHandle, string objectName, IBuildEngine engine, bool buildCalled)
+            => ExecuteBuildOneCore(kbHandle, objectName, engine, buildCalled, forceRebuild: false);
+
+        // forceRebuild maps to BuildOne.ForceRebuild: the object is re-specified and regenerated even when the KB
+        // considers it up to date (#830 item 4). The four-argument wrapper keeps the reflection-based tests' signature.
+        private static bool ExecuteBuildOneCore(object kbHandle, string objectName, IBuildEngine engine, bool buildCalled, bool forceRebuild)
         {
             bool brokerWasSuspended = IsSdkEventBrokerSuspended();
             try
@@ -881,7 +905,7 @@ namespace GxMcp.Worker.Services
                 // proves these forms are valid; stripping the type here would let a
                 // same-name Table/Procedure homonym receive the build.
                 SetProp(task, "ObjectName", objectName);
-                SetProp(task, "ForceRebuild", false);
+                SetProp(task, "ForceRebuild", forceRebuild);
                 SetProp(task, "BuildCalled", buildCalled);
                 SetProp(task, "Output", "IDE");
                 SetProp(task, "EventsSuspended", true);
@@ -1598,13 +1622,15 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private static bool ExecuteSpecifyOneOnly(object kbHandle, List<string> targets, IBuildEngine engine)
+        private static bool ExecuteSpecifyOneOnly(object kbHandle, List<string> targets, IBuildEngine engine, bool forceRebuild = false)
         {
             try
             {
                 object task = Activator.CreateInstance(_typeSpecifyOneOnly);
                 SetProp(task, "KB", kbHandle);
                 SetProp(task, "ObjectNames", string.Join(";", targets));
+                // SpecifyOneOnly.ForceRebuild sets the Rebuild bit of its Options (BuildOptions.Rebuild).
+                if (forceRebuild) SetProp(task, "ForceRebuild", true);
                 SetProp(task, "BuildEngine", engine);
 
                 var execute = _typeSpecifyOneOnly.GetMethod("Execute", BindingFlags.Public | BindingFlags.Instance);

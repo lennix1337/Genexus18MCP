@@ -1707,6 +1707,41 @@ test('doctor marks HTTP smoke not applicable for stdio-isolated runtime', () => 
     }
 });
 
+test('doctor skips HTTP smoke for stdio runtime even when HttpPort is set (#830 item 5)', () => {
+    // The default stdio config keeps HttpPort 5000; the Gateway binds it only with a shared gateway.
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-doctor-stdio-port-'));
+    const configPath = path.join(tempRoot, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+        Server: { HttpPort: 5000, McpStdio: true }
+    }));
+
+    try {
+        const target = resolveMcpSmokeTarget(tempRoot);
+        assert.equal(target.applicable, false);
+        assert.equal(target.status, 'not_applicable');
+        assert.equal(target.baseUrl, null);
+        assert.match(target.detail, /has no HTTP listener/);
+    } finally {
+        removeTempPath(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('doctor targets the HTTP endpoint when a shared gateway serves the port (#830 item 5)', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-doctor-shared-'));
+    const configPath = path.join(tempRoot, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+        Server: { HttpPort: 5000, McpStdio: true, SharedGateway: true }
+    }));
+
+    try {
+        const target = resolveMcpSmokeTarget(tempRoot);
+        assert.equal(target.applicable, true);
+        assert.equal(target.baseUrl, 'http://127.0.0.1:5000/mcp');
+    } finally {
+        removeTempPath(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('doctor MCP smoke uses the PowerShell 7 host', () => {
     const command = buildMcpSmokeCommand(path.join('repo', 'scripts', 'mcp_smoke.ps1'), 'http://127.0.0.1:5000/mcp');
     assert.equal(command.shell, 'pwsh');
