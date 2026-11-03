@@ -4335,9 +4335,11 @@ namespace GxMcp.Worker.Services
                 }
 
                 var freshness = previous == null ? new JObject() : (JObject)previous.DeepClone();
-                freshness["origin"] = refreshed ? "sdk-refresh"
+                string resolvedOrigin = refreshed ? "sdk-refresh"
                     : !string.IsNullOrWhiteSpace(origin) ? origin
                     : previous?["origin"]?.ToString() ?? "sdk-object-state";
+                freshness["origin"] = resolvedOrigin;
+                freshness["textSource"] = TextSourceOf(resolvedOrigin, previous?["textSource"]?.ToString());
                 freshness["observedAtUtc"] = observedAt.ToString("o");
                 freshness["ageMs"] = Math.Max(0L, (long)(now - observedAt).TotalMilliseconds);
                 freshness["sdkCacheRefreshConfirmed"] = refreshed;
@@ -4345,6 +4347,24 @@ namespace GxMcp.Worker.Services
                 return response.ToString(Newtonsoft.Json.Formatting.None);
             }
             catch { return json; }
+        }
+
+        internal const string TextSourceInMemoryBuffer = "in-memory-buffer";
+        internal const string TextSourcePersistedModel = "persisted-model";
+        internal const string TextSourceUnknown = "unknown";
+
+        // Which copy of the text the caller holds (issue #830). An ordinary read returns the SDK object instance this Worker
+        // keeps in memory, which can carry text assigned in this session and not saved yet. A refresh reloads the object
+        // through the SDK from the KB and is the persisted model. A Worker cache replays the text it stored, so it keeps the
+        // label of the read that produced that text, and is `unknown` when that label was never recorded.
+        internal static string TextSourceOf(string origin, string replayedTextSource)
+        {
+            switch (origin)
+            {
+                case "sdk-refresh": return TextSourcePersistedModel;
+                case "sdk-object-state": return TextSourceInMemoryBuffer;
+                default: return string.IsNullOrWhiteSpace(replayedTextSource) ? TextSourceUnknown : replayedTextSource;
+            }
         }
 
         internal static string FreshReadUnsupportedResponse(string target, bool refresh, bool isComDriver)
