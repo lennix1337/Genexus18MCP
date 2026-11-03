@@ -6,6 +6,14 @@ namespace GxMcp.Gateway.Tests
 {
     public class RefreshReadTests
     {
+        // Issue #830: the read help must say which copy of the text a caller receives, so a buffer is not read as persisted.
+        [Theory]
+        [InlineData("readFreshness.textSource")]
+        [InlineData("in-memory-buffer")]
+        [InlineData("persisted-model")]
+        public void GenexusReadHelpDocumentsEachTextSourceLabel(string term) =>
+            Assert.Contains(term, ToolHelpCatalog.Get("genexus_read") ?? string.Empty);
+
         [Fact]
         public void GatewayReplayAgeIsAddedToWorkerReadAge()
         {
