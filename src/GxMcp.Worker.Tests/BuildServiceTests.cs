@@ -1563,7 +1563,7 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("error", result["status"]?.ToString());
             Assert.Equal("TargetNotSupported", result["error"]?["code"]?.ToString());
             Assert.Contains("action=rebuild does not accept a target", result["error"]?["message"]?.ToString());
-            Assert.Contains("Use action=build with target=<object>", result["error"]?["hint"]?.ToString());
+            Assert.Contains("use action=build with target=<object> and force=true", result["error"]?["hint"]?.ToString());
         }
 
         [Fact]
@@ -1576,7 +1576,7 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("error", result["status"]?.ToString());
             Assert.Equal("TargetNotSupported", result["error"]?["code"]?.ToString());
             Assert.Contains("action=rebuild does not accept a target", result["error"]?["message"]?.ToString());
-            Assert.Contains("Use action=build with target=<object>", result["error"]?["hint"]?.ToString());
+            Assert.Contains("use action=build with target=<object> and force=true", result["error"]?["hint"]?.ToString());
         }
 
         [Fact]
