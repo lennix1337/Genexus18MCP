@@ -8,8 +8,9 @@ namespace GxMcp.Worker.Services
 {
     /// <summary>
     /// Wave 3 — IDE "Save As..." parity. Clones a KBObject's parts under a new
-    /// name (same type, same module/folder), optionally also cloning a linked
-    /// WorkWithPlus pattern instance.
+    /// name (same type, same module/folder). A linked WorkWithPlus pattern
+    /// instance is not cloned: includePatternInstance is refused for a source that
+    /// has one, and the answer names the instance a clone did not get (issue #800).
     ///
     /// All SDK access is hidden behind <see cref="IObjectCloner"/> so the
     /// service can be unit-tested without a live KB. The production cloner
@@ -41,10 +42,16 @@ namespace GxMcp.Worker.Services
             /// <summary>Remove an incomplete target after a clone failure. Returns Success/Error envelope JSON.</summary>
             string DeleteTarget(string newName, string typeFilter);
 
-            /// <summary>Return the WorkWithPlus pattern instance bound to the source, or null when none.</summary>
-            PatternInstanceDescriptor FindWwpInstance(string sourceName);
+            /// <summary>
+            /// Return the WorkWithPlus instance linked to the source, or null when none. The instance is an object of
+            /// its own, not a part of the host (issue #800). Throws when the lookup cannot tell.
+            /// </summary>
+            PatternInstanceDescriptor FindWwpInstance(string sourceName, string typeFilter);
 
-            /// <summary>Apply WorkWithPlus pattern to the new host. Returns Success/Error envelope JSON.</summary>
+            /// <summary>
+            /// Apply the WorkWithPlus pattern to the new host with default settings. Returns Success/Error envelope JSON.
+            /// SaveAs does not call it: an instance with default settings is not a copy of the source's (issue #800).
+            /// </summary>
             string ApplyWwpPattern(string newName, PatternInstanceDescriptor sourceInstance);
         }
 
@@ -69,6 +76,7 @@ namespace GxMcp.Worker.Services
         {
             public string PatternKey;   // e.g. "WorkWithPlus"
             public string HostName;     // source host name
+            public string InstanceName; // the instance object linked to the host, e.g. "WorkWithPlus<Host>"
         }
 
         private readonly IObjectCloner _cloner;
@@ -128,22 +136,41 @@ namespace GxMcp.Worker.Services
                     extra: new JObject { ["sourceName"] = sourceName, ["newName"] = newName });
             }
 
+            // #800: the WorkWithPlus instance is an object of its own, linked to the host, and save_as does not clone it
+            // (an instance made with default settings is not a copy of the source's). It is looked up before anything is
+            // created: asked to include it, the call is refused here, the dry run too. Without the flag the answer says
+            // that the clone did not get the instance, or that the lookup could not tell: a failed lookup never reads
+            // as "no instance".
+            PatternInstanceDescriptor sourceInstance = null;
+            string instanceLookupFailure = null;
+            try { sourceInstance = _cloner.FindWwpInstance(sourceName, typeFilter); }
+            catch (Exception ex) { instanceLookupFailure = OneLine(ex.Message, ex.GetType().Name); }
+            if (includePattern && instanceLookupFailure != null)
+                return PatternInstanceLookupFailed(sourceName, newName, instanceLookupFailure);
+            if (includePattern && sourceInstance != null)
+                return PatternInstanceNotCloneable(sourceName, newName, sourceInstance);
+            JObject patternNotice = sourceInstance != null
+                ? PatternInstanceNotice(sourceName, newName, sourceInstance)
+                : instanceLookupFailure != null ? PatternInstanceLookupNotice(sourceName, instanceLookupFailure) : null;
+
             // ---- dryRun: build the plan, never touch the SDK. ----
             if (dryRun)
             {
+                var plan = new JObject
+                {
+                    ["createType"] = src.Type,
+                    ["newName"] = newName,
+                    ["partsToClone"] = new JArray(src.Parts ?? new List<string>()),
+                    ["includePatternInstance"] = includePattern
+                };
+                if (patternNotice != null) plan["patternInstance"] = patternNotice;
                 return McpResponse.Ok(
                     target: sourceName,
                     code: "DryRun",
                     result: new JObject
                     {
                         ["sourceName"] = sourceName,
-                        ["plan"] = new JObject
-                        {
-                            ["createType"] = src.Type,
-                            ["newName"] = newName,
-                            ["partsToClone"] = new JArray(src.Parts ?? new List<string>()),
-                            ["includePatternInstance"] = includePattern
-                        }
+                        ["plan"] = plan
                     });
             }
 
@@ -176,8 +203,8 @@ namespace GxMcp.Worker.Services
                 }
                 if (!IsSuccess(r))
                 {
-                    // #746: the WebForm validator can refuse a form while the parts and the pattern instance it
-                    // depends on are missing from the target. Retry it once after them instead of failing at once.
+                    // #746: the WebForm validator can refuse a form while the parts it depends on are missing from the
+                    // target. Retry it once after them instead of failing at once.
                     if (string.Equals(part, "WebForm", StringComparison.OrdinalIgnoreCase) && deferredWebForm == null)
                     {
                         deferredWebForm = part;
@@ -204,26 +231,8 @@ namespace GxMcp.Worker.Services
                 completedSteps, partsCloned, partsSkipped, out propertiesCloned);
             if (propertiesFailure != null) return propertiesFailure;
 
-            // Step 3: optionally clone the WWP pattern instance.
-            JObject patternBlock = null;
-            if (includePattern)
-            {
-                var inst = _cloner.FindWwpInstance(sourceName);
-                if (inst != null)
-                {
-                    string applyResult = _cloner.ApplyWwpPattern(newName, inst);
-                    bool ok = IsSuccess(applyResult);
-                    patternBlock = new JObject
-                    {
-                        ["name"] = newName,
-                        ["pattern"] = inst.PatternKey,
-                        ["applied"] = ok,
-                        ["detail"] = SafeParseOrString(applyResult)
-                    };
-                    if (ok) completedSteps.Add("applyPattern:" + inst.PatternKey);
-                }
-                // No WWP instance on source → silently omit the block (per spec).
-            }
+            // Step 3: the instance is not cloned (see the lookup above); the answer says so.
+            JObject patternBlock = patternNotice;
 
             if (deferredWebForm != null)
             {
@@ -440,6 +449,99 @@ namespace GxMcp.Worker.Services
                     McpResponse.NextStep("genexus_save_as", new JObject { ["name"] = sourceName ?? "<name>", ["newName"] = "<newName>" }, "Retry with valid arguments.")
                 },
                 extra: sourceName != null ? new JObject { ["sourceName"] = sourceName } : null);
+        }
+
+        // "the WorkWithPlus instance 'WorkWithPlusCustomer'", or "a WorkWithPlus instance" when the lookup gave no name.
+        private static string InstanceDescription(PatternInstanceDescriptor instance)
+        {
+            string pattern = string.IsNullOrWhiteSpace(instance?.PatternKey) ? "WorkWithPlus" : instance.PatternKey;
+            return string.IsNullOrWhiteSpace(instance?.InstanceName)
+                ? "a " + pattern + " instance"
+                : "the " + pattern + " instance '" + instance.InstanceName + "'";
+        }
+
+        // includePatternInstance=true on a source that has an instance: nothing is created, and the answer says how to go on.
+        private static string PatternInstanceNotCloneable(string sourceName, string newName, PatternInstanceDescriptor instance)
+        {
+            string pattern = string.IsNullOrWhiteSpace(instance?.PatternKey) ? "WorkWithPlus" : instance.PatternKey;
+            bool named = !string.IsNullOrWhiteSpace(instance?.InstanceName);
+            var nextSteps = new JArray
+            {
+                McpResponse.NextStep("genexus_create",
+                    new JObject { ["action"] = "save_as", ["name"] = sourceName, ["newName"] = newName, ["includePatternInstance"] = false },
+                    "Clone the parts without the instance.")
+            };
+            if (named)
+            {
+                nextSteps.Add(McpResponse.NextStep("genexus_read",
+                    new JObject { ["name"] = instance.InstanceName, ["part"] = "PatternInstance" },
+                    "Read the settings of the source instance."));
+            }
+            return McpResponse.Err(
+                code: "PatternInstanceNotCloneable",
+                message: "'" + sourceName + "' has " + InstanceDescription(instance) + ", which save_as cannot clone yet; nothing was created.",
+                hint: "Call save_as without includePatternInstance to clone the parts only (the answer names the instance that was not cloned). "
+                    + "genexus_apply_pattern name=" + newName + " pattern=" + pattern + " then makes a new instance with default settings, not a copy of the source's, "
+                    + "and projects it onto the object, which can regenerate the cloned form."
+                    + (named ? " The source settings are readable with genexus_read name=" + instance.InstanceName + " part=PatternInstance." : string.Empty),
+                nextSteps: nextSteps,
+                extra: new JObject
+                {
+                    ["sourceName"] = sourceName,
+                    ["newName"] = newName,
+                    ["patternInstance"] = new JObject
+                    {
+                        ["pattern"] = pattern,
+                        ["sourceInstance"] = named ? (JToken)instance.InstanceName : JValue.CreateNull()
+                    }
+                });
+        }
+
+        // The lookup of the source instance failed: with includePatternInstance=true that is not an answer of "none".
+        private static string PatternInstanceLookupFailed(string sourceName, string newName, string reason)
+        {
+            return McpResponse.Err(
+                code: "PatternInstanceLookupFailed",
+                message: "Could not check whether '" + sourceName + "' has a WorkWithPlus instance (" + reason + "); nothing was created.",
+                hint: "Retry the call, or leave includePatternInstance out to clone the parts without checking for an instance.",
+                nextSteps: new JArray {
+                    McpResponse.NextStep("genexus_create", new JObject { ["action"] = "save_as", ["name"] = sourceName, ["newName"] = newName }, "Clone the parts without checking for an instance.")
+                },
+                extra: new JObject { ["sourceName"] = sourceName, ["newName"] = newName });
+        }
+
+        // What an answer tells about a source that has an instance the clone does not get.
+        private static JObject PatternInstanceNotice(string sourceName, string newName, PatternInstanceDescriptor instance)
+        {
+            string pattern = string.IsNullOrWhiteSpace(instance?.PatternKey) ? "WorkWithPlus" : instance.PatternKey;
+            var notice = new JObject { ["cloned"] = false, ["pattern"] = pattern };
+            if (!string.IsNullOrWhiteSpace(instance?.InstanceName)) notice["sourceInstance"] = instance.InstanceName;
+            notice["hint"] = "'" + sourceName + "' has " + InstanceDescription(instance) + " that save_as does not clone: '" + newName
+                + "' gets the parts but no instance. genexus_apply_pattern name=" + newName + " pattern=" + pattern
+                + " makes a new instance with default settings, not a copy of the source's, and projects it onto the object, "
+                + "which can regenerate the cloned form; includePatternInstance=true is refused for this source.";
+            return notice;
+        }
+
+        // Without the flag, a lookup that could not tell: the answer says so instead of looking like "no instance".
+        private static JObject PatternInstanceLookupNotice(string sourceName, string reason)
+        {
+            return new JObject
+            {
+                ["cloned"] = false,
+                ["checked"] = false,
+                ["lookupError"] = reason,
+                ["hint"] = "Could not check whether '" + sourceName + "' has a WorkWithPlus instance (" + reason + "). "
+                    + "save_as does not clone an instance: if it has one, the new object has the parts but no instance."
+            };
+        }
+
+        // One bounded line: the client-facing error keeps only the first line of a message (#702).
+        private static string OneLine(string text, string fallback)
+        {
+            string line = string.IsNullOrWhiteSpace(text) ? string.Empty : JoinLines(text);
+            if (line.Length == 0) return fallback;
+            return line.Length > 300 ? line.Substring(0, 300) + "..." : line;
         }
 
         private static bool IsSuccess(string envelope)
@@ -814,52 +916,29 @@ namespace GxMcp.Worker.Services
             return _objects.DeleteObject(newName, typeFilter, confirm: true);
         }
 
-        public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName)
+        public SaveAsService.PatternInstanceDescriptor FindWwpInstance(string sourceName, string typeFilter)
         {
-            // The SDK exposes pattern-instance metadata through the object's
-            // PatternInstance property, but the discovery path differs per
-            // KB. Conservative approach: rely on PatternApplyService's
-            // existing detection, which already powers genexus_apply_pattern
-            // reapply / diagnose. If the source has a WWP instance, the
-            // service knows; otherwise we return null and SaveAs skips the
-            // pattern block.
-            try
+            // The WorkWithPlus instance is an object of its own (WorkWithPlus<Host>), not a part of the host, so a walk
+            // of the host's parts never finds it (issue #800). It is resolved the way genexus_wwp resolves it. A
+            // lookup that cannot tell throws: SaveAs must not read it as "no instance".
+            if (_patterns == null) throw new InvalidOperationException("PatternApplyService is not wired in this worker build.");
+            var obj = _objects.FindObject(sourceName, typeFilter);
+            if (obj == null) return null;
+            var instance = _patterns.FindLinkedWorkWithPlusInstance(obj);
+            if (instance == null) return null;
+            return new SaveAsService.PatternInstanceDescriptor
             {
-                var obj = _objects.FindObject(sourceName, null);
-                if (obj == null) return null;
-                // Walk the source object's parts looking for a PatternInstance member.
-                // Mirrors the detection in PatternApplyService.ApplyPattern (~line 357)
-                // so the two paths agree on what constitutes an "already-patterned" object.
-                bool hasInstance = false;
-                try
-                {
-                    foreach (var part in obj.Parts)
-                    {
-                        var p = part as Artech.Architecture.Common.Objects.KBObjectPart;
-                        if (p == null) continue;
-                        if (string.Equals(p.Name, "PatternInstance", StringComparison.OrdinalIgnoreCase) ||
-                            p.GetType().Name.IndexOf("PatternInstance", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            hasInstance = true;
-                            break;
-                        }
-                    }
-                }
-                catch { /* best-effort */ }
-                if (!hasInstance) return null;
-                return new SaveAsService.PatternInstanceDescriptor
-                {
-                    PatternKey = "WorkWithPlus",
-                    HostName = sourceName
-                };
-            }
-            catch { return null; }
+                PatternKey = "WorkWithPlus",
+                HostName = sourceName,
+                InstanceName = instance.Name
+            };
         }
 
         public string ApplyWwpPattern(string newName, SaveAsService.PatternInstanceDescriptor sourceInstance)
         {
             // Direct call to the canonical PatternApplyService.ApplyPattern signature.
-            // settings=null means "use defaults" — same behaviour as the IDE's Save-As.
+            // settings=null means "use defaults": a new instance, not a copy of the source's. SaveAs does not call
+            // this since issue #800; it stays as the seam for a clone that carries the instance's settings.
             if (_patterns == null)
             {
                 return McpResponse.Err(
