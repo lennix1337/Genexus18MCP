@@ -229,6 +229,113 @@ namespace GxMcp.Gateway.Tests
             }
         }
 
+        // #830 item 3: after ~10 minutes idle the session lease expired, and polling a job by id
+        // returned KB_LEASE_EXPIRED ("re-select the KB") although the job itself was readable.
+        [Fact]
+        public async Task ExpiredSessionLease_LifecycleJobResultIsReadableByJobId()
+        {
+            using var fixture = RouteFixture.Create();
+            fixture.UseFakeWorker(ready: true);
+            fixture.RegisterKnown("orders", "C:/KB/Orders");
+            string session = "issue830-job-" + Guid.NewGuid().ToString("N");
+            Program.SetSessionSelectedKb(session, "orders", "C:/KB/Orders");
+            JobEntry? job = null;
+            try
+            {
+                Assert.True(Program.TryGetSessionSnapshotForTest(session, out var snapshot));
+                ExpireLease(snapshot!.Lease!.Token);
+                job = Program.JobRegistry.Start(session, "lifecycle/build", 10);
+                Program.JobRegistry.Complete(job.Id, success: false, summary: "Build Failed: 2 errors, 0 warnings",
+                    result: new JObject
+                    {
+                        ["Status"] = "Failed",
+                        ["ErrorCount"] = 2,
+                        ["Errors"] = new JArray("a.cs(1,1): error CS0103: x", "b.cs(2,2): error CS0103: y")
+                    });
+
+                var response = await CallToolAsync(session, "genexus_lifecycle", new JObject
+                {
+                    ["action"] = "result",
+                    ["job_id"] = job.Id
+                });
+
+                var payload = ExtractPayload(response);
+                Assert.NotEqual("KB_LEASE_EXPIRED", payload["error"]?["code"]?.ToString());
+                Assert.Equal(job.Id, payload["operationId"]?.ToString());
+                Assert.Equal("failed", payload["status"]?.ToString());
+                Assert.Equal(2, payload["result"]!["errorCount"]!.Value<int>());
+                Assert.True(response["result"]!["isError"]!.Value<bool>());
+            }
+            finally
+            {
+                if (job != null) Program.JobRegistry.Cancel(job.Id, "test cleanup");
+                Program.ClearSessionSelectedKb(session);
+            }
+        }
+
+        // #830 item 2: a failed build's result and status keep the error list and can page the log.
+        [Fact]
+        public async Task FailedBuildJob_ResultAndStatusCarryErrorsAndPageableLog()
+        {
+            using var fixture = RouteFixture.Create();
+            fixture.UseFakeWorker(ready: true);
+            fixture.RegisterKnown("orders", "C:/KB/Orders");
+            string session = "issue830-log-" + Guid.NewGuid().ToString("N");
+            Program.SetSessionSelectedKb(session, "orders", "C:/KB/Orders");
+            string logDirectory = Path.Combine(Path.GetTempPath(), "gxmcp-830-e2e-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(logDirectory);
+            JobEntry? job = null;
+            try
+            {
+                string logPath = Path.Combine(logDirectory, "build-abcdef12.log");
+                File.WriteAllText(logPath, "first line\r\nsecond line\r\nthird line");
+                job = Program.JobRegistry.Start(session, "lifecycle/build", 10);
+                Program.JobRegistry.SetWorkerTaskId(job.Id, "abcdef12");
+                Program.JobRegistry.Complete(job.Id, success: false, summary: "Build Failed: 2 errors, 0 warnings",
+                    result: new JObject
+                    {
+                        ["Status"] = "Failed",
+                        ["TaskId"] = "abcdef12",
+                        ["ErrorCount"] = 2,
+                        ["Errors"] = new JArray("a.cs(1,1): error CS0103: x", "b.cs(2,2): error CS0103: y"),
+                        ["TailLines"] = new JArray("tail one"),
+                        ["FullLogPath"] = logPath
+                    });
+
+                var result = await CallToolAsync(session, "genexus_lifecycle", new JObject
+                {
+                    ["action"] = "result",
+                    ["job_id"] = job.Id,
+                    ["log_offset"] = 1,
+                    ["log_limit"] = 1
+                });
+                var resultPayload = ExtractPayload(result);
+                Assert.Equal(2, resultPayload["result"]!["errorCount"]!.Value<int>());
+                Assert.Equal("a.cs(1,1): error CS0103: x", resultPayload["result"]!["errors"]![0]!.ToString());
+                Assert.Null(resultPayload["result"]!["TailLines"]);
+                Assert.Equal("second line", resultPayload["log"]!["lines"]![0]!.ToString());
+                Assert.Equal(3, resultPayload["log"]!["totalLines"]!.Value<int>());
+                Assert.Equal(2, resultPayload["log"]!["nextOffset"]!.Value<int>());
+
+                var status = await CallToolAsync(session, "genexus_lifecycle", new JObject
+                {
+                    ["action"] = "status",
+                    ["job_id"] = job.Id,
+                    ["log_limit"] = 2
+                });
+                var statusPayload = ExtractPayload(status);
+                Assert.Equal(2, statusPayload["result"]!["errorCount"]!.Value<int>());
+                Assert.Equal("first line", statusPayload["log"]!["lines"]![0]!.ToString());
+                Assert.Equal(2, statusPayload["log"]!["returned"]!.Value<int>());
+            }
+            finally
+            {
+                if (job != null) Program.JobRegistry.Cancel(job.Id, "test cleanup");
+                Program.ClearSessionSelectedKb(session);
+                try { Directory.Delete(logDirectory, true); } catch { }
+            }
+        }
+
         private static async Task<JObject> CallToolAsync(string session, string name, JObject arguments)
         {
             return (await Program.ProcessMcpRequest(new JObject

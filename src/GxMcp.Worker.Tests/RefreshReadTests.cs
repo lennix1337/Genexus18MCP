@@ -94,6 +94,29 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(error, ObjectService.DescribeReadFreshness(error, true));
         }
 
+        // Issue #830: an ordinary read returned the SDK object's in-memory text labelled `sdk-object-state`, which reads as
+        // the persisted model. The read now says which copy of the text the caller holds.
+        [Fact]
+        public void ReadLabelsWhetherItsTextIsTheInMemoryBufferOrThePersistedModel()
+        {
+            var buffer = JObject.Parse(ObjectService.DescribeReadFreshness("{\"source\":\"typed\"}", false));
+            Assert.Equal("sdk-object-state", buffer["readFreshness"]?["origin"]?.ToString());
+            Assert.Equal("in-memory-buffer", buffer["readFreshness"]?["textSource"]?.ToString());
+
+            var reloaded = JObject.Parse(ObjectService.DescribeReadFreshness("{\"source\":\"saved\"}", true));
+            Assert.Equal("sdk-refresh", reloaded["readFreshness"]?["origin"]?.ToString());
+            Assert.Equal("persisted-model", reloaded["readFreshness"]?["textSource"]?.ToString());
+
+            // A Worker cache replays the stored text, so it keeps the label of the read that produced that text.
+            var replayed = JObject.Parse(ObjectService.DescribeReadFreshness(buffer.ToString(), false, "worker-object-service-cache"));
+            Assert.Equal("worker-object-service-cache", replayed["readFreshness"]?["origin"]?.ToString());
+            Assert.Equal("in-memory-buffer", replayed["readFreshness"]?["textSource"]?.ToString());
+
+            // A cached payload that carries no label says so instead of inheriting a guess.
+            var unlabelled = JObject.Parse(ObjectService.DescribeReadFreshness("{\"source\":\"old\"}", false, "worker-object-reader-cache"));
+            Assert.Equal("unknown", unlabelled["readFreshness"]?["textSource"]?.ToString());
+        }
+
         [Fact]
         public void ComRefreshFailsClosedAndOtherDriverShapesRemainAvailable()
         {

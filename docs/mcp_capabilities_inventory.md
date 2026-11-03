@@ -266,7 +266,7 @@ semantics documented in #65, and the homonym-routing behavior tracked in #34.
 | modern subscriptions/listen | partial | Acknowledgement and filtered SSE delivery are implemented; stream capacity/queue limits, disconnect cleanup, and KB/revision-qualified resource metadata are enforced. Full wire/reconnect coverage remains pending. |
 
 Operational notes:
-- `genexus_lifecycle(action='status'|'result', target='op:<operationId>')` resolves gateway-tracked MCP operations.
+- `genexus_lifecycle(action='status'|'result', target='op:<operationId>')` resolves gateway-tracked MCP operations. A Gateway operation id needs no KB lease, so a poll after the session's lease expired still answers (Worker task ids keep the lease gate). For a finished build, `log_offset`/`log_limit` page its log by line (`totalLines`, `nextOffset`).
 - `genexus_lifecycle(action='status', target='gateway:metrics')` returns per-tool p50/p95 and error/timeout/no-change counters.
 
 ## Extension integration

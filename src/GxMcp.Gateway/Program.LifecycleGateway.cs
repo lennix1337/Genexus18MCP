@@ -95,6 +95,9 @@ namespace GxMcp.Gateway
         internal static LifecycleOperationAliasResolution ResolveLifecycleOperationAlias(string? target)
             => LifecycleOperationAliasResolver.Resolve(target, JobRegistry, _operationTracker);
 
+        private static bool IsLifecycleResultJob(JobEntry job)
+            => job.Kind?.StartsWith("lifecycle/", StringComparison.OrdinalIgnoreCase) == true;
+
         private static int TryReconcileMutationRecoveryFromOperation(string operationId, JToken? payload)
         {
             if (_mutationRecovery == null || string.IsNullOrWhiteSpace(operationId) || !IsTerminalPersistedReread(payload)) return 0;
@@ -827,6 +830,17 @@ namespace GxMcp.Gateway
                             int reconciled = TryReconcileMutationRecoveryFromOperation(resultJobId!, resultPayload);
                             if (reconciled > 0)
                                 resultPayload["recoveryReconciled"] = reconciled;
+                            // #830 item 2: a build result is reported in the compact shape (errors first,
+                            // each line capped), like status. The page reads the stored result, not this copy.
+                            bool hasStoredResult = resultPayload["result"] is JObject;
+                            if (hasStoredResult
+                                && IsLifecycleResultJob(probe)
+                                && LifecycleResponseShaper.ShouldCompact(args)
+                                && resultPayload["result"] is JObject buildResult
+                                && LifecycleResponseShaper.IsBuildTaskPayload(buildResult))
+                                resultPayload["result"] = LifecycleResponseShaper.CompactObject(buildResult);
+                            if (hasStoredResult && LifecycleLogPage.IsRequested(args))
+                                resultPayload["log"] = LifecycleLogPage.Build(probe, probe.Result, args);
                             return BuildToolTextResponse(idToken, resultPayload, isError: isErr, toolName: "genexus_lifecycle", toolArgs: args);
                         }
                         // Unknown id → fall through to the legacy worker-side taskId result path.
@@ -979,13 +993,21 @@ namespace GxMcp.Gateway
                             // arrive through this short-circuit and were skipping the shaper —
                             // callers using wait_seconds>0 + job_id were getting the verbose
                             // BuildTaskStatus payload under result. Compact here too.
-                            if (!isError
+                            // #830 item 2: a failed build keeps its counts and error list in the compact shape
+                            // too; only lifecycle build results qualify, so other failures keep their evidence.
+                            bool compactFailedBuild = isError
+                                && IsLifecycleResultJob(probe)
+                                && pollResult["result"] is JObject failedBuild
+                                && LifecycleResponseShaper.IsBuildTaskPayload(failedBuild);
+                            if ((!isError || compactFailedBuild)
                                 && LifecycleResponseShaper.ShouldCompact(args)
                                 && pollResult["result"] is JObject innerResult)
                             {
                                 try { pollResult["result"] = LifecycleResponseShaper.CompactObject(innerResult); } // perf: no serialize→parse round-trip
                                 catch { /* shaper passthrough on non-JSON */ }
                             }
+                            if (pollResult["result"] != null && LifecycleLogPage.IsRequested(args))
+                                pollResult["log"] = LifecycleLogPage.Build(probe, probe.Result, args);
                             return BuildToolTextResponse(idToken, pollResult, isError: isError, toolName: "genexus_lifecycle", toolArgs: args);
                         }
                         // Not in registry → fall through to existing worker-side status path (legacy taskId).

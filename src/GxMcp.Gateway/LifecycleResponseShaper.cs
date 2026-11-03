@@ -13,6 +13,40 @@ namespace GxMcp.Gateway
     {
         public const int ErrorCap = 10;
         public const int WarningSampleCap = 3;
+        // #830 item 2: one MSBuild line can carry a long path list. Each listed line is capped so the
+        // error list stays readable; the cut keeps the start, where the file and the error code are.
+        public const int LineCap = 300;
+
+        internal static string CapLine(string text)
+            => text.Length <= LineCap
+                ? text
+                : text.Substring(0, LineCap) + "… [+" + (text.Length - LineCap) + " chars]";
+
+        // Errors arrive as message strings, or as objects with a message (the shape the tests and
+        // some Worker builds use). Only the message text is capped; other fields are kept as they are.
+        internal static JToken CapErrorItem(JToken? item)
+        {
+            if (item is JValue text && text.Type == JTokenType.String)
+                return new JValue(CapLine(text.ToString()));
+            if (item is JObject entry && entry["message"] is JValue message && message.Type == JTokenType.String)
+            {
+                var copy = (JObject)entry.DeepClone();
+                copy["message"] = CapLine(message.ToString());
+                return copy;
+            }
+            return item?.DeepClone() ?? JValue.CreateNull();
+        }
+
+        /// <summary>
+        /// True when the payload is a worker BuildTaskStatus (raw or already reshaped). A job's result
+        /// of another kind, such as an edit, has no build counts and must keep all its fields.
+        /// </summary>
+        public static bool IsBuildTaskPayload(JObject? obj)
+            => obj != null
+               && (obj["Errors"] != null || obj["errors"] != null
+                   || obj["ErrorCount"] != null || obj["errorCount"] != null
+                   || obj["Warnings"] != null || obj["warnings"] != null
+                   || obj["newWarnings"] != null);
 
         public static string Compact(string rawJson, bool compact)
         {
@@ -120,8 +154,17 @@ namespace GxMcp.Gateway
                 });
             }
 
+            // The error block comes first: a size cut on the envelope must not remove the verdict and the
+            // error list (#830 item 2). Each line is capped; the total count and the omitted count are exact.
+            int shownErrors = Math.Min(errors.Count, ErrorCap);
             var compactObj = new JObject
             {
+                ["errorCount"] = errCount,
+                ["totalErrors"] = errCount,
+                ["shownErrors"] = shownErrors,
+                ["omittedErrors"] = Math.Max(0, errCount - shownErrors),
+                ["truncated"] = errCount > ErrorCap,
+                ["errors"] = new JArray(errors.Take(ErrorCap).Select(CapErrorItem)),
                 ["Status"] = obj["Status"] ?? obj["status"],
                 ["Phase"] = obj["Phase"],
                 ["TaskId"] = obj["TaskId"],
@@ -137,27 +180,20 @@ namespace GxMcp.Gateway
                 ["operationId"] = obj["operationId"] ?? obj["OperationId"],
                 ["queuePosition"] = obj["queuePosition"] ?? obj["QueuePosition"],
                 ["queuedMs"] = obj["queuedMs"] ?? obj["QueuedMs"],
-                ["errorCount"] = errCount,
                 ["warningCount"] = warnCount,
                 ["warningTotal"] = obj["warningTotal"]?.ToObject<int?>() ?? obj["WarningCount"]?.ToObject<int?>() ?? warnCount,
-                ["errors"] = new JArray(errors.Take(ErrorCap)),
                 ["warnings"] = hasWarningDelta ? new JArray() : dedupedWarnings,
                 ["newWarnings"] = hasWarningDelta ? (warnings.DeepClone()) : new JArray(),
                 ["summary"] = $"{errCount} errors / {warnCount} warnings",
-                ["totalErrors"] = errCount,
-                ["shownErrors"] = Math.Min(ErrorCap, errors.Count),
-                ["omittedErrors"] = Math.Max(0, errCount - Math.Min(ErrorCap, errors.Count)),
-                ["truncated"] = errCount > ErrorCap,
                 ["compact"] = true
             };
 
             // The list above is cut at ErrorCap (and the task keeps only its first lines):
             // when it is shorter than the count, say where the rest is (#656).
-            int shownErrors = Math.Min(errors.Count, ErrorCap);
             if (errCount > shownErrors)
             {
                 compactObj["errorsHint"] = "The first " + shownErrors + " of " + errCount
-                    + " errors are listed; the complete list is in the build log (fullLogPath), and action=result pages the lines the task kept.";
+                    + " errors are listed, each line capped at " + LineCap + " characters; the complete list is in the build log (fullLogPath). Pass log_offset/log_limit on action=status or result to page the log.";
             }
 
             // The published lifecycle schema allows an optional string, not null.
