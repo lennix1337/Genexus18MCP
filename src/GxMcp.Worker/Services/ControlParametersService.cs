@@ -198,7 +198,7 @@ namespace GxMcp.Worker.Services
                 var layoutDiagnostics = ValidateProspectiveLayout(context.Object, newXml);
                 if (layoutDiagnostics.Count > 0)
                     return ValidationError(target, context, layoutDiagnostics, "WebFormValidationFailed",
-                        "The SDK layout validator found errors in the form that would result.");
+                        "The SDK layout validator found errors in the form that would result.", quoteDiagnostics: true);
                 ((JObject)result["validation"])["layoutValidated"] = true;
 
                 if (dryRun)
@@ -286,7 +286,7 @@ namespace GxMcp.Worker.Services
                 return RollBack(target, typeFilter, before, snapshot,
                     "The save changed another part of the object (" + string.Join(", ", otherParts.ChangedPartKeys ?? new string[0]) + ").");
 
-            string layoutDifference = DescribeLayoutDifference(before.CurrentXml, fresh.CurrentXml);
+            string layoutDifference = DescribeLayoutDifference(before.CurrentXml, fresh.CurrentXml, isTarget: MatchControlElement(before.Control));
             if (layoutDifference != null)
                 return RollBack(target, typeFilter, before, snapshot,
                     "The save changed something other than the control's parameters: " + layoutDifference);
@@ -523,7 +523,7 @@ namespace GxMcp.Worker.Services
             {
                 error = McpResponse.Err(code: "ControlNotFound", target: target,
                     message: "Control '" + control + "' not found in the layout form of " + obj.Name + ".",
-                    hint: "Use genexus_inspect include=controls: pass the attribute name, att:<id>, the control name or the control GUID.",
+                    hint: ControlPropertyHints.ControlNotFoundHint(control),
                     nextSteps: new JArray(McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target, ["include"] = new JArray("controls") }, "Lists the controls of this object's layout form.")),
                     extra: new JObject { ["candidates"] = DescribeCandidates(panel) });
                 return null;
@@ -676,15 +676,31 @@ namespace GxMcp.Worker.Services
 
         // Everything but the target control's parameters must be unchanged. The target element is
         // compared with its parameter list masked; with includeTarget the whole form is compared.
-        internal static string DescribeLayoutDifference(string beforeXml, string afterXml, bool includeTarget = false)
+        // The form read back after the save goes first, as the persisted side of XmlEquivalence: what its diff calls
+        // "rejected" was in the form before and is gone, and what it calls "added" is what the save put there.
+        // isTarget picks the XML element of the control that was written (MatchControlElement); see MaskParameters.
+        internal static string DescribeLayoutDifference(string beforeXml, string afterXml, bool includeTarget = false, Func<XElement, bool> isTarget = null)
         {
             if (string.IsNullOrWhiteSpace(afterXml)) return "the saved form could not be read back.";
-            string left = includeTarget ? beforeXml : MaskParameters(beforeXml);
-            string right = includeTarget ? afterXml : MaskParameters(afterXml);
-            return XmlEquivalence.AreEquivalent(left, right, XmlEquivalenceOptions.Layout, out string diff) ? null : diff;
+            string before = includeTarget ? beforeXml : MaskParameters(beforeXml, isTarget);
+            string after = includeTarget ? afterXml : MaskParameters(afterXml, isTarget);
+            return XmlEquivalence.AreEquivalent(after, before, XmlEquivalenceOptions.Layout, out string diff) ? null : diff;
         }
 
-        internal static string MaskParameters(string xml)
+        /// <summary>
+        /// The XML element of <paramref name="control"/> in a form: by its GUID id or, where the id is not stable (a layout that
+        /// a pattern generates gets new ids on every read), by its control name.
+        /// </summary>
+        internal static Func<XElement, bool> MatchControlElement(LayoutControl control)
+        {
+            string id = control?.Id;
+            string name = control?.ControlName;
+            return element =>
+                (!string.IsNullOrEmpty(id) && string.Equals((string)element.Attribute("id"), id, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrEmpty(name) && string.Equals((string)element.Attribute("controlName"), name, StringComparison.Ordinal));
+        }
+
+        internal static string MaskParameters(string xml, Func<XElement, bool> isTarget = null)
         {
             try
             {
@@ -697,7 +713,13 @@ namespace GxMcp.Worker.Services
                     if (!CustomPropertiesPayload.TryParse(attribute.Value, out var payload) || payload == null) continue;
                     // Masked whether or not the list is stored yet: the first list written to a control
                     // appears only in the saved form, and a one-sided mask reported it as a layout change.
+                    bool onlyParameters = payload.Properties.Count == 0
+                        || (payload.Properties.Count == 1 && payload.TryGet(PropertyName, out _));
                     attribute.Value = payload.ToAttributeValue(PropertyName, "(masked)");
+                    // The control that is written gets this attribute when its first property is written: the saved form then holds
+                    // an attribute with nothing but the parameter list, and the form before it has none. That is the same layout.
+                    // Only for that control: the same attribute going missing from another control is a change the save made.
+                    if (onlyParameters && isTarget != null && isTarget(element)) attribute.Remove();
                 }
                 return document.ToString(SaveOptions.DisableFormatting);
             }
@@ -862,12 +884,20 @@ namespace GxMcp.Worker.Services
         }
 
         private static string ValidationError(string target, ControlContext context, List<ParameterListDiagnostic> diagnostics,
-            string code = "InvalidParameterExpression", string message = null)
+            string code = "InvalidParameterExpression", string message = null, bool quoteDiagnostics = false)
         {
             var first = diagnostics[0];
+            // A message that names only the stage that refused the form (the layout validator) is followed by the
+            // SDK's own words; one that already carries the detail is left as it is.
+            string quoted = string.Join("; ", diagnostics.Take(3).Select(d =>
+                (string.IsNullOrWhiteSpace(d.Code) ? string.Empty : "[" + d.Code + "] ") + (d.Message ?? string.Empty).Trim()));
             return McpResponse.Err(
                 code: code, target: target,
-                message: message ?? ("The SDK rejected the parameter list" + (first.Index.HasValue ? " at expressions[" + first.Index + "]" : "") + ": " + first.Message),
+                message: message != null
+                    ? (quoteDiagnostics
+                        ? message + " " + quoted + (diagnostics.Count > 3 ? "; +" + (diagnostics.Count - 3) + " more in diagnostics" : string.Empty)
+                        : message)
+                    : ("The SDK rejected the parameter list" + (first.Index.HasValue ? " at expressions[" + first.Index + "]" : "") + ": " + first.Message),
                 hint: "Fix the listed expressions and retry the dry run. Names must exist in this object's model (attributes, &variables, objects); nothing was written.",
                 extra: new JObject
                 {

@@ -160,6 +160,61 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void An_error_the_refusal_message_already_quotes_is_not_listed_a_second_time()
+        {
+            // #830: the validator's refusal quotes its first errors itself, so the lines that follow carry only the others.
+            var inner = new JObject
+            {
+                ["error"] = new JObject
+                {
+                    ["code"] = "WebFormValidationFailed",
+                    ["message"] = "The WebForm SDK validator found errors. SDK error: [spc0233] Unknown attribute 'BDIId' (line 3, char 9)"
+                },
+                ["validationDiagnostics"] = new JArray
+                {
+                    new JObject { ["severity"] = "Error", ["message"] = "Unknown attribute 'BDIId'", ["source"] = "GridWWP" },
+                    new JObject { ["severity"] = "Error", ["message"] = "Invalid property 'Visible'" }
+                }
+            }.ToString();
+
+            SaveAsService.SummarizeFailure(inner, out _, out string message);
+
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(message, "Unknown attribute 'BDIId'"));
+            Assert.EndsWith("\nInvalid property 'Visible'", message);
+        }
+
+        [Fact]
+        public void An_error_of_several_lines_is_recognised_in_the_summary_that_squeezes_it_onto_one()
+        {
+            // SummarizeErrors puts each quoted error on one line, so the comparison must squeeze white space too.
+            var diagnostics = new JArray
+            {
+                new JObject { ["severity"] = "Error", ["message"] = "Line one\r\nline two", ["source"] = "Grid1" },
+                new JObject { ["severity"] = "Error", ["message"] = "Another" }
+            };
+
+            Assert.Equal("Another", SaveAsService.ValidationErrorLines(diagnostics, "SDK error: Line one line two (Grid1)"));
+            // The message it is compared with can carry line breaks of its own.
+            Assert.Equal("Another", SaveAsService.ValidationErrorLines(diagnostics, "Refused.\nSDK error: Line one\r\nline two (Grid1)"));
+        }
+
+        [Fact]
+        public void The_lines_of_errors_not_yet_stated_are_all_kept_and_none_when_all_are_stated()
+        {
+            var diagnostics = new JArray
+            {
+                new JObject { ["severity"] = "Error", ["message"] = "first", ["source"] = "A" },
+                new JObject { ["severity"] = "Warning", ["message"] = "a warning" },
+                new JObject { ["severity"] = "Error", ["message"] = "second" }
+            };
+
+            Assert.Equal("A: first\nsecond", SaveAsService.ValidationErrorLines(diagnostics));
+            Assert.Equal("second", SaveAsService.ValidationErrorLines(diagnostics, "already says first"));
+            Assert.Null(SaveAsService.ValidationErrorLines(diagnostics, "first and second"));
+            Assert.Null(SaveAsService.ValidationErrorLines(null, "anything"));
+        }
+
+        [Fact]
         public void A_very_long_diagnostic_is_bounded()
         {
             string inner = new JObject { ["error"] = new JObject { ["message"] = new string('x', 5000) } }.ToString();

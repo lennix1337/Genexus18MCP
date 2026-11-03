@@ -19,6 +19,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("GotchaHtmlFormatScriptStripped")]
         [InlineData("GotchaCellOutsideTable")]
         [InlineData("GotchaDuplicateControlName")]
+        [InlineData("GotchaGridConditionIgnored")]
         [InlineData("GotchaIdeObjectOpenInEditor")]
         [InlineData("GotchaIdeActiveOnKb")]
         public void EveryRegisteredCode_HasNonEmptyMarkdown(string code)

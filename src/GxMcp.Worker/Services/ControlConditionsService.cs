@@ -46,6 +46,77 @@ namespace GxMcp.Worker.Services
                 || string.Equals(name, Alias, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// Issue #830: the IDE shows a grid's Conditions as "Condition", the name a caller tries first. It is the same
+        /// typed route as ControlWhere, but only on a control that lists ControlWhere and has no property of its own
+        /// called Condition, so a control that does have one keeps it.
+        /// </summary>
+        internal const string SingularAlias = "Condition";
+
+        internal static bool IsSingularAlias(string propertyName)
+            => string.Equals(propertyName?.Trim(), SingularAlias, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>True when a control with these property names answers to <see cref="SingularAlias"/> as its Conditions.</summary>
+        internal static bool AliasApplies(IEnumerable<string> propertyNames)
+        {
+            if (propertyNames == null) return false;
+            var names = propertyNames.Where(n => !string.IsNullOrEmpty(n)).ToList();
+            return names.Any(n => string.Equals(n, PropertyName, StringComparison.OrdinalIgnoreCase))
+                && !names.Any(n => string.Equals(n, SingularAlias, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>The property names of a layout control's bag, for <see cref="AliasApplies"/>; empty when it cannot be read.</summary>
+        internal static List<string> PropertyNamesOf(Artech.Common.Properties.PropertiesObject bag)
+        {
+            var names = new List<string>();
+            try
+            {
+                if (bag?.Properties == null) return names;
+                foreach (var property in bag.Properties)
+                    if (!string.IsNullOrEmpty(property?.Name)) names.Add(property.Name);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[ControlConditions] property enumeration failed: " + (ex.InnerException ?? ex).Message);
+            }
+            return names;
+        }
+
+        /// <summary>
+        /// Whether a read of <paramref name="requestedProperty"/> on <paramref name="control"/> is the typed Conditions read:
+        /// ControlWhere or Conditions on any layout control, Condition where <see cref="AliasApplies"/>.
+        /// </summary>
+        internal bool HandlesRead(string target, string control, string typeFilter, string requestedProperty)
+            => ReadRoutesToConditions(requestedProperty,
+                () => IsLayoutControl(target, control, typeFilter),
+                () => LayoutControlPropertyNames(target, control, typeFilter));
+
+        /// <summary>
+        /// The decision behind <see cref="HandlesRead"/>, with what it needs from the object injected: ControlWhere and Conditions
+        /// on any layout control, Condition on a control whose property names say <see cref="AliasApplies"/>. The names are asked
+        /// only for Condition.
+        /// </summary>
+        internal static bool ReadRoutesToConditions(string requestedProperty, Func<bool> isLayoutControl, Func<IEnumerable<string>> controlPropertyNames)
+        {
+            if (IsConditionsProperty(requestedProperty)) return isLayoutControl();
+            return IsSingularAlias(requestedProperty) && AliasApplies(controlPropertyNames());
+        }
+
+        // The property names of the layout control, or none when it cannot be resolved.
+        private List<string> LayoutControlPropertyNames(string target, string control, string typeFilter)
+        {
+            try
+            {
+                var context = _controls.ResolveControl(target, control, typeFilter, requireParameterEngine: false, out _);
+                return context == null ? new List<string>() : PropertyNamesOf(context.Control.Attributes);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[ControlConditions] alias lookup failed: " + (ex.InnerException ?? ex).Message);
+                return new List<string>();
+            }
+        }
+
         // ---------------------------------------------------------------- read
 
         /// <summary>True when <paramref name="control"/> is a control of the object's layout form (a legacy form keeps the generic read).</summary>
@@ -128,7 +199,7 @@ namespace GxMcp.Worker.Services
                 if (!ControlParametersService.HasProperty(context.Control, PropertyName))
                     return McpResponse.Err(code: "PropertyNotApplicable", target: target,
                         message: "'" + PropertyName + "' does not apply to this control.",
-                        hint: "Conditions apply to a Dynamic Combo Box or Dynamic List Box. Configure the control in the GeneXus IDE first.",
+                        hint: "Conditions apply to a control whose property list has ControlWhere, such as a Dynamic Combo Box, a Dynamic List Box or a grid. Configure the control in the GeneXus IDE first.",
                         extra: new JObject { ["control"] = ControlParametersService.DescribeControl(context.Control), ["persisted"] = false });
 
                 string before = ReadExpression(context.Element) ?? string.Empty;
@@ -157,8 +228,14 @@ namespace GxMcp.Worker.Services
                 if (diagnostics.Count > 0)
                     return McpResponse.Err(code: "WebFormValidationFailed", target: target,
                         message: "The SDK layout validator found errors in the form that would result: "
-                            + string.Join("; ", diagnostics.Take(8).Select(d => d.Message)) + "; nothing was written.",
-                        extra: new JObject { ["persisted"] = false, ["savePathExercised"] = false });
+                            + string.Join("; ", diagnostics.Take(8).Select(d =>
+                                (string.IsNullOrWhiteSpace(d.Code) ? string.Empty : "[" + d.Code + "] ") + d.Message)) + "; nothing was written.",
+                        extra: new JObject
+                        {
+                            ["persisted"] = false,
+                            ["savePathExercised"] = false,
+                            ["diagnostics"] = new JArray(diagnostics.Select(d => new JObject { ["code"] = d.Code, ["message"] = d.Message }))
+                        });
                 result["layoutValidated"] = true;
 
                 if (dryRun)
@@ -237,7 +314,7 @@ namespace GxMcp.Worker.Services
                         "The save changed another part of the object (" + string.Join(", ", otherParts.ChangedPartKeys ?? new string[0]) + ").");
             }
 
-            string layoutDifference = DescribeLayoutDifference(before.CurrentXml, fresh.CurrentXml);
+            string layoutDifference = DescribeLayoutDifference(before.CurrentXml, fresh.CurrentXml, ControlParametersService.MatchControlElement(before.Control));
             if (layoutDifference != null)
                 return RollBack(target, typeFilter, before, snapshot,
                     "The save changed something other than the control's Conditions: " + layoutDifference);
@@ -369,22 +446,30 @@ namespace GxMcp.Worker.Services
             return true;
         }
 
-        /// <summary>Everything but the Conditions of the form must be unchanged by the save.</summary>
-        internal static string DescribeLayoutDifference(string beforeXml, string afterXml)
+        /// <summary>
+        /// Everything but the Conditions of the form must be unchanged by the save. The form read back after the save goes
+        /// first, as the persisted side of <see cref="XmlEquivalence"/>: what the diff calls "rejected" was in the form before
+        /// and is gone, and what it calls "added" is what the save put there.
+        /// </summary>
+        internal static string DescribeLayoutDifference(string beforeXml, string afterXml, Func<XElement, bool> isTarget = null)
         {
             if (string.IsNullOrWhiteSpace(afterXml)) return "the saved form could not be read back.";
-            return XmlEquivalence.AreEquivalent(MaskConditions(beforeXml), MaskConditions(afterXml), XmlEquivalenceOptions.Layout, out string diff)
+            return XmlEquivalence.AreEquivalent(MaskConditions(afterXml, isTarget), MaskConditions(beforeXml, isTarget), XmlEquivalenceOptions.Layout, out string diff)
                 ? null : diff;
         }
 
-        /// <summary>The form with the Conditions of every control replaced by a fixed marker in both carriers.</summary>
-        internal static string MaskConditions(string xml)
+        /// <summary>
+        /// The form with the Conditions of every control replaced by a fixed marker in both carriers. <paramref name="isTarget"/>
+        /// picks the XML element of the control that was written (<see cref="ControlParametersService.MatchControlElement"/>).
+        /// </summary>
+        internal static string MaskConditions(string xml, Func<XElement, bool> isTarget = null)
         {
             try
             {
                 var document = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
                 foreach (var element in document.Descendants())
                 {
+                    bool target = isTarget != null && isTarget(element);
                     foreach (string carrier in new[] { CustomPropertiesPayload.AttributeName, ControlConditionCarriers.WebUserControlPropertiesAttribute })
                     {
                         var attribute = element.Attributes().FirstOrDefault(a => string.Equals(a.Name.LocalName, carrier, StringComparison.Ordinal));
@@ -392,7 +477,16 @@ namespace GxMcp.Worker.Services
                         if (!CustomPropertiesPayload.TryParse(attribute.Value, out var payload) || payload == null) continue;
                         // Masked whether or not the property is present: the first Conditions a control gets
                         // appear only in the saved form, and a one-sided mask reported them as a layout change.
+                        bool onlyConditions = payload.Properties.Count == 0
+                            || (payload.Properties.Count == 1 && payload.TryGet(PropertyName, out _));
                         attribute.Value = payload.ToAttributeValue(PropertyName, "(masked)");
+                        // The control that is written gets PATTERN_ELEMENT_CUSTOM_PROPERTIES when its first property is written, so
+                        // the saved form has an attribute that holds nothing but the Conditions and the form before it has none:
+                        // the same layout. Without this a first Conditions on a grid (no custom properties yet) was read as
+                        // "the save changed something else" and the write was reverted. Only that control and only that carrier
+                        // (the other carrier is never created by the write): the same attribute going missing from another
+                        // control, or from the other carrier, is a change the save made.
+                        if (onlyConditions && target && carrier == CustomPropertiesPayload.AttributeName) attribute.Remove();
                     }
                 }
                 return document.ToString(SaveOptions.DisableFormatting);

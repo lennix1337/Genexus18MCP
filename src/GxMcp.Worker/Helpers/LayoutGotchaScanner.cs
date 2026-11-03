@@ -344,7 +344,47 @@ namespace GxMcp.Worker.Helpers
                 });
             }
 
+            // GotchaGridConditionIgnored (issue #830): in a layout form the Conditions of a grid are not a <condition>
+            // child or attribute: the SDK drops those (a write that carries one fails verification), and a caller who reads
+            // only saved/persisted can take the failure for a save. The grid's Conditions are its ControlWhere property.
+            // Say so before the save, not after a failed verification.
+            foreach (var grid in doc.Descendants().Where(e => IsLayoutGridName(e.Name.LocalName) && !IsInsideHtmlForm(e)))
+            {
+                object carrier = (object)grid.Elements().FirstOrDefault(c => IsConditionCarrierName(c.Name.LocalName))
+                    ?? grid.Attributes().FirstOrDefault(a => IsConditionCarrierName(a.Name.LocalName));
+                if (carrier == null) continue;
+                string shape = carrier is XElement child
+                    ? "<" + child.Name.LocalName + "> child"
+                    : "'" + ((XAttribute)carrier).Name.LocalName + "' attribute";
+                hits.Add(new Gotcha
+                {
+                    Code = GotchaCodes.GotchaGridConditionIgnored,
+                    Severity = "Warning",
+                    Element = grid.Name.LocalName,
+                    ControlId = (string)grid.Attribute("controlName") ?? (string)grid.Attribute("id"),
+                    Message = "A " + shape + " on <" + grid.Name.LocalName + "> is not part of the layout format: the SDK drops it, so the write does not "
+                              + "keep those Conditions.",
+                    Workaround = "Set the grid's Conditions as its ControlWhere property: genexus_properties action=get control=<grid> propertyName=ControlWhere "
+                                 + "returns the versionToken, then action=set with value=<expression>, expectedVersion and rollbackOnFailure=true."
+                });
+            }
+
             return hits;
+        }
+
+        private static bool IsLayoutGridName(string name)
+            => name.Equals("grid", StringComparison.OrdinalIgnoreCase) || name.Equals("simplegrid", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsConditionCarrierName(string name)
+            => name.Equals("condition", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("conditions", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("where", StringComparison.OrdinalIgnoreCase);
+
+        // A document can carry an html form and a layout form side by side: what counts is the form the element is in.
+        private static bool IsInsideHtmlForm(XElement element)
+        {
+            var form = element.Ancestors().FirstOrDefault(a => a.Name.LocalName.Equals("Form", StringComparison.OrdinalIgnoreCase));
+            return form != null && string.Equals((string)form.Attribute("type"), "html", StringComparison.OrdinalIgnoreCase);
         }
 
         // Valid ControlType values for gxAttribute, per SDK PropertyDescriptor.Converter.GetStandardValues().

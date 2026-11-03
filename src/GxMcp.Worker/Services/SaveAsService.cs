@@ -369,7 +369,7 @@ namespace GxMcp.Worker.Services
                 if (string.IsNullOrWhiteSpace(message)) message = inner["message"]?.ToString();
                 // The WebForm writer's message only says that the validator refused the form; the
                 // errors themselves travel in its top-level validationDiagnostics list (#746).
-                string diagnostics = ValidationErrorLines(inner["validationDiagnostics"] as JArray);
+                string diagnostics = ValidationErrorLines(inner["validationDiagnostics"] as JArray, message);
                 if (diagnostics != null)
                     message = string.IsNullOrWhiteSpace(message) ? diagnostics : message.TrimEnd() + "\n" + diagnostics;
             }
@@ -384,21 +384,24 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private static string ValidationErrorLines(JArray diagnostics)
+        // The errors the message does not already state: the validator's refusal now quotes its first errors itself
+        // (issue #830), and repeating them would spend the bounded answer on the same text twice.
+        internal static string ValidationErrorLines(JArray diagnostics, string stated = null)
         {
             if (diagnostics == null) return null;
+            // The refusal's summary squeezes the white space of what it quotes onto one line, so compare squeezed text.
+            string squeezedStated = string.IsNullOrEmpty(stated) ? null : SqueezeWhiteSpace(stated);
             var lines = diagnostics.OfType<JObject>()
                 .Where(d => GxMcp.Worker.Helpers.WebFormPreSaveValidator.IsErrorSeverity(d["severity"]?.ToString()))
-                .Select(d =>
-                {
-                    string text = d["message"]?.ToString()?.Trim();
-                    string source = d["source"]?.ToString()?.Trim();
-                    return string.IsNullOrEmpty(source) ? text : source + ": " + text;
-                })
-                .Where(line => !string.IsNullOrEmpty(line))
+                .Select(d => new { Text = d["message"]?.ToString()?.Trim(), Source = d["source"]?.ToString()?.Trim() })
+                .Where(d => !string.IsNullOrEmpty(d.Text)
+                    && (squeezedStated == null || squeezedStated.IndexOf(SqueezeWhiteSpace(d.Text), StringComparison.Ordinal) < 0))
+                .Select(d => string.IsNullOrEmpty(d.Source) ? d.Text : d.Source + ": " + d.Text)
                 .ToList();
             return lines.Count == 0 ? null : string.Join("\n", lines);
         }
+
+        private static string SqueezeWhiteSpace(string text) => System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
 
         private static string JoinLines(string text)
         {
