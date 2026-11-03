@@ -212,6 +212,27 @@ genexus_worker_reload mode=soft
 
 The worker will respawn on the next MCP call.
 
+### Tool calls hang for minutes and the MCP says nothing (antivirus / anti-ransomware)
+
+Behavioural anti-ransomware engines (Acronis Active Protection, Defender ASR "ransomware protection", Sophos CryptoGuard and similar) can flag `GxMcp.Worker.exe` and suspend it, and its parent `GxMcp.Gateway.exe` with it. The client then sees no answer until its own timeout (for example `sent no response or progress for 1800s`). Reported in [#831](https://github.com/lennix1337/Genexus18MCP/issues/831) with Acronis on 4.2.0.
+
+Typical signs:
+
+- The hang starts a few seconds to a couple of minutes after a fresh Worker starts, while the source-store backfill is running (hundreds of small `*.bin.gz` files are created and deleted under `%LOCALAPPDATA%GenexusMCPstate<hash>source-store`).
+- `worker_debug.log` stops at one timestamp and a 0-byte `*_rules.tmp-<guid>` stays in the source-store.
+- The antivirus log shows the Worker as a "suspicious process" and the Gateway as its "suspicious parent process".
+
+Only MCP cache files are touched; no KB file is involved. To fix it, add this folder as trusted in the antivirus (the exact wording varies by product):
+
+```
+%LOCALAPPDATA%GenexusMCP<InstallDir>GxMcp.Gateway.exe
+<InstallDir>workerGxMcp.Worker.exe
+```
+
+`<InstallDir>` is the folder described in [Corporate install](README.md#corporate-install-fixed-path-asr-friendly). After the exclusion, restart the AI client so a new Gateway and Worker start. If you do not know whether your product reacts, check its protection log around the time of the first hang.
+
+The binaries are not code-signed yet and the backfill file churn is a known trigger; both are tracked in #831.
+
 ---
 
 ## Networking
