@@ -82,6 +82,14 @@ try {
     & dotnet build $workerTests -c Release --nologo "-p:GX_PATH=$env:GX_PATH" 2>&1 | Tee-Object -FilePath $logPath -Append
     if ($LASTEXITCODE -ne 0) { throw "Worker live-test build failed with exit code $LASTEXITCODE." }
 
+    # The Worker net48 suite and the ProcessSmoke lane are the release preflight's own lanes, which
+    # hosted runners cannot run without the GeneXus SDK. Selecting them here, rather than copying
+    # their commands, keeps this job and release.ps1 on one definition (test-release-lane-parity).
+    & pwsh -NoProfile -File (Join-Path $root 'scripts\release-preflight.ps1') -GxPath $env:GX_PATH `
+        -OnlyLanes 'solution build and tests;solution process smoke tests' -SkipLive -SkipWarningBaseline `
+        -SummaryPath (Join-Path $OutputRoot 'preflight-summary.json') 2>&1 | Tee-Object -FilePath $logPath -Append
+    if ($LASTEXITCODE -ne 0) { throw "Release preflight test lanes failed with exit code $LASTEXITCODE." }
+
     & pwsh -NoProfile -File (Join-Path $root 'scripts\test-live.ps1') `
         -KbPath $env:GXMCP_TEST_KB -FixtureManifest $env:GXMCP_TEST_FIXTURE -GxPath $env:GX_PATH 2>&1 | Tee-Object -FilePath $logPath -Append
     if ($LASTEXITCODE -ne 0) { throw "Live Worker validation failed with exit code $LASTEXITCODE." }

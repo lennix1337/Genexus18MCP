@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $wrapper = Get-Content -LiteralPath (Join-Path $root 'scripts\release.ps1') -Raw
@@ -70,6 +70,7 @@ $candidateProbe = {
     function Warn($m) {}
     function Fail($m) { throw "Fail: $m" }
     function Invoke-Cmd { }
+    function git { $global:LASTEXITCODE = 0 }
     function gh {
         $global:LASTEXITCODE = 0
         if ($args[0] -eq 'pr' -and $args[1] -eq 'list') { return '[]' }
@@ -95,6 +96,7 @@ $reopenProbe = {
     function Warn($m) {}
     function Fail($m) { throw "Fail: $m" }
     function Invoke-Cmd { }
+    function git { $global:LASTEXITCODE = 0 }
     function gh {
         $global:LASTEXITCODE = 0
         if ($args[0] -eq 'pr' -and $args[1] -eq 'list') { return '[{"number":841,"state":"CLOSED","url":"https://github.com/o/r/pull/841"}]' }

@@ -161,6 +161,16 @@ $statusState = [ordered]@{
 $tag = $null
 $releaseUrl = $null
 $script:releaseIssueSnapshotReused = $false
+# State this run creates. A failure before the tag is pushed undoes exactly these (see
+# Invoke-ReleaseUndo); once publication starts, the next run resumes instead of undoing.
+$script:releaseOriginalHead = $null
+$script:releaseCommitSha = $null
+$script:releaseLocalCommitCreated = $false
+$script:releaseTagCreated = $false
+$script:releaseCandidateCreatedThisRun = $false
+$script:releasePreRunDirtyPaths = @()
+$script:releaseUndoDone = $false
+$releaseAssetNames = @()
 
 $releaseIssuesPath = Join-Path $root 'release-issues.txt'
 $releaseIssuesSnapshotPath = Join-Path $root 'release-issues.json'
@@ -575,18 +585,86 @@ Write-Host "Release status: $StatusFile" -ForegroundColor DarkGray
 function Step([string]$msg) { Write-Host "`n>>> $msg" -ForegroundColor Cyan; Write-ReleaseStatus -Phase $msg -State 'running' }
 function Ok  ([string]$msg) { Write-Host "    [OK] $msg" -ForegroundColor Green }
 function Warn([string]$msg) { Write-Host "    [!]  $msg" -ForegroundColor Yellow }
+
+# One line at the end of every run (success, dry run, prepare-only or failure) so the outcome
+# can be read from the last line of a log: version, tag, release, assets, npm and exit code.
+function Write-ReleaseFinalSummary {
+    param([int]$ExitCode, [string]$FailedStep = '')
+    $release = if ($statusState.releaseUrl) { [string]$statusState.releaseUrl } else { 'none' }
+    $assets = if (@($releaseAssetNames).Count -gt 0) { $releaseAssetNames -join ',' } else { 'none' }
+    $npm = if ($statusState.npmVersion) { [string]$statusState.npmVersion } elseif ($DryRun) { 'not-checked-dry-run' } else { 'unverified' }
+    $line = "RELEASE SUMMARY: version=$Version tag=$tag release=$release assets=$assets npm=$npm rc=$ExitCode"
+    if ($ExitCode -ne 0) { $line += " failed-step='$FailedStep'" }
+    Write-Host "`n$line"
+}
+
+# Undoes what this run created before publication started, and nothing else: the local release
+# commit, the local tag and the candidate branch/PR it pushed. Best effort: an undo problem is
+# reported and never replaces the failure that triggered it.
+function Invoke-ReleaseUndo {
+    param([Parameter(Mandatory = $true)][string]$Reason)
+    if ($DryRun -or $script:releaseUndoDone) { return }
+    if (-not ($script:releaseLocalCommitCreated -or $script:releaseTagCreated -or $script:releaseCandidateCreatedThisRun)) { return }
+    $script:releaseUndoDone = $true
+    Write-Host "`n>>> Undoing this run's unpublished state (failed at: $Reason)" -ForegroundColor Yellow
+    try {
+        if ($script:releaseCandidateCreatedThisRun) { Remove-OwnReleaseCandidate -Tag $tag }
+        if ($script:releaseTagCreated) {
+            & git tag -d $tag 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { Ok "Removed the local tag $tag created by this run." } else { Warn "Could not remove the local tag $tag." }
+        }
+        if ($script:releaseLocalCommitCreated) { Undo-ReleaseLocalCommit }
+    } catch {
+        Warn "Undo was incomplete: $($_.Exception.Message)"
+    }
+}
+
+# Moves the branch back to the commit the run started from. Files the release commit changed
+# are restored only when they were clean before the run: a pending edit the operator made is
+# kept, as it was, in the working tree.
+function Undo-ReleaseLocalCommit {
+    $head = [string](& git rev-parse HEAD 2>$null | Select-Object -First 1)
+    if ($head.Trim() -cne $script:releaseCommitSha) {
+        Warn "HEAD is no longer this run's release commit ($($head.Trim())); leaving it in place."
+        return
+    }
+    $changed = @(& git diff --name-only $script:releaseOriginalHead $script:releaseCommitSha)
+    $added = @(& git diff --name-only --diff-filter=A $script:releaseOriginalHead $script:releaseCommitSha)
+    & git reset -q --mixed $script:releaseOriginalHead
+    if ($LASTEXITCODE -ne 0) { throw "git reset to $script:releaseOriginalHead failed." }
+    $cleanBefore = @($changed | Where-Object { $script:releasePreRunDirtyPaths -notcontains $_ })
+    $tracked = @($cleanBefore | Where-Object { $added -notcontains $_ })
+    if ($tracked.Count -gt 0) {
+        & git checkout -q -- $tracked
+        if ($LASTEXITCODE -ne 0) { throw 'git checkout of the files this run changed failed.' }
+    }
+    foreach ($path in @($cleanBefore | Where-Object { $added -contains $_ })) {
+        Remove-Item -LiteralPath (Join-Path $root ($path -replace '/', '\')) -Force -ErrorAction SilentlyContinue
+    }
+    Ok "Rewound the local release commit $script:releaseCommitSha to $script:releaseOriginalHead."
+}
+
 function Fail([string]$msg) {
     $safeMessage = Protect-GxMcpReleaseMessage $msg
+    $failedStep = [string]$statusState.phase
     Write-Host "    [ERR] $safeMessage" -ForegroundColor Red
+    if (Get-Command Invoke-ReleaseUndo -ErrorAction SilentlyContinue) { Invoke-ReleaseUndo -Reason $failedStep }
     Write-ReleaseStatus -Phase 'failed' -State 'failed' -ExitCode 1 -ErrorMessage $safeMessage
+    if (Get-Command Write-ReleaseFinalSummary -ErrorAction SilentlyContinue) { Write-ReleaseFinalSummary -ExitCode 1 -FailedStep $failedStep }
     exit 1
 }
 
 trap {
     $message = Protect-GxMcpReleaseMessage $_.Exception.Message
+    # Parameter errors can fire before $statusState exists; the trap must not fail on it.
+    $failedStep = ''
+    $statusVariable = Get-Variable -Name statusState -ErrorAction SilentlyContinue
+    if ($statusVariable -and $null -ne $statusVariable.Value) { $failedStep = [string]$statusVariable.Value.phase }
+    if (Get-Command Invoke-ReleaseUndo -ErrorAction SilentlyContinue) { Invoke-ReleaseUndo -Reason $failedStep }
     if (Get-Command Write-ReleaseStatus -ErrorAction SilentlyContinue) {
         Write-ReleaseStatus -Phase 'failed' -State 'failed' -ExitCode 1 -ErrorMessage $message
     }
+    if (Get-Command Write-ReleaseFinalSummary -ErrorAction SilentlyContinue) { Write-ReleaseFinalSummary -ExitCode 1 -FailedStep $failedStep }
     throw $message
 }
 
@@ -986,6 +1064,7 @@ if ($DryRun) {
 
 Step "Checking git working tree"
 $status = git status --porcelain
+$script:releasePreRunDirtyPaths = @($status | ForEach-Object { ([string]$_).Substring(3).Trim().Trim('"') -replace '\\', '/' })
 # Files release.ps1 itself bumps/regenerates. A dirty tree consisting SOLELY of
 # these is the signature of a previous release run that died mid-way (e.g. a
 # failed test pass after the version bump) - that's resumable, not an error.
@@ -1312,7 +1391,10 @@ if ($resumeRelease) {
         git diff --cached --quiet
         $hasStagedChanges = $LASTEXITCODE -ne 0
         if ($hasStagedChanges) {
+            $script:releaseOriginalHead = (git rev-parse HEAD).Trim()
             Invoke-Cmd 'git' @('commit', '-m', "release: $tag")
+            $script:releaseLocalCommitCreated = $true
+            $script:releaseCommitSha = (git rev-parse HEAD).Trim()
             Ok "Committed release source state: release: $tag"
         } else {
             Ok "Release metadata was already committed."
@@ -1345,11 +1427,13 @@ if ($PrepareOnly) {
     if ($DryRun) {
         Warn "[DRY-RUN] would stop after preparing the release commit (-PrepareOnly); nothing is built or published."
         Write-ReleaseStatus -Phase 'dry-run-complete' -State 'succeeded' -ExitCode 0 -NextAction 'run-prepare-only'
+        Write-ReleaseFinalSummary -ExitCode 0
         exit 0
     } else {
         Ok "Release $tag prepared at commit $releaseSourceCommit. Push that SHA as a candidate branch/PR, wait for required CI, then rerun: .\release.ps1 -Version $Version"
         Write-Host "    prepared commit: $releaseSourceCommit" -ForegroundColor Cyan
         Write-ReleaseStatus -Phase 'prepared' -State 'succeeded' -ExitCode 0 -NextAction 'push-candidate-and-run-ci'
+        Write-ReleaseFinalSummary -ExitCode 0
         exit 0
     }
 }
@@ -1357,6 +1441,8 @@ if ($PrepareOnly) {
 # Cheap CI-presence check before the multi-minute build and preflight: the release commit is
 # fixed here, so required CI is either already green on this exact SHA or the release cannot
 # be published and building it would only fail later. Re-verified right before tagging.
+# Read-only: nothing is pushed here. The candidate branch for CI is created after the local
+# preflight has passed (see "Pushing candidate branch" below).
 if (-not $DryRun -and -not $resumeRelease) {
     Step "Checking required CI on the release source commit"
     if ($AutoCandidate) {
@@ -1364,8 +1450,7 @@ if (-not $DryRun -and -not $resumeRelease) {
         if ($ciState.Valid) {
             Ok "Required checks ($($ciState.Required -join ', ')) are already green on $releaseSourceCommit."
         } else {
-            Ensure-ReleaseCandidateCi -Commit $releaseSourceCommit -Tag $tag -DryRun:$DryRun
-            Ok "Candidate CI initiated for $releaseSourceCommit ($tag). Overlapping local build/preflight with remote CI."
+            Ok "Required CI is not green on $releaseSourceCommit yet; the candidate is pushed after the local preflight passes."
         }
     } else {
         Assert-ReleaseRequiredChecksGreen -Commit $releaseSourceCommit
@@ -1416,10 +1501,12 @@ $requiredArtefacts = @(
 foreach ($rel in $requiredArtefacts) {
     $path = Join-Path $publishDir $rel
     if (-not (Test-Path $path)) {
+        # A dry run builds nothing, so publish/ is expected to be absent there.
+        if ($DryRun) { Warn "[DRY-RUN] publish artefact $rel is not built by a dry run."; continue }
         Fail "Required publish artefact missing: $rel (the release workflow asserts on this)."
     }
 }
-Ok "publish/ artefacts validated."
+if ($DryRun) { Warn "[DRY-RUN] publish/ artefacts are not checked by a dry run." } else { Ok "publish/ artefacts validated." }
 
 # -- 3b. Build + package the Nexus IDE VSIX (additive, separate from build.ps1) --
 $extDir = Join-Path $root 'src\nexus-ide'
@@ -1536,6 +1623,19 @@ if ($SkipTests) {
     Warn '[DRY-RUN] warning baseline is included in the complete preflight.'
 } else {
     Ok 'Release warning baseline was included in the complete preflight.'
+}
+
+# The candidate branch and PR are remote state, so they wait until the local preflight has
+# passed: a failing lane pushes nothing. CI then runs on this exact SHA while the remaining
+# local steps run, and the tag waits for its required checks.
+if ($AutoCandidate -and -not $resumeRelease) {
+    $candidateCiValid = (-not $DryRun) -and (Test-ReleaseRequiredChecksQuiet -Commit $releaseSourceCommit).Valid
+    if ($candidateCiValid) {
+        Ok "Required checks are already green on $releaseSourceCommit; no candidate needed."
+    } else {
+        Ensure-ReleaseCandidateCi -Commit $releaseSourceCommit -Tag $tag -DryRun:$DryRun
+        if (-not $DryRun) { Ok "Candidate CI running for $releaseSourceCommit ($tag)." }
+    }
 }
 
 # -- 4b. Validate artefact version stamps match $Version ------------------
@@ -1711,10 +1811,12 @@ if ($resumeRelease) {
         Ok "Local tag $tag already points at the release source commit; reusing it."
     } else {
         Invoke-Cmd 'git' @('tag', '-a', $tag, $releaseSourceCommit, '-m', "$tag")
-        if ($DryRun) { Warn "[DRY-RUN] would create local tag $tag." } else { Ok 'Local tag created.' }
+        if ($DryRun) { Warn "[DRY-RUN] would create local tag $tag." } else { $script:releaseTagCreated = $true; Ok 'Local tag created.' }
     }
 
     if (-not $DryRun) {
+        # Publication starts here: a failure from now on is resumed by the next run, never undone.
+        $script:releaseUndoDone = $true
         Step "Pushing main + $tag to origin"
         Invoke-Cmd 'git' @('push', 'origin', 'HEAD')
         Invoke-Cmd 'git' @('push', 'origin', $tag)
@@ -1791,6 +1893,7 @@ $assetArgs = @($zipPath)
 if (Test-Path $shaPath) { $assetArgs += $shaPath }
 # Attach the Nexus IDE VSIX - ships in lockstep with the MCP release.
 if ($DryRun -or (Test-Path $vsixPath)) { $assetArgs += $vsixPath }
+$releaseAssetNames = @($assetArgs | ForEach-Object { Split-Path -Leaf ([string]$_) })
 if ($releaseExists -and $existingAssetsComplete) {
     $releaseUrl = "https://github.com/lennix1337/Genexus18MCP/releases/tag/$tag"
     Ok "Existing GitHub Release assets reused: $releaseUrl"
@@ -1873,7 +1976,7 @@ if (@($CloseIssues).Count -gt 0) {
     Close-ReleaseIssues -ReleaseUrl $issueReleaseUrl
 }
 
-if ($AutoCandidate -and -not $DryRun) {
+if ($AutoCandidate) {
     Cleanup-ReleaseCandidate -Tag $tag
 }
 
@@ -1896,3 +1999,4 @@ if ($DryRun) {
     $statusState.nextAction = 'complete'
     Write-ReleaseStatus -Phase 'complete' -State 'succeeded' -ExitCode 0 -NextAction $statusState.nextAction
 }
+Write-ReleaseFinalSummary -ExitCode 0
