@@ -118,17 +118,7 @@ namespace GxMcp.Worker.Services
                 catch { rootStart = DateTime.MinValue; }
                 var descendants = CollectDescendants(rootPid, rootStart);
                 // Kill leaves first so we don't reparent children to init mid-walk.
-                foreach (var pid in descendants)
-                {
-                    try
-                    {
-                        using (var child = System.Diagnostics.Process.GetProcessById(pid))
-                        {
-                            if (!child.HasExited) { child.Kill(); killed++; }
-                        }
-                    }
-                    catch { /* gone already */ }
-                }
+                killed += KillPids(descendants);
                 try { if (!root.HasExited) { root.Kill(); killed++; } }
                 catch { }
             }
@@ -139,6 +129,46 @@ namespace GxMcp.Worker.Services
             if (killed > 0)
                 Logger.Info("[KILL-TREE] killed " + killed + " process(es) under root pid=" + (root?.Id));
             return killed;
+        }
+
+        private static int KillPids(System.Collections.Generic.IEnumerable<int> pids)
+        {
+            int killed = 0;
+            foreach (var pid in pids)
+            {
+                try
+                {
+                    using (var child = System.Diagnostics.Process.GetProcessById(pid))
+                    {
+                        if (!child.HasExited) { child.Kill(); killed++; }
+                    }
+                }
+                catch { /* gone already */ }
+            }
+            return killed;
+        }
+
+        // #830 item 3b: a failed build's MSBuild root can exit on its own while its /m worker nodes keep running and
+        // hold the KB locked. They keep the exited root's PID as their WMI ParentProcessId, so they are found through
+        // it. Called while the root's Process object is still open: that handle keeps the PID from being recycled, and
+        // rootStart is the start time captured at launch, so every child found is ours. A live root is not touched here
+        // (KillProcessTree and ReapByPidIfAlive own it).
+        internal static int KillOrphanedChildren(System.Diagnostics.Process exitedRoot, DateTime rootStart)
+        {
+            if (exitedRoot == null || rootStart == DateTime.MinValue) return 0;
+            try
+            {
+                if (!exitedRoot.HasExited) return 0;
+                int killed = KillPids(CollectDescendants(exitedRoot.Id, rootStart));
+                if (killed > 0)
+                    Logger.Info("[BUILD-CLEANUP] killed " + killed + " MSBuild child process(es) left behind by exited pid=" + exitedRoot.Id);
+                return killed;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[BUILD-CLEANUP] orphan reap: " + ex.Message);
+                return 0;
+            }
         }
 
         // Plan 012: reap a spawned MSBuild process by PID from a context where the
@@ -4496,6 +4526,10 @@ namespace GxMcp.Worker.Services
                         status.ChildProcessState = ResolveChildProcessState(process, killRequested: timeoutKillRequested);
                     }
                 }
+                // #830 item 3b: a build that did not succeed must not leave its MSBuild workers holding the KB. This runs
+                // while the root's handle is still open; a successful build keeps its children, as before.
+                if (!string.Equals(status.Status, "Succeeded", StringComparison.OrdinalIgnoreCase))
+                    KillOrphanedChildren(process, reapStart);
                 FinalizeBuildAllStatus(status, fullText);
 
                 // Friction 2026-05-22: when ErrorCount==0 and ExitCode!=0, the
