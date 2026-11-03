@@ -3103,6 +3103,17 @@
             "description": "validate-kb: maximum number of…",
             "type": "integer"
           },
+          "log_limit": {
+            "description": "status/result: log lines per page.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "log_offset": {
+            "description": "status/result: 0-based log line to page…",
+            "minimum": 0,
+            "type": "integer"
+          },
           "mode": {
             "description": "With action=build: compile_check…",
             "enum": [

@@ -530,5 +530,39 @@ namespace GxMcp.Gateway.Tests
             Assert.False(OperationClassifier.RequiresSessionLease("genexus_lifecycle",
                 new JObject { ["action"] = "status" }));
         }
+
+        // #830 item 3: polling a Gateway operation id reads the job registry, so it must not
+        // need the KB lease. Otherwise a running job turns unreadable after the lease idles out.
+        [Theory]
+        [InlineData("status", "op:0123456789abcdef0123456789abcdef")]
+        [InlineData("status", "0123456789ABCDEF0123456789ABCDEF")]
+        [InlineData("result", "op:0123456789abcdef0123456789abcdef")]
+        [InlineData("result", "0123456789abcdef0123456789abcdef")]
+        public void LifecycleGatewayOperationPoll_DoesNotRequireSessionLease(string action, string target)
+        {
+            Assert.False(OperationClassifier.RequiresSessionLease("genexus_lifecycle",
+                new JObject { ["action"] = action, ["target"] = target }));
+        }
+
+        [Theory]
+        [InlineData("status", "0123456789abcdef0123456789abcdef")]
+        [InlineData("result", "0123456789abcdef0123456789abcdef")]
+        public void LifecycleGatewayOperationPoll_ViaJobIdArgument_DoesNotRequireSessionLease(string action, string jobId)
+        {
+            Assert.False(OperationClassifier.RequiresSessionLease("genexus_lifecycle",
+                new JObject { ["action"] = action, ["job_id"] = jobId }));
+        }
+
+        // A Worker task id (8 hex) is still read through the KB worker, and a malformed id is
+        // not a Gateway id: both keep the lease gate.
+        [Theory]
+        [InlineData("status", "op:01234567")]
+        [InlineData("result", "01234567")]
+        [InlineData("result", "op:0123456789abcdef0123456789abcdef0")]
+        public void LifecycleWorkerOrMalformedPoll_StillRequiresSessionLease(string action, string target)
+        {
+            Assert.True(OperationClassifier.RequiresSessionLease("genexus_lifecycle",
+                new JObject { ["action"] = action, ["target"] = target }));
+        }
     }
 }

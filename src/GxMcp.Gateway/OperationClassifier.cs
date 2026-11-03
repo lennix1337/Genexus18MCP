@@ -534,9 +534,16 @@ namespace GxMcp.Gateway
             if (string.Equals(canonical, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase))
             {
                 string? action = effectiveArgs["action"]?.ToString();
-                if (string.Equals(action, "result", StringComparison.OrdinalIgnoreCase)) return true;
-                if (string.Equals(action, "status", StringComparison.OrdinalIgnoreCase)
-                    && !string.IsNullOrWhiteSpace(effectiveArgs["target"]?.ToString())) return true;
+                bool isResult = string.Equals(action, "result", StringComparison.OrdinalIgnoreCase);
+                bool isStatus = string.Equals(action, "status", StringComparison.OrdinalIgnoreCase);
+                // #830 item 3: a poll of a Gateway operation id reads the job or tracker registry,
+                // not the KB. Gating it on the session lease made a still-running job unreadable
+                // after ~10 minutes idle (KB_LEASE_EXPIRED). Worker task ids (8 hex) keep the gate.
+                if ((isResult || isStatus)
+                    && LifecycleOperationAliasResolver.IsGatewayId(McpRouter.ResolveJobId(effectiveArgs)))
+                    return false;
+                if (isResult) return true;
+                if (isStatus && !string.IsNullOrWhiteSpace(effectiveArgs["target"]?.ToString())) return true;
                 return IsMutationCandidate(canonical, effectiveArgs);
             }
 

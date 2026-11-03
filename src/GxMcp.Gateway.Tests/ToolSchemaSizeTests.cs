@@ -254,7 +254,9 @@ namespace GxMcp.Gateway.Tests
             // revisions: the action enum value and the `toVersionId` input; the versionId/async/context
             // descriptions were shortened to offset part of it). Measured ~39813 tokens; ~37 headroom.
             // The typed genexus_wwp add_layout (the action value plus one description sentence) takes the schema from ~39844 to ~39879 tokens, so 39850 -> 39900.
-            Assert.True(approxTokens < 39900, $"tool_definitions.json is ~{approxTokens} tokens; budget 39900.");
+            // Issue #830: 39900 -> 40000 for genexus_lifecycle status/result `log_offset`/`log_limit` (paging into a
+            // finished build's log, the unit a capped error list points to). Measured ~39947 tokens; ~53 headroom.
+            Assert.True(approxTokens < 40000, $"tool_definitions.json is ~{approxTokens} tokens; budget 40000.");
         }
 
         [Theory]
@@ -314,12 +316,15 @@ namespace GxMcp.Gateway.Tests
         // image). Profiles cut every description to 40 chars, so shortening firstItem/firstItemType only
         // offsets the full-schema token budget: all 103100 -> 103250 (measured 103191), authoring
         // 71500 -> 71650 (measured 71562).
-        [InlineData("all", 103250)]
+        // Issue #830 adds genexus_lifecycle `log_offset`/`log_limit` (the same two properties in every profile
+        // that carries the tool): all 103250 -> 103500 (measured 103445), authoring 71650 -> 71900 (measured
+        // 71816), devops 52600 -> 52850 (measured 52791), ui 50400 -> 50600 (measured 50545).
+        [InlineData("all", 103500)]
         [InlineData("core", 27000)]
         [InlineData("standard", 61000)]
-        [InlineData("authoring", 71650)]
-        [InlineData("devops", 52600)]
-        [InlineData("ui", 50400)]
+        [InlineData("authoring", 71900)]
+        [InlineData("devops", 52850)]
+        [InlineData("ui", 50600)]
         [InlineData("db", 40000)]
         public void PublishedToolProfileStaysWithinItsByteBudget(string profile, int maxBytes)
         {
