@@ -275,6 +275,7 @@ Most install issues fall into a handful of buckets — see **[TROUBLESHOOTING.md
 - KB build errors / locked artifacts
 - Port 5000 already in use (legacy `http-shared` mode only)
 - Permissions on `%LOCALAPPDATA%\GenexusMCP\`
+- Tool calls hang with no message (an antivirus / anti-ransomware suspended the Worker and Gateway: exclude `%LOCALAPPDATA%\GenexusMCP\`)
 - Antigravity only shows `exit status 1` / `0xffffffff` with no useful stderr
 
 When a stdio launcher fails before the client can retain stderr, the wrapper writes
