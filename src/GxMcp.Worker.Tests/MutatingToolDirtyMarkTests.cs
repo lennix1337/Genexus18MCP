@@ -112,7 +112,7 @@ namespace GxMcp.Worker.Tests
         public void FastPathConsumerStillConsultsTheDirtySet()
         {
             string runner = Service("InProcessBuildRunner.cs");
-            const string fastPath = "targetMaySkipSpecify = !EditDirtyTracker.IsDirty(kbPath, t);";
+            const string fastPath = "forceTargets, skipSpecifyTargets, t, EditDirtyTracker.IsDirty(kbPath, t));";
 
             Assert.True(
                 Occurrences(runner, fastPath) == 1,
@@ -232,7 +232,9 @@ namespace GxMcp.Worker.Tests
         {
             string runner = Service("InProcessBuildRunner.cs");
             Assert.Contains(
-                "targetMaySkipSpecify = !EditDirtyTracker.IsDirty(kbPath, t);", runner, StringComparison.Ordinal);
+                "bool targetMaySkipSpecify = MaySkipSpecify(", runner, StringComparison.Ordinal);
+            Assert.Contains(
+                "forceTargets, skipSpecifyTargets, t, EditDirtyTracker.IsDirty(kbPath, t));", runner, StringComparison.Ordinal);
 
             string decision = Service("DefaultFastIncrementalDecision.cs");
             Assert.Contains(
