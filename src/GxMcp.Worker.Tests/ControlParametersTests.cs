@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml;
+using System.Xml.Linq;
 using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
@@ -353,7 +354,7 @@ namespace GxMcp.Worker.Tests
 
         private static string Form(string attributeValue)
             => "<GxMultiForm><Form type=\"layout\"><detail><layout><table controlName=\"T\"><row><cell>"
-               + "<data attribute=\"att:232\" PATTERN_ELEMENT_CUSTOM_PROPERTIES=\"" + System.Security.SecurityElement.Escape(attributeValue) + "\" />"
+               + "<data id=\"C232\" attribute=\"att:232\" PATTERN_ELEMENT_CUSTOM_PROPERTIES=\"" + System.Security.SecurityElement.Escape(attributeValue) + "\" />"
                + "<data attribute=\"att:226\" labelCaption=\"=McpCbId.ContextualTitle\" />"
                + "</cell></row></table></layout></detail></Form></GxMultiForm>";
 
@@ -411,6 +412,79 @@ namespace GxMcp.Worker.Tests
             Assert.Null(ControlParametersService.DescribeLayoutDifference(before, before, includeTarget: true));
         }
 
+        // A control that has no custom properties at all: the attribute exists only after its first property is written (issue #830).
+        private static string FormWithoutPayload()
+            => "<GxMultiForm><Form type=\"layout\"><detail><layout><table controlName=\"T\"><row><cell>"
+               + "<data id=\"C232\" attribute=\"att:232\" />"
+               + "<data attribute=\"att:226\" labelCaption=\"=McpCbId.ContextualTitle\" />"
+               + "</cell></row></table></layout></detail></Form></GxMultiForm>";
+
+        // The control that is written, as the typed routes name it for the comparison.
+        private static readonly Func<XElement, bool> WrittenControl = ControlParametersService.MatchControlElement(new LayoutControl { Id = "C232" });
+
+        [Fact]
+        public void LayoutDifference_WhenTheControlHadNoCustomPropertiesAtAll_IgnoresTheFirstParameters()
+        {
+            // The saved form gets an attribute that holds nothing but the list; the form before it has no attribute. That is
+            // the same layout, and read as a change it would revert the very first list written to such a control.
+            string after = Form(Payload(("DataProviderParameters", Tokens)));
+
+            Assert.Null(ControlParametersService.DescribeLayoutDifference(FormWithoutPayload(), after, isTarget: WrittenControl));
+            Assert.NotNull(ControlParametersService.DescribeLayoutDifference(
+                FormWithoutPayload(), after.Replace("=McpCbId.ContextualTitle", "=Other.ContextualTitle"), isTarget: WrittenControl));
+            // Without the element of the control nothing is dropped from the comparison.
+            Assert.NotNull(ControlParametersService.DescribeLayoutDifference(FormWithoutPayload(), after));
+        }
+
+        [Fact]
+        public void LayoutDifference_AnotherPropertyAppearingBesideTheFirstParameters_IsStillAChange()
+        {
+            string after = Form(Payload(("ControlType", "Dynamic Combo Box"), ("DataProviderParameters", Tokens)));
+
+            Assert.NotNull(ControlParametersService.DescribeLayoutDifference(FormWithoutPayload(), after, isTarget: WrittenControl));
+        }
+
+        [Fact]
+        public void LayoutDifference_AnotherControlGainingTheAttributeThatHoldsOnlyTheList_IsStillAChange()
+        {
+            // Only the control that was written may gain the attribute that holds nothing but its list.
+            string before = FormWithoutPayload();
+            string after = Form(Payload(("DataProviderParameters", Tokens)))
+                .Replace("<data attribute=\"att:226\"", "<data attribute=\"att:226\" PATTERN_ELEMENT_CUSTOM_PROPERTIES=\""
+                    + System.Security.SecurityElement.Escape(Payload(("DataProviderParameters", Tokens))) + "\"");
+
+            Assert.NotNull(ControlParametersService.DescribeLayoutDifference(before, after, isTarget: WrittenControl));
+        }
+
+        [Fact]
+        public void LayoutDifference_NamesWhatTheSaveDropped_BecauseTheFormReadBackGoesFirst()
+        {
+            string before = FormWithoutPayload().Replace("<data id=\"C232\"", "<data id=\"C232\" class=\"Attribute\"");
+            string after = Form(Payload(("DataProviderParameters", Tokens)));
+
+            string diff = ControlParametersService.DescribeLayoutDifference(before, after, isTarget: WrittenControl);
+
+            Assert.Contains("rejectedByPersist=[class]", diff);   // it was in the form before and is gone after the save
+            Assert.DoesNotContain("addedByPersist", diff);
+        }
+
+        [Fact]
+        public void MaskParameters_DropsAnAttributeThatHoldsNothingButTheList_OfTheControlThatWasWritten_AndKeepsOneThatHoldsMore()
+        {
+            Assert.DoesNotContain("PATTERN_ELEMENT_CUSTOM_PROPERTIES",
+                ControlParametersService.MaskParameters(Form(Payload(("DataProviderParameters", Tokens))), WrittenControl));
+            // An empty payload is no property either.
+            Assert.DoesNotContain("PATTERN_ELEMENT_CUSTOM_PROPERTIES", ControlParametersService.MaskParameters(Form("<Properties />"), WrittenControl));
+            // No element given: the attribute stays, masked.
+            Assert.Contains("PATTERN_ELEMENT_CUSTOM_PROPERTIES",
+                ControlParametersService.MaskParameters(Form(Payload(("DataProviderParameters", Tokens)))));
+
+            string masked = ControlParametersService.MaskParameters(Form(Payload(("ControlType", "Dynamic Combo Box"), ("DataProviderParameters", Tokens))), WrittenControl);
+            Assert.Contains("PATTERN_ELEMENT_CUSTOM_PROPERTIES", masked);
+            Assert.Contains("Dynamic Combo Box", masked);
+            Assert.DoesNotContain("McpCbFilterA", masked);
+        }
+
         // -------------------------------------------------------- layout model
 
         [Fact]
@@ -423,6 +497,66 @@ namespace GxMcp.Worker.Tests
             Assert.False(LayoutFormModel.IsLayoutOnlyReference("&Var"));
             Assert.False(LayoutFormModel.IsLayoutOnlyReference("att:abc"));
             Assert.False(LayoutFormModel.IsLayoutOnlyReference(null));
+        }
+
+        // Issue #830: a control is also written as <element>:<guid> (grid:9c1f2a3b-...), the spelling some clients print;
+        // it names the control by its GUID, as the bare GUID does, and says which element the control is.
+        [Theory]
+        [InlineData("grid:9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b", "9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b", "grid")]
+        [InlineData("  SimpleGrid:9C1F2A3B-4D5E-4F60-8A7B-0C1D2E3F4A5B ", "9C1F2A3B-4D5E-4F60-8A7B-0C1D2E3F4A5B", "SimpleGrid")]
+        [InlineData("9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b", "9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b", null)]
+        public void ControlGuid_IsTheBareGuidOrTheGuidOfAnElementReference(string reference, string expected, string expectedElement)
+        {
+            Assert.True(LayoutFormModel.TryGetControlGuid(reference, out string guid));
+            Assert.Equal(expected, guid);
+            Assert.True(LayoutFormModel.IsLayoutOnlyReference(reference));
+
+            Assert.True(LayoutFormModel.TryGetControlGuid(reference, out string guid2, out string element));
+            Assert.Equal(expected, guid2);
+            Assert.Equal(expectedElement, element);
+        }
+
+        [Theory]
+        [InlineData("grid:GridProva")]
+        [InlineData("grid:")]
+        [InlineData(":9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b")]
+        [InlineData("1grid:9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b")]
+        [InlineData("grid:9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5")]
+        [InlineData("att:232")]
+        [InlineData("var:5")]
+        [InlineData("&Filtro")]
+        [InlineData("")]
+        [InlineData(null)]
+        public void ControlGuid_IsNotFoundInAnythingElse(string reference)
+        {
+            Assert.False(LayoutFormModel.TryGetControlGuid(reference, out string guid));
+            Assert.Null(guid);
+        }
+
+        [Fact]
+        public void Find_ResolvesAnElementReferenceByGuid_WhenTheElementIsTheControlsOwn()
+        {
+            var grid = new LayoutControl { ElementName = "grid", ControlName = "GridProva", Id = "9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b" };
+            var other = new LayoutControl { ElementName = "table", ControlName = "GridTable", Id = "2725d433-0000-4000-8000-000000000001" };
+            var panel = Panel(grid, other);
+
+            Assert.Same(grid, Assert.Single(LayoutFormModel.Find(panel, "grid:9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b")));
+            Assert.Same(grid, Assert.Single(LayoutFormModel.Find(panel, "GRID:9C1F2A3B-4D5E-4F60-8A7B-0C1D2E3F4A5B")));
+            Assert.Same(other, Assert.Single(LayoutFormModel.Find(panel, "table:2725d433-0000-4000-8000-000000000001")));
+            Assert.Same(grid, Assert.Single(LayoutFormModel.Find(panel, "9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b")));   // the bare id never needed an element
+            Assert.Empty(LayoutFormModel.Find(panel, "grid:00000000-0000-4000-8000-000000000000"));
+        }
+
+        [Fact]
+        public void Find_RefusesAnElementReferenceWhoseElementIsNotTheControls()
+        {
+            // The id is unique, but a reference that names the wrong element is a mistake of the caller's, and a write
+            // through it must not land on the control that happens to have that id.
+            var grid = new LayoutControl { ElementName = "grid", ControlName = "GridProva", Id = "9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b" };
+            var panel = Panel(grid);
+
+            Assert.Empty(LayoutFormModel.Find(panel, "simplegrid:9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b"));
+            Assert.Empty(LayoutFormModel.Find(panel, "table:9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b"));
         }
 
         [Fact]

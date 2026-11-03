@@ -192,5 +192,96 @@ namespace GxMcp.Worker.Tests
             var hits = LayoutGotchaScanner.Scan(xml, _ => null);
             Assert.Contains(hits, h => h.Code == "GotchaDuplicateControlName" && h.ControlId == "Btn");
         }
+
+        // Issue #830: a grid's Conditions are its ControlWhere property; a <condition> child or attribute is not part of
+        // the layout format and the SDK drops it, so the write does not keep those Conditions.
+        [Theory]
+        [InlineData("grid", "<condition>NomeCliente like '%' + &amp;Filtro.Trim() + '%'</condition>", "<condition> child")]
+        [InlineData("simplegrid", "<Conditions>NomeCliente like 'A%'</Conditions>", "<Conditions> child")]
+        [InlineData("grid", "<where>NomeCliente like 'A%'</where>", "<where> child")]
+        public void Scan_GridConditionChildInLayoutForm_EmitsWarningThatNamesControlWhere(string grid, string child, string shape)
+        {
+            var xml = @"<GxMultiForm><Form id=""1"" type=""layout""><detail><layout id=""L""><table id=""T"" controlName=""MainTable"">
+                <row id=""R""><cell id=""C""><" + grid + @" id=""9c1f2a3b-4d5e-4f60-8a7b-0c1d2e3f4a5b"" controlName=""GridProva"">" + child + @"
+                    <table id=""G"" controlName=""GridTable"" /></" + grid + @"></cell></row>
+            </table></layout></detail></Form></GxMultiForm>";
+
+            var hits = LayoutGotchaScanner.Scan(xml, _ => null);
+
+            var hit = Assert.Single(hits, h => h.Code == GotchaCodes.GotchaGridConditionIgnored);
+            Assert.Equal("Warning", hit.Severity);
+            Assert.Equal(grid, hit.Element);
+            Assert.Equal("GridProva", hit.ControlId);
+            Assert.Contains(shape, hit.Message);
+            Assert.Equal("genexus://kb/tool-help/gotchas/GotchaGridConditionIgnored", hit.DocUrl);
+            // The same advice for both grids: both list ControlWhere, and nothing proves the Conditions part belongs to a grid.
+            Assert.Contains("ControlWhere", hit.Workaround);
+            Assert.Contains("expectedVersion", hit.Workaround);
+            Assert.DoesNotContain("part=Conditions", hit.Workaround);
+            Assert.DoesNotContain("classic", hit.Workaround);
+            // The message says what the SDK does, not what the receipt of a failed write reads like.
+            Assert.Contains("the SDK drops it", hit.Message);
+            Assert.DoesNotContain("reports success", hit.Message);
+        }
+
+        [Theory]
+        [InlineData("condition")]
+        [InlineData("Conditions")]
+        public void Scan_GridConditionAttributeInLayoutForm_EmitsWarning(string attribute)
+        {
+            var xml = @"<GxMultiForm><Form id=""1"" type=""layout""><detail><layout id=""L"">
+                <grid id=""G1"" " + attribute + @"=""NomeCliente like 'A%'"" />
+            </layout></detail></Form></GxMultiForm>";
+
+            var hits = LayoutGotchaScanner.Scan(xml, _ => null);
+
+            var hit = Assert.Single(hits, h => h.Code == GotchaCodes.GotchaGridConditionIgnored);
+            Assert.Contains("'" + attribute + "' attribute", hit.Message);
+            Assert.Equal("G1", hit.ControlId); // no controlName: the id is the only handle
+        }
+
+        [Fact]
+        public void Scan_GridWithoutConditionCarrier_HasNoGridConditionWarning()
+        {
+            var xml = @"<GxMultiForm><Form id=""1"" type=""layout""><detail><layout id=""L"">
+                <grid id=""G1"" controlName=""GridProva"" PATTERN_ELEMENT_CUSTOM_PROPERTIES=""x""><table id=""T"" controlName=""GridTable"" /></grid>
+                <simplegrid id=""G2"" controlName=""Grid""><item id=""I1"" attribute=""att:1"" /></simplegrid>
+            </layout></detail></Form></GxMultiForm>";
+
+            Assert.DoesNotContain(LayoutGotchaScanner.Scan(xml, _ => null), h => h.Code == GotchaCodes.GotchaGridConditionIgnored);
+        }
+
+        [Fact]
+        public void Scan_ConditionOnSomethingThatIsNotAGrid_HasNoGridConditionWarning()
+        {
+            var xml = @"<GxMultiForm><Form id=""1"" type=""layout""><detail><layout id=""L"">
+                <table id=""T"" controlName=""MainTable""><condition>x</condition></table>
+                <data id=""D"" attribute=""att:1"" where=""x"" />
+            </layout></detail></Form></GxMultiForm>";
+
+            Assert.DoesNotContain(LayoutGotchaScanner.Scan(xml, _ => null), h => h.Code == GotchaCodes.GotchaGridConditionIgnored);
+        }
+
+        [Fact]
+        public void Scan_GridConditionInAnHtmlForm_IsNotJudgedByTheLayoutRule()
+        {
+            var xml = @"<GxMultiForm><Form id=""1"" type=""html"">
+                <grid id=""G1""><condition>x</condition></grid>
+            </Form></GxMultiForm>";
+
+            Assert.DoesNotContain(LayoutGotchaScanner.Scan(xml, _ => null), h => h.Code == GotchaCodes.GotchaGridConditionIgnored);
+        }
+
+        [Fact]
+        public void Scan_GridConditionInTheLayoutFormOfADocumentThatAlsoHasAnHtmlForm_StillWarns()
+        {
+            var xml = @"<GxMultiForm>
+                <Form id=""1"" type=""html""><grid id=""H1""><condition>x</condition></grid></Form>
+                <Form id=""2"" type=""layout""><detail><layout id=""L""><grid id=""G1"" controlName=""GridLayout""><condition>y</condition></grid></layout></detail></Form>
+            </GxMultiForm>";
+
+            var hit = Assert.Single(LayoutGotchaScanner.Scan(xml, _ => null), h => h.Code == GotchaCodes.GotchaGridConditionIgnored);
+            Assert.Equal("GridLayout", hit.ControlId);
+        }
     }
 }

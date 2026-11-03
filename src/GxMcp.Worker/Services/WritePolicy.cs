@@ -297,6 +297,84 @@ namespace GxMcp.Worker.Services
             return string.Join(" ", invalidKeywords.Select(k => InvalidRuleKeywords[k]));
         }
 
+        // Issue #830: the Conditions part of a web panel or procedure is plain text of boolean expressions, each ending with
+        // ';'. A condition without the ';' makes the save fail with a bare "Erro" and no position, and the dry run, which
+        // checks only the pure syntax, accepts it. Consulted ONLY to enrich an already-failed Conditions save, never to
+        // block a write.
+        private const int MaxConditionLinesListed = 3;
+
+        /// <summary>The hint for a Conditions part save that failed without saying why; null for any other part or error.</summary>
+        public static string BuildConditionsPartFailureHint(string partName, string source, string error)
+            => string.Equals(partName, "Conditions", StringComparison.OrdinalIgnoreCase)
+               && !string.IsNullOrEmpty(source)
+               && IsUninformativeSaveError(error)
+                ? BuildConditionsPartHint(source)
+                : null;
+
+        public static string BuildConditionsPartHint(string source)
+        {
+            if (string.IsNullOrWhiteSpace(source)) return null;
+
+            // Comments are not conditions: a '// note' after the ';' must not make the line look unterminated. The line
+            // structure is kept, so the numbers below are the lines of the text that was sent.
+            var withoutTerminator = new List<string>();
+            string[] lines = StripConditionComments(source.Replace("\r\n", "\n").Replace('\r', '\n')).Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i].Trim();
+                if (line.Length == 0) continue;
+                if (!line.EndsWith(";", StringComparison.Ordinal)) withoutTerminator.Add("line " + (i + 1));
+            }
+
+            string rule = "The SDK reports a Conditions text it cannot parse only as 'Erro', with no position. Each condition ends with ';'";
+            if (withoutTerminator.Count == 0)
+                return rule + "; check the expression and the attributes and variables it names.";
+
+            string listed = string.Join(", ", withoutTerminator.Take(MaxConditionLinesListed));
+            if (withoutTerminator.Count > MaxConditionLinesListed)
+                listed += " and " + (withoutTerminator.Count - MaxConditionLinesListed) + " more";
+            return rule + "; the likely cause is that these lines do not end with ';': " + listed
+                   + " (a condition that spans lines ends with ';' on its last line).";
+        }
+
+        /// <summary>
+        /// The text without its <c>//</c> and <c>/* */</c> comments, newlines kept so that line numbers stay the same.
+        /// A quote ('...' or "...") shuts comments out until it closes or the line ends: <c>"http://host"</c> is not a comment.
+        /// </summary>
+        internal static string StripConditionComments(string source)
+        {
+            if (string.IsNullOrEmpty(source)) return source;
+            var result = new System.Text.StringBuilder(source.Length);
+            bool inBlock = false;
+            char quote = '\0';
+            for (int i = 0; i < source.Length; i++)
+            {
+                char c = source[i];
+                char next = i + 1 < source.Length ? source[i + 1] : '\0';
+                if (inBlock)
+                {
+                    if (c == '*' && next == '/') { inBlock = false; i++; }
+                    else if (c == '\n') result.Append(c);
+                    continue;
+                }
+                if (quote != '\0')
+                {
+                    result.Append(c);
+                    if (c == quote || c == '\n') quote = '\0';
+                    continue;
+                }
+                if (c == '/' && next == '*') { inBlock = true; i++; continue; }
+                if (c == '/' && next == '/')
+                {
+                    while (i + 1 < source.Length && source[i + 1] != '\n') i++;
+                    continue;
+                }
+                if (c == '"' || c == '\'') quote = c;
+                result.Append(c);
+            }
+            return result.ToString();
+        }
+
         public static bool ShouldRetryWithoutPartSave(string partName, string exceptionMessage, string diagnosticText)
         {
             if (!IsLogicalSourcePart(partName))

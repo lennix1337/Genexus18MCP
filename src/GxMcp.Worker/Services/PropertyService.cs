@@ -169,7 +169,7 @@ namespace GxMcp.Worker.Services
                     if (!string.IsNullOrEmpty(controlName))
                     {
                         container = FindControl(obj, controlName);
-                        if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
+                        if (container == null) return ControlNotFoundError(obj, target, controlName);
                     }
 
                     var selectedRecoveryNames = reconcileTimedOutWrite
@@ -554,6 +554,37 @@ namespace GxMcp.Worker.Services
                 .Where(n => !string.IsNullOrEmpty(n))
                 .ToList());
 
+            // Issue #830: a caller who looks for the Conditions of a grid tries Condition, Conditions or Where. When what was
+            // listed for the control has ControlWhere, that is the property: offer it first. Decided from the control's own
+            // property list, never from the kind of element. Other suggestions stay, after it.
+            bool OfferConditions(IEnumerable<string> names, List<string> suggestions)
+            {
+                if (string.IsNullOrEmpty(controlName) || controlName.TrimStart().StartsWith("&")) return false;
+                if (!names.Any(ControlPropertyHints.IsConditionsName)) return false;
+                if (!GetAllPropNames().Any(n => string.Equals(n, ControlPropertyHints.ConditionsProperty, StringComparison.OrdinalIgnoreCase))) return false;
+                suggestions.RemoveAll(s => string.Equals(s, ControlPropertyHints.ConditionsProperty, StringComparison.OrdinalIgnoreCase));
+                suggestions.Insert(0, ControlPropertyHints.ConditionsProperty);
+                if (suggestions.Count > 3) suggestions.RemoveRange(3, suggestions.Count - 3);
+                return true;
+            }
+
+            // The step and the hint that list what is there. projection=minimal and standard are fixed lists of common
+            // names, which a control rarely has: asked about a control they answered an empty list, so for a control the
+            // listing is the control's own, in full (issue #830).
+            void AddListingStep(JArray steps)
+            {
+                if (!string.IsNullOrEmpty(controlName))
+                    steps.Add(Models.McpResponse.NextStep("genexus_properties",
+                        new JObject { ["action"] = "get", ["name"] = target, ["control"] = controlName }, "Lists every property of the control."));
+                else
+                    steps.Add(Models.McpResponse.NextStep("genexus_properties",
+                        new JObject { ["action"] = "get", ["name"] = target, ["projection"] = "minimal" }, "View common properties using minimal projection."));
+            }
+            string ListingHint(string objectHint) => string.IsNullOrEmpty(controlName)
+                ? objectHint
+                : "Call genexus_properties with action=get and the same control, with no propertyName and no projection, to list every property of the control "
+                  + "(projection=minimal and standard list only a fixed set of common names, which a control rarely has).";
+
             var requested = new List<string>();
             if (!string.IsNullOrWhiteSpace(propertyName))
             {
@@ -611,6 +642,7 @@ namespace GxMcp.Worker.Services
                 {
                     string cleanSearch = searchPattern.Trim('*', '?');
                     var suggestions = FindPropertySuggestions(cleanSearch, GetAllPropNames(), 3);
+                    bool conditionsListed = OfferConditions(new[] { cleanSearch }, suggestions);
                     var nextSteps = new JArray();
                     foreach (var sug in suggestions.Take(2))
                     {
@@ -618,7 +650,7 @@ namespace GxMcp.Worker.Services
                         if (!string.IsNullOrEmpty(controlName)) stepArgs["control"] = controlName;
                         nextSteps.Add(Models.McpResponse.NextStep("genexus_properties", stepArgs, $"Read closest matching property '{sug}'."));
                     }
-                    nextSteps.Add(Models.McpResponse.NextStep("genexus_properties", new JObject { ["action"] = "get", ["name"] = target, ["projection"] = "minimal" }, "View common properties using minimal projection."));
+                    AddListingStep(nextSteps);
 
                     string msg = $"No properties matching '{searchPattern}' found on {entityDesc}.";
                     if (suggestions.Count > 0)
@@ -630,7 +662,9 @@ namespace GxMcp.Worker.Services
                     return Models.McpResponse.Err(
                         code: "PropertyNotFound",
                         message: msg,
-                        hint: "Use projection=minimal to view common properties or omit query/wildcard to list all properties.",
+                        hint: conditionsListed
+                            ? ControlPropertyHints.ControlWhereHint(controlName)
+                            : ListingHint("Use projection=minimal to view common properties or omit query/wildcard to list all properties."),
                         nextSteps: nextSteps,
                         target: target,
                         errorExtra: errorExtra);
@@ -659,6 +693,7 @@ namespace GxMcp.Worker.Services
                 if (matched == null)
                 {
                     var suggestions = FindPropertySuggestions(targetPropName, GetAllPropNames(), 3);
+                    bool conditionsListed = OfferConditions(new[] { targetPropName }, suggestions);
                     var nextSteps = new JArray();
                     foreach (var sug in suggestions.Take(2))
                     {
@@ -666,7 +701,7 @@ namespace GxMcp.Worker.Services
                         if (!string.IsNullOrEmpty(controlName)) stepArgs["control"] = controlName;
                         nextSteps.Add(Models.McpResponse.NextStep("genexus_properties", stepArgs, $"Read closest matching property '{sug}'."));
                     }
-                    nextSteps.Add(Models.McpResponse.NextStep("genexus_properties", new JObject { ["action"] = "get", ["name"] = target, ["projection"] = "minimal" }, "View common properties using minimal projection."));
+                    AddListingStep(nextSteps);
 
                     string msg = $"Property '{targetPropName}' not found on {entityDesc}.";
                     if (suggestions.Count > 0)
@@ -678,7 +713,9 @@ namespace GxMcp.Worker.Services
                     return Models.McpResponse.Err(
                         code: "PropertyNotFound",
                         message: msg,
-                        hint: "Call genexus_properties with action=get and no propertyName (or projection=minimal) to see available properties.",
+                        hint: conditionsListed
+                            ? ControlPropertyHints.ControlWhereHint(controlName)
+                            : ListingHint("Call genexus_properties with action=get and no propertyName (or projection=minimal) to see available properties."),
                         nextSteps: nextSteps,
                         target: target,
                         errorExtra: errorExtra);
@@ -730,6 +767,7 @@ namespace GxMcp.Worker.Services
                         suggestions.AddRange(FindPropertySuggestions(req, propNames, 2));
                     }
                     suggestions = suggestions.Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList();
+                    bool conditionsListed = OfferConditions(requested, suggestions);
 
                     var nextSteps = new JArray();
                     foreach (var sug in suggestions.Take(2))
@@ -738,7 +776,7 @@ namespace GxMcp.Worker.Services
                         if (!string.IsNullOrEmpty(controlName)) stepArgs["control"] = controlName;
                         nextSteps.Add(Models.McpResponse.NextStep("genexus_properties", stepArgs, $"Read closest matching property '{sug}'."));
                     }
-                    nextSteps.Add(Models.McpResponse.NextStep("genexus_properties", new JObject { ["action"] = "get", ["name"] = target, ["projection"] = "minimal" }, "View common properties using minimal projection."));
+                    AddListingStep(nextSteps);
 
                     string msg = $"None of the requested properties ({string.Join(", ", requested)}) were found on {entityDesc}.";
                     if (suggestions.Count > 0)
@@ -750,7 +788,9 @@ namespace GxMcp.Worker.Services
                     return Models.McpResponse.Err(
                         code: "PropertyNotFound",
                         message: msg,
-                        hint: "Call genexus_properties with action=get and no propertyName (or projection=minimal) to see available properties.",
+                        hint: conditionsListed
+                            ? ControlPropertyHints.ControlWhereHint(controlName)
+                            : ListingHint("Call genexus_properties with action=get and no propertyName (or projection=minimal) to see available properties."),
                         nextSteps: nextSteps,
                         target: target,
                         errorExtra: errorExtra);
@@ -804,6 +844,8 @@ namespace GxMcp.Worker.Services
             return Models.McpResponse.Ok(target: target, code: "PropertiesRead", result: fullResult);
         }
 
+        private const int MaxAvailableNamesListed = 60;
+
         /// <summary>
         /// Builds a filtered <c>projection=minimal</c> or <c>projection=standard</c>
         /// read.
@@ -823,6 +865,10 @@ namespace GxMcp.Worker.Services
         /// The full/default read is deliberately not routed here. It does not
         /// filter, and it returns the whole cloned result rather than a
         /// reconstructed one.
+        ///
+        /// A projection that leaves out every property of the object or control says so
+        /// (<c>omittedProperties</c>, <c>note</c>, <c>availablePropertyNames</c>), so an empty list is
+        /// never mistaken for an object with no properties (issue #830); one that keeps some answers as before.
         /// </summary>
         private static string BuildProjectionResult(
             string target,
@@ -854,6 +900,20 @@ namespace GxMcp.Worker.Services
             if (!string.IsNullOrEmpty(versionToken))
             {
                 projResult["versionToken"] = versionToken;
+            }
+            // Issue #830: a projection is a fixed list of common names. On an object or control that has
+            // none of them the answer was an empty list that read as "this has no properties". Say that it left them
+            // all out, how many there are and which names the caller can ask for. A projection that keeps some
+            // properties answers as it always did.
+            if (props.Count > 0 && filteredProps.Count == 0)
+            {
+                projResult["omittedProperties"] = props.Count;
+                projResult["note"] = "projection=" + projection + " lists only a fixed set of common properties and none of them is on this "
+                    + "object or control, which has " + props.Count + " properties. Omit projection to list them all, or pass propertyName "
+                    + "or query to read specific ones.";
+                var availableNames = props.Select(p => p["name"]?.ToString()).Where(n => !string.IsNullOrEmpty(n)).Distinct().ToList();
+                projResult["availablePropertyNames"] = new JArray(availableNames.Take(MaxAvailableNamesListed));
+                if (availableNames.Count > MaxAvailableNamesListed) projResult["availablePropertyNamesTruncated"] = true;
             }
             return Models.McpResponse.Ok(target: target, code: "PropertiesRead", result: projResult);
         }
@@ -972,14 +1032,15 @@ namespace GxMcp.Worker.Services
                 {
                     container = FindControl(obj, controlName);
                     if (container != null && !(container is global::Artech.Packages.Patterns.Objects.PatternInstanceElementAttributes)
-                        && (string.Equals(propName?.Trim(), "ControlWhere", StringComparison.OrdinalIgnoreCase) || string.Equals(propName?.Trim(), "Conditions", StringComparison.OrdinalIgnoreCase)))
+                        && (string.Equals(propName?.Trim(), "ControlWhere", StringComparison.OrdinalIgnoreCase) || string.Equals(propName?.Trim(), "Conditions", StringComparison.OrdinalIgnoreCase)
+                            || ControlConditionsService.IsSingularAlias(propName)))
                     {
                         var layout = ResolveLayoutControl(obj, controlName);
-                        if (layout != null) container = layout;
+                        if (layout != null && (!ControlConditionsService.IsSingularAlias(propName) || IsConditionsAlias(propName, LayoutPropertyNames(layout)))) container = layout;
                     }
-                    if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
+                    if (container == null) return ControlNotFoundError(obj, target, controlName);
                     if (IsLayoutControlContainer((object)container))
-                        return ConditionsWriter != null && ControlConditionsService.IsConditionsProperty(propName)
+                        return ConditionsWriter != null && (ControlConditionsService.IsConditionsProperty(propName) || IsConditionsAlias(propName, LayoutPropertyNames((object)container)))
                             ? ConditionsWriter.Set(target, controlName, value, null, false, true, typeFilter)
                             : LayoutControlWriteUnsupported(target, controlName, propName);
                 }
@@ -1104,15 +1165,16 @@ namespace GxMcp.Worker.Services
                     container = FindControl(obj, controlName);
                     var only = properties.Properties().Count() == 1 ? properties.Properties().First() : null;
                     if (container != null && !(container is global::Artech.Packages.Patterns.Objects.PatternInstanceElementAttributes)
-                        && only != null && (string.Equals(only.Name?.Trim(), "ControlWhere", StringComparison.OrdinalIgnoreCase) || string.Equals(only.Name?.Trim(), "Conditions", StringComparison.OrdinalIgnoreCase)))
+                        && only != null && (string.Equals(only.Name?.Trim(), "ControlWhere", StringComparison.OrdinalIgnoreCase) || string.Equals(only.Name?.Trim(), "Conditions", StringComparison.OrdinalIgnoreCase)
+                            || ControlConditionsService.IsSingularAlias(only.Name)))
                     {
                         var layout = ResolveLayoutControl(obj, controlName);
-                        if (layout != null) container = layout;
+                        if (layout != null && (!ControlConditionsService.IsSingularAlias(only.Name) || IsConditionsAlias(only.Name, LayoutPropertyNames(layout)))) container = layout;
                     }
-                    if (container == null) return Models.McpResponse.Err(code: "ControlNotFound", message: $"Control '{controlName}' not found in {obj.Name}.", hint: "Use genexus_inspect to list controls available in this object's layout.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target }, "Returns the layout controls for this object.")), target: target);
+                    if (container == null) return ControlNotFoundError(obj, target, controlName);
                     if (IsLayoutControlContainer((object)container))
                     {
-                        if (ConditionsWriter != null && only != null && ControlConditionsService.IsConditionsProperty(only.Name))
+                        if (ConditionsWriter != null && only != null && (ControlConditionsService.IsConditionsProperty(only.Name) || IsConditionsAlias(only.Name, LayoutPropertyNames((object)container))))
                             return ConditionsWriter.Set(target, controlName, only.Value?.ToString() ?? string.Empty, expectedVersion, dryRun, rollbackOnFailure, typeFilter);
                         return LayoutControlWriteUnsupported(target, controlName, string.Join(", ", properties.Properties().Select(p => p.Name)));
                     }
@@ -2549,6 +2611,14 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private static string ControlNotFoundError(KBObject obj, string target, string controlName)
+            => Models.McpResponse.Err(
+                code: "ControlNotFound",
+                message: $"Control '{controlName}' not found in {obj.Name}.",
+                hint: ControlPropertyHints.ControlNotFoundHint(controlName),
+                nextSteps: new JArray(Models.McpResponse.NextStep("genexus_inspect", new JObject { ["name"] = target, ["include"] = new JArray("controls") }, "Returns the layout controls for this object.")),
+                target: target);
+
         private dynamic FindControl(KBObject obj, string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
@@ -2642,13 +2712,28 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        /// <summary>
+        /// Whether <paramref name="propName"/> is the singular spelling of the Conditions property (issue #830) and
+        /// <paramref name="layoutBag"/>, a layout control's property bag, answers to it: the control lists ControlWhere
+        /// and has no property of its own called Condition.
+        /// </summary>
+        internal static bool IsConditionsAlias(string propName, IEnumerable<string> controlPropertyNames)
+            => ControlConditionsService.IsSingularAlias(propName)
+               && ControlConditionsService.AliasApplies(controlPropertyNames);
+
+        // The property names of a layout control's bag (empty when it is not one or cannot be read).
+        private static List<string> LayoutPropertyNames(object layoutBag)
+            => ControlConditionsService.PropertyNamesOf(layoutBag as Artech.Common.Properties.PropertiesObject);
+
         // The property bag of a layout-form control belongs to a DETACHED copy of the form, so a
         // scalar write through it would "succeed" in memory and persist nothing. Say so instead.
         private static string LayoutControlWriteUnsupported(string target, string controlName, string propertyNames)
             => Models.McpResponse.Err(
                 code: "LayoutControlPropertyWriteUnsupported", target: target,
                 message: "'" + controlName + "' is a control of a layout form; its properties are not written through genexus_properties (" + propertyNames + ").",
-                hint: "Only the parameter list (propertyName=DataProviderParameters with expressions[]) and the Conditions (propertyName=ControlWhere with value, expectedVersion and rollbackOnFailure) of a Dynamic Combo Box can be set here. For other control properties edit the WebForm XML with genexus_edit part=WebForm.",
+                hint: "Only the parameter list (propertyName=DataProviderParameters with expressions[]) and the Conditions of a control that lists ControlWhere "
+                    + "(a Dynamic Combo Box, a grid; propertyName=ControlWhere, or Conditions or Condition, with value, expectedVersion and rollbackOnFailure) can be set here. "
+                    + "For other control properties edit the WebForm XML with genexus_edit part=WebForm.",
                 extra: new JObject { ["persisted"] = false, ["savePathExercised"] = false });
 
         internal static bool IsLayoutControlContainer(object container)

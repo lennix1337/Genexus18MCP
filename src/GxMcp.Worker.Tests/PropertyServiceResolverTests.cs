@@ -422,6 +422,244 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("Id", json["result"]?["value"]?.ToString());
         }
 
+        // ------------------------------------------------ issue #830: a grid's Conditions are ControlWhere
+
+        // The property names a layout form lists for a grid (the listing read from a real one: 39 names). It has ControlWhere
+        // and no Condition, and the closest spelling of Condition in it is "collection".
+        private static readonly string[] GridPropertyNames =
+        {
+            "id", "controlName", "class", "collection", "rows", "dataSelectorReference", "dataSelectorParametersCode",
+            "defaultTable", "[ElementName]", "SDSmartGrid_scrollDirection", "SDSmartGrid_SnapToGrid", "SDSmartGrid_multipleItems",
+            "GxObjClass", "RenderingMode", "SAVE_STATE", "ControlBaseTable", "ControlOrder", "ControlWhere", "ControlUnique",
+            "AllowDrop", "AllowDrag", "NotifyContextChange", "title", "align", "GxWidth", "GxHeight", "cellPadding", "cellSpacing",
+            "SflRender", "multi_columns", "multi_columns_xs", "multi_columns_sm", "multi_columns_md", "multi_columns_lg",
+            "PROP_EMPTYDATASETTEXT", "AllowCollapsing", "Collapsed", "idIsSDControl", "IsAbstractLayoutControl"
+        };
+
+        // A control that has no ControlWhere, such as a table of a layout form.
+        private static readonly string[] TablePropertyNames = { "id", "controlName", "class", "[ElementName]", "width", "height" };
+
+        private static JObject ControlProps(string[] names, string control = "GridProva")
+        {
+            return new JObject
+            {
+                ["name"] = "PainelLista",
+                ["control"] = control,
+                ["properties"] = new JArray(names.Select(n =>
+                    new JObject { ["name"] = n, ["value"] = n == "controlName" ? control : "", ["type"] = "System.String", ["readOnly"] = false }))
+            };
+        }
+
+        private static JObject GridControlProps() => ControlProps(GridPropertyNames);
+
+        [Theory]
+        [InlineData("Condition")]
+        [InlineData("condition")]
+        [InlineData("Conditions")]
+        [InlineData(" Where ")]
+        [InlineData("Grid_Condition")]
+        public void SingleProperty_ConditionsLikeNameOnAControlThatListsControlWhere_OffersControlWhereFirst(string requested)
+        {
+            string raw = PropertyService.ShapeGetPropertiesResult(
+                GridControlProps(), target: "PainelLista", controlName: "GridProva", propertyName: requested);
+
+            var error = JObject.Parse(raw)["error"] as JObject;
+            Assert.Equal("PropertyNotFound", error["code"]?.ToString());
+            var suggestions = ((JArray)error["didYouMean"]).Select(t => t.ToString()).ToList();
+            Assert.Equal("ControlWhere", suggestions[0]);
+            Assert.True(suggestions.Count <= 3);
+            Assert.Contains("'ControlWhere'", error["message"]?.ToString());
+            Assert.Contains("ControlWhere", error["hint"]?.ToString());
+            Assert.Contains("expectedVersion", error["hint"]?.ToString());
+            Assert.Contains("<condition>", error["hint"]?.ToString());
+            var first = error["nextSteps"][0];
+            Assert.Equal("genexus_properties", first["tool"]?.ToString());
+            Assert.Equal("ControlWhere", first["args"]?["propertyName"]?.ToString());
+            Assert.Equal("GridProva", first["args"]?["control"]?.ToString());
+        }
+
+        [Fact]
+        public void ControlWhere_IsAPropertyOfTheGrid_AndIsFound()
+        {
+            var json = JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                GridControlProps(), target: "PainelLista", controlName: "GridProva", propertyName: "ControlWhere"));
+
+            Assert.Equal("PropertiesRead", json["code"]?.ToString());
+            Assert.Null(json["error"]);
+        }
+
+        [Fact]
+        public void MultiProperty_AllMissingWithAConditionsName_OffersControlWhere_AndKeepsTheSuggestionOfTheOtherName()
+        {
+            // "Where" is a piece of ControlWhere and "Order" a piece of ControlOrder.
+            string raw = PropertyService.ShapeGetPropertiesResult(
+                GridControlProps(), target: "PainelLista", controlName: "GridProva",
+                propertyNames: new[] { "Where", "Order" });
+
+            var error = JObject.Parse(raw)["error"] as JObject;
+            Assert.Equal("PropertyNotFound", error["code"]?.ToString());
+            var suggestions = ((JArray)error["didYouMean"]).Select(t => t.ToString()).ToList();
+            Assert.Equal("ControlWhere", suggestions[0]);
+            Assert.Contains("ControlOrder", suggestions);
+            Assert.True(suggestions.Count <= 3);
+            Assert.Contains("ControlWhere", error["hint"]?.ToString());
+        }
+
+        [Fact]
+        public void Query_ConditionsNameOnAControlThatListsControlWhere_OffersControlWhere()
+        {
+            string raw = PropertyService.ShapeGetPropertiesResult(
+                GridControlProps(), target: "PainelLista", controlName: "GridProva", query: "Condition");
+
+            var error = JObject.Parse(raw)["error"] as JObject;
+            Assert.Equal("PropertyNotFound", error["code"]?.ToString());
+            Assert.Equal("ControlWhere", ((JArray)error["didYouMean"])[0].ToString());
+            Assert.Contains("ControlWhere", error["hint"]?.ToString());
+        }
+
+        // What is offered follows the list of the control, not the kind of element it is: a control whose list has no
+        // ControlWhere (a table) is not sent to a property it does not have.
+        [Theory]
+        [InlineData("Condition")]
+        [InlineData("Conditions")]
+        [InlineData("ControlWhere")]
+        public void ConditionsLikeName_OnAControlWhoseListHasNoControlWhere_KeepsTheGenericRefusal(string requested)
+        {
+            var error = JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                ControlProps(TablePropertyNames, "TabelaProva"), target: "PainelLista", controlName: "TabelaProva", propertyName: requested))["error"] as JObject;
+
+            Assert.Equal("PropertyNotFound", error["code"]?.ToString());
+            Assert.DoesNotContain("ControlWhere", error["hint"]?.ToString());
+            Assert.DoesNotContain("ControlWhere", (error["didYouMean"] as JArray)?.Select(t => t.ToString()) ?? Enumerable.Empty<string>());
+            Assert.DoesNotContain("ControlWhere", error["nextSteps"].Select(s => s["args"]?["propertyName"]?.ToString() ?? string.Empty));
+        }
+
+        [Fact]
+        public void ConditionsLikeName_OnAnObjectOrAVariable_KeepsTheGenericRefusal()
+        {
+            var onObject = JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                SamplePropsResult(), target: "Customer", propertyName: "Condition"))["error"] as JObject;
+            Assert.DoesNotContain("ControlWhere", onObject["hint"]?.ToString());
+
+            var onVariable = JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                GridControlProps(), target: "PainelLista", controlName: "&Filtro", propertyName: "Condition"))["error"] as JObject;
+            Assert.DoesNotContain("ControlWhere", onVariable["hint"]?.ToString());
+        }
+
+        // The refusal of a classic grid and of a simplegrid is the same: both list ControlWhere, and nothing here sends the
+        // caller to the Conditions part (nothing proves that part belongs to a grid).
+        [Fact]
+        public void TheRefusalOfAControlThatListsControlWhere_NeverSendsTheCallerToTheConditionsPart()
+        {
+            var error = JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                GridControlProps(), target: "PainelLista", controlName: "GridProva", propertyName: "Condition"))["error"] as JObject;
+
+            Assert.DoesNotContain("part=Conditions", error["hint"]?.ToString());
+            Assert.DoesNotContain("classic", error["hint"]?.ToString());
+            Assert.DoesNotContain(error["nextSteps"].Select(s => s["tool"]?.ToString()), tool => tool == "genexus_read");
+        }
+
+        [Fact]
+        public void SomethingElseMissingOnAControl_KeepsTheGenericRefusal()
+        {
+            var error = JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                GridControlProps(), target: "PainelLista", controlName: "GridProva", propertyName: "Bogus"))["error"] as JObject;
+
+            Assert.Equal("PropertyNotFound", error["code"]?.ToString());
+            Assert.DoesNotContain("ControlWhere", error["hint"]?.ToString());
+        }
+
+        [Theory]
+        [InlineData("minimal")]
+        [InlineData("standard")]
+        public void Projection_WithNoneOfItsNamesOnTheControl_SaysHowManyPropertiesItHasAndWhichOnes(string projection)
+        {
+            // None of these names is in the minimal or the standard set (the standard one lists "Collection").
+            var grid = new JObject
+            {
+                ["name"] = "PainelLista",
+                ["control"] = "GridProva",
+                ["properties"] = new JArray
+                {
+                    new JObject { ["name"] = "controlName", ["value"] = "GridProva", ["type"] = "System.String", ["readOnly"] = false },
+                    new JObject { ["name"] = "MaxRows", ["value"] = "10", ["type"] = "System.Int32", ["readOnly"] = false },
+                    new JObject { ["name"] = "InfiniteScrolling", ["value"] = "One page at a time", ["type"] = "System.String", ["readOnly"] = false }
+                }
+            };
+
+            var json = JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                grid, target: "PainelLista", controlName: "GridProva", projection: projection));
+
+            Assert.Equal("ok", json["status"]?.ToString());
+            var result = (JObject)json["result"];
+            Assert.Empty((JArray)result["properties"]);
+            Assert.Equal(3, (int)result["omittedProperties"]);
+            Assert.Contains("3 properties", result["note"]?.ToString());
+            Assert.Contains("projection=" + projection, result["note"]?.ToString());
+            var names = ((JArray)result["availablePropertyNames"]).Select(t => t.ToString()).ToList();
+            Assert.Equal(new[] { "controlName", "MaxRows", "InfiniteScrolling" }, names);
+            Assert.Null(result["availablePropertyNamesTruncated"]);
+        }
+
+        [Fact]
+        public void Projection_WithManyUnlistedProperties_CapsTheNamesItOffers()
+        {
+            var props = new JArray();
+            for (int i = 0; i < 75; i++) props.Add(new JObject { ["name"] = "Custom" + i, ["value"] = "v", ["type"] = "System.String", ["readOnly"] = false });
+            var full = new JObject { ["name"] = "Big", ["control"] = "", ["properties"] = props };
+
+            var result = (JObject)JObject.Parse(PropertyService.ShapeGetPropertiesResult(full, target: "Big", projection: "minimal"))["result"];
+
+            Assert.Equal(75, (int)result["omittedProperties"]);
+            Assert.Equal(60, ((JArray)result["availablePropertyNames"]).Count);
+            Assert.True((bool)result["availablePropertyNamesTruncated"]);
+        }
+
+        [Fact]
+        public void Projection_ThatKeepsSomePropertiesAnswersAsItAlwaysDid()
+        {
+            // The common case (a projection of an object that has some of the common names) gets no new field.
+            var result = (JObject)JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                SamplePropsResult(), target: "Customer", projection: "minimal"))["result"];
+
+            Assert.Equal(2, ((JArray)result["properties"]).Count);
+            Assert.Null(result["omittedProperties"]);
+            Assert.Null(result["note"]);
+            Assert.Null(result["availablePropertyNames"]);
+        }
+
+        [Fact]
+        public void Projection_ThatKeepsEverything_AddsNoOmissionFields()
+        {
+            var props = new JObject
+            {
+                ["name"] = "Customer",
+                ["control"] = "",
+                ["properties"] = new JArray
+                {
+                    new JObject { ["name"] = "Description", ["value"] = "d", ["type"] = "String", ["readOnly"] = false },
+                    new JObject { ["name"] = "Name", ["value"] = "n", ["type"] = "String", ["readOnly"] = false }
+                }
+            };
+
+            var result = (JObject)JObject.Parse(PropertyService.ShapeGetPropertiesResult(props, target: "Customer", projection: "minimal"))["result"];
+
+            Assert.Equal(2, ((JArray)result["properties"]).Count);
+            Assert.Null(result["omittedProperties"]);
+            Assert.Null(result["note"]);
+        }
+
+        [Fact]
+        public void Projection_OnAnObjectWithNoPropertiesAtAll_StaysAnEmptyAnswerWithoutANote()
+        {
+            var result = (JObject)JObject.Parse(PropertyService.ShapeGetPropertiesResult(
+                new JObject { ["name"] = "Empty", ["control"] = "", ["properties"] = new JArray() }, target: "Empty", projection: "minimal"))["result"];
+
+            Assert.Empty((JArray)result["properties"]);
+            Assert.Null(result["note"]);
+            Assert.Null(result["omittedProperties"]);
+        }
+
         private static JObject SamplePropsResult()
         {
             return new JObject

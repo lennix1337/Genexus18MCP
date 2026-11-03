@@ -1937,6 +1937,8 @@ namespace GxMcp.Gateway
             return reasons.Count == 0 ? head : head + " " + string.Join("; ", reasons);
         }
 
+        private const int MaxTerseValidationDiagnostics = 20;
+
         internal static JObject TrimErrorEnvelope(JObject error, bool verbose)
         {
             if (verbose) return error; // pass-through
@@ -2119,6 +2121,26 @@ namespace GxMcp.Gateway
                 // corrects the template and sends it again.
                 JToken? violations = ResolveErrorField(error, "violations");
                 if (violations != null) trimmed["violations"] = violations;
+            }
+            if (string.Equals(code?.ToString(), "WebFormValidationFailed", StringComparison.Ordinal))
+            {
+                // Issue #830: the SDK validator's own list of what it rejected (code, text, source, positions) is the
+                // whole point of this refusal, and its hint tells the caller to fix "the listed controls/attributes".
+                // The list is capped here, with its total; the verbose envelope keeps it whole.
+                foreach (string key in new[] { "validationAvailable", "validationError" })
+                {
+                    JToken? value = ResolveErrorField(error, key);
+                    if (value != null) trimmed[key] = value;
+                }
+                if (ResolveErrorField(error, "validationDiagnostics") is JArray validationDiagnostics)
+                {
+                    trimmed["validationDiagnostics"] = new JArray(validationDiagnostics.Take(MaxTerseValidationDiagnostics));
+                    if (validationDiagnostics.Count > MaxTerseValidationDiagnostics)
+                    {
+                        trimmed["validationDiagnosticsTotal"] = validationDiagnostics.Count;
+                        trimmed["validationDiagnosticsTruncated"] = true;
+                    }
+                }
             }
             string receiptCode = code?.ToString() ?? string.Empty;
             if ((receiptCode.StartsWith("Pattern", StringComparison.Ordinal)

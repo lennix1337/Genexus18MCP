@@ -272,7 +272,7 @@ namespace GxMcp.Worker.Services
             return WritePolicy.ShouldRetryWithoutPartSave(partName, exceptionMessage, diagnosticText);
         }
 
-        private static JObject CreateTransactionErrorResponse(string target, string partName, string stage, Exception ex, JArray issues, string retryStrategy, string sdkMessages, global::Artech.Architecture.Common.Objects.KBObject obj = null, string decodedCode = null)
+        internal static JObject CreateTransactionErrorResponse(string target, string partName, string stage, Exception ex, JArray issues, string retryStrategy, string sdkMessages, global::Artech.Architecture.Common.Objects.KBObject obj = null, string decodedCode = null)
         {
             // Friction-report #2: if the SDK threw bare "Erro" but GetSdkMessages / GetDiagnostics
             // produced the real message (e.g. "src0059: Esperando 'EndFor'..."), surface it as the
@@ -324,10 +324,19 @@ namespace GxMcp.Worker.Services
                 Logger.Debug("[CreateTransactionErrorResponse] invalid-rule hint failed: " + hintEx.Message);
             }
 
+            // issue #830: the same for a Conditions save, whose commonest cause is a condition without the closing ';'.
+            string conditionsHint = null;
+            try
+            {
+                conditionsHint = WritePolicy.BuildConditionsPartFailureHint(partName, decodedCode, enrichedError);
+            }
+            catch (Exception hintEx)
+            {
+                Logger.Debug("[CreateTransactionErrorResponse] conditions hint failed: " + hintEx.Message);
+            }
+
             string detailText = WritePolicy.BuildFailureDetails(sdkMessages, issues);
-            string hint = undeclaredHint
-                ?? invalidRuleHint
-                ?? (string.IsNullOrWhiteSpace(detailText) ? null : detailText);
+            string hint = ChooseSaveFailureHint(undeclaredHint, invalidRuleHint, conditionsHint, detailText);
 
             bool copyModelLock = WritePolicy.IsCopyModelWriteLock(enrichedError)
                 || WritePolicy.IsCopyModelWriteLock(sdkMessages);
@@ -2526,6 +2535,16 @@ namespace GxMcp.Worker.Services
             return JObject.Parse(errJson);
         }
 
+        /// <summary>
+        /// The hint of a failed save: the most specific cause first (an undeclared variable, an invalid rule, a Conditions
+        /// text the SDK refused), the SDK's own details last.
+        /// </summary>
+        internal static string ChooseSaveFailureHint(string undeclaredHint, string invalidRuleHint, string conditionsHint, string detailText)
+            => undeclaredHint
+                ?? invalidRuleHint
+                ?? conditionsHint
+                ?? (string.IsNullOrWhiteSpace(detailText) ? null : detailText);
+
         private string CreateWriteError(
             string error,
             string target,
@@ -2537,22 +2556,10 @@ namespace GxMcp.Worker.Services
             string customHint = null)
         {
             // Build verifyDiff for extra block when a structured diff is available.
-            JObject verifyDiffObj = null;
-            if (structuredDiff != null)
-            {
-                verifyDiffObj = new JObject();
-                if (!string.IsNullOrEmpty(structuredDiff.ElementName)) verifyDiffObj["element"] = structuredDiff.ElementName;
-                if (!string.IsNullOrEmpty(structuredDiff.Path)) verifyDiffObj["path"] = structuredDiff.Path;
-                if (structuredDiff.RejectedAttributes != null && structuredDiff.RejectedAttributes.Length > 0)
-                    verifyDiffObj["rejectedAttributes"] = new JArray(structuredDiff.RejectedAttributes);
-                if (structuredDiff.AddedAttributes != null && structuredDiff.AddedAttributes.Length > 0)
-                    verifyDiffObj["addedAttributes"] = new JArray(structuredDiff.AddedAttributes);
-                if (structuredDiff.LeftAttributes != null) verifyDiffObj["persistedAttributes"] = new JArray(structuredDiff.LeftAttributes);
-                if (structuredDiff.RightAttributes != null) verifyDiffObj["requestedAttributes"] = new JArray(structuredDiff.RightAttributes);
-            }
+            JObject verifyDiffObj = structuredDiff != null ? BuildVerifyDiff(structuredDiff) : null;
 
             // Build hint from suggestion and nextSteps from availableParts.
-            string hint = customHint ?? BuildSuggestion(error, partName);
+            string hint = customHint ?? BuildSuggestion(error, partName, structuredDiff);
 
             // C17: enrich Events-part SDK failures (src0208 auto-stub collision;
             // src0233/src0216 control-not-yet-projected) with the actionable cause.
@@ -2606,7 +2613,57 @@ namespace GxMcp.Worker.Services
                 extra: extra);
         }
 
-        private static string BuildSuggestion(string error, string partName)
+        /// <summary>
+        /// The <c>verifyDiff</c> block of a verification failure: where the persisted XML differs from the requested one,
+        /// and which attributes and child nodes the SDK dropped (rejected) or injected (added). A child count that
+        /// differs used to leave this block empty, so a dropped node was named nowhere (issue #830).
+        /// </summary>
+        internal static JObject BuildVerifyDiff(GxMcp.Worker.Helpers.XmlEquivalenceDiff structuredDiff)
+        {
+            var verifyDiff = new JObject();
+            if (structuredDiff == null) return verifyDiff;
+            if (!string.IsNullOrEmpty(structuredDiff.ElementName)) verifyDiff["element"] = structuredDiff.ElementName;
+            if (!string.IsNullOrEmpty(structuredDiff.Path)) verifyDiff["path"] = structuredDiff.Path;
+            if (structuredDiff.RejectedAttributes != null && structuredDiff.RejectedAttributes.Length > 0)
+                verifyDiff["rejectedAttributes"] = new JArray(structuredDiff.RejectedAttributes);
+            if (structuredDiff.AddedAttributes != null && structuredDiff.AddedAttributes.Length > 0)
+                verifyDiff["addedAttributes"] = new JArray(structuredDiff.AddedAttributes);
+            if (structuredDiff.LeftAttributes != null) verifyDiff["persistedAttributes"] = new JArray(structuredDiff.LeftAttributes);
+            if (structuredDiff.RightAttributes != null) verifyDiff["requestedAttributes"] = new JArray(structuredDiff.RightAttributes);
+            // A table can hold hundreds of children: each list is capped, with its total beside it when it was.
+            if (structuredDiff.RejectedChildren != null && structuredDiff.RejectedChildren.Length > 0)
+                AddCappedNames(verifyDiff, "rejectedChildren", structuredDiff.RejectedChildren);
+            if (structuredDiff.AddedChildren != null && structuredDiff.AddedChildren.Length > 0)
+                AddCappedNames(verifyDiff, "addedChildren", structuredDiff.AddedChildren);
+            if (structuredDiff.LeftChildren != null) AddCappedNames(verifyDiff, "persistedChildren", structuredDiff.LeftChildren);
+            if (structuredDiff.RightChildren != null) AddCappedNames(verifyDiff, "requestedChildren", structuredDiff.RightChildren);
+            return verifyDiff;
+        }
+
+        internal const int MaxVerifyDiffChildren = 20;
+
+        private static void AddCappedNames(JObject target, string key, string[] names)
+        {
+            target[key] = new JArray(names.Take(MaxVerifyDiffChildren));
+            if (names.Length > MaxVerifyDiffChildren) target[key + "Total"] = names.Length;
+        }
+
+        /// <summary>
+        /// The hint of a visual verification failure. A difference in child elements is not the schema-trimmed attributes
+        /// that the standing advice is about (the SDK keeps the children its element defines, and nothing is "dropped to a
+        /// Theme class"), so it gets its own sentence.
+        /// </summary>
+        internal static string BuildVerificationFailureSuggestion(GxMcp.Worker.Helpers.XmlEquivalenceDiff diff)
+        {
+            bool attributes = (diff?.RejectedAttributes?.Length ?? 0) > 0 || (diff?.AddedAttributes?.Length ?? 0) > 0;
+            bool children = (diff?.RejectedChildren?.Length ?? 0) > 0 || (diff?.AddedChildren?.Length ?? 0) > 0;
+            if (children && !attributes)
+                return "See 'verifyDiff' for the child elements the SDK dropped (rejectedChildren) or added (addedChildren). "
+                    + "The SDK keeps only the child elements that its schema defines for that element: put the content in the property or part that holds it.";
+            return "See 'verifyDiff' for rejected/added attrs. SDK sanitises attrs outside its element schema (e.g. 'style' on classref-bound elements). Drop those attrs or move them to a Theme class.";
+        }
+
+        private static string BuildSuggestion(string error, string partName, GxMcp.Worker.Helpers.XmlEquivalenceDiff structuredDiff = null)
         {
             if (string.IsNullOrEmpty(error)) return null;
             if (error.IndexOf("Part not found", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -2614,7 +2671,7 @@ namespace GxMcp.Worker.Services
             if (error.IndexOf("does not expose text source", StringComparison.OrdinalIgnoreCase) >= 0)
                 return "Resolve via parent Transaction (e.g., type='Transaction') or use mode='full'.";
             if (error.IndexOf("verification failed", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "See 'verifyDiff' for rejected/added attrs. SDK sanitises attrs outside its element schema (e.g. 'style' on classref-bound elements). Drop those attrs or move them to a Theme class.";
+                return BuildVerificationFailureSuggestion(structuredDiff);
             if (error.IndexOf("Invalid", StringComparison.OrdinalIgnoreCase) >= 0)
                 return "Check XML well-formedness; verify single root element and quoted attribute values.";
             if (error.IndexOf("Object not found", StringComparison.OrdinalIgnoreCase) >= 0)

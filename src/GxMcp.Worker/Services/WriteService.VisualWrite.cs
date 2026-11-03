@@ -81,10 +81,44 @@ namespace GxMcp.Worker.Services
                     ["severity"] = message.Severity ?? "Information",
                     ["message"] = message.Message ?? string.Empty
                 };
+                if (!string.IsNullOrWhiteSpace(message.Code)) item["code"] = message.Code;
                 if (!string.IsNullOrWhiteSpace(message.Source)) item["source"] = message.Source;
+                if (message.Positions != null && message.Positions.Count > 0) item["positions"] = new JArray(message.Positions);
                 result.Add(item);
             }
             return result;
+        }
+
+        // The refusal's message quotes the first SDK errors (code, text, position) so a caller that
+        // reads only the message still learns what was rejected; validationDiagnostics carries them all.
+        internal static string WithValidationSummary(string message, IEnumerable<WebFormPreSaveValidator.ValidationMessage> messages)
+        {
+            string summary = WebFormPreSaveValidator.SummarizeErrors(messages);
+            return summary.Length == 0 ? message : message + " " + summary;
+        }
+
+        /// <summary>
+        /// The WebFormValidationFailed envelope of a visual write the SDK validator refused: the same shape for the dry run
+        /// of a no-change write, the dry run of a change and the save itself (issue #830).
+        /// </summary>
+        internal static string BuildWebFormValidationRefusal(
+            string target, string partName, string message, WebFormPreSaveValidator.ValidationReport report, bool dryRun)
+        {
+            var extra = new JObject
+            {
+                ["part"] = partName,
+                ["validationAvailable"] = report.ValidatorAvailable,
+                ["validationDiagnostics"] = ToValidationDiagnostics(report.Messages),
+                ["persisted"] = false
+            };
+            if (dryRun) extra["dryRun"] = true;
+            if (!string.IsNullOrWhiteSpace(report.Error)) extra["validationError"] = report.Error;
+            return Models.McpResponse.Err(
+                code: "WebFormValidationFailed",
+                message: WithValidationSummary(message, report.Messages),
+                hint: "Fix the listed controls/attributes and retry. Pass forceWrite=true only when you explicitly accept the SDK validation errors.",
+                target: target,
+                extra: extra);
         }
 
         // The validator's own messages are the only account of why it refused a form. They used
@@ -354,23 +388,8 @@ namespace GxMcp.Worker.Services
                         noChangeValidation = ValidateProspectiveWebForm(
                             webFormPart, noChangeValidationProjection.Xml ?? currentXml, currentXml);
                         if (WebFormPreSaveValidator.HasErrors(noChangeValidation.Messages) && !forceWrite)
-                        {
-                            var validationError = new JObject
-                            {
-                                ["part"] = partName,
-                                ["validationAvailable"] = noChangeValidation.ValidatorAvailable,
-                                ["validationDiagnostics"] = ToValidationDiagnostics(noChangeValidation.Messages),
-                                ["persisted"] = false,
-                                ["dryRun"] = true
-                            };
-                            if (!string.IsNullOrWhiteSpace(noChangeValidation.Error)) validationError["validationError"] = noChangeValidation.Error;
-                            return Models.McpResponse.Err(
-                                code: "WebFormValidationFailed",
-                                message: "The WebForm SDK validator found errors in the current visual XML.",
-                                hint: "Fix the listed controls/attributes and retry. Pass forceWrite=true only when you explicitly accept the SDK validation errors.",
-                                target: target,
-                                extra: validationError);
-                        }
+                            return BuildWebFormValidationRefusal(target, partName,
+                                "The WebForm SDK validator found errors in the current visual XML.", noChangeValidation, dryRun: true);
                     }
                     var noChangeResp = new JObject
                     {
@@ -407,23 +426,8 @@ namespace GxMcp.Worker.Services
                     var dryValidation = ValidateProspectiveWebForm(
                         webFormPart, dryProjection.Xml ?? normalizedInput, currentXml);
                     if (WebFormPreSaveValidator.HasErrors(dryValidation.Messages) && !forceWrite)
-                    {
-                        var validationError = new JObject
-                        {
-                            ["part"] = partName,
-                            ["validationAvailable"] = dryValidation.ValidatorAvailable,
-                            ["validationDiagnostics"] = ToValidationDiagnostics(dryValidation.Messages),
-                            ["persisted"] = false,
-                            ["dryRun"] = true
-                        };
-                        if (!string.IsNullOrWhiteSpace(dryValidation.Error)) validationError["validationError"] = dryValidation.Error;
-                        return Models.McpResponse.Err(
-                            code: "WebFormValidationFailed",
-                            message: "The WebForm SDK validator found errors in the requested visual XML.",
-                            hint: "Fix the listed controls/attributes and retry. Pass forceWrite=true only when you explicitly accept the SDK validation errors.",
-                            target: target,
-                            extra: validationError);
-                    }
+                        return BuildWebFormValidationRefusal(target, partName,
+                            "The WebForm SDK validator found errors in the requested visual XML.", dryValidation, dryRun: true);
                     var dryResp = new JObject
                     {
                         ["part"] = partName,
@@ -503,20 +507,8 @@ namespace GxMcp.Worker.Services
                     if (WebFormPreSaveValidator.HasErrors(validationReport.Messages) && !forceWrite)
                     {
                         transaction.Rollback();
-                        var validationError = new JObject
-                        {
-                            ["part"] = partName,
-                            ["validationAvailable"] = validationReport.ValidatorAvailable,
-                            ["validationDiagnostics"] = ToValidationDiagnostics(validationReport.Messages),
-                            ["persisted"] = false
-                        };
-                        if (!string.IsNullOrWhiteSpace(validationReport.Error)) validationError["validationError"] = validationReport.Error;
-                        return Models.McpResponse.Err(
-                            code: "WebFormValidationFailed",
-                            message: "The WebForm SDK validator found errors; the visual write was not persisted.",
-                            hint: "Fix the listed controls/attributes and retry. Pass forceWrite=true only when you explicitly accept the SDK validation errors.",
-                            target: target,
-                            extra: validationError);
+                        return BuildWebFormValidationRefusal(target, partName,
+                            "The WebForm SDK validator found errors; the visual write was not persisted.", validationReport, dryRun: false);
                     }
 
                     // ── DIAGNOSTIC: byte-level state RIGHT BEFORE obj.Save ────────────────
@@ -636,24 +628,8 @@ namespace GxMcp.Worker.Services
                             // The transaction is already committed at this point. Keep
                             // physical persistence separate from content verification;
                             // callers must not read this mismatch as "nothing was saved".
-                            try
-                            {
-                                var verifyJobj = JObject.Parse(visualVerifyErr);
-                                var errObj = verifyJobj["error"] as JObject ?? verifyJobj;
-                                AttachVisualSaveError(errObj, webFormPartSaveError, forceSaveError);
-                                if (sdkCommitCompleted)
-                                {
-                                    AttachVisualCommitEvidence(verifyJobj, committed: true, verified: false);
-                                    AttachVisualCommitEvidence(errObj, committed: true, verified: false);
-                                }
-                                verifyJobj["rollbackRequested"] = rollbackOnFailure;
-                                AddVersioningRestoreStep(verifyJobj, target, partName);
-                                return verifyJobj.ToString();
-                            }
-                            catch
-                            {
-                                return visualVerifyErr;
-                            }
+                            return DecorateVisualVerificationFailure(visualVerifyErr, webFormPartSaveError, forceSaveError,
+                                sdkCommitCompleted, rollbackOnFailure, prospectiveGotchas, target, partName);
                         }
                     }
                     else if (webFormPartSaveError != null)
@@ -887,6 +863,75 @@ namespace GxMcp.Worker.Services
             // commit; persistedVerified/verified describe content equivalence.
             response["persisted"] = committed;
             response["persistedVerified"] = verified;
+        }
+
+        // Issue #830: a verification failure after the commit carries saved:true and persisted:true, which a caller
+        // reads as "my layout is in the object". They report the physical commit of the layout the SDK kept; the
+        // content verdict is persistedVerified. It says nothing about verifyDiff: the hint before it (BuildSuggestion) points
+        // there, and a difference of an attribute value or of text leaves verifyDiff without a rejected list.
+        internal const string VisualCommitMeaningHint =
+            "saved and persisted report that the SDK committed the layout it kept, not that your content is in the object: "
+            + "persistedVerified=false says the object does not hold what was requested.";
+
+        /// <summary>
+        /// The verification failure of a visual write as the caller receives it: the SDK's own save error, the commit evidence
+        /// (the layout the SDK kept is committed even though the content does not verify), the hint, the rollback request and the
+        /// restore step. Returns <paramref name="failureJson"/> untouched when it cannot be read.
+        /// </summary>
+        internal static string DecorateVisualVerificationFailure(string failureJson, JObject webFormPartSaveError, JObject forceSaveError,
+            bool sdkCommitCompleted, bool rollbackOnFailure, JArray gotchas, string target, string partName)
+        {
+            try
+            {
+                var verifyJobj = JObject.Parse(failureJson);
+                var errObj = verifyJobj["error"] as JObject ?? verifyJobj;
+                AttachVisualSaveError(errObj, webFormPartSaveError, forceSaveError);
+                if (sdkCommitCompleted)
+                {
+                    AttachVisualCommitEvidence(verifyJobj, committed: true, verified: false);
+                    AttachVisualCommitEvidence(errObj, committed: true, verified: false);
+                }
+                AppendVisualVerificationGuidance(errObj, sdkCommitCompleted, gotchas);
+                verifyJobj["rollbackRequested"] = rollbackOnFailure;
+                AddVersioningRestoreStep(verifyJobj, target, partName);
+                return verifyJobj.ToString();
+            }
+            catch
+            {
+                return failureJson;
+            }
+        }
+
+        /// <summary>
+        /// What a visual verification failure adds to its hint (issue #830): what saved/persisted mean after a commit, and the
+        /// gotcha that the scan of the request found and the SDK then trimmed. The failure envelope carries no
+        /// layoutGotchas of its own, so the gotcha is explained in the hint.
+        /// </summary>
+        internal static void AppendVisualVerificationGuidance(JObject errObj, bool sdkCommitCompleted, JArray gotchas)
+        {
+            if (sdkCommitCompleted) AppendVisualHint(errObj, VisualCommitMeaningHint);
+            AppendVisualHint(errObj, GotchaGuidance(gotchas, GotchaCodes.GotchaGridConditionIgnored));
+        }
+
+        // The message and workaround of the first gotcha with the given code, as one hint, or null (issue #830).
+        internal static string GotchaGuidance(JArray gotchas, string code)
+        {
+            if (gotchas == null) return null;
+            foreach (var gotcha in gotchas.OfType<JObject>())
+            {
+                if (!string.Equals(gotcha["code"]?.ToString(), code, StringComparison.Ordinal)) continue;
+                string text = ((gotcha["message"]?.ToString() ?? string.Empty) + " " + (gotcha["workaround"]?.ToString() ?? string.Empty)).Trim();
+                return text.Length == 0 ? null : text;
+            }
+            return null;
+        }
+
+        internal static void AppendVisualHint(JObject errObj, string text)
+        {
+            if (errObj == null || string.IsNullOrEmpty(text)) return;
+            string current = errObj["hint"]?.ToString();
+            if (!string.IsNullOrEmpty(current) && current.IndexOf(text, StringComparison.Ordinal) >= 0) return;
+            errObj["hint"] = string.IsNullOrEmpty(current) ? text : current + " " + text;
         }
 
         private const int VisualSaveErrorTextLimit = 500;

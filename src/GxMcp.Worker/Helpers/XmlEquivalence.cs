@@ -17,6 +17,13 @@ namespace GxMcp.Worker.Helpers
         // Added by SDK = present in persisted (left) but absent in input (right).
         public string[] AddedAttributes { get; set; }
         public string ElementName { get; set; }
+        // Child nodes of the element, by element name ("#text" for text), as persisted (left) and as requested (right).
+        public string[] LeftChildren { get; set; }
+        public string[] RightChildren { get; set; }
+        // Rejected by SDK = requested (right) but not among the persisted children (left): the SDK dropped it.
+        public string[] RejectedChildren { get; set; }
+        // Added by SDK = persisted (left) but not requested (right).
+        public string[] AddedChildren { get; set; }
     }
 
     public sealed class XmlEquivalenceOptions
@@ -339,7 +346,27 @@ namespace GxMcp.Worker.Helpers
             var cy = SignificantChildren(y).ToList();
             if (cx.Count != cy.Count)
             {
-                diff = "Child count differs at " + path + x.Name + " (" + cx.Count + " vs " + cy.Count + ")";
+                // Name the child nodes that one side has and the other does not: a bare count told a caller
+                // that the SDK dropped something under this element, not what (issue #830). The text says only
+                // which side has them: callers do not all pass (persisted, requested), and a label that assumed
+                // an order read backwards for the ones that do not. Rejected/Added below keep that order.
+                var leftChildren = cx.Select(ChildLabel).ToArray();
+                var rightChildren = cy.Select(ChildLabel).ToArray();
+                var rejectedChildren = MultisetExcept(rightChildren, leftChildren); // requested but missing after save → SDK dropped
+                var addedChildren = MultisetExcept(leftChildren, rightChildren);    // SDK injected on persist
+                diff = "Child count differs at " + path + x.Name + " (" + cx.Count + " vs " + cy.Count + ")"
+                       + (addedChildren.Length > 0 ? "; onlyInLeft=[" + JoinCapped(addedChildren) + "]" : "")
+                       + (rejectedChildren.Length > 0 ? "; onlyInRight=[" + JoinCapped(rejectedChildren) + "]" : "");
+                structured = new XmlEquivalenceDiff
+                {
+                    Path = path + x.Name,
+                    ElementName = x.Name.LocalName,
+                    Summary = diff,
+                    LeftChildren = leftChildren,
+                    RightChildren = rightChildren,
+                    RejectedChildren = rejectedChildren,
+                    AddedChildren = addedChildren
+                };
                 return false;
             }
 
@@ -370,6 +397,30 @@ namespace GxMcp.Worker.Helpers
             }
             return true;
         }
+
+        private static string ChildLabel(XNode node)
+            => node is XElement element ? element.Name.LocalName : node is XText ? "#text" : node.NodeType.ToString();
+
+        // The entries of source that remain after removing one entry of remove for each entry it holds, in source order.
+        private static string[] MultisetExcept(string[] source, string[] remove)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var name in remove) counts[name] = counts.TryGetValue(name, out int seen) ? seen + 1 : 1;
+            var result = new List<string>();
+            foreach (var name in source)
+            {
+                if (counts.TryGetValue(name, out int left) && left > 0) counts[name] = left - 1;
+                else result.Add(name);
+            }
+            return result.ToArray();
+        }
+
+        private const int MaxNamesInSummary = 10;
+
+        private static string JoinCapped(string[] names)
+            => names.Length <= MaxNamesInSummary
+                ? string.Join(",", names)
+                : string.Join(",", names.Take(MaxNamesInSummary)) + ",+" + (names.Length - MaxNamesInSummary) + " more";
 
         private static IEnumerable<XNode> SignificantChildren(XElement e)
         {

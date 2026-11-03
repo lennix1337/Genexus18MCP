@@ -59,6 +59,9 @@ namespace GxMcp.Worker.Helpers
         private static readonly Regex AttRef = new Regex(@"^att:(\d+)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex Guid36 = new Regex(
             @"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        // The "<element>:<guid>" spelling of a control id (grid:9c1f2a3b-...), as some clients print it (issue #830).
+        private static readonly Regex KindedGuid = new Regex(
+            @"^([A-Za-z][A-Za-z0-9_]*):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>The <c>&lt;detail&gt;</c> element of the main layout form, or null.</summary>
         internal static XmlElement FindDetailElement(XmlDocument document)
@@ -262,23 +265,47 @@ namespace GxMcp.Worker.Helpers
             }
         }
 
-        /// <summary>An att:&lt;id&gt; or a GUID: spellings that only a layout control can answer to.</summary>
+        /// <summary>An att:&lt;id&gt;, a GUID or an &lt;element&gt;:&lt;guid&gt;: spellings that only a layout control can answer to.</summary>
         internal static bool IsLayoutOnlyReference(string reference)
         {
             if (string.IsNullOrWhiteSpace(reference)) return false;
             string trimmed = reference.Trim();
-            return AttRef.IsMatch(trimmed) || Guid36.IsMatch(trimmed);
+            return AttRef.IsMatch(trimmed) || TryGetControlGuid(trimmed, out _);
         }
 
-        /// <summary>What a reference can match: a control name, a GUID id, an attribute (name or att:N).</summary>
+        /// <summary>The control id a reference spells: a bare GUID, or the GUID of an <c>&lt;element&gt;:&lt;guid&gt;</c> reference.</summary>
+        internal static bool TryGetControlGuid(string reference, out string guid)
+            => TryGetControlGuid(reference, out guid, out _);
+
+        /// <summary>
+        /// The control id a reference spells and, for <c>&lt;element&gt;:&lt;guid&gt;</c> (<c>grid:9c1f2a3b-...</c>), the element
+        /// it names (null for a bare GUID). <see cref="Find"/> accepts such a reference only for a control of that element, so
+        /// a reference that names the wrong element never acts on the control that has the id.
+        /// </summary>
+        internal static bool TryGetControlGuid(string reference, out string guid, out string element)
+        {
+            guid = null;
+            element = null;
+            if (string.IsNullOrWhiteSpace(reference)) return false;
+            string trimmed = reference.Trim();
+            if (Guid36.IsMatch(trimmed)) { guid = trimmed; return true; }
+            var kinded = KindedGuid.Match(trimmed);
+            if (!kinded.Success) return false;
+            guid = kinded.Groups[2].Value;
+            element = kinded.Groups[1].Value;
+            return true;
+        }
+
+        /// <summary>What a reference can match: a control name, a GUID id (bare or as &lt;element&gt;:&lt;guid&gt;), an attribute (name or att:N).</summary>
         internal static List<LayoutControl> Find(LayoutPanel panel, string reference)
         {
             var matches = new List<LayoutControl>();
             if (panel == null || string.IsNullOrWhiteSpace(reference)) return matches;
             string wanted = reference.Trim();
 
-            if (Guid36.IsMatch(wanted))
-                return panel.Controls.Where(c => string.Equals(c.Id, wanted, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (TryGetControlGuid(wanted, out string wantedGuid, out string wantedElement))
+                return panel.Controls.Where(c => string.Equals(c.Id, wantedGuid, StringComparison.OrdinalIgnoreCase)
+                    && (wantedElement == null || string.Equals(c.ElementName, wantedElement, StringComparison.OrdinalIgnoreCase))).ToList();
 
             matches = panel.Controls.Where(c => !string.IsNullOrEmpty(c.ControlName)
                 && string.Equals(c.ControlName, wanted, StringComparison.OrdinalIgnoreCase)).ToList();

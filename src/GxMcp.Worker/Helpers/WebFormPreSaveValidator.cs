@@ -25,7 +25,11 @@ namespace GxMcp.Worker.Helpers
             public string Severity;   // "Error", "Warning", "Information"
             public string Message;
             public string Source;     // typically the control id or layout path
+            public string Code;       // the SDK's own error code (spc0233, ...), when the message carries one
+            public List<string> Positions; // where the SDK says the problem is (line/char, context), at most MaxPositions
         }
+
+        private const int MaxPositions = 3;
 
         public sealed class ValidationReport
         {
@@ -142,10 +146,7 @@ namespace GxMcp.Worker.Helpers
                 foreach (var m in msgs)
                 {
                     if (m == null) continue;
-                    string sev = ReadString(m, "Level") ?? ReadString(m, "Severity") ?? ReadString(m, "Type") ?? "Information";
-                    string msg = ReadString(m, "Text") ?? ReadString(m, "Message") ?? m.ToString();
-                    string src = ReadString(m, "Source") ?? ReadString(m, "ObjectName") ?? null;
-                    report.Messages.Add(new ValidationMessage { Severity = sev, Message = msg, Source = src });
+                    report.Messages.Add(FromSdkMessage(m));
                 }
 
                 // Some SDK builds communicate failure through the bool return and
@@ -172,6 +173,27 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
+        /// One message of the SDK's <c>OutputMessages</c> as the fields a caller can act on: level, text,
+        /// the SDK error code (<c>spc0233</c>) and the positions the SDK attached (issue #830: a refusal
+        /// used to carry only level and text, so the caller bisected the XML by hand).
+        /// </summary>
+        internal static ValidationMessage FromSdkMessage(object message)
+        {
+            string severity = ReadString(message, "Level") ?? ReadString(message, "Severity") ?? ReadString(message, "Type") ?? "Information";
+            string text = ReadString(message, "Text") ?? ReadString(message, "Message") ?? message.ToString();
+            string source = ReadString(message, "Source") ?? ReadString(message, "ObjectName") ?? null;
+            string code = ReadString(message, "ErrorCode") ?? ReadString(message, "Code");
+            return new ValidationMessage
+            {
+                Severity = severity,
+                Message = text,
+                Source = source,
+                Code = string.IsNullOrWhiteSpace(code) ? null : code.Trim(),
+                Positions = ReadPositions(message)
+            };
+        }
+
+        /// <summary>
         /// True if any message has severity that maps to "error" (case-insensitive, accepts
         /// English / Spanish / Portuguese / numeric MessageLevel.Error == 1 strings).
         /// </summary>
@@ -189,6 +211,96 @@ namespace GxMcp.Worker.Helpers
         {
             string s = severity?.ToLowerInvariant() ?? "";
             return s.Contains("error") || s == "1" || s == "erro";
+        }
+
+        /// <summary>
+        /// The first errors of a refused form as one line of text: "[code] message (position)". The
+        /// refusal's <c>message</c> carries it so a caller that reads only that field still learns what
+        /// the SDK objected to and where; the complete list stays in <c>validationDiagnostics</c>.
+        /// Returns an empty string when there is no error message to quote.
+        /// </summary>
+        public static string SummarizeErrors(IEnumerable<ValidationMessage> messages, int max = 3, int maxChars = 700)
+        {
+            if (messages == null) return string.Empty;
+            var errors = messages.Where(m => m != null && IsErrorSeverity(m.Severity)).ToList();
+            if (errors.Count == 0) return string.Empty;
+
+            // The SDK often reports the same problem once per control it affects: quote each distinct message once.
+            var parts = new List<string>();
+            foreach (var error in errors)
+            {
+                // One line: the error envelope keeps only the first line of a message.
+                string text = System.Text.RegularExpressions.Regex.Replace((error.Message ?? string.Empty).Trim(), @"\s+", " ");
+                if (text.Length == 0) continue;
+                string part = (string.IsNullOrWhiteSpace(error.Code) ? string.Empty : "[" + error.Code + "] ") + text;
+                string where = error.Positions != null && error.Positions.Count > 0
+                    ? string.Join(", ", error.Positions)
+                    : error.Source;
+                if (!string.IsNullOrWhiteSpace(where)) part += " (" + System.Text.RegularExpressions.Regex.Replace(where.Trim(), @"\s+", " ") + ")";
+                parts.Add(part);
+            }
+            var distinct = parts.Distinct(StringComparer.Ordinal).ToList();
+            if (distinct.Count == 0) return string.Empty;
+
+            string summary = (distinct.Count == 1 ? "SDK error: " : "First SDK errors: ") + string.Join("; ", distinct.Take(max));
+            if (distinct.Count > max) summary += "; +" + (distinct.Count - max) + " more in validationDiagnostics";
+            if (summary.Length > maxChars) summary = summary.Substring(0, maxChars) + "...";
+            return summary;
+        }
+
+        private static List<string> ReadPositions(object message)
+        {
+            var result = new List<string>();
+            try
+            {
+                var type = message.GetType();
+                var many = type.GetProperty("Positions", BindingFlags.Public | BindingFlags.Instance)?.GetValue(message) as IEnumerable;
+                if (many != null)
+                    foreach (var position in many) AddPosition(result, position);
+                if (result.Count == 0)
+                    AddPosition(result, type.GetProperty("Position", BindingFlags.Public | BindingFlags.Instance)?.GetValue(message));
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[WebFormValidate] message positions could not be read: " + (ex.InnerException ?? ex).Message);
+            }
+            return result;
+        }
+
+        private static void AddPosition(List<string> sink, object position)
+        {
+            if (position == null || sink.Count >= MaxPositions) return;
+            string text = DescribePosition(position);
+            if (!string.IsNullOrWhiteSpace(text) && !sink.Contains(text)) sink.Add(text);
+        }
+
+        /// <summary>
+        /// A position the SDK attached to a message, as text: "line 3, char 12" for a text position,
+        /// the context string for a context position, otherwise the position's own text. A position
+        /// that says nothing beyond its type name is dropped rather than quoted.
+        /// </summary>
+        internal static string DescribePosition(object position)
+        {
+            if (position == null) return null;
+            // The SDK answers Position with a help-page position built from the error code when the message has
+            // none of its own; that is a link to the error's documentation, not a place in the form.
+            if (string.Equals(position.GetType().Name, "ErrorHelpPosition", StringComparison.Ordinal)) return null;
+            string line = ReadString(position, "Line");
+            if (line != null)
+            {
+                string chr = ReadString(position, "Char");
+                return "line " + line + (chr != null ? ", char " + chr : string.Empty);
+            }
+            string context = ReadString(position, "Context");
+            if (!string.IsNullOrWhiteSpace(context)) return context.Trim();
+
+            string text;
+            try { text = position.ToString(); } catch { return null; }
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            text = text.Trim();
+            if (string.Equals(text, position.GetType().FullName, StringComparison.Ordinal)
+                || string.Equals(text, position.GetType().Name, StringComparison.Ordinal)) return null;
+            return text.Length > 160 ? text.Substring(0, 160) + "..." : text;
         }
 
         private static Type FindType(string fullName)

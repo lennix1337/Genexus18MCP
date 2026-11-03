@@ -2984,8 +2984,9 @@ namespace GxMcp.Worker.Services
                 if (!isSet && ControlParametersService.IsParametersProperty(requestedProperty) && !Helpers.JsonUtil.IsSupplied(args?["propertyNames"]))
                     return _controlParametersService.Get(target, args?["control"]?.ToString(), propType);
                 // Conditions (ControlWhere) of a layout-form control: the control's own expression and the form's version token.
-                if (!isSet && ControlConditionsService.IsConditionsProperty(requestedProperty) && !Helpers.JsonUtil.IsSupplied(args?["propertyNames"])
-                    && _controlConditionsService.IsLayoutControl(target, args?["control"]?.ToString(), propType))
+                // ControlWhere and Conditions on any layout control; Condition (issue #830) on one that lists ControlWhere.
+                if (!isSet && !Helpers.JsonUtil.IsSupplied(args?["propertyNames"])
+                    && _controlConditionsService.HandlesRead(target, args?["control"]?.ToString(), propType, requestedProperty))
                     return _controlConditionsService.Get(target, args?["control"]?.ToString(), propType);
             }
 
