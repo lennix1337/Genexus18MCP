@@ -34,9 +34,11 @@ function Ensure-ReleaseCandidateCi {
     Ok "Pushed candidate branch $candidateBranch ($Commit)."
 
     $prListRaw = @(gh pr list --head $candidateBranch --state all --json number,state,url 2>$null)
-    $prs = if ($LASTEXITCODE -eq 0 -and $prListRaw.Count -gt 0) {
+    # @() keeps an empty '[]' list an array: ConvertFrom-Json enumerates it to $null,
+    # and StrictMode callers then fail on .Count.
+    $prs = @(if ($LASTEXITCODE -eq 0 -and $prListRaw.Count -gt 0) {
         ($prListRaw -join [Environment]::NewLine) | ConvertFrom-Json
-    } else { @() }
+    })
 
     $openPr = @($prs | Where-Object { [string]$_.state -ieq 'OPEN' } | Select-Object -First 1)
     if ($openPr.Count -gt 0) {

@@ -57,6 +57,31 @@ foreach ($funcName in @('Ensure-ReleaseCandidateCi', 'Wait-ReleaseRequiredChecks
     $fnDef = $ciAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $funcName }, $true)
     if (-not $fnDef) { throw "Candidate CI script is missing function: $funcName" }
 }
+
+# Regression (v4.3.0): under StrictMode an empty `gh pr list` ('[]') must not make
+# Ensure-ReleaseCandidateCi throw "property 'Count' cannot be found"; it creates the PR.
+$candidateProbe = {
+    param($ScriptPath)
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $script:created = $false
+    function Step($m) {}
+    function Ok($m) {}
+    function Warn($m) {}
+    function Fail($m) { throw "Fail: $m" }
+    function Invoke-Cmd { }
+    function gh {
+        $global:LASTEXITCODE = 0
+        if ($args[0] -eq 'pr' -and $args[1] -eq 'list') { return '[]' }
+        if ($args[0] -eq 'pr' -and $args[1] -eq 'create') { $script:created = $true; return 'https://github.com/o/r/pull/9' }
+    }
+    $statusState = $null
+    . $ScriptPath
+    Ensure-ReleaseCandidateCi -Commit 'abc' -Tag 'v0.0.1'
+    $script:created
+}
+$probeResult = & $candidateProbe $candidateCiScript
+if (-not $probeResult) { throw 'Ensure-ReleaseCandidateCi did not create a candidate PR when none existed.' }
 $minorPatchRun = & pwsh -NoProfile -File (Join-Path $root 'release.ps1') -Minor -Patch -DryRun 2>&1
 if ($LASTEXITCODE -eq 0 -or ($minorPatchRun -join "`n") -notmatch 'Cannot specify both -Minor and -Patch') {
     throw 'Running release.ps1 with -Minor and -Patch must fail with conflict guidance.'
