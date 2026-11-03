@@ -49,30 +49,39 @@ function Ensure-ReleaseCandidateCi {
             $statusState.candidate.prUrl = $prUrl
         }
         Ok "Candidate PR already open: #$prNum ($prUrl)."
-    } elseif ($prs.Count -gt 0) {
+        return
+    }
+
+    if ($prs.Count -gt 0) {
         $closedPr = $prs[0]
         $prNum = [int]$closedPr.number
         $prUrl = [string]$closedPr.url
-        Invoke-Cmd 'gh' @('pr', 'reopen', [string]$prNum)
-        if ($null -ne $statusState -and $statusState.Contains('candidate')) {
-            $statusState.candidate.prNumber = $prNum
-            $statusState.candidate.prUrl = $prUrl
+        # A closed PR whose branch was deleted and pushed again cannot be reopened;
+        # GitHub answers 'Could not open the pull request', so a new PR is created.
+        gh pr reopen ([string]$prNum) 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            if ($null -ne $statusState -and $statusState.Contains('candidate')) {
+                $statusState.candidate.prNumber = $prNum
+                $statusState.candidate.prUrl = $prUrl
+            }
+            Ok "Reopened candidate PR #$prNum for CI."
+            return
         }
-        Ok "Reopened candidate PR #$prNum for CI."
-    } else {
-        $prOut = @(gh pr create --head $candidateBranch --base main --title "release candidate: $Tag" --body "Automated release candidate verification for $Tag ($Commit)." 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $prOut.Count -eq 0) {
-            Fail "Could not create candidate PR for $candidateBranch to trigger required CI."
-        }
-        $createdUrl = ($prOut -join ' ').Trim()
-        $prNumMatch = [regex]::Match($createdUrl, '/pull/(\d+)')
-        $prNum = if ($prNumMatch.Success) { [int]$prNumMatch.Groups[1].Value } else { $null }
-        if ($null -ne $statusState -and $statusState.Contains('candidate')) {
-            $statusState.candidate.prNumber = $prNum
-            $statusState.candidate.prUrl = $createdUrl
-        }
-        Ok "Created candidate PR for CI: $createdUrl"
+        Warn "Could not reopen candidate PR #$prNum; creating a new one."
     }
+
+    $prOut = @(gh pr create --head $candidateBranch --base main --title "release candidate: $Tag" --body "Automated release candidate verification for $Tag ($Commit)." 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $prOut.Count -eq 0) {
+        Fail "Could not create candidate PR for $candidateBranch to trigger required CI."
+    }
+    $createdUrl = ($prOut -join ' ').Trim()
+    $prNumMatch = [regex]::Match($createdUrl, '/pull/(\d+)')
+    $prNum = if ($prNumMatch.Success) { [int]$prNumMatch.Groups[1].Value } else { $null }
+    if ($null -ne $statusState -and $statusState.Contains('candidate')) {
+        $statusState.candidate.prNumber = $prNum
+        $statusState.candidate.prUrl = $createdUrl
+    }
+    Ok "Created candidate PR for CI: $createdUrl"
 }
 
 function Wait-ReleaseRequiredChecksGreen {
