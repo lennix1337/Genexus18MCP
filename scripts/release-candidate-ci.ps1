@@ -2,7 +2,8 @@
 #
 # Manages automated candidate branch (candidate/vX.Y.Z) and candidate PR lifecycle
 # to trigger and verify required GitHub Actions status checks on the exact release
-# source commit, overlapping cloud CI execution with local preflight/builds.
+# source commit. The candidate is created after the local build and preflight pass;
+# cloud CI then overlaps with the remaining local steps (stamps, manifest, publish.zip).
 
 $ErrorActionPreference = 'Stop'
 
