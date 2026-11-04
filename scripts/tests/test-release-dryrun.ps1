@@ -62,8 +62,29 @@ try {
     if ($control.state -ne 'failed' -or $controlOutput -notmatch "RELEASE SUMMARY: .* rc=1 failed-step='") {
         throw 'The dry-run harness passed a version the flow must reject: the rehearsal cannot be trusted.'
     }
+
+    # Diverged base: origin/main answers a commit that is neither HEAD nor its parent, so the
+    # call site's freshness check must stop the rehearsal at that step (#852). The scenarios
+    # above only prove the check passes; this proves it fails, without any write. The harness
+    # exits 0 even when release.ps1 fails, so the status file is the evidence.
+    $head = ((& git -C $root rev-parse HEAD) | Select-Object -First 1).Trim()
+    $flip = if ($head[0] -ne '0') { '0' } else { '1' }
+    $divergentMain = $flip + $head.Substring(1) + "`trefs/heads/main"
+    $divergedStatus = Join-Path $temp 'status-diverged.json'
+    $divergedCalls = Join-Path $temp 'calls-diverged.log'
+    $divergedOutput = & pwsh -NoProfile -File $harness -ReleaseScript $releaseScript -Version $version -StatusFile $divergedStatus `
+        -CallLog $divergedCalls -RemoteMainLine $divergentMain 2>&1 | Out-String
+    $diverged = Get-Content -LiteralPath $divergedStatus -Raw | ConvertFrom-Json
+    if ($diverged.state -ne 'failed' -or $diverged.phase -ne 'failed' -or $diverged.exitCode -ne 1 -or [string]$diverged.error -notmatch 'stale or diverged') {
+        throw "dry run [diverged base] was not stopped by the base freshness check: phase=$($diverged.phase) state=$($diverged.state) exitCode=$($diverged.exitCode) error=$($diverged.error)`n$divergedOutput"
+    }
+    if ($divergedOutput -notmatch "RELEASE SUMMARY: .* rc=1 failed-step='Checking release base freshness'") {
+        throw "dry run [diverged base] did not fail at the step 'Checking release base freshness'.`n$divergedOutput"
+    }
+    $writes = @(if (Test-Path -LiteralPath $divergedCalls) { Get-Content -LiteralPath $divergedCalls | Where-Object { $_ -match $writePattern } })
+    if ($writes.Count -gt 0) { throw "dry run [diverged base] reached write calls: $($writes -join ' | ')" }
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "release-dryrun: $($scenarios.Count) rehearsals of v$version completed without writes; failure control rejected" -ForegroundColor Green
+Write-Host "release-dryrun: $($scenarios.Count) rehearsals of v$version completed without writes; failure control and diverged base rejected" -ForegroundColor Green
