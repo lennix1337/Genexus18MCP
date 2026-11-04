@@ -59,15 +59,18 @@ Use the one-shot script (the only implementation entrypoint):
 For a terminal or agent session that may time out, use
 `./release.ps1 -Minor -Detach` (or `-Patch`, or `-Version <X.Y.Z>`) and poll the returned status path.
 
-### Automated candidate CI & overlapped execution
+### Automated candidate CI: preflight first, then remote state
 
-By default, `release.ps1` automates candidate CI verification and overlaps execution to minimize release turnaround:
-1. When a new release commit is created, it checks whether required status checks (`test`) are already green on that SHA.
-2. If not, it pushes `candidate/vX.Y.Z` to `origin` and ensures an automated candidate PR exists to trigger GitHub Actions CI.
-3. While cloud CI runs required checks on GitHub, the local machine concurrently builds `publish/`, compiles `nexus-ide.vsix`, and executes the canonical preflight (Worker, Gateway, live KB tests).
-4. Right before tagging (`Step "Verifying pre-publication freshness"`), `release.ps1` waits for GitHub Actions CI to conclude with success.
-5. Upon successful publication and verification, the candidate PR and remote candidate branch are cleaned up automatically.
-6. To disable automated candidate CI and require manual preparation / pre-existing green CI (legacy mode), pass `-NoAutoCandidate`.
+By default, `release.ps1` creates no remote state until the local build and preflight pass, then overlaps candidate CI with the remaining local steps:
+1. When a new release commit is created, it checks, read-only, whether required status checks (`test`) are already green on that SHA. Nothing is pushed here.
+2. It builds `publish/` (`build.ps1`), compiles `nexus-ide.vsix`, and runs the complete release preflight (Worker, Gateway, live KB tests, warning baseline).
+3. Only after the preflight passes, if the checks were not already green, it pushes `candidate/vX.Y.Z` to `origin` and ensures an automated candidate PR exists to trigger GitHub Actions CI.
+4. While cloud CI runs, the remaining local steps proceed: artefact version stamps, manifest, `publish.zip` and its verification.
+5. Right before tagging (`Step "Verifying pre-publication freshness"`), `release.ps1` waits for GitHub Actions CI to conclude with success; with `-NoAutoCandidate` it asserts the checks are green instead of waiting.
+6. Upon successful publication and verification, the candidate PR and remote candidate branch are cleaned up automatically.
+7. To disable automated candidate CI and require manual preparation / pre-existing green CI (legacy mode), pass `-NoAutoCandidate`.
+
+Exceptions: `-PrepareOnly` stops after the release commit, before build and preflight, and tells the operator to push the commit as a candidate to get CI; `-SkipBuild`/`-SkipTests` remove build or preflight from the path, so the candidate is created earlier.
 
 It bumps versions, synchronizes both npm lockfiles, SDK project files, and the
 catalog-generated release metadata, commits that source state before building,
