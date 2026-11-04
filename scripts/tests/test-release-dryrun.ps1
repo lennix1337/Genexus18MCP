@@ -38,6 +38,11 @@ try {
         if ($status.state -ne 'succeeded' -or $status.phase -ne 'dry-run-complete') {
             throw "dry run [$($scenario.Name)] did not complete: phase=$($status.phase) state=$($status.state) error=$($status.error)`n$output"
         }
+        # The harness reports the branch as main against a simulated origin/main, so the base
+        # freshness check really runs (never the dry-run "skipped" warning) in any checkout.
+        if ($output -notmatch 'Local main matches the current origin/main head') {
+            throw "dry run [$($scenario.Name)] did not run the release base freshness check."
+        }
         if ($output -notmatch [regex]::Escape($scenario.Expect)) {
             throw "dry run [$($scenario.Name)] did not reach the step '$($scenario.Expect)'."
         }
