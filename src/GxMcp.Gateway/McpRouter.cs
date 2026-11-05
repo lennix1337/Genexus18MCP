@@ -2067,6 +2067,19 @@ namespace GxMcp.Gateway
                 var value = ResolveErrorField(error, k);
                 if (value != null) trimmed[k] = value;
             }
+            if (string.Equals(code?.ToString(), "WorkerBusy", StringComparison.Ordinal)
+                && ResolveErrorField(error, "dispatchState") != null)
+            {
+                // RFC #854: the shared-host broker's Busy_Envelope. Its hint says to retry after retryAfterMs, so the wait,
+                // the delivery state, the KB identity and the queue state must survive the terse shape. The Isolated_Mode
+                // WorkerBusy carries no dispatchState and keeps its existing terse shape.
+                foreach (string key in new[] { "retryAfterMs", "dispatchState", "kbIdentityKey", "kbPath",
+                    "runningOperation", "runningElapsedMs", "queuePosition", "queueDepth", "sessionQueueCap" })
+                {
+                    JToken? value = ResolveErrorField(error, key);
+                    if (value != null) trimmed[key] = value;
+                }
+            }
             if (code?.ToString().StartsWith("Module", StringComparison.Ordinal) == true)
             {
                 // Module failures attach a typed receipt at the envelope root,
