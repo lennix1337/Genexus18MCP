@@ -38,6 +38,7 @@ $tests = @(
     'test-release-status.ps1',
     'test-release-exit-codes.ps1',
     'test-release-freshness.ps1',
+    'test-release-ci-wiring.ps1',
     'test-release-resume.ps1',
     'test-release-publication.ps1',
     'test-release-doctor.ps1',
