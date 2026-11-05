@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Test-only process host for the shared-host process harness. It is never packaged
+    into publish/ (build.ps1 builds only the Gateway and Worker projects) and it must
+    never reference the GeneXus SDK: the broker sources linked below have to compile
+    without it. See README.md for the fake-child script format.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x86</Platforms>
+    <PlatformTarget>x86</PlatformTarget>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <RootNamespace>GxMcp.SharedHost.TestHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same version the Worker already ships; not a new dependency. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The real broker code, compiled exactly as the Worker compiles it. -->
+    <Compile Include="..\GxMcp.Worker\SharedWorkerHost.cs" Link="Broker\SharedWorkerHost.cs" />
+    <Compile Include="..\GxMcp.Worker\SharedWorkerHostProtocol.cs" Link="Broker\SharedWorkerHostProtocol.cs" />
+    <Compile Include="..\GxMcp.Worker\Helpers\LogRedaction.cs" Link="Broker\LogRedaction.cs" />
+    <Compile Include="..\GxMcp.Shared\JsonIngress.cs" Link="Shared\JsonIngress.cs" />
+    <Compile Include="..\GxMcp.Shared\SharedHost\*.cs" LinkBase="Shared\SharedHost" />
+  </ItemGroup>
+</Project>
