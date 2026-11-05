@@ -197,6 +197,20 @@ test('the docs index lists every top-level document and every link resolves', ()
     assert.match(read('AGENTS.md'), /\]\(docs\/README\.md\)/);
 });
 
+// Antigravity `agy` truncates a project AGENTS.md above 24,000 bytes, silently dropping the
+// rules at its end. Keep headroom for edits; move details to docs/agent-operations.md.
+test('AGENTS.md stays under the agent truncation limit and links its operations reference', () => {
+    const bytes = fs.statSync(path.join(repoRoot, 'AGENTS.md')).size;
+    assert.ok(bytes < 23000, `AGENTS.md is ${bytes} bytes; agy truncates at 24000`);
+    const guide = read('AGENTS.md');
+    const reference = read('docs/agent-operations.md');
+    for (const [, anchor] of guide.matchAll(/\]\(docs\/agent-operations\.md#([a-z0-9-]+)\)/g)) {
+        const heading = reference.split('\n').some((line) => line.startsWith('## ')
+            && line.slice(3).toLowerCase().replace(/[^a-z0-9 -]/g, '').replace(/ /g, '-') === anchor);
+        assert.ok(heading, `docs/agent-operations.md has no section for #${anchor}`);
+    }
+});
+
 test('explain documentation advertises compatibility-only contract', () => {
     for (const docPath of ['README.md', 'GEMINI.md', '.gemini/skills/genexus-mastery/SKILL.md']) {
         const text = read(docPath);

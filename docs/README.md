@@ -85,6 +85,7 @@ also read [`AGENTS.md`](../AGENTS.md).
 ## Contributing, agents and releases
 
 - [Agent playbook](agent_playbook.md) — SDK authoring order, placement and Windows gotchas.
+- [Agent operations reference](agent-operations.md) — KB selection contracts, test KB table, runtime iteration and the install/update decision matrix moved out of `AGENTS.md`.
 - [Agent coordination](agent-coordination.md) — delegating implementation and review lanes.
 - [Multi-PR review playbook](pr-review-playbook.md).
 - [Release protocol](release_protocol.md) and the [release recovery pointer](RELEASE.md).
