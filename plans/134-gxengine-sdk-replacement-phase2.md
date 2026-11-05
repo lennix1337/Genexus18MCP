@@ -4,7 +4,7 @@
 
 **Goal:** Expand native `gx-engine` coverage and MCP Gateway routing to replace the GeneXus SDK across native edits, expanded reads (Variables, SDT Structure, DataProvider), pattern instance UDM inspection, and Business Component C# generation.
 
-**Architecture:** 
+**Architecture:**
 1. Gateway MCP: Implement `EngineEditContract.cs` to route single-part textual edits (`genexus_edit`) directly to `gx-engine kb-write` with transactional T-SQL persistence, removing the unconditional deferral for admitted Procedures, WebPanels, and Transactions.
 2. Engine UDM & Reads: Expand `EngineReadContract.cs` and `kb-read` to admit `Variables` XML part and `StructuredDataType` (SDT), `DataProvider`, and `DataSelector` objects.
 3. Pattern Metadata: Add native extraction of `PatternInstance` parts directly from UDM `EntityPart` tables in `gx-engine`.

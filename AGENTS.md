@@ -107,20 +107,8 @@ Source of truth: `config/gx-versions.json`.
   output when behavior changes. Preserve the final `build.ps1` ordering below;
   identify the exact packaged binary in postchecks rather than borrowing timings
   from another target directory.
-- **Current native capabilities (Plan 133 & 134 parity roadmap):**
-  - Content-addressed SHA-256 build cache with automatic LRU and `.tmp-*` directory pruning (`BuildCache::prune_if_needed`).
-  - Autonomous UDM metadata & deterministic version token resolution directly from SQL Server tables (`ModelEntityVersion`, `UtcTicks`, `ParentIdentity`).
-  - C# ADO.NET cursor generation with `ParDef` parameter inference (`@Param`, `GXType`, length, decimals) and deterministic handle cleanup.
-  - WebPanel `Enter` event lifecycle generation (`E13_Enter()`).
-  - Business Component companion class emission (`[Transaction]BC.cs`) with full CRUD and transaction API (`Load`, `Save`, `Insert`, `Update`, `Delete`, `Success`, `Fail`, `GetMessages`) during `rebuild-all`.
-  - Native single-part edit routing contract (`EngineEditContract.cs`) and async engine execution pipeline (`DispatchEngineEditAsync`).
-  - Native UDM XML part decoding for `PatternInstance` (WorkWithPlus), `WebForm`, `Variables`, and `Structure` directly from storage without COM STA.
-  - Transactional live UDM persistence (`UdmWriter`) with atomic T-SQL batching (`plan_save_existing_object_sql`) and fail-closed safety guards.
-  - Streaming zero-allocation row parsing (`live_rows.rs`) and pre-allocated buffers in read sessions.
-  - Fast-path wildcard / pattern matching in KB object queries (`matches_name_pattern`).
-  - Topological dependency ordering with external reference partitioning in `Catalog`.
-  - Panic-free frontend AST fuzzing robustness (`tests/frontend_fuzz_robustness.rs`).
-  - **Measured differential performance:** 14.38x overall runtime speedup (peak 22.42x on SDT JSON serialization); 64.19x warm compilation speedup on Procedure fixtures vs. local GeneXus 18 SDK/MSBuild.
+- **Current native capabilities (Plan 133 & 134 parity roadmap):** listed in
+  [`docs/agent-operations.md`](docs/agent-operations.md#native-gx-engine-capabilities).
 
 ## KB and harness contracts
 
