@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using GxMcp.Common.SharedHost;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -41,7 +42,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
             Directory.CreateDirectory(installation);
 
             var identity = SharedWorkerIdentity.Create(exe, kbPath, installation, "sdk", "18");
-            string realRecord = SharedWorkerRegistry.GetRecordPath(identity);
+            string realRecord = SharedWorkerRegistry.GetRecordPathV2(identity.KbKey);
             var stderr = new StringBuilder();
             Process? broker = null;
             SharedWorkerConnection? a = null;
@@ -49,8 +50,11 @@ namespace GxMcp.Gateway.Tests.SharedHost
             try
             {
                 broker = StartBroker(exe, identity, kbPath, installation, registryDir, stderr);
-                string recordPath = Path.Combine(registryDir, identity.Key + ".json");
-                SharedWorkerRecord record = await WaitForRecordAsync(recordPath, broker, stderr);
+                // Registry v2 (decision A4): one record per KB directory, <kbKey>.json under --registry-dir.
+                string recordPath = SharedWorkerRegistry.GetRecordPathV2(identity.KbKey, registryDir);
+                SharedHostRecord record = await WaitForRecordAsync(recordPath, broker, stderr);
+                Assert.Equal(SharedWorkerRegistry.PipeNameV2(identity), record.PipeName);
+                Assert.Equal(identity.Key, record.Identity.Key);
                 Assert.False(File.Exists(realRecord), "the smoke wrote the real registry record " + realRecord);
 
                 var toA = new ConcurrentQueue<JObject>();
@@ -136,7 +140,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
                 FileName = exe,
                 Arguments = "--shared-host"
                     + " --identity-key \"" + identity.Key + "\""
-                    + " --pipe-name \"" + SharedWorkerRegistry.PipeName(identity) + "\""
+                    + " --pipe-name \"" + SharedWorkerRegistry.PipeNameV2(identity) + "\""
                     + " --worker-executable \"" + exe + "\""
                     + " --kb \"" + kbPath + "\""
                     + " --installation \"" + installation + "\""
@@ -162,21 +166,21 @@ namespace GxMcp.Gateway.Tests.SharedHost
             return process;
         }
 
-        private static async Task<SharedWorkerRecord> WaitForRecordAsync(string path, Process broker, StringBuilder stderr)
+        private static async Task<SharedHostRecord> WaitForRecordAsync(string path, Process broker, StringBuilder stderr)
         {
             DateTime deadline = DateTime.UtcNow.AddMilliseconds(TimeoutMs);
             while (DateTime.UtcNow < deadline)
             {
                 if (broker.HasExited)
                     throw new InvalidOperationException("the broker exited with " + broker.ExitCode + ":\n" + Tail(stderr));
-                SharedWorkerRecord? record = SharedWorkerRegistry.ReadRecord(path);
+                SharedHostRecord? record = RecordReadResult.ReadFile(path).Record;
                 if (record != null && record.WorkerPid > 0 && !string.IsNullOrEmpty(record.PipeName)) return record;
                 await Task.Delay(50);
             }
             throw new TimeoutException("no registry record at " + path + ":\n" + Tail(stderr));
         }
 
-        private static SharedWorkerConnection Connect(SharedWorkerIdentity identity, SharedWorkerRecord record, string clientId, ConcurrentQueue<JObject> sink)
+        private static SharedWorkerConnection Connect(SharedWorkerIdentity identity, SharedHostRecord record, string clientId, ConcurrentQueue<JObject> sink)
         {
             var connection = new SharedWorkerConnection(identity, record, clientId);
             connection.LineReceived += line =>

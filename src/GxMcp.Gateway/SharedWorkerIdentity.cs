@@ -571,7 +571,9 @@ namespace GxMcp.Gateway
             if (terminateError != null)
                 return OrphanStopResult.Create(OrphanStopOutcome.KillFailed, pid, terminateError);
 
-            var waited = Stopwatch.StartNew();
+            // Measured on the context clock, so the stop wait of Requirement 7 criterion 9 is deterministic under a
+            // fake clock; the default clock is the system clock.
+            DateTime waitStarted = ctx.Clock.UtcNow;
             while (true)
             {
                 var after = ctx.Probe.Probe(pid);
@@ -580,12 +582,12 @@ namespace GxMcp.Gateway
                         && !SharedHostRecordClassifier.SameMillisecond(startTicks, after.StartTimeUtcTicks));
                 if (gone) return OrphanStopResult.Create(OrphanStopOutcome.Stopped, pid, null);
 
-                if (waited.Elapsed >= ctx.StopWaitTimeout)
+                if (ctx.Clock.UtcNow - waitStarted >= ctx.StopWaitTimeout)
                     return OrphanStopResult.Create(OrphanStopOutcome.StillRunning, pid,
                         "pid " + pid.ToString(CultureInfo.InvariantCulture) + " still running after " +
                         ((long)ctx.StopWaitTimeout.TotalMilliseconds).ToString(CultureInfo.InvariantCulture) + " ms");
 
-                Thread.Sleep(ctx.StopPollInterval);
+                ctx.Clock.Sleep(ctx.StopPollInterval);
             }
         }
 
@@ -738,6 +740,15 @@ namespace GxMcp.Gateway
         public TimeSpan StopWaitTimeout { get; init; } = TimeSpan.FromSeconds(10);
         public TimeSpan StopPollInterval { get; init; } = TimeSpan.FromMilliseconds(100);
         public string? RegistryRoot { get; init; }
+
+        // Launcher seams of the v2 Connect sequence (SharedWorkerHostLauncher.ConnectV2).
+        // Null means WorkerOwnershipRegistry.DefaultRoot.
+        public string? OwnershipRegistryRoot { get; init; }
+        public ISharedWorkerLauncherClock Clock { get; init; } = SharedWorkerSystemClock.Instance;
+        public SharedWorkerHostStarter StartHost { get; init; } = SharedWorkerHostLauncher.StartHostProcess;
+        public SharedWorkerPipeConnector ConnectPipe { get; init; } = SharedWorkerHostLauncher.ConnectPipeProcess;
+        public SharedWorkerElectionMutexFactory AcquireElectionMutex { get; init; } = SharedWorkerHostLauncher.AcquireNamedMutex;
+        public TimeSpan RegistryPollInterval { get; init; } = TimeSpan.FromMilliseconds(100);
 
         // Kills exactly one process (not its tree: only the root was verified). Returns null on success or when the
         // process has already exited, otherwise the error text.
