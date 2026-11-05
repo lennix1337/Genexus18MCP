@@ -331,16 +331,11 @@ namespace GxMcp.Worker.Helpers
                         var items = GetCollection(bandObj, "Items", "Elements", "Controls", "Components");
                         if (items == null) continue;
 
-                        foreach (var item in items)
+                        var target = SelectReportItem(items, elName, HomonymOrdinal(elXml, elName));
+                        if (target != null)
                         {
+                            var item = target;
                             var iType = item.GetType();
-                            var nameProp = iType.GetProperty("Name", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                            var currentName = nameProp?.GetValue(item, null)?.ToString();
-                            var controlNameProp = iType.GetProperty("ControlName", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                            var currentControlName = controlNameProp?.GetValue(item, null)?.ToString();
-                            
-                            if (string.Equals(currentName, elName, StringComparison.OrdinalIgnoreCase) ||
-                                string.Equals(currentControlName, elName, StringComparison.OrdinalIgnoreCase))
                             {
                                 foreach (var attr in elXml.Attributes())
                                 {
@@ -1045,6 +1040,44 @@ namespace GxMcp.Worker.Helpers
                || string.Equals(name, "Top", StringComparison.OrdinalIgnoreCase)
                || string.Equals(name, "Width", StringComparison.OrdinalIgnoreCase)
                || string.Equals(name, "Height", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Position of a control among the same-named controls of its print block. GeneXus
+        /// names a bound control after its reference, so one block can hold two "&amp;x"
+        /// controls; the serializer emits band items in order, so the ordinal identifies
+        /// the SDK item and a write never spills onto the homonym (#867).
+        /// </summary>
+        internal static int HomonymOrdinal(XElement control, string controlName)
+        {
+            if (control?.Parent == null || string.IsNullOrEmpty(controlName)) return 0;
+            int ordinal = 0;
+            foreach (var sibling in control.Parent.Elements("Control"))
+            {
+                if (ReferenceEquals(sibling, control)) return ordinal;
+                var siblingName = sibling.Attribute("ControlName")?.Value ?? sibling.Attribute("Name")?.Value;
+                if (string.Equals(siblingName, controlName, StringComparison.OrdinalIgnoreCase)) ordinal++;
+            }
+            return 0;
+        }
+
+        /// <summary>The ordinal-th band item named <paramref name="controlName"/> (Name or ControlName), or null.</summary>
+        internal static object SelectReportItem(System.Collections.IEnumerable items, string controlName, int ordinal)
+        {
+            if (items == null || string.IsNullOrEmpty(controlName) || ordinal < 0) return null;
+            int seen = 0;
+            foreach (var item in items)
+            {
+                if (item == null) continue;
+                var iType = item.GetType();
+                var currentName = iType.GetProperty("Name", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(item, null)?.ToString();
+                var currentControlName = iType.GetProperty("ControlName", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(item, null)?.ToString();
+                if (!string.Equals(currentName, controlName, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(currentControlName, controlName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (seen == ordinal) return item;
+                seen++;
+            }
+            return null;
+        }
 
         private static bool IsMatchingReportBand(object band, string blockName)
         {
