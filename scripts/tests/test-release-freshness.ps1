@@ -145,6 +145,11 @@ try {
     $script:ghCalls = @()
     $summaryPath = Join-Path $temp 'missing-preflight.json'
     $Version = '9.9.9'; $allowLegacyAssets = $false
+    # The base freshness check inside the composite gate: origin/main moved, HEAD is the release commit.
+    $threw = $false
+    try { Assert-ReleasePrePublicationFresh -SourceCommit $releaseCommit -Tag 'v9.9.9' -SummaryPath $summaryPath } catch { $threw = $_.Exception.Message -match 'stale or diverged'; $script:lastMsg = $_.Exception.Message }
+    if (-not $threw) { throw "A moved origin/main must stop publication from the composite gate: $script:lastMsg" }
+    if (@($script:ghCalls).Count -ne 0) { throw 'CI must not be consulted when the base is stale.' }
     $threw = $false
     try { Assert-ReleasePrePublicationFresh -SourceCommit $base -Tag 'v9.9.9' -SummaryPath $summaryPath } catch { $threw = $_.Exception.Message -match 'no longer the release source commit' }
     if (-not $threw) { throw 'A HEAD that moved since the manifest was written must stop publication.' }
@@ -157,6 +162,20 @@ try {
     try { Assert-ReleasePrePublicationFresh -SourceCommit $releaseCommit -Tag 'v9.9.9' -SummaryPath $summaryPath } catch { $threw = $_.Exception.Message -match "preflight certificate"; $script:lastMsg = $_.Exception.Message }
     if (-not $threw) { throw "Publishing without a matching passed preflight certificate must be refused: $script:lastMsg" }
     if (@($script:ghCalls).Count -ne 0) { throw 'CI must not be consulted before the cheaper local freshness checks pass.' }
+
+    # Success path: a valid certificate and green checks reach the final CI re-check for the exact commit.
+    Set-Content -LiteralPath $summaryPath -Value '{}' -Encoding ascii
+    function Get-GxMcpReleaseArtifactFingerprint { param($RepositoryRoot, $Version, [switch]$AllowLegacy) return 'fixed-fingerprint' }
+    function Get-ReleasePreflightInputs { param($ArtifactFingerprint) return @{} }
+    function Test-GxMcpReleasePreflightCertificate { param($Summary, $Expected) return $true }
+    $script:runLines = @(New-RunLine)
+    $script:ghCalls = @()
+    Assert-ReleasePrePublicationFresh -SourceCommit $releaseCommit -Tag 'v9.9.9' -SummaryPath $summaryPath
+    if (-not ($script:ghCalls -match "commits/$releaseCommit/check-runs")) { throw 'The composite gate must re-check required CI on the release source commit.' }
+    $script:runLines = @(New-RunLine '' 'in_progress')
+    $threw = $false
+    try { Assert-ReleasePrePublicationFresh -SourceCommit $releaseCommit -Tag 'v9.9.9' -SummaryPath $summaryPath } catch { $threw = $_.Exception.Message -match 'Required CI is not green' }
+    if (-not $threw) { throw 'The composite gate must refuse publication while required CI is not green.' }
 } finally {
     Set-Location $originalLocation
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
