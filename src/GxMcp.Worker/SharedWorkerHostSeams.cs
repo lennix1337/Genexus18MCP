@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
+using GxMcp.Common.SharedHost;
 using Newtonsoft.Json;
 
 namespace GxMcp.Worker
@@ -10,8 +11,9 @@ namespace GxMcp.Worker
     // Seams of the shared-host broker (RFC #854). The contract is pinned in the header of
     // src/GxMcp.Worker.Tests/SharedWorkerHostSchedulerWiringTests.cs. The production
     // implementations below are the only ones the Worker uses; tests pass fakes through the
-    // six-argument SharedWorkerHostRuntime constructor. This file is SDK-free and is linked
-    // into GxMcp.SharedHost.TestHost.
+    // six-argument or the eight-argument SharedWorkerHostRuntime constructor (the ownership
+    // seams are pinned in the header of SharedWorkerHostOwnershipTests.cs). This file is
+    // SDK-free and is linked into GxMcp.SharedHost.TestHost.
 
     /// <summary>Monotonic clock and timer factory of the broker.</summary>
     internal interface ISharedHostClock
@@ -66,6 +68,27 @@ namespace GxMcp.Worker
     {
         void Write(SharedWorkerHostRegistryRecord record);
         void Delete();
+    }
+
+    /// <summary>
+    /// The registry v2 record writer (decision A4). A separate interface from
+    /// <see cref="ISharedHostRegistryWriter"/>, whose v1 record the PR A tests implement.
+    /// </summary>
+    internal interface ISharedHostRecordWriter
+    {
+        void Write(SharedHostRecord record);
+        void Delete();
+    }
+
+    /// <summary>Named mutexes of the broker (decision A3).</summary>
+    internal interface ISharedHostMutexFactory
+    {
+        /// <summary>
+        /// Takes ownership of the named mutex without waiting. Returns the held mutex, or null when another
+        /// owner holds it; an abandoned mutex counts as acquired. Disposing the handle releases the mutex and
+        /// may happen on any thread.
+        /// </summary>
+        IDisposable TryAcquire(string name);
     }
 
     /// <summary>One Gateway attachment as the broker runtime sees it.</summary>
@@ -299,6 +322,119 @@ namespace GxMcp.Worker
         public void Delete()
         {
             try { if (File.Exists(_recordPath)) File.Delete(_recordPath); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// The registry v2 record file (<c>shared-workers\v2\&lt;kbKey&gt;.json</c>): a temporary file plus
+    /// <see cref="File.Replace(string, string, string)"/>, so a reader never sees a partial record.
+    /// </summary>
+    internal sealed class SharedHostFileRecordWriter : ISharedHostRecordWriter
+    {
+        private readonly string _recordPath;
+
+        internal SharedHostFileRecordWriter(string recordPath)
+        {
+            if (string.IsNullOrWhiteSpace(recordPath)) throw new ArgumentException("A registry record path is required.", nameof(recordPath));
+            _recordPath = recordPath;
+        }
+
+        internal string RecordPath => _recordPath;
+
+        public void Write(SharedHostRecord record)
+        {
+            if (record == null) throw new ArgumentNullException(nameof(record));
+            string directory = Path.GetDirectoryName(_recordPath);
+            Directory.CreateDirectory(directory);
+            string temp;
+            using (var self = Process.GetCurrentProcess())
+                temp = _recordPath + ".tmp-" + self.Id + "-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                File.WriteAllText(temp, record.ToJson(), new UTF8Encoding(false));
+                if (File.Exists(_recordPath)) File.Replace(temp, _recordPath, null);
+                else File.Move(temp, _recordPath);
+            }
+            finally { try { if (File.Exists(temp)) File.Delete(temp); } catch { } }
+        }
+
+        public void Delete()
+        {
+            try { if (File.Exists(_recordPath)) File.Delete(_recordPath); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Production <see cref="ISharedHostMutexFactory"/> backed by <see cref="Mutex"/>. A mutex is owned by the
+    /// thread that acquired it, so each held mutex lives on a dedicated thread that releases it when the handle
+    /// is disposed; the handle can therefore be disposed from any thread.
+    /// </summary>
+    internal sealed class SharedHostNamedMutexFactory : ISharedHostMutexFactory
+    {
+        public IDisposable TryAcquire(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("A mutex name is required.", nameof(name));
+            var held = new HeldMutex(name);
+            return held.Acquired ? held : null;
+        }
+
+        private sealed class HeldMutex : IDisposable
+        {
+            private const int ThreadJoinMs = 10000;
+
+            private readonly ManualResetEventSlim _decided = new ManualResetEventSlim(false);
+            private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+            private readonly Thread _owner;
+            private Exception _error;
+            private int _disposed;
+
+            internal HeldMutex(string name)
+            {
+                _owner = new Thread(() => Hold(name)) { IsBackground = true, Name = "SharedHostMutexOwner" };
+                _owner.Start();
+                _decided.Wait();
+                if (!Acquired) _owner.Join(ThreadJoinMs);
+                if (_error != null) throw new InvalidOperationException("Could not open the shared host mutex '" + name + "'.", _error);
+            }
+
+            internal bool Acquired { get; private set; }
+
+            private void Hold(string name)
+            {
+                Mutex mutex = null;
+                bool owned = false;
+                try
+                {
+                    mutex = new Mutex(false, name);
+                    try { owned = mutex.WaitOne(0); }
+                    catch (AbandonedMutexException) { owned = true; }
+                    Acquired = owned;
+                    _decided.Set();
+                    if (owned) _release.Wait();
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // The mutex exists under another security context: another owner holds it.
+                    _decided.Set();
+                }
+                catch (Exception ex)
+                {
+                    _error = ex;
+                    _decided.Set();
+                }
+                finally
+                {
+                    if (owned) { try { mutex.ReleaseMutex(); } catch { } }
+                    try { mutex?.Dispose(); } catch { }
+                }
+            }
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+                _release.Set();
+                _owner.Join(ThreadJoinMs);
+            }
         }
     }
 }
