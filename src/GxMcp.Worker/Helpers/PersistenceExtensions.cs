@@ -121,6 +121,33 @@ namespace GxMcp.Worker.Helpers
             }
         }
 
+        // A raw KBObject.Save() failure only says "<type> '<name>' validation failed.":
+        // re-run validation on the failed state so the caller sees which validator,
+        // node or field rejected the save.
+        public static Exception WithValidationDetail(this KBObject obj, Exception saveFailure)
+        {
+            if (obj == null || saveFailure == null) return saveFailure;
+            string detail = null;
+            try
+            {
+                var msgs = new OutputMessages();
+                obj.Validate(msgs);
+                detail = ExtractErrorText(msgs, obj);
+            }
+            catch { /* the detail is advisory; keep the original failure */ }
+            string message = ComposeSaveFailureMessage(saveFailure.Message, detail);
+            return message == saveFailure.Message ? saveFailure : new InvalidOperationException(message, saveFailure);
+        }
+
+        internal static string ComposeSaveFailureMessage(string saveMessage, string validationDetail)
+        {
+            saveMessage = (saveMessage ?? string.Empty).Trim();
+            string detail = (validationDetail ?? string.Empty).Trim();
+            if (detail.Length == 0 || saveMessage.IndexOf(detail, StringComparison.Ordinal) >= 0) return saveMessage;
+            if (detail.IndexOf(saveMessage, StringComparison.Ordinal) >= 0 && saveMessage.Length > 0) return detail;
+            return saveMessage.Length == 0 ? detail : saveMessage + " Detailed Messages: " + detail;
+        }
+
         public static string GetSdkMessages(this object target)
         {
             if (target == null) return string.Empty;

@@ -3422,12 +3422,21 @@ public string ChangeBusinessComponentVariable(string action, string target, stri
 
         private static void ForceSaveVariableOwner(global::Artech.Architecture.Common.Objects.KBObject obj)
         {
-            obj.Save(new global::Artech.Architecture.Common.Objects.KBObjectSavePreferences
+            try
             {
-                ForceSave = true,
-                ForceSaveDefaultParts = true,
-                SkipValidation = false
-            });
+                obj.Save(new global::Artech.Architecture.Common.Objects.KBObjectSavePreferences
+                {
+                    ForceSave = true,
+                    ForceSaveDefaultParts = true,
+                    SkipValidation = false
+                });
+            }
+            catch (Exception ex)
+            {
+                var detailed = obj.WithValidationDetail(ex);
+                if (ReferenceEquals(detailed, ex)) throw;
+                throw detailed;
+            }
         }
 
         // issue #281: normalize an attribute request to its canonical

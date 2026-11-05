@@ -17,6 +17,7 @@
 - `genexus_edit part=Structure` on an SDT keeps `Character(N)` members as CHARACTER and adds new members, instead of turning them into NUMERIC and ending in `WriteNotPersisted`: the DSL writer sets the member type through the same shadow-safe path as `update_visual`. https://github.com/lennix1337/Genexus18MCP/issues/865
 - Report `genexus_layout set_properties` on `/Report/PrintBlock[N]/Control[i]` changes only the addressed control when several controls share a name (`&nome` twice), instead of moving all of them. https://github.com/lennix1337/Genexus18MCP/issues/867
 - `add_report_control` and `move_report_control` no longer refuse to place a control inside a box or across a line (`ReportControlOverlap`): `ReportRectangle` and `ReportLine` are frames, not obstacles; overlapping content controls are still refused. https://github.com/lennix1337/Genexus18MCP/issues/866
+- A failed `genexus_variable` save (`add`, `modify`, rollback) now carries the GeneXus validator messages after `Detailed Messages:`, instead of only "Web Panel '<name>' validation failed.". The bound NUMERIC(n,2) retype failure itself is still under investigation. https://github.com/lennix1337/Genexus18MCP/issues/864
 
 ### Internal
 
