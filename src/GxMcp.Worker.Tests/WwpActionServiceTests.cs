@@ -180,6 +180,47 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("DoBaixarConfiguracao", projectedAction["event"]?.ToString());
         }
 
+        [Theory]
+        [InlineData("group")]
+        [InlineData("containerName")]
+        [InlineData("container")]
+        public void RemoveAction_RemovesFormLevelUserActionFromFormContainer(string argName)
+        {
+            var doc = XDocument.Parse("<instance><table name='TableActions'><userAction name='BtnTeste' caption='Teste'/><userAction name='Outra' caption='Outra'/></table></instance>");
+            JObject result = WwpActionService.Apply(doc, "remove_action", new JObject
+            {
+                [argName] = "TableActions",
+                ["actionName"] = "BtnTeste"
+            }, null);
+
+            Assert.Null(result["error"]);
+            Assert.True((bool)result["changed"]!);
+            Assert.Equal(new[] { "Outra" }, doc.Root.Element("table").Elements("userAction").Select(e => (string)e.Attribute("name")).ToArray());
+        }
+
+        [Fact]
+        public void RemoveAction_ReportsUnknownFormContainerAndAmbiguousContainer()
+        {
+            var missing = XDocument.Parse("<instance><table name='TableActions'><userAction name='BtnTeste'/></table></instance>");
+            JObject notFound = WwpActionService.Apply(missing, "remove_action", new JObject
+            {
+                ["containerName"] = "TableNada",
+                ["actionName"] = "BtnTeste"
+            }, null);
+            Assert.Equal("ActionGroupNotFound", notFound["code"]?.ToString());
+            Assert.Contains("TableNada", notFound["error"]?.ToString());
+            Assert.Single(missing.Root.Element("table").Elements("userAction"));
+
+            var ambiguous = XDocument.Parse("<instance><table name='TableMain'><table name='TableActions'><userAction name='BtnTeste'/></table><table name='TableActions'><userAction name='BtnTeste'/></table></table></instance>");
+            JObject twice = WwpActionService.Apply(ambiguous, "remove_action", new JObject
+            {
+                ["group"] = "TableActions",
+                ["actionName"] = "BtnTeste"
+            }, null);
+            Assert.Equal("FormActionContainerAmbiguous", twice["code"]?.ToString());
+            Assert.Equal(2, ambiguous.Descendants("userAction").Count());
+        }
+
         [Fact]
         public void AddFormUserAction_RejectsInvalidNamesDuplicatesAndUnknownContainers()
         {
