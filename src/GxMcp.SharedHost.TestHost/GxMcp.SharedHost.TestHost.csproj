@@ -30,6 +30,9 @@
     <Compile Include="..\GxMcp.Worker\SharedWorkerHost.cs" Link="Broker\SharedWorkerHost.cs" />
     <Compile Include="..\GxMcp.Worker\SharedWorkerHostProtocol.cs" Link="Broker\SharedWorkerHostProtocol.cs" />
     <Compile Include="..\GxMcp.Worker\Helpers\LogRedaction.cs" Link="Broker\LogRedaction.cs" />
+    <!-- SDK-free lane classifier and the SDK-free half of WriteDestinationGuard it reads. -->
+    <Compile Include="..\GxMcp.Worker\Services\CommandLaneClassifier.cs" Link="Broker\CommandLaneClassifier.cs" />
+    <Compile Include="..\GxMcp.Worker\Services\WriteDestinationGuard.Lane.cs" Link="Broker\WriteDestinationGuard.Lane.cs" />
     <Compile Include="..\GxMcp.Shared\JsonIngress.cs" Link="Shared\JsonIngress.cs" />
     <Compile Include="..\GxMcp.Shared\SharedHost\*.cs" LinkBase="Shared\SharedHost" />
   </ItemGroup>

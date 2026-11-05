@@ -28,9 +28,12 @@ namespace GxMcp.Worker.Tests
         private const string PinnedPath = @"C:\KBs\KbA";
         private const string PinnedVersion = "Development";
 
-        // The single entry point under test. The extraction adds the classifier beside it.
+        // The two entry points under test: the dispatcher method the Worker loop calls, and
+        // the SDK-free classifier the shared-host broker calls. Both must agree on every row.
         private static readonly Func<JObject, bool> DispatcherEntryPoint = request =>
             ((CommandDispatcher)FormatterServices.GetUninitializedObject(typeof(CommandDispatcher))).IsThreadSafe(request);
+
+        private static readonly Func<JObject, bool> ClassifierEntryPoint = CommandLaneClassifier.IsThreadSafe;
 
         // Columns: request JSON, lane without pins, lane with a configured pin (either variable).
         internal static readonly (string Request, bool Unpinned, bool Pinned)[] Table =
@@ -157,6 +160,27 @@ namespace GxMcp.Worker.Tests
             using (new PinScope(pins))
             {
                 Assert.Equal(expected, DispatcherEntryPoint(Parse(request)));
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(Cases))]
+        public void Classifier_lane_decision_matches_the_pinned_table(PinState pins, string request, bool expected)
+        {
+            using (new PinScope(pins))
+            {
+                Assert.Equal(expected, ClassifierEntryPoint(Parse(request)));
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(Cases))]
+        public void Dispatcher_and_classifier_give_identical_lane_decisions(PinState pins, string request, bool expected)
+        {
+            _ = expected;
+            using (new PinScope(pins))
+            {
+                Assert.Equal(DispatcherEntryPoint(Parse(request)), ClassifierEntryPoint(Parse(request)));
             }
         }
 

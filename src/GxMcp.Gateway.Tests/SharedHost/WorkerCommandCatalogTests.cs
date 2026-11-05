@@ -224,6 +224,10 @@ namespace GxMcp.Gateway.Tests.SharedHost
             SourceAssert.NormaliseNewlines(
                 RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "CommandDispatcher.cs"));
 
+        private static string ClassifierSource() =>
+            SourceAssert.NormaliseNewlines(
+                RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "CommandLaneClassifier.cs"));
+
         /// <summary>
         /// Every (lower-case method, action) pair the dispatcher registers, with the empty
         /// action for a method whose handler compares no action literal. Actions are
@@ -253,7 +257,8 @@ namespace GxMcp.Gateway.Tests.SharedHost
                 order.Add(method);
             }
 
-            foreach (Match guard in MethodGuardPattern.Matches(source))
+            // Issue #854 moved the dispatcher's lane guards into CommandLaneClassifier; scan both files so the guard actions stay covered.
+            foreach (Match guard in MethodGuardPattern.Matches(source + "\n" + ClassifierSource()))
             {
                 string method = guard.Groups["m"].Value.ToLowerInvariant();
                 if (actionsByMethod.TryGetValue(method, out var actions))
