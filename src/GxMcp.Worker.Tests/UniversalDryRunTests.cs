@@ -44,6 +44,7 @@ namespace GxMcp.Worker.Tests
             public string WriteObject(string target, string p, string c) { Writes.Add((target, p, c)); return "{}"; }
             public bool ObjectExists(string name) => false;
             public GxMcp.Worker.Helpers.WwpConventionProbe.Result ProbeWwpConvention() => null;
+            public string ReadWebFormXml(string name) => null;
         }
 
         private static JObject SimpleSpec() => JObject.Parse(@"{

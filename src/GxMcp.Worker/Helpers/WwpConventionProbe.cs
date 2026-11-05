@@ -43,6 +43,25 @@ namespace GxMcp.Worker.Helpers
             @"<Form\b[^>]*type\s*=\s*""layout""[^>]*>\s*<detail\b[^>]*>\s*<layout\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        /// <summary>
+        /// Reads the form shape from one WebForm source. A GeneXus 18 WebPanel created in a KB
+        /// whose layouts go through WebLayoutHandler already carries a <c>&lt;detail&gt;&lt;layout&gt;</c>
+        /// body, so the object about to be written is the most reliable sample: it answers for
+        /// KBs with no other layout-form WebPanel and without the WorkWithPlus assembly.
+        /// </summary>
+        public static Result FromWebFormSource(string source, string objectName)
+        {
+            if (string.IsNullOrEmpty(source) || !DetailLayoutRx.IsMatch(source)) return null;
+            var m = ClassGuidRx.Match(source);
+            return new Result
+            {
+                IsWwp = true,
+                ThemeClassPrefix = m.Success ? m.Groups[1].Value : null,
+                SampleFromObject = objectName,
+                Reason = "Target WebForm of " + objectName + " already uses <detail><layout>"
+            };
+        }
+
         public static Result Probe(KbService kbService)
         {
             var result = new Result { IsWwp = false };

@@ -17,6 +17,8 @@ namespace GxMcp.Worker.Tests
         private sealed class FakeBackend : PopupTemplateService.IPopupBackend
         {
             public HashSet<string> Existing { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public Func<string, string> WebFormXml { get; set; } = _ => null;
+            public Func<string, string> WriteResult { get; set; } = _ => "{\"status\":\"Success\"}";
             public List<(string type, string name)> Creates { get; } = new List<(string, string)>();
             public List<(string target, string varName, string typeName)> Variables { get; } =
                 new List<(string, string, string)>();
@@ -39,11 +41,12 @@ namespace GxMcp.Worker.Tests
             public string WriteObject(string target, string partName, string content)
             {
                 Writes.Add((target, partName, content));
-                return "{\"status\":\"Success\"}";
+                return WriteResult(partName);
             }
 
             public bool ObjectExists(string name) => Existing.Contains(name);
             public GxMcp.Worker.Helpers.WwpConventionProbe.Result ProbeWwpConvention() => null;
+            public string ReadWebFormXml(string name) => Existing.Contains(name) ? WebFormXml(name) : null;
         }
 
         // === Sample spec used across tests (mirrors the UG popup the friction report describes). ===
@@ -287,6 +290,60 @@ namespace GxMcp.Worker.Tests
             Assert.Empty(backend.Creates);
             // But still writes parts.
             Assert.Contains(backend.Writes, w => w.part == "WebForm");
+        }
+
+        // === Issue #876 ===
+
+        private const string DetailLayoutForm =
+            "<GxMultiForm rootId=\"1\" version=\"html:15.0.0;layout:17.11.0\"><Form id=\"1\" type=\"layout\"><detail>" +
+            "<layout id=\"29de02eb-d8c3-4b4c-8fa9-15588237a2e5\"><table id=\"fda5f7bd-8647-46f9-997c-4bd404f3064e\" controlName=\"MainTable\" tableType=\"Responsive\" />" +
+            "</layout></detail></Form></GxMultiForm>";
+
+        [Fact]
+        public void CreatePopup_FailedWebFormWrite_ReportsPopupIncompleteAndStops()
+        {
+            var backend = new FakeBackend
+            {
+                WriteResult = part => part == "WebForm"
+                    ? "{\"status\":\"error\",\"error\":{\"code\":\"VisualWriteFailed\",\"message\":\"Visual write failed\"}}"
+                    : "{\"status\":\"ok\"}"
+            };
+            var resp = JObject.Parse(new PopupTemplateService(backend).CreatePopup("PopupX", UgSpec()));
+
+            Assert.Equal("error", (string)resp["status"]);
+            Assert.Equal("PopupIncomplete", (string)resp["error"]["code"]);
+            Assert.Contains("write_webform", (string)resp["error"]["message"]);
+            Assert.DoesNotContain(backend.Writes, w => w.part == "Events");
+        }
+
+        [Fact]
+        public void CreatePopup_NewWebPanelWithDetailLayout_WritesTheDualFormSchema()
+        {
+            var backend = new FakeBackend { WebFormXml = _ => DetailLayoutForm };
+            new PopupTemplateService(backend).CreatePopup("PopupX", UgSpec());
+
+            string form = backend.Writes.Single(w => w.part == "WebForm").content;
+            Assert.Contains("<detail>", form);
+            Assert.Contains("attribute=\"&amp;RespRegProf\"", form);
+        }
+
+        [Fact]
+        public void CreatePopup_ExistingWebPanelWithDetailLayout_WritesTheDualFormSchema()
+        {
+            var backend = new FakeBackend { WebFormXml = _ => DetailLayoutForm };
+            backend.Existing.Add("PopupX");
+            new PopupTemplateService(backend).CreatePopup("PopupX", UgSpec());
+
+            Assert.Contains("<detail>", backend.Writes.Single(w => w.part == "WebForm").content);
+        }
+
+        [Fact]
+        public void CreatePopup_FlatWebForm_KeepsTheFlatSchema()
+        {
+            var backend = new FakeBackend { WebFormXml = _ => "<GxMultiForm><Form id=\"1\" type=\"layout\"><table id=\"TblMain\"/></Form></GxMultiForm>" };
+            new PopupTemplateService(backend).CreatePopup("PopupX", UgSpec());
+
+            Assert.DoesNotContain("<detail>", backend.Writes.Single(w => w.part == "WebForm").content);
         }
     }
 }
