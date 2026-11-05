@@ -497,7 +497,8 @@ namespace GxMcp.Gateway.Tests
                         JObject frame;
                         try { frame = JObject.Parse(line); } catch { continue; }
                         string type = frame["gxmcp"]?.ToString() ?? frame["type"]?.ToString() ?? string.Empty;
-                        NextFrame(type);
+                        // Creates the completion source for this frame type when no test asked for it yet.
+                        _ = NextFrame(type);
                         _firstFrameByType[type].TrySetResult(frame);
 
                         if (type == "attach")
