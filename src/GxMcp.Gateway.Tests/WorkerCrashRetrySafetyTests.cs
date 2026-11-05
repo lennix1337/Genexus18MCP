@@ -25,6 +25,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("get_indexes")]
         [InlineData("get_logic")]
         [InlineData("check_subtypes")]
+        [InlineData("get_item_property")]
         public void GenexusStructure_ReadActions_AreRetrySafe(string action)
         {
             var args = new JObject { ["action"] = action };
@@ -41,6 +42,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("set_domain")]
         [InlineData("update_group")]
         [InlineData("move_attribute")]
+        [InlineData("set_item_property")]
         public void GenexusStructure_MutatingActions_AreNeverRetrySafe(string action)
         {
             var args = new JObject { ["action"] = action };

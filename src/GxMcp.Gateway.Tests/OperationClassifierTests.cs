@@ -335,6 +335,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("get_indexes")]
         [InlineData("get_logic")]
         [InlineData("check_subtypes")]
+        [InlineData("get_item_property")]
         public void GenexusStructure_ReadActions_ClassifiedAsReadOnly(string action)
         {
             Assert.True(OperationClassifier.IsReadOnly("genexus_structure", new JObject { ["action"] = action }));
@@ -350,9 +351,26 @@ namespace GxMcp.Gateway.Tests
         [InlineData("set_domain")]
         [InlineData("update_group")]
         [InlineData("move_attribute")]
+        [InlineData("set_item_property")]
         public void GenexusStructure_MutatingActions_ClassifiedAsNotReadOnly(string action)
         {
             Assert.False(OperationClassifier.IsReadOnly("genexus_structure", new JObject { ["action"] = action }));
+        }
+
+        [Fact]
+        public void SetItemProperty_PreviewIsReadOnlyAndTheWriteIsAMutationNeverRetriedBlindly()
+        {
+            var preview = new JObject { ["action"] = "set_item_property", ["dryRun"] = true };
+            var described = OperationClassifier.Describe("genexus_structure", preview);
+            Assert.True(described.PreviewSupported);
+            Assert.True(OperationClassifier.IsReadOnly("genexus_structure", preview));
+
+            var write = new JObject { ["action"] = "set_item_property", ["dryRun"] = false };
+            var mutation = OperationClassifier.Describe("genexus_structure", write);
+            Assert.Equal(OperationClassifier.OperationKind.Mutating, mutation.Kind);
+            Assert.Equal("operation_key", mutation.Retry);
+            Assert.Equal("never", mutation.Cache);
+            Assert.True(OperationClassifier.IsMutationCandidate("genexus_structure", write));
         }
 
         [Fact]

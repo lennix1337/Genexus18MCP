@@ -2798,6 +2798,14 @@ namespace GxMcp.Worker.Services
             if (action == "SetAttributeProperties") return _structureService.SetAttributeProperties(target, payload);
             if (action == "SetLevelProperties") return _structureService.SetLevelProperties(target, payload);
             if (action == "SetDomainProperties") return _structureService.SetDomainProperties(target, payload);
+            // Typed property of one SDT member: dryRun, expectedVersion, rollback and a fresh re-read are built in.
+            if (action == "GetSdtItemProperty" || action == "SetSdtItemProperty")
+            {
+                string sdtTypeFilter = args?["type"]?.ToString() ?? request?["type"]?.ToString();
+                return action == "GetSdtItemProperty"
+                    ? _structureService.GetSdtItemProperty(target, sdtTypeFilter, args)
+                    : _structureService.SetSdtItemProperty(target, sdtTypeFilter, args);
+            }
             if (action == "GetLogicStructure") return _structureService.GetLogicStructure(target);
             if (action == "UpdateGroupStructure") return _structureService.UpdateGroupStructure(target, payload);
             if (action == "MoveAttribute") return _structureService.MoveAttribute(target, args);

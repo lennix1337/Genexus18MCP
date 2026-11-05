@@ -683,6 +683,20 @@ namespace GxMcp.Gateway
             => string.Equals(toolName, "genexus_read", StringComparison.OrdinalIgnoreCase)
                 && args?["refresh"]?.Type == JTokenType.Boolean && args["refresh"]!.Value<bool>();
 
+        /// <summary>
+        /// <c>genexus_structure</c> <c>get_item_property</c> and the <c>set_item_property</c> preview. Both hand out the
+        /// <c>versionToken</c> a write has to present and the value a change is judged against, so a copy cached for 30
+        /// minutes would keep serving the token and the "before" of an SDT edited meanwhile outside this Gateway. They are
+        /// cheap Worker reads through a fresh SDK instance: never looked up in and never stored into the cache.
+        /// </summary>
+        internal static bool IsLiveSdtMemberProperty(string toolName, JObject? args)
+        {
+            if (!string.Equals(toolName, "genexus_structure", StringComparison.OrdinalIgnoreCase)) return false;
+            string? action = args?["action"]?.ToString();
+            return string.Equals(action, "get_item_property", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(action, "set_item_property", StringComparison.OrdinalIgnoreCase);
+        }
+
         internal static bool InvalidateRefreshReadScope(SemanticCacheStore cache, string kbScope, string toolName, JObject? args)
         {
             // An empty scope is SemanticCacheStore's explicit global-invalidation fallback;
@@ -753,7 +767,8 @@ namespace GxMcp.Gateway
             if (isMutating || isLiveTool
                 || OperationClassifier.Describe(toolName, args).Kind != OperationClassifier.OperationKind.ReadOnly
                 || IsTransactionRecordOperation(toolName, args) || IsPatternSettingsObservation(toolName, args)
-                || IsConditionalRead(toolName, args) || IsRefreshRead(toolName, args))
+                || IsConditionalRead(toolName, args) || IsRefreshRead(toolName, args)
+                || IsLiveSdtMemberProperty(toolName, args))
                 return null;
             return $"{kbScope}|{toolName}:{args?.ToString(Newtonsoft.Json.Formatting.None)}";
         }
@@ -784,7 +799,8 @@ namespace GxMcp.Gateway
             if (isMutating || isLiveTool
                 || OperationClassifier.Describe(toolName, args).Kind != OperationClassifier.OperationKind.ReadOnly
                 || IsTransactionRecordOperation(toolName, args) || IsPatternSettingsObservation(toolName, args)
-                || IsConditionalRead(toolName, args) || IsRefreshRead(toolName, args))
+                || IsConditionalRead(toolName, args) || IsRefreshRead(toolName, args)
+                || IsLiveSdtMemberProperty(toolName, args))
                 return null;
 
             var canonicalArgs = CanonicalizeJson(args ?? new JObject());

@@ -32,6 +32,9 @@ namespace GxMcp.Gateway.Routers
                 "get_logic" => "GetLogicStructure",
                 "update_group" => "UpdateGroupStructure",
                 "move_attribute" => "MoveAttribute",
+                // Typed read / write of one property of one SDT member without rebuilding the SDT.
+                "get_item_property" => "GetSdtItemProperty",
+                "set_item_property" => "SetSdtItemProperty",
                 // Issue #97: native TransactionLevel.Items attribute removal (lets agents
                 // drop + re-add a misclassified subtype attribute to force re-derivation)
                 // and the subtype-classification guard-rail.
@@ -56,6 +59,10 @@ namespace GxMcp.Gateway.Routers
                 position = args?["position"]?.ToObject<int?>(),
                 level = args?["level"]?.ToString(),
                 levelPath = args?["levelPath"],
+                // get_item_property / set_item_property: the SDT member path, the property and its new value.
+                itemPath = args?["itemPath"],
+                property = args?["property"]?.ToString(),
+                value = args?["value"],
                 dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false,
                 baseVersion = args?["baseVersion"]?.ToString(),
                 expectedVersion = args?["expectedVersion"]?.ToString(),
