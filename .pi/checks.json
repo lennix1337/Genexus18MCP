@@ -1,6 +1,13 @@
 {
   "version": 1,
   "checks": {
+    "release-scripts": {
+      "description": "Release script suite the contracts job runs (scripts/tests/run-release-script-tests.ps1: dry run, entrypoint, lifecycle, candidate CI); mocked gh/git, no SDK, KB or publication",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/tests/run-release-script-tests.ps1"],
+      "timeoutMs": 600000,
+      "onEdit": true,
+      "watch": ["release.ps1", "scripts"]
+    },
     "gateway-harness-cleanup": {
       "description": "Disposable process-tree cleanup smoke; no SDK, KB or Cloud",
       "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~LiveGatewayHarnessCleanupTests", "--logger", "console;verbosity=normal"],
