@@ -25,6 +25,7 @@ namespace GxMcp.Worker.Services
         private readonly DomainWriteService _domainWriteService;
         private readonly SDTService _sdtService;
         private readonly GroupStructureService _groupStructureService;
+        private readonly SdtItemPropertyService _sdtItemPropertyService;
 
         private static readonly System.Text.RegularExpressions.Regex SubRegex = new System.Text.RegularExpressions.Regex(
             @"\bsub\s+['""]?([\w\.]+)['""]?",
@@ -43,6 +44,7 @@ namespace GxMcp.Worker.Services
             _domainWriteService = new DomainWriteService(objectService);
             _sdtService = new SDTService(objectService);
             _groupStructureService = new GroupStructureService(objectService);
+            _sdtItemPropertyService = new SdtItemPropertyService(objectService);
         }
 
         public string UpdateVisualStructure(string targetName, string payload, bool dryRun = false,
@@ -2113,6 +2115,13 @@ namespace GxMcp.Worker.Services
         public string SetAttributeProperties(string attrName, string payload) => _attributeWriteService.SetAttributeProperties(attrName, payload);
 
         public string SetDomainProperties(string domainName, string payload) => _domainWriteService.SetDomainProperties(domainName, payload);
+
+        // Typed read / write of one property of one SDT member (leaf item or sub-level) without rebuilding the SDT.
+        public string GetSdtItemProperty(string sdtName, string typeFilter, JObject args) =>
+            _sdtItemPropertyService.GetItemProperty(sdtName, typeFilter, args);
+
+        public string SetSdtItemProperty(string sdtName, string typeFilter, JObject args) =>
+            _sdtItemPropertyService.SetItemProperty(sdtName, typeFilter, args);
 
         // issue #39 follow-up: set a Transaction level's Description / Image attribute — level
         // properties the structure DSL doesn't express. payload = { level?, descriptionAttribute?, imageAttribute? }.

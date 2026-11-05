@@ -4375,7 +4375,9 @@
               "update_group",
               "move_attribute",
               "remove_attribute",
-              "check_subtypes"
+              "check_subtypes",
+              "get_item_property",
+              "set_item_property"
             ],
             "type": "string"
           },
@@ -4403,6 +4405,13 @@
           "expectedVersion": {
             "description": "Alias of baseVersion for update_visual;…",
             "type": "string"
+          },
+          "itemPath": {
+            "description": "get_item_property/set_item_property:…",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "kb": {
             "description": "KB alias.",
@@ -4436,6 +4445,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "property": {
+            "description": "get_item_property/set_item_property:…",
+            "type": "string"
+          },
           "rollbackOnFailure": {
             "default": true,
             "description": "update_visual, move_attribute and…",
@@ -4450,6 +4463,10 @@
             "enum": [
               "specify"
             ],
+            "type": "string"
+          },
+          "value": {
+            "description": "set_item_property: new value.…",
             "type": "string"
           }
         },
