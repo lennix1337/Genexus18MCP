@@ -496,11 +496,17 @@ fn write_web_classes(
 /// Companion Business Component classes emitted for Transactions flagged as business components.
 fn write_business_components(out: &mut OutputTree<'_>, manifest: &ObjectManifest<'_>) {
     for txn in &manifest.transactions {
-        if let Ok(tc) = crate::csharp::transaction::TransactionClass::from_kb_object(txn) {
-            if tc.is_business_component {
-                let file_name = format!("{}_bc.cs", txn.name.to_lowercase());
+        match crate::csharp::transaction::TransactionClass::from_kb_object(txn) {
+            Ok(mut tc) if tc.is_business_component => {
+                let bc_name = format!("{}_bc", txn.name.to_lowercase());
+                let file_name = format!("{bc_name}.cs");
+                tc.name = bc_name;
                 out.write_generated_file(&file_name, &tc.emit());
             }
+            Ok(_) => {}
+            Err(error) => out
+                .errors
+                .push(format!("business component '{}': {error}", txn.name)),
         }
     }
 }

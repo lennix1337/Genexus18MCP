@@ -621,3 +621,48 @@ fn read_object_serves_pattern_instance_and_webform() {
     assert_eq!(read_form.parts[0].name, "WEBFORM");
     assert!(read_form.parts[0].source.contains("MainTable"));
 }
+
+#[test]
+fn write_replaces_source_on_procedure_with_xml_variables_preserving_variable_ids_and_xml() {
+    let client = UdmClient::new_in_memory();
+    let writer = UdmWriter::new(Arc::new(client.clone()));
+    let variables_xml = r#"<Variables><Variable Name="CustomerId" Id="8"><Properties><Property><Name>OBJ_TYPE</Name><Value>id_OTYPE_VAR</Value></Property><Property><Name>ATTCUSTOMTYPE</Name><Value>&lt;AttCustomType&gt;&lt;DataType&gt;4&lt;/DataType&gt;&lt;/AttCustomType&gt;</Value></Property><Property><Name>Length</Name><Value>10</Value></Property></Properties></Variable></Variables>"#;
+
+    writer
+        .create_object(&object(
+            "PWithXmlVars",
+            ObjectKind::Procedure,
+            &[("SOURCE", "// initial"), ("VARIABLES", variables_xml)],
+        ))
+        .unwrap();
+
+    let result = write_object_part(&client, "PWithXmlVars", "Source", "// updated", None, None)
+        .expect("write_object_part must succeed on Procedure with XML variables");
+    assert_eq!(result.version_id, 2);
+
+    let raw_after = writer
+        .load_raw_object("PWithXmlVars")
+        .unwrap()
+        .expect("raw object after write");
+    let raw_vars = raw_after
+        .source_parts
+        .iter()
+        .find(|p| p.name == "VARIABLES")
+        .expect("raw VARIABLES part");
+    assert_eq!(
+        raw_vars.source, variables_xml,
+        "raw XML VARIABLES blob must not be overwritten with compiler JSON"
+    );
+
+    let reader = gx_engine::udm::UdmReader::new(Arc::new(client));
+    let hydrated = reader
+        .read_object_by_name("PWithXmlVars")
+        .unwrap()
+        .expect("hydrated object after write");
+    let var_ids = hydrated
+        .source_parts
+        .iter()
+        .find(|p| p.name == "VARIABLE_IDS")
+        .expect("synthetic VARIABLE_IDS part must still be derived from preserved XML");
+    assert!(var_ids.source.contains("\"CustomerId\":8"));
+}

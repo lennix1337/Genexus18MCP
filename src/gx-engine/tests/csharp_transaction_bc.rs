@@ -139,3 +139,31 @@ fn business_component_with_composite_key_emits_multikey_load() {
     assert!(code.contains("this.A_BranchId = aP_BranchId;"));
     assert!(code.contains("getByPrimaryKey();"));
 }
+
+#[test]
+fn business_component_emits_typed_default_and_condition_rules() {
+    use gx_engine::transaction::TransactionRule;
+
+    let mut structure = sample_structure();
+    structure.rules.push(TransactionRule::Default {
+        attribute: "CustomerName".to_string(),
+        value: "'Anonymous'".to_string(),
+    });
+    structure.rules.push(TransactionRule::Error {
+        message: "Name is required".to_string(),
+        condition: Some("CustomerName.IsEmpty()".to_string()),
+    });
+
+    let tc = TransactionClass::from_structure("Customer", structure);
+    let code = tc.emit();
+
+    assert!(
+        code.contains("if ( string.IsNullOrEmpty(A_CustomerName) )"),
+        "string attribute must not emit A_CustomerName == 0: {code}"
+    );
+    assert!(code.contains("A_CustomerName = \"Anonymous\";"));
+    assert!(
+        !code.contains("if ( /*"),
+        "condition must be translated rather than commented out into if ( true ): {code}"
+    );
+}

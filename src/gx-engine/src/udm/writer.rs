@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::catalog::{KbObject, ReferenceKind, SourcePart};
+use crate::catalog::{KbObject, ObjectId, Reference, ReferenceKind, SourcePart};
 use crate::udm::client::{
     EntityVersionCompositionRecord, EntityVersionRecord, ModelCrossReferenceRecord,
     ModelEntityVersionRecord, StateLockRecord, UdmClient,
@@ -58,26 +58,38 @@ fn reference_target(
     object_name: &str,
     target: &str,
 ) -> Result<(i32, i32), String> {
-    let bare_object = object_name.rsplit('.').next().unwrap_or(object_name);
-    let bare_target = target.rsplit('.').next().unwrap_or(target);
-    if target.eq_ignore_ascii_case(object_name) || bare_target.eq_ignore_ascii_case(bare_object) {
+    let normalized_object = object_name.replace('.', "-");
+    let normalized_target = target.replace('.', "-");
+    if target.eq_ignore_ascii_case(object_name)
+        || normalized_target.eq_ignore_ascii_case(&normalized_object)
+    {
         return Ok(self_entity);
     }
-    if let Some(rec) = active
-        .iter()
-        .find(|rec| rec.name.eq_ignore_ascii_case(target))
-    {
+    if let Some(rec) = active.iter().find(|rec| {
+        rec.name.eq_ignore_ascii_case(target)
+            || rec
+                .name
+                .replace('.', "-")
+                .eq_ignore_ascii_case(&normalized_target)
+    }) {
         return Ok((rec.entity_type_id, rec.entity_id));
     }
-    let bare_matches: Vec<_> = active
-        .iter()
-        .filter(|rec| {
-            let rec_bare = rec.name.rsplit('.').next().unwrap_or(&rec.name);
-            rec_bare.eq_ignore_ascii_case(bare_target)
-        })
-        .collect();
-    if bare_matches.len() == 1 {
-        return Ok((bare_matches[0].entity_type_id, bare_matches[0].entity_id));
+    let is_qualified = target.contains('.') || (target.contains('-') && object_name.contains('.'));
+    if !is_qualified {
+        let bare_object = object_name.rsplit('.').next().unwrap_or(object_name);
+        if target.eq_ignore_ascii_case(bare_object) {
+            return Ok(self_entity);
+        }
+        let bare_matches: Vec<_> = active
+            .iter()
+            .filter(|rec| {
+                let rec_bare = rec.name.rsplit('.').next().unwrap_or(&rec.name);
+                rec_bare.eq_ignore_ascii_case(target)
+            })
+            .collect();
+        if bare_matches.len() == 1 {
+            return Ok((bare_matches[0].entity_type_id, bare_matches[0].entity_id));
+        }
     }
     Err(format!(
         "'{object_name}' references '{target}', which is not an object of this model; refusing to store a dangling reference"
@@ -179,26 +191,319 @@ impl UdmWriter {
         self.client.get_lock(state_name)
     }
 
+    /// Loads an existing active object with its raw stored UDM composition payloads,
+    /// without hydrating synthetic compiler parts (`VARIABLE_IDS`, `PROPERTIES`, etc.)
+    /// or transforming `VARIABLES` / `STRUCTURE` XML into compiler JSON/DSL.
+    /// Refuses the load if any stored composition has an entity type outside engine coverage.
+    pub fn load_raw_object(&self, object_name: &str) -> Result<Option<KbObject>, String> {
+        let resolver = self.client.entity_type_resolver()?;
+        let active = self.client.get_active_objects(self.model_id)?;
+        let matches: Vec<&ModelEntityVersionRecord> = active
+            .iter()
+            .filter(|r| r.name.eq_ignore_ascii_case(object_name))
+            .collect();
+        if matches.is_empty() {
+            return Ok(None);
+        }
+        if matches.len() > 1 {
+            return Err(format!(
+                "object '{object_name}' is ambiguous in Model {} ({} active records)",
+                self.model_id,
+                matches.len()
+            ));
+        }
+        let record = matches[0];
+        let kind = resolver.object_kind(record.entity_type_id).ok_or_else(|| {
+            format!(
+                "object '{}' has unsupported entity type {} in Model {}",
+                record.name, record.entity_type_id, self.model_id
+            )
+        })?;
+
+        let obj_id = ObjectId::new(record.name.replace('.', "-")).unwrap_or_else(|_| {
+            ObjectId::new(format!(
+                "obj-{}-{}",
+                record.entity_type_id, record.entity_id
+            ))
+            .expect("valid fallback identity")
+        });
+        let mut object = KbObject::new(obj_id, record.name.clone(), kind);
+        let compositions = self.client.get_compositions(
+            record.entity_type_id,
+            record.entity_id,
+            record.entity_version_id,
+        )?;
+
+        for comp in compositions {
+            let part_kind = resolver
+                .part_kind(comp.component_entity_type_id)
+                .ok_or_else(|| {
+                    format!(
+                        "object '{}' has composition of entity type {} outside engine coverage; refusing a partial save",
+                        record.name, comp.component_entity_type_id
+                    )
+                })?;
+            let ev = self
+                .client
+                .get_entity_version(
+                    comp.component_entity_type_id,
+                    comp.component_entity_id,
+                    comp.component_entity_version_id,
+                )?
+                .ok_or_else(|| {
+                    format!(
+                        "part {} ({}, {}) of '{}' has no EntityVersion row; the composition is inconsistent",
+                        part_kind.name(),
+                        comp.component_entity_type_id,
+                        comp.component_entity_id,
+                        record.name
+                    )
+                })?;
+            let source = if ev.data.is_empty() {
+                String::new()
+            } else {
+                let decoded = decode_blob(&ev.data)?;
+                if part_kind.is_tokenized_source() && decoded.contains("<TokenDataList") {
+                    extract_token_data_list(&decoded)?
+                } else {
+                    decoded
+                }
+            };
+            object.source_parts.push(SourcePart {
+                name: part_kind.name().to_string(),
+                source,
+            });
+        }
+
+        let xr_records = self.client.get_cross_references(
+            self.model_id,
+            record.entity_type_id,
+            record.entity_id,
+        )?;
+        for xr in xr_records {
+            if let Some(target_rec) = active.iter().find(|r| {
+                r.entity_type_id == xr.to_entity_type_id && r.entity_id == xr.to_entity_id
+            }) {
+                let target_id =
+                    ObjectId::new(target_rec.name.replace('.', "-")).unwrap_or_else(|_| {
+                        ObjectId::new(format!(
+                            "obj-{}-{}",
+                            target_rec.entity_type_id, target_rec.entity_id
+                        ))
+                        .expect("valid fallback identity")
+                    });
+                let ref_kind = match xr.reference_type {
+                    1 => ReferenceKind::Calls,
+                    2 => ReferenceKind::Uses,
+                    3 => ReferenceKind::BasedOn,
+                    4 => ReferenceKind::Contains,
+                    _ => ReferenceKind::Uses,
+                };
+                let reference = Reference {
+                    kind: ref_kind,
+                    target: target_id,
+                };
+                if !object.references.contains(&reference) {
+                    object.references.push(reference);
+                }
+            }
+        }
+
+        Ok(Some(object))
+    }
+
+    fn append_parts_and_refs_sql(
+        &self,
+        sql: &mut String,
+        active: &[ModelEntityVersionRecord],
+        object: &KbObject,
+        identity: &UdmObjectIdentity,
+        (allocated_part_ids, clear_existing_xrefs): (&[i32], bool),
+    ) -> Result<(), String> {
+        let resolver = self.client.entity_type_resolver()?;
+        let (entity_type_id, entity_id, version_id) = (
+            identity.entity_type_id,
+            identity.entity_id,
+            identity.version_id,
+        );
+        let parts = stored_parts(&resolver, object)?;
+        if allocated_part_ids.len() != parts.len() {
+            return Err(format!(
+                "allocated_part_ids length ({}) does not match stored parts count ({}) for '{}'",
+                allocated_part_ids.len(),
+                parts.len(),
+                object.name
+            ));
+        }
+
+        let mut encoded_parts = Vec::with_capacity(parts.len());
+        for (&(component_type_id, part_kind, part), &component_id) in
+            parts.iter().zip(allocated_part_ids.iter())
+        {
+            let payload = if part_kind.is_tokenized_source() {
+                build_token_data_list(&part.source)
+            } else {
+                part.source.clone()
+            };
+            let blob = encode_blob(&payload, true)?;
+            let hex_blob = format_sql_varbinary_hex(&blob);
+            encoded_parts.push((component_type_id, component_id, hex_blob));
+        }
+
+        let mut resolved_refs = Vec::with_capacity(object.references.len());
+        let mut seen_refs = BTreeSet::new();
+        for r in &object.references {
+            let (to_type_id, to_id) = reference_target(
+                active,
+                (entity_type_id, entity_id),
+                &object.name,
+                r.target.as_str(),
+            )?;
+            let ref_type = match r.kind {
+                ReferenceKind::Calls => 1,
+                ReferenceKind::Uses => 2,
+                ReferenceKind::BasedOn => 3,
+                ReferenceKind::Contains => 4,
+            };
+            if seen_refs.insert((to_type_id, to_id, ref_type)) {
+                resolved_refs.push((to_type_id, to_id, ref_type));
+            }
+        }
+
+        for (component_type_id, component_id, hex_blob) in &encoded_parts {
+            let _ = write!(
+                sql,
+                " INSERT INTO EntityVersion (EntityTypeId, EntityId, EntityVersionId, EntityVersionData) VALUES ({component_type_id}, {component_id}, {version_id}, {hex_blob}); \
+INSERT INTO EntityVersionComposition (CompoundEntityTypeId, CompoundEntityId, CompoundEntityVersionId, ComponentEntityTypeId, ComponentEntityId, ComponentEntityVersionId) VALUES ({entity_type_id}, {entity_id}, {version_id}, {component_type_id}, {component_id}, {version_id});"
+            );
+        }
+
+        let model_id = self.model_id;
+        if clear_existing_xrefs {
+            let _ = write!(
+                sql,
+                " DELETE FROM ModelCrossReference WHERE ModelId = {model_id} AND FromEntityTypeId = {entity_type_id} AND FromEntityId = {entity_id};"
+            );
+        }
+
+        for &(to_type_id, to_id, ref_type) in &resolved_refs {
+            let _ = write!(
+                sql,
+                " INSERT INTO ModelCrossReference (ModelId, FromEntityTypeId, FromEntityId, ToEntityTypeId, ToEntityId, ReferenceType) VALUES ({model_id}, {entity_type_id}, {entity_id}, {to_type_id}, {to_id}, {ref_type});"
+            );
+        }
+
+        sql.push_str(" COMMIT TRANSACTION;");
+        Ok(())
+    }
+
+    /// Plans and builds a deterministic, fail-closed transactional SQL Server batch for creating
+    /// a new object in the active model.
+    pub fn plan_create_object_sql(
+        &self,
+        object: &KbObject,
+        allocated_entity_id: i32,
+        allocated_part_ids: &[i32],
+    ) -> Result<(UdmObjectIdentity, String), String> {
+        validate_object_name_for_sql(&object.name)?;
+        if allocated_entity_id <= 0 {
+            return Err(format!(
+                "allocated entity ID {allocated_entity_id} for '{}' must be positive (> 0)",
+                object.name
+            ));
+        }
+
+        let active = self.client.get_active_objects(self.model_id)?;
+        if active
+            .iter()
+            .any(|r| r.name.eq_ignore_ascii_case(&object.name))
+        {
+            return Err(format!(
+                "Object '{}' already exists in Model {}",
+                object.name, self.model_id
+            ));
+        }
+
+        let mut seen_ids = BTreeSet::new();
+        seen_ids.insert(allocated_entity_id);
+        for &part_id in allocated_part_ids {
+            if part_id <= 0 {
+                return Err(format!(
+                    "allocated part entity ID {part_id} for '{}' must be positive (> 0)",
+                    object.name
+                ));
+            }
+            if !seen_ids.insert(part_id) {
+                return Err(format!(
+                    "duplicate allocated entity ID {part_id} for '{}'; entity IDs must be distinct",
+                    object.name
+                ));
+            }
+        }
+
+        let resolver = self.client.entity_type_resolver()?;
+        let entity_type_id = resolver.object_type_id(object.kind)?;
+        let version_id = 1;
+        let identity = UdmObjectIdentity {
+            entity_type_id,
+            entity_id: allocated_entity_id,
+            version_id,
+            name: object.name.clone(),
+        };
+        let model_id = self.model_id;
+        let escaped_name = escape_sql_literal(&object.name);
+        let escaped_guid = escape_sql_literal(object.id.as_str());
+        let mut sql = String::new();
+        let _ = write!(
+            &mut sql,
+            "SET NOCOUNT ON; SET XACT_ABORT ON; SET LOCK_TIMEOUT 10000; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; BEGIN TRANSACTION; \
+IF EXISTS (SELECT 1 FROM ModelEntityVersion WITH (UPDLOCK, HOLDLOCK) WHERE ModelId = {model_id} AND ModelEntityVersionName = N'{escaped_name}') \
+THROW 50002, 'Object already exists in ModelEntityVersion', 1; \
+IF NOT EXISTS (SELECT 1 FROM Entity WITH (UPDLOCK, HOLDLOCK) WHERE EntityTypeId = {entity_type_id} AND EntityId = {allocated_entity_id}) \
+INSERT INTO Entity (EntityTypeId, EntityId, EntityGuid) VALUES ({entity_type_id}, {allocated_entity_id}, '{escaped_guid}'); \
+INSERT INTO ModelEntityVersion (ModelId, EntityTypeId, EntityId, EntityVersionId, ModelEntityVersionName) VALUES ({model_id}, {entity_type_id}, {allocated_entity_id}, {version_id}, N'{escaped_name}');"
+        );
+        self.append_parts_and_refs_sql(
+            &mut sql,
+            &active,
+            object,
+            &identity,
+            (allocated_part_ids, false),
+        )?;
+
+        Ok((identity, sql))
+    }
+
     /// Creates a new object in the UDM database. Fails if an object with the same name exists.
     pub fn create_object(&self, object: &KbObject) -> Result<UdmObjectIdentity, String> {
         let resolver = self.client.entity_type_resolver()?;
         let entity_type_id = resolver.object_type_id(object.kind)?;
         let parts = stored_parts(&resolver, object)?;
+        let active = self.client.get_active_objects(self.model_id)?;
+        if active
+            .iter()
+            .any(|r| r.name.eq_ignore_ascii_case(&object.name))
+        {
+            return Err(format!(
+                "Object '{}' already exists in Model {}",
+                object.name, self.model_id
+            ));
+        }
+
+        let entity_id = self.client.allocate_entity_id()?;
+        let mut allocated_part_ids = Vec::with_capacity(parts.len());
+        for _ in 0..parts.len() {
+            allocated_part_ids.push(self.client.allocate_entity_id()?);
+        }
+
+        if self.client.is_live() && self.client.live_writes_enabled() {
+            let (_, sql) = self.plan_create_object_sql(object, entity_id, &allocated_part_ids)?;
+            self.client.execute_live_sql(&sql)?;
+        }
+
         self.client.begin_transaction()?;
 
         let result = (|| {
-            let active = self.client.get_active_objects(self.model_id)?;
-            if active
-                .iter()
-                .any(|r| r.name.eq_ignore_ascii_case(&object.name))
-            {
-                return Err(format!(
-                    "Object '{}' already exists in Model {}",
-                    object.name, self.model_id
-                ));
-            }
-
-            let entity_id = self.client.allocate_entity_id()?;
             let version_id = 1;
 
             if self.client.is_live() && self.client.live_writes_enabled() {
@@ -218,9 +523,9 @@ impl UdmWriter {
                 })?;
 
             // 2. Insert component parts
-            for &(component_type_id, part_kind, part) in &parts {
-                let component_id = self.client.allocate_entity_id()?;
-
+            for (&(component_type_id, part_kind, part), &component_id) in
+                parts.iter().zip(allocated_part_ids.iter())
+            {
                 let payload = if part_kind.is_tokenized_source() {
                     build_token_data_list(&part.source)
                 } else {
@@ -319,16 +624,14 @@ impl UdmWriter {
         }
         let parts = stored_parts(&resolver, object)?;
 
+        let mut allocated_part_ids = Vec::with_capacity(parts.len());
+        for _ in 0..parts.len() {
+            allocated_part_ids.push(self.client.allocate_entity_id()?);
+        }
+
         if self.client.is_live() && self.client.live_writes_enabled() {
-            let mut allocated_part_ids = Vec::with_capacity(parts.len());
-            for _ in 0..parts.len() {
-                allocated_part_ids.push(self.client.allocate_entity_id()?);
-            }
-            let (identity, sql) =
-                self.plan_save_existing_object_sql(object, &allocated_part_ids)?;
+            let (_, sql) = self.plan_save_existing_object_sql(object, &allocated_part_ids)?;
             self.client.execute_live_sql(&sql)?;
-            self.verify_saved_object_readback(&identity, object)?;
-            return Ok(identity);
         }
 
         self.client.begin_transaction()?;
@@ -348,9 +651,9 @@ impl UdmWriter {
             )?;
 
             // 2. Insert new version component parts
-            for &(component_type_id, part_kind, part) in &parts {
-                let component_id = self.client.allocate_entity_id()?;
-
+            for (&(component_type_id, part_kind, part), &component_id) in
+                parts.iter().zip(allocated_part_ids.iter())
+            {
                 let payload = if part_kind.is_tokenized_source() {
                     build_token_data_list(&part.source)
                 } else {
@@ -464,16 +767,6 @@ impl UdmWriter {
             ));
         }
 
-        let parts = stored_parts(&resolver, object)?;
-        if allocated_part_ids.len() != parts.len() {
-            return Err(format!(
-                "allocated_part_ids length ({}) does not match stored parts count ({}) for '{}'",
-                allocated_part_ids.len(),
-                parts.len(),
-                object.name
-            ));
-        }
-
         let mut seen_part_ids = BTreeSet::new();
         for &part_id in allocated_part_ids {
             if part_id <= 0 {
@@ -503,40 +796,12 @@ impl UdmWriter {
             .checked_add(1)
             .ok_or_else(|| format!("EntityVersionId overflow for '{}'", object.name))?;
 
-        let mut encoded_parts = Vec::with_capacity(parts.len());
-        for (&(component_type_id, part_kind, part), &component_id) in
-            parts.iter().zip(allocated_part_ids.iter())
-        {
-            let payload = if part_kind.is_tokenized_source() {
-                build_token_data_list(&part.source)
-            } else {
-                part.source.clone()
-            };
-            let blob = encode_blob(&payload, true)?;
-            let hex_blob = format_sql_varbinary_hex(&blob);
-            encoded_parts.push((component_type_id, component_id, hex_blob));
-        }
-
-        let mut resolved_refs = Vec::with_capacity(object.references.len());
-        let mut seen_refs = BTreeSet::new();
-        for r in &object.references {
-            let (to_type_id, to_id) = reference_target(
-                &active,
-                (entity_type_id, entity_id),
-                &object.name,
-                r.target.as_str(),
-            )?;
-            let ref_type = match r.kind {
-                ReferenceKind::Calls => 1,
-                ReferenceKind::Uses => 2,
-                ReferenceKind::BasedOn => 3,
-                ReferenceKind::Contains => 4,
-            };
-            if seen_refs.insert((to_type_id, to_id, ref_type)) {
-                resolved_refs.push((to_type_id, to_id, ref_type));
-            }
-        }
-
+        let identity = UdmObjectIdentity {
+            entity_type_id,
+            entity_id,
+            version_id: new_version_id,
+            name: object.name.clone(),
+        };
         let model_id = self.model_id;
         let escaped_name = escape_sql_literal(&object.name);
         let mut sql = String::new();
@@ -547,35 +812,13 @@ IF NOT EXISTS (SELECT 1 FROM ModelEntityVersion WITH (UPDLOCK, HOLDLOCK) WHERE M
 THROW 50001, 'Optimistic concurrency conflict on ModelEntityVersion', 1; \
 UPDATE ModelEntityVersion SET EntityVersionId = {new_version_id}, ModelEntityVersionName = N'{escaped_name}' WHERE ModelId = {model_id} AND EntityTypeId = {entity_type_id} AND EntityId = {entity_id} AND EntityVersionId = {expected_old_version};"
         );
-
-        for (component_type_id, component_id, hex_blob) in &encoded_parts {
-            let _ = write!(
-                &mut sql,
-                " INSERT INTO EntityVersion (EntityTypeId, EntityId, EntityVersionId, EntityVersionData) VALUES ({component_type_id}, {component_id}, {new_version_id}, {hex_blob}); \
-INSERT INTO EntityVersionComposition (CompoundEntityTypeId, CompoundEntityId, CompoundEntityVersionId, ComponentEntityTypeId, ComponentEntityId, ComponentEntityVersionId) VALUES ({entity_type_id}, {entity_id}, {new_version_id}, {component_type_id}, {component_id}, {new_version_id});"
-            );
-        }
-
-        let _ = write!(
+        self.append_parts_and_refs_sql(
             &mut sql,
-            " DELETE FROM ModelCrossReference WHERE ModelId = {model_id} AND FromEntityTypeId = {entity_type_id} AND FromEntityId = {entity_id};"
-        );
-
-        for &(to_type_id, to_id, ref_type) in &resolved_refs {
-            let _ = write!(
-                &mut sql,
-                " INSERT INTO ModelCrossReference (ModelId, FromEntityTypeId, FromEntityId, ToEntityTypeId, ToEntityId, ReferenceType) VALUES ({model_id}, {entity_type_id}, {entity_id}, {to_type_id}, {to_id}, {ref_type});"
-            );
-        }
-
-        sql.push_str(" COMMIT TRANSACTION;");
-
-        let identity = UdmObjectIdentity {
-            entity_type_id,
-            entity_id,
-            version_id: new_version_id,
-            name: object.name.clone(),
-        };
+            &active,
+            object,
+            &identity,
+            (allocated_part_ids, true),
+        )?;
 
         Ok((identity, sql))
     }
@@ -669,18 +912,24 @@ INSERT INTO EntityVersionComposition (CompoundEntityTypeId, CompoundEntityId, Co
             ));
         }
 
-        if read_back.source_parts.len() != expected_parts.len() {
+        let read_back_stored_parts: Vec<&SourcePart> = read_back
+            .source_parts
+            .iter()
+            .filter(|part| !matches!(UdmPartKind::from_name(&part.name), UdmPartKind::Unknown(_)))
+            .collect();
+
+        if read_back_stored_parts.len() != expected_parts.len() {
             return Err(format!(
                 "read-back verification failed for '{}': read-back part count ({}) does not match expected part count ({})",
                 expected_object.name,
-                read_back.source_parts.len(),
+                read_back_stored_parts.len(),
                 expected_parts.len()
             ));
         }
 
         for (idx, ((expected_type_id, expected_kind, expected_part), actual_part)) in expected_parts
             .iter()
-            .zip(read_back.source_parts.iter())
+            .zip(read_back_stored_parts.iter())
             .enumerate()
         {
             let actual_kind = UdmPartKind::from_name(&actual_part.name);
@@ -743,13 +992,18 @@ INSERT INTO EntityVersionComposition (CompoundEntityTypeId, CompoundEntityId, Co
                 ));
             }
 
-            let reader_transforms_variables = matches!(
+            let reader_transforms_part = ((matches!(
                 expected_object.kind,
                 crate::catalog::ObjectKind::Procedure | crate::catalog::ObjectKind::DataProvider
-            ) && *expected_kind == UdmPartKind::Variables
+            ) && *expected_kind == UdmPartKind::Variables)
+                || (matches!(
+                    expected_object.kind,
+                    crate::catalog::ObjectKind::Transaction
+                        | crate::catalog::ObjectKind::StructuredDataType
+                ) && *expected_kind == UdmPartKind::Structure))
                 && expected_part.source.trim_start().starts_with('<');
 
-            if !reader_transforms_variables && actual_part.source != expected_part.source {
+            if !reader_transforms_part && actual_part.source != expected_part.source {
                 return Err(format!(
                     "read-back verification failed for '{}' part '{}': reader part content does not match expected content",
                     expected_object.name,
@@ -774,6 +1028,25 @@ INSERT INTO EntityVersionComposition (CompoundEntityTypeId, CompoundEntityId, Co
         Ok(())
     }
 
+    /// Plans a deterministic, fail-closed transactional SQL Server batch for deleting an object
+    /// from the active model.
+    pub fn plan_delete_object_sql(
+        &self,
+        record: &ModelEntityVersionRecord,
+    ) -> Result<String, String> {
+        let model_id = self.model_id;
+        let entity_type_id = record.entity_type_id;
+        let entity_id = record.entity_id;
+        let version_id = record.entity_version_id;
+        Ok(format!(
+            "SET NOCOUNT ON; SET XACT_ABORT ON; SET LOCK_TIMEOUT 10000; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; BEGIN TRANSACTION; \
+DELETE FROM ModelCrossReference WHERE ModelId = {model_id} AND FromEntityTypeId = {entity_type_id} AND FromEntityId = {entity_id}; \
+DELETE FROM EntityVersionComposition WHERE CompoundEntityTypeId = {entity_type_id} AND CompoundEntityId = {entity_id} AND CompoundEntityVersionId = {version_id}; \
+DELETE FROM ModelEntityVersion WHERE ModelId = {model_id} AND EntityTypeId = {entity_type_id} AND EntityId = {entity_id}; \
+COMMIT TRANSACTION;"
+        ))
+    }
+
     /// Deletes an object by name from the active model in the UDM database.
     pub fn delete_object(&self, object_name: &str) -> Result<bool, String> {
         let active = self.client.get_active_objects(self.model_id)?;
@@ -785,6 +1058,11 @@ INSERT INTO EntityVersionComposition (CompoundEntityTypeId, CompoundEntityId, Co
         let Some(record) = existing else {
             return Ok(false);
         };
+
+        if self.client.is_live() && self.client.live_writes_enabled() {
+            let sql = self.plan_delete_object_sql(&record)?;
+            self.client.execute_live_sql(&sql)?;
+        }
 
         self.client.begin_transaction()?;
 

@@ -717,3 +717,71 @@ fn test_udm_writer_save_and_verify_and_readback_tamper_detection() {
         .unwrap();
     assert!(writer.verify_saved_object_readback(&id2, &proc).is_err());
 }
+
+#[test]
+fn test_udm_writer_plan_create_and_delete_sql_and_cross_module_reference() {
+    let client = Arc::new(UdmClient::new_in_memory());
+    let writer = UdmWriter::new(client.clone());
+
+    let mod_b_helper = KbObject::new(
+        ObjectId::new("modb-helper").unwrap(),
+        "ModB.Helper",
+        ObjectKind::Procedure,
+    );
+    let mod_b_id = writer
+        .create_object(&mod_b_helper)
+        .expect("create ModB.Helper");
+
+    let mut mod_a_helper = KbObject::new(
+        ObjectId::new("moda-helper").unwrap(),
+        "ModA.Helper",
+        ObjectKind::Procedure,
+    );
+    mod_a_helper.source_parts.push(SourcePart {
+        name: "SOURCE".to_string(),
+        source: "Call(ModB.Helper)".to_string(),
+    });
+    mod_a_helper.references.push(Reference {
+        kind: ReferenceKind::Calls,
+        target: ObjectId::new("modb-helper").unwrap(),
+    });
+
+    let (planned_create_id, create_sql) = writer
+        .plan_create_object_sql(&mod_a_helper, 500, &[501])
+        .expect("plan create SQL");
+    assert_eq!(planned_create_id.entity_id, 500);
+    assert_eq!(planned_create_id.version_id, 1);
+    assert!(create_sql.starts_with(
+        "SET NOCOUNT ON; SET XACT_ABORT ON; SET LOCK_TIMEOUT 10000; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; BEGIN TRANSACTION;"
+    ));
+    assert!(create_sql.ends_with("COMMIT TRANSACTION;"));
+    assert!(
+        create_sql.contains(&format!(
+            "INSERT INTO ModelCrossReference (ModelId, FromEntityTypeId, FromEntityId, ToEntityTypeId, ToEntityId, ReferenceType) VALUES (1, 38, 500, 38, {}, 1);",
+            mod_b_id.entity_id
+        )),
+        "ModA.Helper referencing ModB.Helper must resolve to ModB.Helper ({}), not self (500): {create_sql}",
+        mod_b_id.entity_id
+    );
+
+    let created_a = writer
+        .create_object(&mod_a_helper)
+        .expect("create ModA.Helper");
+    let xrs = client
+        .get_cross_references(1, created_a.entity_type_id, created_a.entity_id)
+        .unwrap();
+    assert_eq!(xrs.len(), 1);
+    assert_eq!(xrs[0].to_entity_id, mod_b_id.entity_id);
+
+    let active_rec = client
+        .get_active_objects(1)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.entity_id == created_a.entity_id)
+        .unwrap();
+    let delete_sql = writer
+        .plan_delete_object_sql(&active_rec)
+        .expect("plan delete SQL");
+    assert!(delete_sql.contains("DELETE FROM EntityVersionComposition"));
+    assert!(delete_sql.contains("DELETE FROM ModelEntityVersion"));
+}

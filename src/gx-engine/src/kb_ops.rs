@@ -6,15 +6,12 @@
 //! (`src/GxMcp.Gateway/EngineCapabilityRegistry.cs`).
 //!
 //! The admitted space is deliberately narrow and fail-closed: reads serve
-//! existing objects and their stored parts, queries filter by exact object name,
-//! object type, and recorded references. In-memory writes replace a known part;
-//! live writes are refused. Anything outside that space is an error the caller must
-//! handle explicitly - never an approximation.
-//!
-//! Writes are refused outright against a live Knowledge Base database: the
-//! writer's physical persistence is not implemented, so reporting success would
-//! claim an edit that never reaches the KB. Live reads and queries go through
-//! `sqlcmd` and fail closed when the database cannot be read.
+//! existing objects and their stored parts, queries filter by exact or wildcard
+//! object name, object type, and recorded references. Writes replace a known
+//! part while preserving raw stored compositions; against a live Knowledge Base
+//! database, writes are refused unless `with_live_writes(true)` is explicitly
+//! enabled on the client. Live reads, queries, and enabled live writes go
+//! through `sqlcmd` and fail closed when the database cannot be accessed.
 
 #![forbid(unsafe_code)]
 

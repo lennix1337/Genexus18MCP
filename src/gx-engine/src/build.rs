@@ -131,13 +131,29 @@ impl BuildCache {
             Ok(e) => e,
             Err(_) => return,
         };
+        let now = SystemTime::now();
+        let current_pid_prefix = format!(".tmp-{}-", std::process::id());
         let mut items = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with(".tmp-") {
-                let _ = fs::remove_dir_all(&path);
+            if let Some(rest) = name_str.strip_prefix(".tmp-") {
+                let modified = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                let is_recent = now
+                    .duration_since(modified)
+                    .map(|age| age.as_secs() < 300)
+                    .unwrap_or(true);
+                let is_structured_tmp = rest
+                    .split_once('-')
+                    .is_some_and(|(pid, seq)| !pid.is_empty() && !seq.is_empty());
+                if !(is_structured_tmp && (name_str.starts_with(&current_pid_prefix) || is_recent))
+                {
+                    let _ = fs::remove_dir_all(&path);
+                }
                 continue;
             }
             if path.is_dir() {
@@ -535,16 +551,20 @@ mod tests {
         let dir2 = scratch.join("entry2");
         let dir3 = scratch.join("entry3");
         let tmp = scratch.join(".tmp-1234");
+        let active_tmp = scratch.join(format!(".tmp-{}-99", std::process::id()));
         fs::create_dir_all(&dir1).unwrap();
         fs::create_dir_all(&dir2).unwrap();
         fs::create_dir_all(&dir3).unwrap();
         fs::create_dir_all(&tmp).unwrap();
+        fs::create_dir_all(&active_tmp).unwrap();
 
         // Prune to max 2 entries
         BuildCache::prune_if_needed(&scratch, 2);
 
-        // Stale tmp dir must always be purged
+        // Stale tmp dir must always be purged while active in-flight tmp dir is preserved
         assert!(!tmp.exists());
+        assert!(active_tmp.exists());
+        let _ = fs::remove_dir_all(&active_tmp);
 
         // Total remaining dirs must be at most 2
         let remaining: Vec<_> = fs::read_dir(&scratch)

@@ -12,13 +12,20 @@ impl UdmClient {
 
     fn execute_live_write_sql(&self, sql: &str) -> Result<(), String> {
         if self.is_live() && self.live_writes {
-            self.execute_live_sql(sql)?;
+            let in_tx = self
+                .storage
+                .read()
+                .map(|s| s.in_transaction())
+                .unwrap_or(false);
+            if !in_tx {
+                self.execute_live_sql(sql)?;
+            }
         }
         Ok(())
     }
 
     fn fetch_live_max_entity_id(&self) -> Option<i32> {
-        let query = "SET NOCOUNT ON; SELECT ISNULL(MAX(EntityId), 0) + 1 FROM EntityVersion;";
+        let query = "SET NOCOUNT ON; SELECT ISNULL(MAX(EntityId), 0) + 1 FROM (SELECT EntityId FROM EntityVersion UNION ALL SELECT EntityId FROM ModelEntityVersion UNION ALL SELECT EntityId FROM Entity) AS AllIds;";
         let raw = self.execute_live_sql(query).ok()?;
         let rows = live_rows::parse_live_rows(&raw, 1).ok()?;
         let id_str = rows.first()?.first()?.trim();
@@ -33,8 +40,13 @@ impl UdmClient {
             None
         };
         let mut store = self.storage_mut()?;
-        let store_id = store.allocate_entity_id();
-        Ok(live_id.map_or(store_id, |id| store_id.max(id)))
+        if let Some(id) = live_id {
+            let min_prev = id.saturating_sub(1);
+            if store.next_entity_id < min_prev {
+                store.next_entity_id = min_prev;
+            }
+        }
+        Ok(store.allocate_entity_id())
     }
 
     /// Retrieves active object descriptors for a model. If live connection is configured,
@@ -61,15 +73,16 @@ impl UdmClient {
         entity_id: i32,
         guid: &str,
     ) -> Result<(), String> {
+        let escaped_guid = crate::udm::writer::escape_sql_literal(guid);
+        let sql = format!(
+            "IF NOT EXISTS (SELECT 1 FROM Entity WHERE EntityTypeId = {entity_type_id} AND EntityId = {entity_id}) \
+             INSERT INTO Entity (EntityTypeId, EntityId, EntityGuid) VALUES ({entity_type_id}, {entity_id}, '{escaped_guid}');"
+        );
+        self.execute_live_write_sql(&sql)?;
         let mut store = self.storage_mut()?;
         store
             .entity_guids
             .insert((entity_type_id, entity_id), guid.to_string());
-        let sql = format!(
-            "IF NOT EXISTS (SELECT 1 FROM Entity WHERE EntityTypeId = {entity_type_id} AND EntityId = {entity_id}) \
-             INSERT INTO Entity (EntityTypeId, EntityId, EntityGuid) VALUES ({entity_type_id}, {entity_id}, '{guid}');"
-        );
-        self.execute_live_write_sql(&sql)?;
         Ok(())
     }
 
@@ -192,6 +205,9 @@ impl UdmClient {
         compound_ver: i32,
     ) -> Result<(), String> {
         self.clear_bulk_coverage();
+        self.execute_live_write_sql(&format!(
+            "SET NOCOUNT ON; DELETE FROM EntityVersionComposition WHERE CompoundEntityTypeId = {compound_type} AND CompoundEntityId = {compound_id} AND CompoundEntityVersionId = {compound_ver};"
+        ))?;
         let mut store = self.storage_mut()?;
         store.entity_version_compositions.retain(|c| {
             !(c.compound_entity_type_id == compound_type

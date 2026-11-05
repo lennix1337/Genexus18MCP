@@ -191,6 +191,10 @@ impl InMemoryDatabase {
         self.next_entity_id
     }
 
+    pub fn in_transaction(&self) -> bool {
+        self.savepoint.is_some()
+    }
+
     pub fn begin_transaction(&mut self) {
         let mut snapshot = self.clone();
         snapshot.savepoint = None;
