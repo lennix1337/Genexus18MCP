@@ -29,6 +29,7 @@
     <!-- The real broker code, compiled exactly as the Worker compiles it. -->
     <Compile Include="..\GxMcp.Worker\SharedWorkerHost.cs" Link="Broker\SharedWorkerHost.cs" />
     <Compile Include="..\GxMcp.Worker\SharedWorkerHostProtocol.cs" Link="Broker\SharedWorkerHostProtocol.cs" />
+    <Compile Include="..\GxMcp.Worker\SharedWorkerHostSeams.cs" Link="Broker\SharedWorkerHostSeams.cs" />
     <Compile Include="..\GxMcp.Worker\Helpers\LogRedaction.cs" Link="Broker\LogRedaction.cs" />
     <!-- SDK-free lane classifier and the SDK-free half of WriteDestinationGuard it reads. -->
     <Compile Include="..\GxMcp.Worker\Services\CommandLaneClassifier.cs" Link="Broker\CommandLaneClassifier.cs" />

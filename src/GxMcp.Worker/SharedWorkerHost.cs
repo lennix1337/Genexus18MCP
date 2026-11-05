@@ -2,11 +2,15 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using GxMcp.Common.SharedHost;
+using GxMcp.Worker.Services;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -65,6 +69,20 @@ namespace GxMcp.Worker
         public int IdleTimeoutMs { get; private set; }
         public int AttachTimeoutMs { get; private set; }
 
+        /// <summary>
+        /// Directory of the registry record. Empty means the production location
+        /// (<c>%LOCALAPPDATA%\GxMcp\shared-workers</c>). Only process tests set it: on .NET
+        /// Framework the known-folder lookup ignores an overridden LOCALAPPDATA variable.
+        /// </summary>
+        public string RegistryDirectory { get; private set; }
+
+        /// <summary>
+        /// The queue settings the launching Gateway resolved (RFC #854). The Gateway passes them
+        /// as arguments, so the broker never reads them from inherited environment variables;
+        /// an absent argument is the documented default.
+        /// </summary>
+        internal SharedHostSettingsResult Settings { get; private set; }
+
         internal static SharedWorkerHostOptions Parse(string[] args)
         {
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -99,6 +117,9 @@ namespace GxMcp.Worker
             if (!SharedWorkerHostProtocol.IsValidPipeName(pipe)) throw new InvalidDataException("Invalid shared Worker pipe name.");
             if (string.IsNullOrWhiteSpace(kb) || string.IsNullOrWhiteSpace(install) || string.IsNullOrWhiteSpace(driver) || string.IsNullOrWhiteSpace(major))
                 throw new InvalidDataException("Shared Worker host requires --kb, --installation, --driver, and --major.");
+            string registryDirectory = Get(values, "registry-dir");
+            if (!string.IsNullOrWhiteSpace(registryDirectory) && !Path.IsPathRooted(registryDirectory))
+                throw new InvalidDataException("--registry-dir must be an absolute path.");
 
             return new SharedWorkerHostOptions
             {
@@ -110,8 +131,31 @@ namespace GxMcp.Worker
                 Driver = driver,
                 Major = major,
                 IdleTimeoutMs = ParsePositive(values, "idle-ms", 120000),
-                AttachTimeoutMs = ParsePositive(values, "attach-timeout-ms", 30000)
+                AttachTimeoutMs = ParsePositive(values, "attach-timeout-ms", 30000),
+                RegistryDirectory = registryDirectory ?? string.Empty,
+                Settings = ParseSettings(values)
             };
+        }
+
+        // The values go through the same resolver and ranges as the Gateway's configuration,
+        // with no environment lookup: a value the Gateway did not pass is the default.
+        private static SharedHostSettingsResult ParseSettings(IDictionary<string, string> values)
+        {
+            var section = new JObject();
+            AddSetting(values, "queue-wait-ms", SharedHostSettingsResolver.QueueWaitMsKey, section);
+            AddSetting(values, "queue-depth", SharedHostSettingsResolver.QueueDepthKey, section);
+            AddSetting(values, "session-queue-cap", SharedHostSettingsResolver.SessionQueueCapKey, section);
+            var settings = SharedHostSettingsResolver.Resolve(section, false, string.Empty, _ => null);
+            if (!settings.IsValid) throw new InvalidDataException(string.Join(" ", settings.Errors));
+            return settings;
+        }
+
+        private static void AddSetting(IDictionary<string, string> values, string argument, string key, JObject section)
+        {
+            if (!values.TryGetValue(argument, out string raw)) return;
+            if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
+                throw new InvalidDataException("--" + argument + " must be an integer, got '" + raw + "'.");
+            section[key] = parsed;
         }
 
         private static string Get(IDictionary<string, string> values, string key)
@@ -125,28 +169,67 @@ namespace GxMcp.Worker
         }
     }
 
+    /// <summary>
+    /// The shared-host broker (RFC #854). Every JSON-RPC request is classified on arrival:
+    /// thread-safe and control commands bypass the queue and go straight to the child inbox,
+    /// every other request is an SDK_Operation and goes through <see cref="SharedHostScheduler"/>,
+    /// which releases one at a time. All runtime state is guarded by <c>_hostLock</c>; lines to
+    /// Attachments are collected under the lock and sent after it is released.
+    /// </summary>
     internal sealed class SharedWorkerHostRuntime : IDisposable
     {
-        private const int QueueCapacity = 256;
+        // Bound of the child inbox. The scheduler bounds SDK_Operations to one released request,
+        // so this bound is for bypass commands and forwarded cancellations; a full inbox answers
+        // SHARED_WORKER_BACKPRESSURE instead of blocking the caller.
+        internal const int ChildInboxCapacity = 256;
+
+        private const int SupervisorTickMs = 5000;
+        private const int RespawnBackoffMs = 250;
+        private const int IdleRecordDebounceMs = 1000;
+        private const int RespawnWindowMs = 60000;
+        private const int MaxRespawnsPerWindow = 3;
+        private const int ChildReaderDrainMs = 2000;
+
         private readonly SharedWorkerHostOptions _options;
+        private readonly SharedHostSettingsResult _settings;
+        private readonly SchedulerLimits _limits;
+        private readonly SharedHostScheduler _scheduler;
+        private readonly ISharedHostClock _clock;
+        private readonly ISharedHostChildLauncher _childLauncher;
+        private readonly ISharedHostRegistryWriter _registryWriter;
+        private readonly bool _runBackgroundThreads;
+        private readonly ISharedHostTimer _expiryTimer;
+        private readonly ISharedHostTimer _idleRecordTimer;
         private readonly CancellationTokenSource _stop = new CancellationTokenSource();
-        private readonly ConcurrentDictionary<string, SharedWorkerHostAttachment> _attachments = new ConcurrentDictionary<string, SharedWorkerHostAttachment>(StringComparer.Ordinal);
+        private readonly object _hostLock = new object();
+        private readonly BlockingCollection<ChildInboxItem> _childInbox = new BlockingCollection<ChildInboxItem>(ChildInboxCapacity);
+        private readonly ConcurrentDictionary<string, ISharedHostAttachment> _attachments = new ConcurrentDictionary<string, ISharedHostAttachment>(StringComparer.Ordinal);
+
+        // Requests written (or about to be written) to the child: route, progress owner and
+        // what the exit and metadata paths need. Queued SDK_Operations live in _queued only.
         private readonly ConcurrentDictionary<string, SharedWorkerRequestRoute> _routes = new ConcurrentDictionary<string, SharedWorkerRequestRoute>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, SharedWorkerRequestRoute> _progressOwners = new ConcurrentDictionary<string, SharedWorkerRequestRoute>(StringComparer.Ordinal);
-        private readonly object _recordGate = new object();
-        private readonly object _childGate = new object();
-        private readonly Queue<DateTime> _respawnHistory = new Queue<DateTime>();
-        private Process _child;
-        private StreamWriter _childStdin;
-        private Thread _childWriter;
+        private readonly Dictionary<string, RouteInfo> _routeInfo = new Dictionary<string, RouteInfo>(StringComparer.Ordinal);
+        private readonly Dictionary<string, QueuedEntry> _queued = new Dictionary<string, QueuedEntry>(StringComparer.Ordinal);
+        private readonly Queue<long> _respawnHistory = new Queue<long>();
+        private readonly int _hostPid;
+        private readonly long _hostStartTimeUtcTicks;
+        private ISharedHostChild _child;
         private Thread _childReader;
         private Thread _childErrorReader;
+        private Thread _childInboxWriter;
         private Thread _acceptThread;
         private string _lastChildError = string.Empty;
         private string _lastChildFailureDiagnostic = string.Empty;
         private DateTime _lastDetachUtc = DateTime.UtcNow;
         private long _lastBackgroundActivityTicks = DateTime.UtcNow.Ticks;
         private long _generation = 1;
+        private long _sequence;
+        private long? _expiryArmedAtMs;
+        private bool _idleRecordArmed;
+        private bool _recordWritten;
+        private double _serviceMsEstimate;
+        private int _fatal;
 
         // Issue #335: broker-owned recycle election and the generation each attachment
         // observes. Recycle decisions belong here - the broker owns the child - so that
@@ -156,7 +239,6 @@ namespace GxMcp.Worker
         private long _brokerGeneration = 1;
         private int _recycleElected;
         private bool _sdkReady;
-        private string _recordPath;
         private SharedWorkerHostRegistryRecord _record;
         private int _disposed;
 
@@ -286,38 +368,117 @@ namespace GxMcp.Worker
         }
 
         internal SharedWorkerHostRuntime(SharedWorkerHostOptions options)
+            : this(
+                options,
+                options?.Settings ?? DefaultSettings(),
+                SharedHostSystemClock.Instance,
+                new SharedHostProcessLauncher(),
+                new SharedHostFileRegistryWriter(ResolveRecordPath(options)),
+                runBackgroundThreads: true)
         {
-            _options = options ?? throw new ArgumentNullException(nameof(options));
-            _recordPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "GxMcp", "shared-workers", _options.IdentityKey + ".json");
         }
 
+        internal SharedWorkerHostRuntime(
+            SharedWorkerHostOptions options,
+            SharedHostSettingsResult settings,
+            ISharedHostClock clock,
+            ISharedHostChildLauncher childLauncher,
+            ISharedHostRegistryWriter registryWriter,
+            bool runBackgroundThreads)
+        {
+            _options = options ?? throw new ArgumentNullException(nameof(options));
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+            _childLauncher = childLauncher ?? throw new ArgumentNullException(nameof(childLauncher));
+            _registryWriter = registryWriter ?? throw new ArgumentNullException(nameof(registryWriter));
+            _runBackgroundThreads = runBackgroundThreads;
+            _limits = new SchedulerLimits(settings.QueueDepth, settings.SessionQueueCap, settings.QueueWaitMs);
+            _scheduler = new SharedHostScheduler(_limits, () => _clock.NowMs);
+            // Nothing is released until the child reports sdk_ready.
+            _scheduler.SetWorkerAvailable(false, WaitReason.WorkerStarting);
+            _expiryTimer = _clock.CreateTimer(OnExpiryTimer);
+            _idleRecordTimer = _clock.CreateTimer(OnIdleRecordTimer);
+            using (var self = Process.GetCurrentProcess())
+            {
+                _hostPid = self.Id;
+                _hostStartTimeUtcTicks = self.StartTime.ToUniversalTime().Ticks;
+            }
+        }
+
+        private static SharedHostSettingsResult DefaultSettings()
+            => SharedHostSettingsResolver.Resolve(null, false, string.Empty, _ => null);
+
+        private static string ResolveRecordPath(SharedWorkerHostOptions options)
+        {
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            string directory = string.IsNullOrWhiteSpace(options.RegistryDirectory)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GxMcp", "shared-workers")
+                : options.RegistryDirectory;
+            return Path.Combine(directory, options.IdentityKey + ".json");
+        }
+
+        // ---- Lifecycle ----
+
+        /// <summary>
+        /// Starts the first child and writes the record (state "starting"). With background
+        /// threads it also starts the child readers, the child inbox writer and the accept loop.
+        /// </summary>
+        internal void Start()
+        {
+            lock (_hostLock)
+            {
+                StartChildLocked();
+            }
+            if (!_runBackgroundThreads) return;
+            _childInboxWriter = new Thread(ChildInboxWriterLoop) { IsBackground = true, Name = "SharedWorkerChildWriter" };
+            _childInboxWriter.Start();
+            StartPipeAcceptLoop();
+        }
+
+        /// <summary>
+        /// The supervisor: waits on the child exit handle and the stop handle, with a
+        /// <see cref="SupervisorTickMs"/> timeout for the idle check. No polling loop.
+        /// </summary>
         internal int Run()
         {
-            StartChild();
-            StartPipeAcceptLoop();
+            Start();
+            WaitHandle stopHandle = _stop.Token.WaitHandle;
             while (!_stop.IsCancellationRequested)
             {
-                if (_child == null || _child.HasExited)
+                ISharedHostChild child;
+                lock (_hostLock) child = _child;
+                if (child == null)
                 {
-                    if (!TryRespawnChild()) break;
+                    if (Volatile.Read(ref _fatal) != 0) break;
+                    stopHandle.WaitOne(SupervisorTickMs);
                     continue;
                 }
-                DateTime lastBackgroundActivity = new DateTime(Interlocked.Read(ref _lastBackgroundActivityTicks), DateTimeKind.Utc);
-                if (_attachments.IsEmpty
-                    && (DateTime.UtcNow - _lastDetachUtc).TotalMilliseconds >= _options.IdleTimeoutMs
-                    && (DateTime.UtcNow - lastBackgroundActivity).TotalMilliseconds >= _options.IdleTimeoutMs)
-                    break;
-                WriteRecord();
-                Thread.Sleep(250);
+                int signaled = WaitHandle.WaitAny(new[] { stopHandle, child.ExitedHandle }, SupervisorTickMs);
+                if (signaled == 0) break;
+                if (signaled == 1)
+                {
+                    OnChildExited(child);
+                    if (Volatile.Read(ref _fatal) != 0) break;
+                    continue;
+                }
+                if (IsIdleExpired()) break;
             }
             return 0;
         }
 
-        private void StartChild()
+        private bool IsIdleExpired()
         {
-            Volatile.Write(ref _lastChildError, string.Empty);
+            lock (_hostLock)
+            {
+                if (!_attachments.IsEmpty || _queued.Count > 0 || !_scheduler.Snapshot().IsIdle) return false;
+            }
+            DateTime lastBackgroundActivity = new DateTime(Interlocked.Read(ref _lastBackgroundActivityTicks), DateTimeKind.Utc);
+            return (DateTime.UtcNow - _lastDetachUtc).TotalMilliseconds >= _options.IdleTimeoutMs
+                && (DateTime.UtcNow - lastBackgroundActivity).TotalMilliseconds >= _options.IdleTimeoutMs;
+        }
+
+        private ProcessStartInfo BuildChildStartInfo()
+        {
             var start = new ProcessStartInfo
             {
                 FileName = _options.WorkerExecutable,
@@ -339,10 +500,18 @@ namespace GxMcp.Worker
             if (!string.IsNullOrWhiteSpace(legacyProvider))
                 start.EnvironmentVariables["GXMCP_GXPUBLIC_PROVIDER"] = legacyProvider;
             start.EnvironmentVariables["GXMCP_SHARED_CHILD"] = "1";
+            // The broker queue owns the wait (RFC #854): the child's own busy-reject wait would
+            // answer WorkerBusy for a request the broker released to it.
+            start.EnvironmentVariables["GXMCP_BUSY_REJECT_MS"] = "0";
             start.EnvironmentVariables.Remove("GX_MCP_PIPE");
+            return start;
+        }
 
-            var child = new Process { StartInfo = start, EnableRaisingEvents = true };
-            if (!child.Start()) throw new InvalidOperationException("Could not start shared Worker child.");
+        private void StartChildLocked()
+        {
+            Volatile.Write(ref _lastChildError, string.Empty);
+            ISharedHostChild child = _childLauncher.Start(BuildChildStartInfo());
+            if (child == null) throw new InvalidOperationException("Could not start shared Worker child.");
             _child = child;
             // Issue #335: a new child starts a new supervision generation and ends any
             // outstanding recycle election. Clearing the election is what makes the sweep
@@ -350,8 +519,7 @@ namespace GxMcp.Worker
             // elected" and could each act on it.
             Interlocked.Increment(ref _brokerGeneration);
             Volatile.Write(ref _recycleElected, 0);
-            var childStdin = SharedWorkerHost.CreateChildStdinWriter(child.StandardInput.BaseStream);
-            _childStdin = childStdin;
+            _sdkReady = false;
             _record = new SharedWorkerHostRegistryRecord
             {
                 Identity = new SharedWorkerHostIdentity
@@ -363,21 +531,20 @@ namespace GxMcp.Worker
                     Major = (_options.Major ?? string.Empty).Trim().ToLowerInvariant(),
                     Key = _options.IdentityKey
                 },
-                HostPid = Process.GetCurrentProcess().Id,
-                HostStartTimeUtcTicks = Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks,
-                WorkerPid = child.Id,
-                WorkerStartTimeUtcTicks = child.StartTime.ToUniversalTime().Ticks,
+                HostPid = _hostPid,
+                HostStartTimeUtcTicks = _hostStartTimeUtcTicks,
+                WorkerPid = child.Pid,
+                WorkerStartTimeUtcTicks = child.StartTimeUtcTicks,
                 PipeName = _options.PipeName,
                 Generation = _generation,
                 UpdatedUtc = DateTime.UtcNow,
                 State = "starting"
             };
-            WriteRecord();
+            WriteRecordLocked();
 
-            _childWriter = new Thread(() => ChildWriterLoop(childStdin)) { IsBackground = true, Name = "SharedWorkerChildWriter" };
+            if (!_runBackgroundThreads) return;
             _childReader = new Thread(() => ChildReaderLoop(child)) { IsBackground = true, Name = "SharedWorkerChildReader" };
             _childErrorReader = new Thread(() => ChildErrorReaderLoop(child)) { IsBackground = true, Name = "SharedWorkerChildErrorReader" };
-            _childWriter.Start();
             _childReader.Start();
             _childErrorReader.Start();
         }
@@ -413,86 +580,77 @@ namespace GxMcp.Worker
                 {
                     try { server?.Dispose(); } catch { }
                     HostLog("pipe accept failed: " + ex.Message);
-                    if (!_stop.IsCancellationRequested) Thread.Sleep(250);
+                    // Back off on the stop handle, so Dispose ends the wait at once.
+                    if (!_stop.IsCancellationRequested) _stop.Token.WaitHandle.WaitOne(250);
                 }
             }
         }
 
-        internal bool Attach(SharedWorkerHostAttachment attachment, SharedWorkerEnvelope request, out string error)
+        // ---- Attachments ----
+
+        internal bool Attach(ISharedHostAttachment attachment, SharedWorkerEnvelope request, out string error)
         {
             error = string.Empty;
+            if (attachment == null) { error = "attachment is null"; return false; }
             if (!SharedWorkerHostProtocol.TryValidateAttach(request, _options.IdentityKey, out error)) return false;
-            attachment.AttachmentId = Guid.NewGuid().ToString("N");
-            if (!_attachments.TryAdd(attachment.ConnectionId, attachment))
+            JObject ack;
+            lock (_hostLock)
             {
-                error = "could not register attachment";
-                return false;
+                attachment.AttachmentId = Guid.NewGuid().ToString("N");
+                if (!_attachments.TryAdd(attachment.ConnectionId, attachment))
+                {
+                    error = "could not register attachment";
+                    return false;
+                }
+                _lastDetachUtc = DateTime.UtcNow;
+                ack = new JObject
+                {
+                    ["attachId"] = attachment.AttachmentId,
+                    ["attachmentId"] = attachment.AttachmentId,
+                    ["hostPid"] = _record.HostPid,
+                    ["hostStartTimeUtcTicks"] = _record.HostStartTimeUtcTicks,
+                    ["workerPid"] = _record.WorkerPid,
+                    ["workerStartTimeUtcTicks"] = _record.WorkerStartTimeUtcTicks,
+                    ["generation"] = _record.Generation,
+                    ["ready"] = _sdkReady
+                };
             }
-            _lastDetachUtc = DateTime.UtcNow;
-            SendHostFrame(attachment, "attach_ack", new JObject
-            {
-                ["attachId"] = attachment.AttachmentId,
-                ["attachmentId"] = attachment.AttachmentId,
-                ["hostPid"] = _record.HostPid,
-                ["hostStartTimeUtcTicks"] = _record.HostStartTimeUtcTicks,
-                ["workerPid"] = _record.WorkerPid,
-                ["workerStartTimeUtcTicks"] = _record.WorkerStartTimeUtcTicks,
-                ["generation"] = _record.Generation,
-                ["ready"] = _sdkReady
-            });
+            SendHostFrame(attachment, "attach_ack", ack);
             return true;
         }
 
-        internal void Detach(SharedWorkerHostAttachment attachment)
+        /// <summary>
+        /// The pipe-EOF path (RunAsync's finally); a detach frame reaches it through
+        /// <see cref="ISharedHostAttachment.Stop"/>. Queued requests of the Attachment are dropped
+        /// without executing them; its in-flight request keeps running, because an SDK call
+        /// cannot be aborted safely, and its response and progress are discarded.
+        /// </summary>
+        internal void Detach(ISharedHostAttachment attachment)
         {
             if (attachment == null) return;
-            _attachments.TryRemove(attachment.ConnectionId, out _);
-            RemoveRoutesForAttachment(attachment.AttachmentId);
-            _lastDetachUtc = DateTime.UtcNow;
+            var outbox = new Outbox();
+            lock (_hostLock)
+            {
+                _attachments.TryRemove(attachment.ConnectionId, out _);
+                string attachmentId = attachment.AttachmentId;
+                if (!string.IsNullOrEmpty(attachmentId))
+                {
+                    foreach (QueuedRequest removed in _scheduler.RemoveSession(attachmentId))
+                        _queued.Remove(removed.ChildRequestId);
+                    RemoveRoutesForAttachment(attachmentId);
+                }
+                _lastDetachUtc = DateTime.UtcNow;
+                RescheduleExpiryLocked(outbox);
+            }
+            Flush(outbox);
         }
 
-        internal void Receive(SharedWorkerHostAttachment attachment, string line)
+        internal void Receive(ISharedHostAttachment attachment, string line)
         {
-            if (string.IsNullOrWhiteSpace(line)) return;
+            if (attachment == null || string.IsNullOrWhiteSpace(line)) return;
             if (SharedWorkerHostProtocol.TryParseEnvelope(line, out SharedWorkerEnvelope envelope, out _))
             {
-                if (envelope.Type == "heartbeat")
-                {
-                    if (!SharedWorkerHostProtocol.TryValidateSessionEnvelope(
-                        envelope, true, _options.IdentityKey, attachment.AttachmentId, out string sessionError))
-                    {
-                        SendHostError(attachment, sessionError);
-                        return;
-                    }
-                    // Issue #335: the heartbeat_ack now carries the broker's own view of the child.
-                    //
-                    // In shared mode the Gateway does not own the child Process, so it
-                    // cannot ask the OS anything: no PID, no working set, no way to tell a
-                    // progressing SDK call from a deadlocked one. That left a shared Worker
-                    // with no heap or stall supervision at all - the exact gap that made
-                    // these checks worth having for an isolated Worker.
-                    //
-                    // The broker is the only party that can answer them, so it does, here -
-                    // on a frame that already exists. Extending heartbeat_ack rather than
-                    // adding a frame type keeps this off the protocol-migration path
-                    // entirely: an older Gateway ignores the new fields, and an older
-                    // broker's ack still satisfies the newer Gateway's reader.
-                    SendHostFrame(attachment, "heartbeat_ack", BuildHeartbeatAck(attachment.AttachmentId));
-                }
-                else if (envelope.Type == "detach")
-                {
-                    if (!SharedWorkerHostProtocol.TryValidateSessionEnvelope(
-                        envelope, true, _options.IdentityKey, attachment.AttachmentId, out string sessionError))
-                    {
-                        SendHostError(attachment, sessionError);
-                        return;
-                    }
-                    attachment.Stop();
-                }
-                else
-                {
-                    SendHostError(attachment, "unexpected host frame after attach");
-                }
+                ReceiveHostFrame(attachment, envelope);
                 return;
             }
 
@@ -505,154 +663,403 @@ namespace GxMcp.Worker
                 return;
             }
 
-            if (string.Equals(request.Value<string>("method"), "notifications/cancelled", StringComparison.Ordinal))
+            var outbox = new Outbox();
+            lock (_hostLock)
             {
-                if (SharedWorkerHostProtocol.TryRewriteCancellationForChild(
-                    request, _routes.Values, attachment.AttachmentId, out JObject childCancellation, out _))
-                    attachment.EnqueueChild(childCancellation.ToString(Formatting.None));
+                if (!_attachments.ContainsKey(attachment.ConnectionId)) return;
+                if (string.Equals(request.Value<string>("method"), "notifications/cancelled", StringComparison.Ordinal))
+                    ReceiveCancellationLocked(attachment, request, outbox);
+                else
+                    ReceiveRequestLocked(attachment, request, outbox);
+                RescheduleExpiryLocked(outbox);
+            }
+            Flush(outbox);
+        }
+
+        private void ReceiveHostFrame(ISharedHostAttachment attachment, SharedWorkerEnvelope envelope)
+        {
+            bool known = envelope.Type == "heartbeat" || envelope.Type == "detach"
+                || envelope.Type == SharedWorkerHostProtocol.StatusFrameType;
+            if (!known)
+            {
+                SendHostError(attachment, "unexpected host frame after attach");
+                return;
+            }
+            if (!SharedWorkerHostProtocol.TryValidateSessionEnvelope(
+                envelope, true, _options.IdentityKey, attachment.AttachmentId, out string sessionError))
+            {
+                SendHostError(attachment, sessionError);
                 return;
             }
 
-            lock (_childGate)
+            if (envelope.Type == "heartbeat")
             {
-                if (!SharedWorkerHostProtocol.TryRewriteRequestForChild(request, attachment.AttachmentId, attachment.NextSequence(), out JObject childRequest, out SharedWorkerRequestRoute route, out string error))
-                {
-                    SendHostError(attachment, error);
-                    return;
-                }
-                _routes[route.ChildRequestId] = route;
-                if (!string.IsNullOrWhiteSpace(route.ChildProgressToken)) _progressOwners[route.ChildProgressToken] = route;
-                string payload = childRequest.ToString(Formatting.None);
-                if (!attachment.EnqueueChild(payload))
-                {
-                    _routes.TryRemove(route.ChildRequestId, out _);
-                    if (!string.IsNullOrWhiteSpace(route.ChildProgressToken)) _progressOwners.TryRemove(route.ChildProgressToken, out _);
-                    attachment.Enqueue(new JObject
-                    {
-                        ["jsonrpc"] = "2.0",
-                        ["id"] = route.ClientRequestId.DeepClone(),
-                        ["error"] = new JObject
-                        {
-                            ["code"] = -32029,
-                            ["message"] = "Shared Worker command queue is full; retry this operation.",
-                            ["data"] = new JObject { ["code"] = "SHARED_WORKER_BACKPRESSURE", ["retryable"] = true }
-                        }
-                    }.ToString(Formatting.None));
-                }
+                // Issue #335: the heartbeat_ack now carries the broker's own view of the child.
+                //
+                // In shared mode the Gateway does not own the child Process, so it
+                // cannot ask the OS anything: no PID, no working set, no way to tell a
+                // progressing SDK call from a deadlocked one. That left a shared Worker
+                // with no heap or stall supervision at all - the exact gap that made
+                // these checks worth having for an isolated Worker.
+                //
+                // The broker is the only party that can answer them, so it does, here -
+                // on a frame that already exists. Extending heartbeat_ack rather than
+                // adding a frame type keeps this off the protocol-migration path
+                // entirely: an older Gateway ignores the new fields, and an older
+                // broker's ack still satisfies the newer Gateway's reader.
+                SendHostFrame(attachment, "heartbeat_ack", BuildHeartbeatAck(attachment.AttachmentId));
+            }
+            else if (envelope.Type == "detach")
+            {
+                attachment.Stop();
+            }
+            else
+            {
+                // Protocol v2 diagnostics: answered from a snapshot, never queued.
+                SendStatusAck(attachment, envelope.RequestId);
             }
         }
 
-        private bool TryRespawnChild()
+        private void SendStatusAck(ISharedHostAttachment attachment, string requestId)
         {
-            if (_stop.IsCancellationRequested) return false;
-            lock (_childGate)
+            SchedulerSnapshot snapshot;
+            ISharedHostChild child;
+            string childState;
+            int attachments;
+            lock (_hostLock)
             {
-                if (_stop.IsCancellationRequested) return false;
-                while (_respawnHistory.Count > 0 && (DateTime.UtcNow - _respawnHistory.Peek()).TotalMinutes >= 1)
-                    _respawnHistory.Dequeue();
-                if (_respawnHistory.Count >= 3)
-                {
-                    BroadcastHostError("Shared Worker child crashed repeatedly; host stopped fail-closed.");
-                    return false;
-                }
-                _respawnHistory.Enqueue(DateTime.UtcNow);
-                string failureDiagnostic = BuildChildFailureDiagnostic(_child);
-                _lastChildFailureDiagnostic = failureDiagnostic;
-                FailRoutesForRespawn();
-                try { _childStdin?.Dispose(); } catch { }
-                _childStdin = null;
-                try { _child?.Dispose(); } catch { }
-                _sdkReady = false;
-                _generation++;
-                lock (_recordGate) { if (_record != null) _record.State = "recovering"; }
-                WriteRecord();
-                try
-                {
-                    Thread.Sleep(250);
-                    StartChild();
-                    BroadcastWorkerRestarted(failureDiagnostic);
-                    BroadcastJson(new JObject
-                    {
-                        ["jsonrpc"] = "2.0",
-                        ["method"] = "notifications/worker/restarting",
-                        ["params"] = new JObject { ["generation"] = _generation }
-                    }.ToString(Formatting.None));
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    BroadcastHostError("Shared Worker child respawn failed after " + failureDiagnostic + ": " + ex.Message);
-                    return false;
-                }
+                snapshot = _scheduler.Snapshot();
+                child = _child;
+                childState = _record?.State ?? string.Empty;
+                attachments = _attachments.Count;
             }
+            var context = new SharedHostStatusContext
+            {
+                ChildState = childState,
+                WorkerPid = child?.Pid ?? 0,
+                WorkerWorkingSetMb = child == null ? 0 : child.WorkingSetBytes / (1024 * 1024),
+                Attachments = attachments,
+                EffectiveSettings = new JObject
+                {
+                    ["queueWaitMs"] = _limits.QueueWaitMs,
+                    ["queueDepth"] = _limits.QueueDepth,
+                    ["sessionQueueCap"] = _limits.SessionQueueCap
+                }
+            };
+            JObject ack;
+            try { ack = SharedWorkerHostProtocol.BuildStatusAck(_options.IdentityKey, requestId, snapshot, context); }
+            catch (ArgumentException) { SendHostError(attachment, "status frame requires a bounded requestId"); return; }
+            attachment.Enqueue(ack.ToString(Formatting.None));
         }
 
-        private void BroadcastWorkerRestarted(string failureDiagnostic)
+        // notifications/cancelled: a queued request of this Attachment is removed and answered
+        // Cancelled; otherwise the cancellation is forwarded for this Attachment's in-flight
+        // request; a cancellation that matches none of its requests is dropped.
+        private void ReceiveCancellationLocked(ISharedHostAttachment attachment, JObject request, Outbox outbox)
         {
-            foreach (var attachment in _attachments.Values)
+            JToken requestId = request["params"]?["requestId"];
+            if (requestId == null || requestId.Type == JTokenType.Null) return;
+            var removed = _scheduler.Cancel(attachment.AttachmentId, requestId.ToString(Formatting.None), null).Removed;
+            if (removed.Count > 0)
             {
-                SendHostFrame(attachment, "worker_restarted", new JObject
-                {
-                    ["hostPid"] = _record.HostPid,
-                    ["hostStartTimeUtcTicks"] = _record.HostStartTimeUtcTicks,
-                    ["workerPid"] = _record.WorkerPid,
-                    ["workerStartTimeUtcTicks"] = _record.WorkerStartTimeUtcTicks,
-                    ["generation"] = _record.Generation,
-                    ["ready"] = false,
-                    ["failureStage"] = "child_exit",
-                    ["failureDiagnostic"] = failureDiagnostic
-                });
+                foreach (QueuedRequest queued in removed) AnswerCancelledLocked(attachment, queued, outbox);
+                return;
+            }
+            if (SharedWorkerHostProtocol.TryRewriteCancellationForChild(
+                request, _routes.Values, attachment.AttachmentId, out JObject childCancellation, out _))
+            {
+                if (!TryEnqueueChildLocked(childCancellation.ToString(Formatting.None)))
+                    HostLog("dropped cancellation: the child inbox is full or no child is running");
             }
         }
 
-        private void FailRoutesForRespawn()
+        private void ReceiveRequestLocked(ISharedHostAttachment attachment, JObject request, Outbox outbox)
         {
-            foreach (var entry in _routes)
+            string method = request.Value<string>("method") ?? string.Empty;
+            string action = request["action"]?.Type == JTokenType.String ? (string)request["action"] : null;
+            bool bypass = IsBypassCommand(request, method, action);
+            if (!SharedWorkerHostProtocol.TryRewriteRequestForChild(
+                request, attachment.AttachmentId, attachment.NextSequence(), out JObject childRequest, out SharedWorkerRequestRoute route, out string error))
             {
-                if (_routes.TryRemove(entry.Key, out SharedWorkerRequestRoute route))
-                {
-                    if (!string.IsNullOrWhiteSpace(route.ChildProgressToken)) _progressOwners.TryRemove(route.ChildProgressToken, out _);
-                    var error = new JObject
-                    {
-                        ["jsonrpc"] = "2.0",
-                        ["id"] = route.ClientRequestId.DeepClone(),
-                        ["error"] = new JObject
-                        {
-                            ["code"] = -32050,
-                            ["message"] = "Shared Worker restarted while this request was running.",
-                            ["data"] = new JObject { ["code"] = "SHARED_WORKER_RESTARTED", ["retryable"] = true, ["generation"] = _generation }
-                        }
-                    };
-                    SendJson(_attachments, route.AttachmentId, error.ToString(Formatting.None));
-                }
+                outbox.Add(attachment, HostFrameLine("host_error", new JObject { ["message"] = error }));
+                return;
             }
-            foreach (var attachment in _attachments.Values)
-                attachment.ClearChildQueue();
+
+            if (Volatile.Read(ref _fatal) != 0 || (bypass && _child == null))
+            {
+                outbox.Add(attachment, SharedWorkerHostProtocol.BuildRestartedError(
+                    route.ClientRequestId, ConcurrencyDispatchState.NotDelivered, method, action, _generation, _limits.QueueWaitMs)
+                    .ToString(Formatting.None));
+                return;
+            }
+
+            if (bypass)
+            {
+                // control/Cancel names a cancelToken; a queued request with that token is
+                // removed here, and the command still reaches the child for running work.
+                if (string.Equals(method, "control", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(action, "Cancel", StringComparison.Ordinal)
+                    && request["params"]?["cancelToken"]?.Type == JTokenType.String)
+                {
+                    string token = (string)request["params"]["cancelToken"];
+                    foreach (QueuedRequest queued in _scheduler.Cancel(attachment.AttachmentId, null, token).Removed)
+                        AnswerCancelledLocked(attachment, queued, outbox);
+                }
+                RegisterRouteLocked(route, new RouteInfo(method, action, false, 0, 0));
+                if (!TryEnqueueChildLocked(childRequest.ToString(Formatting.None)))
+                {
+                    UnregisterRouteLocked(route.ChildRequestId);
+                    outbox.Add(attachment, BuildBackpressureError(route.ClientRequestId));
+                }
+                return;
+            }
+
+            long now = _clock.NowMs;
+            var entry = new QueuedEntry(route, childRequest, attachment.AttachmentId, method, action);
+            var queuedRequest = new QueuedRequest
+            {
+                ChildRequestId = route.ChildRequestId,
+                SessionId = attachment.AttachmentId,
+                ClientRequestIdJson = route.ClientRequestId.ToString(Formatting.None),
+                Operation = method + "/" + (action ?? string.Empty),
+                CancelToken = request["params"]?["cancelToken"]?.Type == JTokenType.String ? (string)request["params"]["cancelToken"] : null,
+                EnqueuedAtMs = now,
+                Sequence = ++_sequence
+            };
+            _queued[route.ChildRequestId] = entry;
+            SubmitResult submit = _scheduler.Submit(queuedRequest);
+            if (submit.Started)
+            {
+                // Started without waiting: released at the submit instant, so its wait is 0.
+                ReleaseLocked(queuedRequest, outbox, now);
+            }
+            else if (!submit.Queued)
+            {
+                _queued.Remove(route.ChildRequestId);
+                SchedulerSnapshot snapshot = _scheduler.Snapshot();
+                int ahead = snapshot.QueueDepth + (snapshot.IsIdle ? 0 : 1);
+                outbox.Add(attachment, SharedWorkerHostProtocol.BuildBusyResult(
+                    route.ClientRequestId, submit.RejectReason, snapshot, _limits, _options.IdentityKey, _options.KbPath,
+                    null, EstimateRetryAfterMs(ahead)).ToString(Formatting.None));
+            }
         }
 
-        private void ChildWriterLoop(StreamWriter childStdin)
+        private static bool IsBypassCommand(JObject request, string method, string action)
+        {
+            if (CommandLaneClassifier.IsThreadSafe(request)) return true;
+            // Control commands never wait behind the SDK lane they exist to observe or cancel.
+            return string.Equals(method, "health", StringComparison.OrdinalIgnoreCase)
+                || (string.Equals(method, "control", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(action, "Cancel", StringComparison.Ordinal));
+        }
+
+        private void AnswerCancelledLocked(ISharedHostAttachment attachment, QueuedRequest queued, Outbox outbox)
+        {
+            if (!_queued.TryGetValue(queued.ChildRequestId, out QueuedEntry entry)) return;
+            _queued.Remove(queued.ChildRequestId);
+            outbox.Add(attachment, SharedWorkerHostProtocol.BuildCancelledResult(entry.Route.ClientRequestId).ToString(Formatting.None));
+        }
+
+        // ---- Release to the child ----
+
+        // Writes a released SDK_Operation to the child inbox with its remaining queue wait as
+        // _meta.busyWaitMs. A full inbox answers SHARED_WORKER_BACKPRESSURE and frees the window.
+        private void ReleaseLocked(QueuedRequest next, Outbox outbox, long? releasedAtMs = null)
+        {
+            while (next != null)
+            {
+                if (!_queued.TryGetValue(next.ChildRequestId, out QueuedEntry entry))
+                {
+                    next = _scheduler.Complete(next.ChildRequestId);
+                    continue;
+                }
+                _queued.Remove(next.ChildRequestId);
+                long now = releasedAtMs ?? _clock.NowMs;
+                releasedAtMs = null;
+                var meta = entry.ChildRequest["_meta"] as JObject;
+                if (meta == null)
+                {
+                    meta = new JObject();
+                    entry.ChildRequest["_meta"] = meta;
+                }
+                meta["busyWaitMs"] = SharedWorkerHostProtocol.ComputeBusyWaitMs(_limits.QueueWaitMs, now - next.EnqueuedAtMs);
+                RegisterRouteLocked(entry.Route, new RouteInfo(entry.Method, entry.Action, true, next.EnqueuedAtMs, now));
+                if (TryEnqueueChildLocked(entry.ChildRequest.ToString(Formatting.None))) return;
+
+                UnregisterRouteLocked(entry.Route.ChildRequestId);
+                ISharedHostAttachment owner = FindAttachment(entry.SessionId);
+                if (owner != null) outbox.Add(owner, BuildBackpressureError(entry.Route.ClientRequestId));
+                next = _scheduler.Complete(next.ChildRequestId);
+            }
+        }
+
+        private bool TryEnqueueChildLocked(string line)
+        {
+            ISharedHostChild child = _child;
+            if (child == null) return false;
+            try { return _childInbox.TryAdd(new ChildInboxItem(child, line)); }
+            catch (InvalidOperationException) { return false; }
+        }
+
+        /// <summary>
+        /// Writes every pending child-inbox line to the current child, in order, on the
+        /// caller's thread. Only for runBackgroundThreads=false; with threads the inbox writer
+        /// consumes the inbox with GetConsumingEnumerable.
+        /// </summary>
+        internal int PumpChildInbox()
+        {
+            if (_runBackgroundThreads)
+                throw new InvalidOperationException("PumpChildInbox is only available without background threads.");
+            int written = 0;
+            while (_childInbox.TryTake(out ChildInboxItem item))
+                if (WriteChildInboxItem(item)) written++;
+            return written;
+        }
+
+        private void ChildInboxWriterLoop()
         {
             try
             {
-                while (!_stop.IsCancellationRequested)
-                {
-                    bool wrote = false;
-                    foreach (SharedWorkerHostAttachment attachment in _attachments.Values)
-                    {
-                        if (!attachment.TryDequeueChild(out string line)) continue;
-                        wrote = true;
-                        if (_stop.IsCancellationRequested) break;
-                        childStdin.WriteLine(line);
-                        childStdin.Flush();
-                    }
-                    if (wrote) continue;
-                    Thread.Sleep(5);
-                }
+                foreach (ChildInboxItem item in _childInbox.GetConsumingEnumerable(_stop.Token))
+                    WriteChildInboxItem(item);
             }
-            catch (Exception ex) { HostLog("child stdin closed: " + ex.Message); }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { HostLog("child inbox writer stopped: " + ex.Message); }
         }
 
-        private void ChildReaderLoop(Process child)
+        // A line addressed to a child that is no longer current is dropped: the exit path
+        // already answered its request, and it must never reach the replacement.
+        private bool WriteChildInboxItem(ChildInboxItem item)
+        {
+            ISharedHostChild current;
+            lock (_hostLock) current = _child;
+            if (current == null || !ReferenceEquals(current, item.Child))
+            {
+                HostLog("dropped a child inbox line addressed to a previous child");
+                return false;
+            }
+            try
+            {
+                current.WriteLine(item.Line);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                HostLog("child stdin closed: " + ex.Message);
+                return false;
+            }
+        }
+
+        // ---- Child output ----
+
+        /// <summary>One stdout line of <paramref name="child"/>, as the child reader loop delivers it.</summary>
+        internal void OnChildLine(ISharedHostChild child, string line) => HandleChildLine(child, line);
+
+        // False when the line made the host stop fail-closed.
+        private bool HandleChildLine(ISharedHostChild child, string line)
+        {
+            if (child == null || string.IsNullOrWhiteSpace(line)) return true;
+            JObject frame;
+            try { frame = GxMcp.Common.JsonIngress.ParseObject(line); }
+            catch
+            {
+                // The normal Worker emits two plain-text handshake lines before
+                // switching to newline-delimited JSON-RPC. They are part of the
+                // existing stdio contract, not malformed broker frames.
+                if (line.StartsWith("WORKER_HANDSHAKE_", StringComparison.Ordinal)) return true;
+                BroadcastHostError("Shared Worker child emitted malformed JSON; host stopped fail-closed.");
+                _stop.Cancel();
+                return false;
+            }
+
+            var outbox = new Outbox();
+            lock (_hostLock)
+            {
+                if (!ReferenceEquals(child, _child)) return true;
+                string method = frame.Value<string>("method") ?? string.Empty;
+                if (string.Equals(method, "notifications/worker/build_active", StringComparison.Ordinal)
+                    || string.Equals(method, "notifications/worker/index_active", StringComparison.Ordinal))
+                {
+                    Interlocked.Exchange(ref _lastBackgroundActivityTicks, DateTime.UtcNow.Ticks);
+                }
+
+                if (frame["id"] != null && frame["id"].Type != JTokenType.Null && string.IsNullOrEmpty(method))
+                {
+                    HandleChildResponseLocked(child, frame, outbox);
+                }
+                else
+                {
+                    if (string.Equals(method, "notifications/worker/sdk_ready", StringComparison.Ordinal))
+                        MarkChildReadyLocked(outbox);
+                    RouteChildNotificationLocked(frame, method, outbox);
+                }
+                RescheduleExpiryLocked(outbox);
+            }
+            Flush(outbox);
+            return true;
+        }
+
+        private void MarkChildReadyLocked(Outbox outbox)
+        {
+            _sdkReady = true;
+            if (_record != null) _record.State = "ready";
+            WriteRecordLocked();
+            _scheduler.SetWorkerAvailable(true, WaitReason.StaBusy);
+            ReleaseLocked(_scheduler.TryStartNext(), outbox);
+        }
+
+        private void HandleChildResponseLocked(ISharedHostChild child, JObject frame, Outbox outbox)
+        {
+            string childId = frame["id"].ToString();
+            if (_routes.TryRemove(childId, out SharedWorkerRequestRoute route))
+            {
+                if (!string.IsNullOrWhiteSpace(route.ChildProgressToken)) _progressOwners.TryRemove(route.ChildProgressToken, out _);
+                _routeInfo.TryGetValue(childId, out RouteInfo info);
+                _routeInfo.Remove(childId);
+                if (SharedWorkerHostProtocol.TryRestoreResponse(frame, route, out JObject restored, out _))
+                {
+                    if (info != null && info.IsSdk)
+                    {
+                        SharedWorkerHostProtocol.TryInjectSharedMetadata(restored, info.ReleasedAtMs - info.EnqueuedAtMs, child.Pid);
+                        RecordServiceTime(_clock.NowMs - info.ReleasedAtMs);
+                    }
+                    ISharedHostAttachment owner = FindAttachment(route.AttachmentId);
+                    if (owner != null) outbox.Add(owner, restored.ToString(Formatting.None));
+                }
+            }
+            // Always: the window may belong to a request whose Attachment detached.
+            CompleteLocked(childId, outbox);
+        }
+
+        private void CompleteLocked(string childId, Outbox outbox)
+        {
+            QueuedRequest next = _scheduler.Complete(childId);
+            if (next != null) ReleaseLocked(next, outbox);
+            else if (_queued.Count == 0 && _scheduler.Snapshot().IsIdle) ArmIdleRecordLocked();
+        }
+
+        private void RouteChildNotificationLocked(JObject frame, string method, Outbox outbox)
+        {
+            if (SharedWorkerHostProtocol.TryRouteChildNotification(
+                frame, _progressOwners, out string attachmentId, out JObject routed, out bool broadcast, out string routeError))
+            {
+                string json = routed.ToString(Formatting.None);
+                if (broadcast)
+                {
+                    foreach (var attachment in _attachments.Values) outbox.Add(attachment, json);
+                }
+                else if (!string.IsNullOrWhiteSpace(attachmentId))
+                {
+                    ISharedHostAttachment owner = FindAttachment(attachmentId);
+                    if (owner != null) outbox.Add(owner, json);
+                }
+                return;
+            }
+            if (!string.IsNullOrWhiteSpace(method))
+                HostLog("dropping unroutable child notification method=" + method + " reason=" + routeError);
+        }
+
+        private void ChildReaderLoop(ISharedHostChild child)
         {
             try
             {
@@ -695,10 +1102,9 @@ namespace GxMcp.Worker
                                 oversizedRequestId, frameBytes, SharedWorkerHostProtocol.MaxFrameBytes);
                             // Route it exactly as a normal response would be routed, to the
                             // attachment that owns the request, and nowhere else.
-                            if (_routes.TryRemove(oversizedRequestId, out SharedWorkerRequestRoute oversizedRoute))
+                            SharedWorkerRequestRoute oversizedRoute = TakeAnsweredRoute(child, oversizedRequestId);
+                            if (oversizedRoute != null)
                             {
-                                if (!string.IsNullOrWhiteSpace(oversizedRoute.ChildProgressToken))
-                                    _progressOwners.TryRemove(oversizedRoute.ChildProgressToken, out _);
                                 var clientFrame = new JObject
                                 {
                                     ["jsonrpc"] = "2.0",
@@ -722,63 +1128,35 @@ namespace GxMcp.Worker
                         // The host keeps serving every other attachment.
                         continue;
                     }
-                    JObject frame;
-                    try { frame = GxMcp.Common.JsonIngress.ParseObject(line); }
-                    catch
-                    {
-                        // The normal Worker emits two plain-text handshake lines before
-                        // switching to newline-delimited JSON-RPC. They are part of the
-                        // existing stdio contract, not malformed broker frames.
-                        if (line.StartsWith("WORKER_HANDSHAKE_", StringComparison.Ordinal)) continue;
-                        BroadcastHostError("Shared Worker child emitted malformed JSON; host stopped fail-closed.");
-                        _stop.Cancel();
-                        break;
-                    }
-                    string method = frame.Value<string>("method") ?? string.Empty;
-                    if (string.Equals(method, "notifications/worker/sdk_ready", StringComparison.Ordinal))
-                    {
-                        _sdkReady = true;
-                        lock (_recordGate) { _record.State = "ready"; }
-                        WriteRecord();
-                    }
-                    if (string.Equals(method, "notifications/worker/build_active", StringComparison.Ordinal)
-                        || string.Equals(method, "notifications/worker/index_active", StringComparison.Ordinal))
-                    {
-                        Interlocked.Exchange(ref _lastBackgroundActivityTicks, DateTime.UtcNow.Ticks);
-                    }
-                    if (frame["id"] != null && frame["id"].Type != JTokenType.Null)
-                    {
-                        string childId = frame["id"].ToString();
-                        if (_routes.TryRemove(childId, out SharedWorkerRequestRoute route))
-                        {
-                            if (!string.IsNullOrWhiteSpace(route.ChildProgressToken)) _progressOwners.TryRemove(route.ChildProgressToken, out _);
-                            if (SharedWorkerHostProtocol.TryRestoreResponse(frame, route, out JObject restored, out _))
-                                SendJson(_attachments, route.AttachmentId, restored.ToString(Formatting.None));
-                        }
-                        continue;
-                    }
-                    if (SharedWorkerHostProtocol.TryRouteChildNotification(
-                        frame, _progressOwners, out string attachmentId, out JObject routed, out bool broadcast, out string routeError))
-                    {
-                        if (broadcast)
-                            BroadcastJson(routed.ToString(Formatting.None));
-                        else if (!string.IsNullOrWhiteSpace(attachmentId))
-                            SendJson(_attachments, attachmentId, routed.ToString(Formatting.None));
-                        continue;
-                    }
-                    if (!string.IsNullOrWhiteSpace(method))
-                        HostLog("dropping unroutable child notification method=" + method + " reason=" + routeError);
+                    if (!HandleChildLine(child, line)) break;
                 }
             }
             catch (Exception ex) { HostLog("child stdout closed: " + ex.Message); }
             finally
             {
                 if (!_stop.IsCancellationRequested)
-                    HostLog("shared Worker child stdout ended; respawn monitor will recover it");
+                    HostLog("shared Worker child stdout ended; the supervisor recovers it on exit");
             }
         }
 
-        private void ChildErrorReaderLoop(Process child)
+        // Removes the route of a request the broker answers itself (an oversized response) and
+        // ends the request in the scheduler, so the next queued request is released.
+        private SharedWorkerRequestRoute TakeAnsweredRoute(ISharedHostChild child, string childRequestId)
+        {
+            var outbox = new Outbox();
+            SharedWorkerRequestRoute route = null;
+            lock (_hostLock)
+            {
+                if (!ReferenceEquals(child, _child)) return null;
+                if (_routes.TryRemove(childRequestId, out route)) UnregisterRouteLocked(childRequestId, route);
+                CompleteLocked(childRequestId, outbox);
+                RescheduleExpiryLocked(outbox);
+            }
+            Flush(outbox);
+            return route;
+        }
+
+        private void ChildErrorReaderLoop(ISharedHostChild child)
         {
             try
             {
@@ -793,10 +1171,304 @@ namespace GxMcp.Worker
             catch { }
         }
 
-        private void SendHostError(SharedWorkerHostAttachment attachment, string message)
-            => SendHostFrame(attachment, "host_error", new JObject { ["message"] = message });
+        // ---- Child exit ----
 
-        private void SendHostFrame(SharedWorkerHostAttachment attachment, string type, JObject data)
+        /// <summary>
+        /// Called by the supervisor when the child's ExitedHandle is signalled. Requests
+        /// already written to the child get SHARED_WORKER_RESTARTED (delivered-unanswered,
+        /// retryable from <see cref="WorkerCommandCatalog"/>); queued requests stay queued for
+        /// the replacement, or get not-delivered when no replacement starts. Three exits in one
+        /// minute stop the host fail-closed. The replacement is started before this returns.
+        /// </summary>
+        internal void OnChildExited(ISharedHostChild child)
+        {
+            if (child == null) return;
+            // Let the reader deliver what the child wrote before it exited.
+            Thread reader = _childReader;
+            if (_runBackgroundThreads && reader != null && reader != Thread.CurrentThread) reader.Join(ChildReaderDrainMs);
+
+            var outbox = new Outbox();
+            string failureDiagnostic;
+            bool replace;
+            lock (_hostLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0 || !ReferenceEquals(child, _child)) return;
+                failureDiagnostic = BuildChildFailureDiagnostic(child);
+                _lastChildFailureDiagnostic = failureDiagnostic;
+                _child = null;
+                _sdkReady = false;
+                _scheduler.SetWorkerAvailable(false, WaitReason.WorkerStarting);
+                QueuedRequest running = _scheduler.Snapshot().Running;
+                if (running != null) _scheduler.Complete(running.ChildRequestId);
+                FailDeliveredRequestsLocked(outbox);
+
+                long now = _clock.NowMs;
+                while (_respawnHistory.Count > 0 && now - _respawnHistory.Peek() >= RespawnWindowMs)
+                    _respawnHistory.Dequeue();
+                if (_respawnHistory.Count >= MaxRespawnsPerWindow)
+                {
+                    FailClosedLocked("Shared Worker child crashed repeatedly; host stopped fail-closed.", outbox);
+                    replace = false;
+                }
+                else
+                {
+                    _respawnHistory.Enqueue(now);
+                    _generation++;
+                    if (_record != null) _record.State = "recovering";
+                    WriteRecordLocked();
+                    replace = true;
+                }
+                RescheduleExpiryLocked(outbox);
+            }
+            Flush(outbox);
+            try { child.Dispose(); } catch { }
+            if (!replace) return;
+
+            // Respawn back-off on the stop handle, outside the host lock.
+            if (_runBackgroundThreads && _stop.Token.WaitHandle.WaitOne(RespawnBackoffMs)) return;
+
+            lock (_hostLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0) return;
+                try
+                {
+                    StartChildLocked();
+                    QueueWorkerRestartedLocked(failureDiagnostic, outbox);
+                }
+                catch (Exception ex)
+                {
+                    FailClosedLocked("Shared Worker child respawn failed after " + failureDiagnostic + ": " + ex.Message, outbox);
+                }
+                RescheduleExpiryLocked(outbox);
+            }
+            Flush(outbox);
+        }
+
+        private void FailDeliveredRequestsLocked(Outbox outbox)
+        {
+            foreach (SharedWorkerRequestRoute route in _routes.Values.ToList())
+            {
+                _routeInfo.TryGetValue(route.ChildRequestId, out RouteInfo info);
+                ISharedHostAttachment owner = FindAttachment(route.AttachmentId);
+                if (owner == null) continue;
+                outbox.Add(owner, SharedWorkerHostProtocol.BuildRestartedError(
+                    route.ClientRequestId, ConcurrencyDispatchState.DeliveredUnanswered,
+                    info?.Method, info?.Action, _generation, _limits.QueueWaitMs).ToString(Formatting.None));
+            }
+            _routes.Clear();
+            _progressOwners.Clear();
+            _routeInfo.Clear();
+        }
+
+        // No replacement: every queued request gets not-delivered, then the host stops.
+        private void FailClosedLocked(string message, Outbox outbox)
+        {
+            foreach (string sessionId in _queued.Values.Select(e => e.SessionId).Distinct().ToList())
+            {
+                ISharedHostAttachment owner = FindAttachment(sessionId);
+                foreach (QueuedRequest queued in _scheduler.RemoveSession(sessionId))
+                {
+                    if (!_queued.TryGetValue(queued.ChildRequestId, out QueuedEntry entry)) continue;
+                    _queued.Remove(queued.ChildRequestId);
+                    if (owner == null) continue;
+                    outbox.Add(owner, SharedWorkerHostProtocol.BuildRestartedError(
+                        entry.Route.ClientRequestId, ConcurrencyDispatchState.NotDelivered,
+                        entry.Method, entry.Action, _generation, _limits.QueueWaitMs).ToString(Formatting.None));
+                }
+            }
+            _queued.Clear();
+            foreach (var attachment in _attachments.Values)
+                outbox.Add(attachment, HostFrameLine("host_error", new JObject { ["message"] = message }));
+            Volatile.Write(ref _fatal, 1);
+            _stop.Cancel();
+        }
+
+        private void QueueWorkerRestartedLocked(string failureDiagnostic, Outbox outbox)
+        {
+            foreach (var attachment in _attachments.Values)
+            {
+                outbox.Add(attachment, HostFrameLine("worker_restarted", new JObject
+                {
+                    ["hostPid"] = _record.HostPid,
+                    ["hostStartTimeUtcTicks"] = _record.HostStartTimeUtcTicks,
+                    ["workerPid"] = _record.WorkerPid,
+                    ["workerStartTimeUtcTicks"] = _record.WorkerStartTimeUtcTicks,
+                    ["generation"] = _record.Generation,
+                    ["ready"] = false,
+                    ["failureStage"] = "child_exit",
+                    ["failureDiagnostic"] = failureDiagnostic
+                }));
+            }
+        }
+
+        // ---- Queue expiry and record debounce ----
+
+        // One timer, armed just after the earliest queue deadline: the scheduler expires
+        // strictly after the deadline, so arming at the deadline would find nothing to expire.
+        private void RescheduleExpiryLocked(Outbox outbox)
+        {
+            for (int pass = 0; pass < 2; pass++)
+            {
+                long? deadline = _scheduler.NextDeadlineMs;
+                if (!deadline.HasValue)
+                {
+                    if (_expiryArmedAtMs.HasValue)
+                    {
+                        _expiryTimer.Change(null);
+                        _expiryArmedAtMs = null;
+                    }
+                    return;
+                }
+                if (deadline.Value < _clock.NowMs)
+                {
+                    // Already expired (for example skipped by a start): answer it now.
+                    ExpireDueLocked(outbox);
+                    continue;
+                }
+                long dueAt = deadline.Value + 1;
+                if (_expiryArmedAtMs != dueAt)
+                {
+                    _expiryTimer.Change(dueAt);
+                    _expiryArmedAtMs = dueAt;
+                }
+                return;
+            }
+        }
+
+        private void OnExpiryTimer()
+        {
+            var outbox = new Outbox();
+            lock (_hostLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0) return;
+                _expiryArmedAtMs = null;
+                ExpireDueLocked(outbox);
+                RescheduleExpiryLocked(outbox);
+            }
+            Flush(outbox);
+        }
+
+        private void ExpireDueLocked(Outbox outbox)
+        {
+            IReadOnlyList<ExpiredRequest> expired = _scheduler.ExpireDue();
+            if (expired.Count == 0) return;
+            SchedulerSnapshot snapshot = _scheduler.Snapshot();
+            foreach (ExpiredRequest item in expired)
+            {
+                if (!_queued.TryGetValue(item.Request.ChildRequestId, out QueuedEntry entry)) continue;
+                _queued.Remove(item.Request.ChildRequestId);
+                ISharedHostAttachment owner = FindAttachment(entry.SessionId);
+                if (owner == null) continue;
+                outbox.Add(owner, SharedWorkerHostProtocol.BuildBusyResult(
+                    entry.Route.ClientRequestId, "queue-wait-expired", snapshot, _limits, _options.IdentityKey, _options.KbPath,
+                    item.Position, EstimateRetryAfterMs(item.Position)).ToString(Formatting.None));
+            }
+        }
+
+        // The record is written on state transitions; going idle adds at most one debounced
+        // write per IdleRecordDebounceMs.
+        private void ArmIdleRecordLocked()
+        {
+            if (_idleRecordArmed || Volatile.Read(ref _disposed) != 0) return;
+            _idleRecordArmed = true;
+            _idleRecordTimer.Change(_clock.NowMs + IdleRecordDebounceMs);
+        }
+
+        private void OnIdleRecordTimer()
+        {
+            lock (_hostLock)
+            {
+                _idleRecordArmed = false;
+                if (Volatile.Read(ref _disposed) != 0) return;
+                if (_queued.Count == 0 && _scheduler.Snapshot().IsIdle) WriteRecordLocked();
+            }
+        }
+
+        // Exponentially weighted mean of recent SDK_Operation service times.
+        private void RecordServiceTime(long elapsedMs)
+        {
+            double sample = Math.Max(0L, elapsedMs);
+            _serviceMsEstimate = _serviceMsEstimate <= 0 ? sample : 0.7 * _serviceMsEstimate + 0.3 * sample;
+        }
+
+        private long EstimateRetryAfterMs(int requestsAhead)
+        {
+            double perRequest = Math.Max(SharedWorkerHostProtocol.MinBusyWaitMs, _serviceMsEstimate);
+            double estimate = perRequest * Math.Max(1, requestsAhead);
+            return (long)Math.Min(Math.Max(estimate, SharedWorkerHostProtocol.MinBusyWaitMs), _limits.QueueWaitMs);
+        }
+
+        // ---- Routes ----
+
+        private void RegisterRouteLocked(SharedWorkerRequestRoute route, RouteInfo info)
+        {
+            _routes[route.ChildRequestId] = route;
+            if (!string.IsNullOrWhiteSpace(route.ChildProgressToken)) _progressOwners[route.ChildProgressToken] = route;
+            _routeInfo[route.ChildRequestId] = info;
+        }
+
+        private void UnregisterRouteLocked(string childRequestId)
+        {
+            if (_routes.TryRemove(childRequestId, out SharedWorkerRequestRoute route)) UnregisterRouteLocked(childRequestId, route);
+            else _routeInfo.Remove(childRequestId);
+        }
+
+        private void UnregisterRouteLocked(string childRequestId, SharedWorkerRequestRoute route)
+        {
+            if (route != null && !string.IsNullOrWhiteSpace(route.ChildProgressToken)) _progressOwners.TryRemove(route.ChildProgressToken, out _);
+            _routeInfo.Remove(childRequestId);
+        }
+
+        private void RemoveRoutesForAttachment(string attachmentId)
+        {
+            foreach (var entry in _routes)
+                if (string.Equals(entry.Value.AttachmentId, attachmentId, StringComparison.Ordinal))
+                {
+                    _routes.TryRemove(entry.Key, out _);
+                    _routeInfo.Remove(entry.Key);
+                }
+            foreach (var entry in _progressOwners)
+                if (string.Equals(entry.Value.AttachmentId, attachmentId, StringComparison.Ordinal))
+                    _progressOwners.TryRemove(entry.Key, out _);
+        }
+
+        private ISharedHostAttachment FindAttachment(string attachmentId)
+        {
+            foreach (var attachment in _attachments.Values)
+                if (string.Equals(attachment.AttachmentId, attachmentId, StringComparison.Ordinal)) return attachment;
+            return null;
+        }
+
+        // ---- Outbound frames ----
+
+        private void Flush(Outbox outbox)
+        {
+            // Outside the host lock: an Attachment whose output is full stops, and its
+            // transport then calls Detach, which takes the lock.
+            if (outbox.Count == 0) return;
+            var lines = new List<KeyValuePair<ISharedHostAttachment, string>>(outbox);
+            outbox.Clear();
+            foreach (var line in lines) line.Key.Enqueue(line.Value);
+        }
+
+        private string BuildBackpressureError(JToken clientRequestId)
+        {
+            var data = ConcurrencyErrorCatalog.Build(ConcurrencyErrorCatalog.SharedWorkerBackpressure, null,
+                new ConcurrencyErrorFields { QueueWaitMs = _limits.QueueWaitMs });
+            return new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = clientRequestId.DeepClone(),
+                ["error"] = new JObject
+                {
+                    ["code"] = -32029,
+                    ["message"] = "Shared Worker command queue is full; retry this operation.",
+                    ["data"] = data
+                }
+            }.ToString(Formatting.None);
+        }
+
+        private string HostFrameLine(string type, JObject data)
         {
             data = data ?? new JObject();
             data["type"] = type;
@@ -805,18 +1477,19 @@ namespace GxMcp.Worker
             data["gxmcp"] = type;
             data["version"] = SharedWorkerHostProtocol.ProtocolVersion;
             data["key"] = _options.IdentityKey;
-            attachment.Enqueue(data.ToString(Formatting.None));
+            return data.ToString(Formatting.None);
         }
 
-        private static void SendJson(ConcurrentDictionary<string, SharedWorkerHostAttachment> attachments, string attachmentId, string json)
+        private void SendHostError(ISharedHostAttachment attachment, string message)
+            => SendHostFrame(attachment, "host_error", new JObject { ["message"] = message });
+
+        private void SendHostFrame(ISharedHostAttachment attachment, string type, JObject data)
+            => attachment.Enqueue(HostFrameLine(type, data));
+
+        private static void SendJson(ConcurrentDictionary<string, ISharedHostAttachment> attachments, string attachmentId, string json)
         {
             foreach (var attachment in attachments.Values)
                 if (string.Equals(attachment.AttachmentId, attachmentId, StringComparison.Ordinal)) { attachment.Enqueue(json); return; }
-        }
-
-        private void BroadcastJson(string json)
-        {
-            foreach (var attachment in _attachments.Values) attachment.Enqueue(json);
         }
 
         /// <summary>
@@ -907,22 +1580,15 @@ namespace GxMcp.Worker
             try
             {
                 var child = _child;
-                var pid = child?.Id ?? 0;
+                var pid = child?.Pid ?? 0;
                 long workingSet = 0, privateBytes = 0;
 
                 if (child != null && !child.HasExited)
                 {
-                    try
-                    {
-                        child.Refresh();
-                        workingSet = child.WorkingSet64;
-                        privateBytes = child.PrivateMemorySize64;
-                    }
-                    catch
-                    {
-                        // A process that exited between the check and the read. Reported
-                        // as zero rather than guessed; the exit itself is what matters.
-                    }
+                    // Refreshed on read. A process that exited between the check and the
+                    // read reports zero rather than a guess; the exit itself is what matters.
+                    workingSet = child.WorkingSetBytes;
+                    privateBytes = child.PrivateBytes;
                 }
 
                 // Issue #362. The SDK-lane section reads the child's own status, captured
@@ -1011,56 +1677,50 @@ namespace GxMcp.Worker
                 SendHostError(attachment, message);
         }
 
-        private void RemoveRoutesForAttachment(string attachmentId)
-        {
-            foreach (var entry in _routes)
-                if (string.Equals(entry.Value.AttachmentId, attachmentId, StringComparison.Ordinal))
-                    _routes.TryRemove(entry.Key, out _);
-            foreach (var entry in _progressOwners)
-                if (string.Equals(entry.Value.AttachmentId, attachmentId, StringComparison.Ordinal))
-                    _progressOwners.TryRemove(entry.Key, out _);
-        }
-
-        private void WriteRecord()
+        private void WriteRecordLocked()
         {
             if (_record == null) return;
-            lock (_recordGate)
+            _record.UpdatedUtc = DateTime.UtcNow;
+            try
             {
-                _record.UpdatedUtc = DateTime.UtcNow;
-                string directory = Path.GetDirectoryName(_recordPath);
-                Directory.CreateDirectory(directory);
-                string temp = _recordPath + ".tmp-" + Process.GetCurrentProcess().Id + "-" + Guid.NewGuid().ToString("N");
-                try
-                {
-                    File.WriteAllText(temp, JsonConvert.SerializeObject(_record, Formatting.None), new UTF8Encoding(false));
-                    if (File.Exists(_recordPath)) File.Replace(temp, _recordPath, null);
-                    else File.Move(temp, _recordPath);
-                }
-                finally { try { if (File.Exists(temp)) File.Delete(temp); } catch { } }
+                _registryWriter.Write(_record);
+                _recordWritten = true;
             }
+            catch (Exception ex) { HostLog("registry record write failed: " + ex.Message); }
         }
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             _stop.Cancel();
-            foreach (var attachment in _attachments.Values) attachment.Stop();
-            try { _childStdin?.Close(); } catch { }
-            try
+            try { _expiryTimer.Dispose(); } catch { }
+            try { _idleRecordTimer.Dispose(); } catch { }
+            foreach (var attachment in _attachments.Values)
             {
-                if (_child != null && !_child.HasExited)
-                {
-                    _child.Kill();
-                    _child.WaitForExit(3000);
-                }
+                try { attachment.Stop(); } catch { }
             }
-            catch { }
-            try { if (File.Exists(_recordPath)) File.Delete(_recordPath); } catch { }
+            try { _childInbox.CompleteAdding(); } catch { }
+            ISharedHostChild child;
+            bool deleteRecord;
+            lock (_hostLock)
+            {
+                child = _child;
+                deleteRecord = _recordWritten;
+            }
+            if (child != null)
+            {
+                try { if (!child.HasExited) child.Kill(); } catch { }
+                try { child.Dispose(); } catch { }
+            }
+            if (deleteRecord)
+            {
+                try { _registryWriter.Delete(); } catch { }
+            }
         }
 
         private static string Quote(string value) => "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\"";
 
-        private string BuildChildFailureDiagnostic(Process child)
+        private string BuildChildFailureDiagnostic(ISharedHostChild child)
         {
             int exitCode = -1;
             try { exitCode = child != null && child.HasExited ? child.ExitCode : -1; } catch { }
@@ -1085,15 +1745,72 @@ namespace GxMcp.Worker
             catch { return (value ?? string.Empty).Trim().TrimEnd('\\', '/').ToLowerInvariant(); }
         }
         private static void HostLog(string message) { try { Console.Error.WriteLine("[SharedWorkerHost] " + message); } catch { } }
+
+        // ---- Runtime records ----
+
+        private sealed class Outbox : List<KeyValuePair<ISharedHostAttachment, string>>
+        {
+            internal void Add(ISharedHostAttachment attachment, string line)
+                => Add(new KeyValuePair<ISharedHostAttachment, string>(attachment, line));
+        }
+
+        private sealed class ChildInboxItem
+        {
+            internal ChildInboxItem(ISharedHostChild child, string line)
+            {
+                Child = child;
+                Line = line;
+            }
+
+            internal ISharedHostChild Child { get; }
+            internal string Line { get; }
+        }
+
+        // A queued SDK_Operation: the rewritten frame stays here, not in QueuedRequest.Payload,
+        // so the release path adds _meta.busyWaitMs without parsing it again.
+        private sealed class QueuedEntry
+        {
+            internal QueuedEntry(SharedWorkerRequestRoute route, JObject childRequest, string sessionId, string method, string action)
+            {
+                Route = route;
+                ChildRequest = childRequest;
+                SessionId = sessionId;
+                Method = method;
+                Action = action;
+            }
+
+            internal SharedWorkerRequestRoute Route { get; }
+            internal JObject ChildRequest { get; }
+            internal string SessionId { get; }
+            internal string Method { get; }
+            internal string Action { get; }
+        }
+
+        private sealed class RouteInfo
+        {
+            internal RouteInfo(string method, string action, bool isSdk, long enqueuedAtMs, long releasedAtMs)
+            {
+                Method = method;
+                Action = action;
+                IsSdk = isSdk;
+                EnqueuedAtMs = enqueuedAtMs;
+                ReleasedAtMs = releasedAtMs;
+            }
+
+            internal string Method { get; }
+            internal string Action { get; }
+            internal bool IsSdk { get; }
+            internal long EnqueuedAtMs { get; }
+            internal long ReleasedAtMs { get; }
+        }
     }
 
-    internal sealed class SharedWorkerHostAttachment
+    internal sealed class SharedWorkerHostAttachment : ISharedHostAttachment
     {
         private readonly SharedWorkerHostRuntime _host;
         private readonly NamedPipeServerStream _pipe;
         private readonly int _attachTimeoutMs;
         private readonly BlockingCollection<string> _output = new BlockingCollection<string>(128);
-        private readonly BlockingCollection<string> _input = new BlockingCollection<string>(64);
         private readonly StreamReader _reader;
         private readonly StreamWriter _writer;
         private int _stopped;
@@ -1109,23 +1826,9 @@ namespace GxMcp.Worker
             ConnectionId = Guid.NewGuid().ToString("N");
         }
 
-        internal string ConnectionId { get; }
-        internal string AttachmentId { get; set; } = string.Empty;
-        internal long NextSequence() => Interlocked.Increment(ref _sequence);
-
-        internal bool EnqueueChild(string line)
-        {
-            if (Volatile.Read(ref _stopped) != 0) return false;
-            try { return _input.TryAdd(line); }
-            catch (InvalidOperationException) { return false; }
-        }
-
-        internal bool TryDequeueChild(out string line)
-        {
-            line = string.Empty;
-            try { return _input.TryTake(out line); }
-            catch (InvalidOperationException) { return false; }
-        }
+        public string ConnectionId { get; }
+        public string AttachmentId { get; set; } = string.Empty;
+        public long NextSequence() => Interlocked.Increment(ref _sequence);
 
         internal async Task RunAsync()
         {
@@ -1166,23 +1869,21 @@ namespace GxMcp.Worker
             return await read.ConfigureAwait(false);
         }
 
-        internal bool Enqueue(string line)
+        public bool Enqueue(string line)
         {
             if (Volatile.Read(ref _stopped) != 0) return false;
-            if (_output.TryAdd(line)) return true;
+            try
+            {
+                if (_output.TryAdd(line)) return true;
+            }
+            catch (InvalidOperationException) { return false; }
             Stop();
             return false;
         }
 
-        internal void ClearChildQueue()
-        {
-            while (_input.TryTake(out _)) { }
-        }
-
-        internal void Stop()
+        public void Stop()
         {
             if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
-            try { _input.CompleteAdding(); } catch { }
             try { _output.CompleteAdding(); } catch { }
             try { _pipe.Dispose(); } catch { }
         }
