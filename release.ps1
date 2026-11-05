@@ -983,6 +983,10 @@ function Assert-ReleasePrePublicationFresh {
     Assert-ReleaseRequiredChecksGreen -Commit $SourceCommit
 }
 
+# Captured before this run writes anything (release-issues.json, metadata sync, version bump),
+# so a failed run's undo restores every file it changed and keeps only edits already pending.
+$script:releasePreRunDirtyPaths = @(git status --porcelain | ForEach-Object { ([string]$_).Substring(3).Trim().Trim('"') -replace '\\', '/' })
+
 Step "Resolving version"
 $pkgPath = Join-Path $root 'package.json'
 if (-not (Test-Path $pkgPath)) { Fail "package.json not found at $pkgPath" }
@@ -1064,7 +1068,6 @@ if ($DryRun) {
 
 Step "Checking git working tree"
 $status = git status --porcelain
-$script:releasePreRunDirtyPaths = @($status | ForEach-Object { ([string]$_).Substring(3).Trim().Trim('"') -replace '\\', '/' })
 # Files release.ps1 itself bumps/regenerates. A dirty tree consisting SOLELY of
 # these is the signature of a previous release run that died mid-way (e.g. a
 # failed test pass after the version bump) - that's resumable, not an error.

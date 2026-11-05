@@ -168,7 +168,10 @@ public sealed class LiveMutationIntegrityTests : IClassFixture<LiveGatewayHarnes
                 },
             });
             string form = (await Read(name, "WebForm"))["source"]!.ToString();
-            Assert.True(form.Contains("&Valor") || form.Contains("&amp;Valor"), "WebForm has no Valor control: " + form + " popup=" + popup);
+            // The stored form binds the input either by name (&Valor) or by variable id (var:N).
+            bool boundByName = form.Contains("&Valor") || form.Contains("&amp;Valor");
+            bool boundById = System.Text.RegularExpressions.Regex.IsMatch(form, "<data[^>]*attribute=\"var:\\d+\"[^>]*labelCaption=\"Valor\"");
+            Assert.True(boundByName || boundById, "WebForm has no Valor control: " + form + " popup=" + popup);
         }
         finally
         {
