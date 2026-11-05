@@ -276,7 +276,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void Run_Exits_At_Startup_When_The_Host_Lifetime_Mutex_Is_Held()
+        public async Task Run_Exits_At_Startup_When_The_Host_Lifetime_Mutex_Is_Held()
         {
             using (var h = new Harness())
             {
@@ -285,10 +285,12 @@ namespace GxMcp.Worker.Tests
                 // Run never waits when Start fails; the bound only keeps a wrong implementation from
                 // hanging the suite.
                 var run = Task.Run(() => h.Runtime.Run());
-                Assert.True(run.Wait(TimeSpan.FromSeconds(10)), "Run must return at once when the host-lifetime mutex is held");
+                Task finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(10)));
+                Assert.True(ReferenceEquals(finished, run), "Run must return at once when the host-lifetime mutex is held");
 
-                Assert.Equal(SharedWorkerHostRuntime.HostMutexHeldExitCode, run.Result);
-                Assert.NotEqual(0, run.Result);
+                int exitCode = await run;
+                Assert.Equal(SharedWorkerHostRuntime.HostMutexHeldExitCode, exitCode);
+                Assert.NotEqual(0, exitCode);
                 Assert.Empty(h.Launcher.Started);
                 Assert.Empty(h.Records.Snapshots);
             }
