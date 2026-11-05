@@ -15,6 +15,10 @@ ever gains an SDK dependency, this project stops compiling.
 - `--shared-host ...` runs `SharedWorkerHost.Run`, the same entry point the Worker's
   `Main` calls before any SDK code. Pass this executable as `--worker-executable`
   (or let it default to itself) so the broker starts this binary as its child.
+  A process test also passes `--registry-dir <absolute temp dir>`: on .NET Framework
+  the broker's `LocalApplicationData` lookup ignores an overridden `LOCALAPPDATA`
+  variable, so the option is what keeps a test out of the real
+  `%LOCALAPPDATA%\GxMcp\shared-workers` registry.
 - Any other command line runs the scripted fake child described below. The broker
   starts its child with `--kb <path> --driver <driver> --major <major>`; the fake
   reads only `--kb` (echoed in `sdk_ready`) and `--fake-script`.
@@ -22,7 +26,7 @@ ever gains an SDK dependency, this project stops compiling.
 ## Child stdio framing
 
 The fake speaks the framing the broker uses with `GxMcp.Worker` in shared-child
-mode (`SharedWorkerHostRuntime.ChildWriterLoop` / `ChildReaderLoop`):
+mode (`SharedWorkerHostRuntime.ChildInboxWriterLoop` / `ChildReaderLoop`):
 
 - UTF-8 without BOM, one JSON-RPC 2.0 frame per `\n`-terminated line, both ways.
 - stdout may start with plain-text `WORKER_HANDSHAKE_START` and
@@ -89,3 +93,8 @@ Example:
 child, reads `sdk_ready`, and makes it exit. It locates the executable through
 `GXMCP_SHAREDHOST_TESTHOST_EXE` (set by `scripts/coverage/collect.ps1`, which builds
 this project before the Gateway tests) or under `bin\Debug` / `bin\Release`.
+
+`src/GxMcp.Gateway.Tests/SharedHost/SharedHostQueueProcessSmokeTests.cs` runs the real
+broker with this binary as its child and two `SharedWorkerConnection` clients, and checks
+that a second session's SDK request queues behind the first and is answered. It finds the
+executable the same way.
