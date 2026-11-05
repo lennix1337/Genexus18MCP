@@ -23,7 +23,13 @@ namespace GxMcp.Gateway.Tests
     //                .TrimEnd('\\', '/')                     (no trailing directory separator)
     //                .ToLowerInvariant()                     (letter case ignored)
     //   kbKey      = lowercase hex of SHA-256(UTF-8 bytes of normalized), 64 characters, no prefix.
+    //   If Path.GetFullPath throws, kbPath.Trim() is used with the same TrimEnd and ToLowerInvariant steps.
     //   A null or whitespace KB path has no kbKey: ComputeKbKey throws ArgumentException.
+    //   Known answer: "c:\kbs\kbteste" -> 717f20e76c7a9966c16cbba1019e30fc89e4648fde629b0ae6062e504fe0b504.
+    //   This is the rule stated by src/GxMcp.Worker.Tests/SharedWorkerHostOwnershipTests.cs (task 4.8): the single
+    //   implementation is GxMcp.Common.SharedHost.SharedHostKbKey (src/GxMcp.Shared/SharedHost/SharedHostKbKey.cs,
+    //   NormalizeKbPath and Compute), linked into both processes; SharedWorkerIdentity.ComputeKbKey delegates to
+    //   SharedHostKbKey.Compute so the Gateway and the host can never compute different keys.
     //
     // ---- SharedWorkerIdentity (src/GxMcp.Gateway/SharedWorkerIdentity.cs), additions ----
     //   string KbKey { get; init; }                                   set by Create; equals ComputeKbKey(KbPath)
@@ -190,6 +196,17 @@ namespace GxMcp.Gateway.Tests
             }
 
             Assert.True(SharedWorkerRegistry.IsValidKbKey(expected));
+        }
+
+        [Fact]
+        public void KbKey_MatchesTheKnownAnswerAndTheSharedHostKbKeyUsedByTheWorker()
+        {
+            const string knownAnswer = "717f20e76c7a9966c16cbba1019e30fc89e4648fde629b0ae6062e504fe0b504";
+
+            Assert.Equal(knownAnswer, SharedWorkerIdentity.ComputeKbKey(@"C:\KBs\KbTeste\"));
+            Assert.Equal(knownAnswer, SharedHostKbKey.Compute(@"C:\KBs\KbTeste\"));
+            Assert.Equal(@"c:\kbs\kbteste", SharedHostKbKey.NormalizeKbPath(@"C:\KBs\KbTeste\"));
+            Assert.Equal(knownAnswer, Identity(kbPath: @"c:\kbs\kbteste").KbKey);
         }
 
         [Fact]
