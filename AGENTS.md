@@ -284,8 +284,7 @@ read the decision matrix in
 [`docs/agent-operations.md`](docs/agent-operations.md#mcp-update-and-harness-synchronization)
 and reuse `install.ps1`, `build.ps1`, `scripts/install.ps1` or `cli/`.
 `install.ps1` rewrites `config.json` and client configs (an installer, not a
-build); `.
-elease.ps1` runs only on explicit user request. A rewritten client
+build); `.\release.ps1` runs only on explicit user request. A rewritten client
 config or green build does not reload the current session's MCP: a full client
 restart is required before new tools take effect. Prefer `build.ps1`'s scoped
 process termination over machine-wide `Stop-Process`.
