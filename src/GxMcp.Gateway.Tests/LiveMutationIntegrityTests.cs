@@ -150,6 +150,33 @@ public sealed class LiveMutationIntegrityTests : IClassFixture<LiveGatewayHarnes
     }
 
     [LiveKbFact]
+    public async Task CreatePopupPersistsItsInputControl()
+    {
+        await Call("genexus_whoami", new JObject());
+        string name = "McpPopup" + Guid.NewGuid().ToString("N").Substring(0, 10);
+        try
+        {
+            // issue #876: on a GeneXus 18 KB without WorkWithPlus the popup used to write the
+            // flat layout body, the SDK refused it, and the call still answered PopupCreated.
+            JObject popup = await Call("genexus_create_popup", new JObject
+            {
+                ["name"] = name,
+                ["spec"] = new JObject
+                {
+                    ["title"] = "Popup",
+                    ["inputs"] = new JArray(new JObject { ["type"] = "text", ["varName"] = "Valor", ["label"] = "Valor" }),
+                },
+            });
+            string form = (await Read(name, "WebForm"))["source"]!.ToString();
+            Assert.True(form.Contains("&Valor") || form.Contains("&amp;Valor"), "WebForm has no Valor control: " + form + " popup=" + popup);
+        }
+        finally
+        {
+            try { await harness.CallToolAsync("genexus_delete_object", new JObject { ["name"] = name, ["type"] = "WebPanel", ["confirm"] = true }, timeoutMs: 120_000); } catch { }
+        }
+    }
+
+    [LiveKbFact]
     public async Task ModifyRetypesNumericVariableBoundToWebFormControl()
     {
         await Call("genexus_whoami", new JObject());

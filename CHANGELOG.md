@@ -20,6 +20,7 @@
 - A failed `genexus_variable` save (`add`, `modify`, rollback) now carries the GeneXus validator messages after `Detailed Messages:`, instead of only "Web Panel '<name>' validation failed.". https://github.com/lennix1337/Genexus18MCP/issues/864
 - `genexus_variable modify` retypes a primitive variable bound to a WebForm control (e.g. `NUMERIC(10,2)` to `NUMERIC(12,2)`) in place, like the IDE and the Variables patch, instead of deleting and re-adding it, which left the `<data attribute="var:N">` binding pointing at nothing and failed the save. https://github.com/lennix1337/Genexus18MCP/issues/864
 - A raw `PatternInstance` patch may remove an empty `<table>` (one left by `genexus_wwp add_table` or emptied by `move_control`); a table that still has children is still refused. https://github.com/lennix1337/Genexus18MCP/issues/869
+- `genexus_create_popup` follows the form shape of the WebPanel it writes into, so a GeneXus 18 KB without WorkWithPlus gets the `<detail><layout>` body its WebPanels require; a failed step (e.g. the WebForm write) now ends the call with `PopupIncomplete` and the steps, instead of answering `PopupCreated` over an empty form. https://github.com/lennix1337/Genexus18MCP/issues/876
 
 ### Internal
 

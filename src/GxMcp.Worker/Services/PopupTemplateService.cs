@@ -35,6 +35,8 @@ namespace GxMcp.Worker.Services
             // the WorkWithPlus dual-form convention; null otherwise. Tests
             // return null so the existing flat-schema emit path stays exercised.
             GxMcp.Worker.Helpers.WwpConventionProbe.Result ProbeWwpConvention();
+            // Issue #876 — the editable WebForm XML of an existing WebPanel, or null.
+            string ReadWebFormXml(string name);
         }
 
         private sealed class DefaultBackend : IPopupBackend
@@ -55,6 +57,15 @@ namespace GxMcp.Worker.Services
             public GxMcp.Worker.Helpers.WwpConventionProbe.Result ProbeWwpConvention()
             {
                 try { return GxMcp.Worker.Helpers.WwpConventionProbe.Probe(_obj?.GetKbService()); }
+                catch { return null; }
+            }
+            public string ReadWebFormXml(string name)
+            {
+                try
+                {
+                    var o = _obj.FindObject(name, "WebPanel");
+                    return o == null ? null : WebFormXmlHelper.ReadEditableXml(o);
+                }
                 catch { return null; }
             }
         }
@@ -99,34 +110,20 @@ namespace GxMcp.Worker.Services
             //    emit the dual-form <detail><layout><table controlName tableType="Responsive"
             //    class="GUID-N"> structure with the harvested theme prefix. Probe failure or
             //    non-WWP KB falls back to the flat schema (which is what worked pre-fix).
+            //
+            //    Issue #876 — the KB-wide probe misses GeneXus 18 KBs without WorkWithPlus whose
+            //    WebPanels already use <detail><layout>. The target's own WebForm decides when
+            //    it exists; a new object is re-checked right after it is created (step 2).
+            bool objectExisted = _backend.ObjectExists(name);
             GxMcp.Worker.Helpers.WwpConventionProbe.Result wwpProbe = null;
-            try { wwpProbe = _backend.ProbeWwpConvention(); } catch { /* best-effort */ }
-            bool useWwpSchema = wwpProbe != null && wwpProbe.IsWwp;
-            string layoutXml = useWwpSchema
-                ? PopupLayoutBuilder.BuildWwpLayoutXml(pspec, wwpProbe.ThemeClassPrefix)
-                : PopupLayoutBuilder.BuildLayoutXml(pspec);
-            var gotchas = LayoutGotchaScanner.Scan(layoutXml, _ => null);
-            if (gotchas.Count > 0)
+            if (objectExisted) wwpProbe = ProbeTargetForm(name);
+            if (wwpProbe == null)
             {
-                var arr = new JArray();
-                foreach (var g in gotchas)
-                {
-                    arr.Add(new JObject
-                    {
-                        ["code"] = g.Code,
-                        ["severity"] = g.Severity,
-                        ["element"] = g.Element,
-                        ["controlId"] = g.ControlId,
-                        ["message"] = g.Message,
-                        ["workaround"] = g.Workaround
-                    });
-                }
-                return McpResponse.Err(
-                    code: "LayoutGotcha",
-                    message: "Generated layout XML failed LayoutGotchaScanner self-validation. Refusing to write.",
-                    hint: "Review the gotchas list and fix the spec before retrying.",
-                    extra: new JObject { ["gotchas"] = arr });
+                try { wwpProbe = _backend.ProbeWwpConvention(); } catch { /* best-effort */ }
             }
+            string layoutXml = BuildLayout(pspec, wwpProbe);
+            string gotchaRefusal = RefuseOnGotchas(layoutXml);
+            if (gotchaRefusal != null) return gotchaRefusal;
 
             // Item 21 (friction 2026-05-22) — universal dryRun. Spec was parsed +
             // layout XML rendered + LayoutGotchaScanner cleared above; short-circuit
@@ -148,7 +145,7 @@ namespace GxMcp.Worker.Services
                         ["layoutFormType"] = "layout",
                         ["inputs"] = pspec.Inputs.Count,
                         ["buttons"] = pspec.Buttons.Count,
-                        ["wouldCreateObject"] = !_backend.ObjectExists(name),
+                        ["wouldCreateObject"] = !objectExisted,
                         ["webFormXml"] = layoutXml,
                         ["rulesSource"] = rulesPreview,
                         ["eventsSource"] = eventsPreview,
@@ -159,7 +156,7 @@ namespace GxMcp.Worker.Services
             var responseSteps = new JArray();
 
             // 2) Create the WebPanel if missing (idempotent).
-            if (!_backend.ObjectExists(name))
+            if (!objectExisted)
             {
                 string createResult = _backend.CreateObject("WebPanel", name);
                 responseSteps.Add(new JObject
@@ -167,6 +164,20 @@ namespace GxMcp.Worker.Services
                     ["step"] = "create_object",
                     ["result"] = TryParse(createResult)
                 });
+                string createFailure = RefuseIfLastStepFailed(name, responseSteps, objectCreated: false);
+                if (createFailure != null) return createFailure;
+
+                if (wwpProbe == null || !wwpProbe.IsWwp)
+                {
+                    var targetProbe = ProbeTargetForm(name);
+                    if (targetProbe != null)
+                    {
+                        wwpProbe = targetProbe;
+                        layoutXml = BuildLayout(pspec, wwpProbe);
+                        gotchaRefusal = RefuseOnGotchas(layoutXml);
+                        if (gotchaRefusal != null) return gotchaRefusal;
+                    }
+                }
             }
             else
             {
@@ -185,6 +196,8 @@ namespace GxMcp.Worker.Services
                 if (string.IsNullOrEmpty(vn) || !addedVars.Add(vn)) continue;
                 string r = _backend.AddVariable(name, vn, vt);
                 responseSteps.Add(new JObject { ["step"] = "add_variable", ["var"] = vn, ["type"] = vt, ["result"] = TryParse(r) });
+                string failure = RefuseIfLastStepFailed(name, responseSteps, objectCreated: true);
+                if (failure != null) return failure;
             }
             foreach (var inp in pspec.Inputs)
             {
@@ -192,6 +205,8 @@ namespace GxMcp.Worker.Services
                 string typeName = DefaultTypeForInput(inp);
                 string r = _backend.AddVariable(name, inp.VarName, typeName);
                 responseSteps.Add(new JObject { ["step"] = "add_variable", ["var"] = inp.VarName, ["type"] = typeName, ["result"] = TryParse(r) });
+                string failure = RefuseIfLastStepFailed(name, responseSteps, objectCreated: true);
+                if (failure != null) return failure;
             }
 
             // 4) Write Rules part.
@@ -200,11 +215,15 @@ namespace GxMcp.Worker.Services
             {
                 string r = _backend.WriteObject(name, "Rules", rules);
                 responseSteps.Add(new JObject { ["step"] = "write_rules", ["result"] = TryParse(r) });
+                string rulesFailure = RefuseIfLastStepFailed(name, responseSteps, objectCreated: true);
+                if (rulesFailure != null) return rulesFailure;
             }
 
             // 5) Write WebForm (layout) part.
             string wfResult = _backend.WriteObject(name, "WebForm", layoutXml);
             responseSteps.Add(new JObject { ["step"] = "write_webform", ["result"] = TryParse(wfResult) });
+            string formFailure = RefuseIfLastStepFailed(name, responseSteps, objectCreated: true);
+            if (formFailure != null) return formFailure;
 
             // 6) Write Events part.
             string events = PopupLayoutBuilder.BuildEventsSource(pspec);
@@ -212,6 +231,8 @@ namespace GxMcp.Worker.Services
             {
                 string r = _backend.WriteObject(name, "Events", events);
                 responseSteps.Add(new JObject { ["step"] = "write_events", ["result"] = TryParse(r) });
+                string eventsFailure = RefuseIfLastStepFailed(name, responseSteps, objectCreated: true);
+                if (eventsFailure != null) return eventsFailure;
             }
 
             // FR#18 (Stream G, v2.6.6): inline the popup-branch hint so the
@@ -230,6 +251,71 @@ namespace GxMcp.Worker.Services
                     ["buttons"] = pspec.Buttons.Count,
                     ["popupHint"] = AnalyzeService.HintForOpenedAs("popup"),
                     ["steps"] = responseSteps
+                });
+        }
+
+        private GxMcp.Worker.Helpers.WwpConventionProbe.Result ProbeTargetForm(string name)
+        {
+            string form = null;
+            try { form = _backend.ReadWebFormXml(name); } catch { /* best-effort */ }
+            return GxMcp.Worker.Helpers.WwpConventionProbe.FromWebFormSource(form, name);
+        }
+
+        private static string BuildLayout(PopupLayoutBuilder.PopupSpec pspec, GxMcp.Worker.Helpers.WwpConventionProbe.Result probe)
+        {
+            return probe != null && probe.IsWwp
+                ? PopupLayoutBuilder.BuildWwpLayoutXml(pspec, probe.ThemeClassPrefix)
+                : PopupLayoutBuilder.BuildLayoutXml(pspec);
+        }
+
+        private static string RefuseOnGotchas(string layoutXml)
+        {
+            var gotchas = LayoutGotchaScanner.Scan(layoutXml, _ => null);
+            if (gotchas.Count == 0) return null;
+            var arr = new JArray();
+            foreach (var g in gotchas)
+            {
+                arr.Add(new JObject
+                {
+                    ["code"] = g.Code,
+                    ["severity"] = g.Severity,
+                    ["element"] = g.Element,
+                    ["controlId"] = g.ControlId,
+                    ["message"] = g.Message,
+                    ["workaround"] = g.Workaround
+                });
+            }
+            return McpResponse.Err(
+                code: "LayoutGotcha",
+                message: "Generated layout XML failed LayoutGotchaScanner self-validation. Refusing to write.",
+                hint: "Review the gotchas list and fix the spec before retrying.",
+                extra: new JObject { ["gotchas"] = arr });
+        }
+
+        // Issue #876 — a step that answered status=error used to be recorded and then
+        // ignored, so the call reported PopupCreated over an empty WebForm. Stop at the
+        // first failure and name the partial object.
+        private static string RefuseIfLastStepFailed(string name, JArray steps, bool objectCreated)
+        {
+            var last = steps.Count == 0 ? null : steps[steps.Count - 1] as JObject;
+            var result = last?["result"] as JObject;
+            if (!string.Equals(result?["status"]?.ToString(), "error", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            string step = last["step"]?.ToString();
+            string detail = result["error"]?["message"]?.ToString() ?? result["message"]?.ToString() ?? "step failed";
+            return McpResponse.Err(
+                code: "PopupIncomplete",
+                message: "genexus_create_popup stopped at step '" + step + "': " + detail,
+                hint: objectCreated
+                    ? "WebPanel '" + name + "' exists with only the steps listed before the failure. Fix the cause in steps[].result.error, then delete the WebPanel and run genexus_create_popup again."
+                    : "Nothing was written. Fix the cause in steps[].result.error and retry.",
+                target: name,
+                extra: new JObject
+                {
+                    ["failedStep"] = step,
+                    ["objectExists"] = objectCreated,
+                    ["steps"] = steps
                 });
         }
 

@@ -732,11 +732,11 @@ namespace GxMcp.Worker.Services
                             || chain.IndexOf("convertion of formId", StringComparison.OrdinalIgnoreCase) >= 0
                             || chain.IndexOf("WebLayoutHandler", StringComparison.OrdinalIgnoreCase) >= 0)
                         {
-                            hint = "This KB requires the WorkWithPlus dual-form layout schema: " +
+                            hint = "This WebPanel uses the dual-form layout schema (GeneXus 18 layouts, with or without WorkWithPlus): " +
                                    "<Form id=\"1\" type=\"layout\"><detail><layout id=\"GUID\"><table controlName tableType=\"Responsive\" class=\"<themeGUID>-N\">...</table></layout></detail></Form>. " +
                                    "The flat-table body is rejected by WebLayoutHandler.LoadPanelElement. " +
-                                   "Use genexus_create_popup (auto-detects WWP and emits the right schema) " +
-                                   "or hand-roll the dual-form XML harvested from an existing layout-form WebPanel in the same KB.";
+                                   "Read the WebPanel's current WebForm and edit inside its <detail><layout> body, " +
+                                   "or use genexus_create_popup, which follows the target WebForm's schema.";
                         }
                         else if (chain.IndexOf("variable", StringComparison.OrdinalIgnoreCase) >= 0
                                  && chain.IndexOf("not declared", StringComparison.OrdinalIgnoreCase) >= 0)
