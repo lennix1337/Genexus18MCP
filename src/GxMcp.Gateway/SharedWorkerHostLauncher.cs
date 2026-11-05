@@ -85,8 +85,6 @@ namespace GxMcp.Gateway
             string major,
             string? legacyProvider)
         {
-            int idleMs = ResolveIdleTimeoutMs(config);
-            string pipeName = SharedWorkerRegistry.PipeName(identity);
             var info = new ProcessStartInfo
             {
                 FileName = workerPath,
@@ -95,15 +93,7 @@ namespace GxMcp.Gateway
                 CreateNoWindow = true,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
-                Arguments = "--shared-host"
-                    + " --identity-key " + Quote(identity.Key)
-                    + " --pipe-name " + Quote(pipeName)
-                    + " --worker-executable " + Quote(workerPath)
-                    + " --kb " + Quote(kb.Path)
-                    + " --installation " + Quote(installationPath)
-                    + " --driver " + Quote(driver)
-                    + " --major " + Quote(major)
-                    + " --idle-ms " + idleMs.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                Arguments = BuildHostArguments(config, identity, workerPath, kb.Path, installationPath, driver, major)
             };
             info.EnvironmentVariables["GX_PROGRAM_DIR"] = installationPath ?? string.Empty;
             info.EnvironmentVariables["GX_KB_PATH"] = kb.Path ?? string.Empty;
@@ -147,6 +137,37 @@ namespace GxMcp.Gateway
             _ = host.StandardOutput.ReadToEndAsync();
             _ = host.StandardError.ReadToEndAsync();
             Program.Log("[Gateway] shared_worker_host_started pid=" + host.Id + " identity=" + identity.Key);
+        }
+
+        /// <summary>
+        /// The broker command line. The queue settings are the Gateway's resolved
+        /// <see cref="Configuration.EffectiveSharedHost"/> values, passed as arguments so the
+        /// broker does not depend on inherited environment variables (RFC #854).
+        /// </summary>
+        internal static string BuildHostArguments(
+            Configuration config,
+            SharedWorkerIdentity identity,
+            string workerPath,
+            string? kbPath,
+            string installationPath,
+            string driver,
+            string major)
+        {
+            var invariant = System.Globalization.CultureInfo.InvariantCulture;
+            int idleMs = ResolveIdleTimeoutMs(config);
+            var settings = config.EffectiveSharedHost;
+            return "--shared-host"
+                + " --identity-key " + Quote(identity.Key)
+                + " --pipe-name " + Quote(SharedWorkerRegistry.PipeName(identity))
+                + " --worker-executable " + Quote(workerPath)
+                + " --kb " + Quote(kbPath ?? string.Empty)
+                + " --installation " + Quote(installationPath)
+                + " --driver " + Quote(driver)
+                + " --major " + Quote(major)
+                + " --idle-ms " + idleMs.ToString(invariant)
+                + " --queue-wait-ms " + settings.QueueWaitMs.ToString(invariant)
+                + " --queue-depth " + settings.QueueDepth.ToString(invariant)
+                + " --session-queue-cap " + settings.SessionQueueCap.ToString(invariant);
         }
 
         // An absent Server section uses the same default as an isolated Worker (issue #692).
