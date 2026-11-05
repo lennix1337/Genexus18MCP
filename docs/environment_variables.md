@@ -125,6 +125,44 @@ The GeneXus model is single-threaded: only one SDK operation runs at a time on t
 
 Temporary Worker diagnostics use `%LOCALAPPDATA%\GenexusMCP\tmp\<operational-key-hash>`. Preview configuration/baselines use the state root; build output and rotated Worker logs use the log root. `GXMCP_BUILD_LOG_RETAIN_COUNT` still controls retention there.
 
+## Shared-host queue and admission settings (`Server.SharedHost`)
+
+**Operator-facing, opt-in.** These settings apply only when
+`Server.WorkerSharingMode="shared-host"` (which requires
+`GatewayMode=stdio-isolated`). Each one can be set in the `Server.SharedHost`
+object of `config.json` or by its environment variable; the environment
+variable wins over the file. Every explicit value must be an integer inside its
+range, otherwise the configuration is rejected at load with an error naming the
+setting, the value and the range. In `isolated` mode an allowed value is
+accepted, has no effect, and is named once in the Gateway log as not in effect.
+With `GatewayMode=http-shared`, setting any of them is a load error.
+`config.shared-host.sample.json` is a ready-to-copy document that lists every
+setting at its default.
+
+| Config key | Environment variable | Default | Allowed range | Takes effect in |
+|------------|----------------------|---------|---------------|-----------------|
+| `Server.SharedHost.QueueWaitMs` | `GXMCP_SHARED_QUEUE_WAIT_MS` | 30000, or GXMCP_BUSY_WAIT_MS when it is an integer from 1000 to 600000 | 1000-600000 ms | `shared-host` |
+| `Server.SharedHost.QueueDepth` | `GXMCP_SHARED_QUEUE_DEPTH` | 8 | 1-64 requests | `shared-host` |
+| `Server.SharedHost.SessionQueueCap` | `GXMCP_SHARED_SESSION_QUEUE_CAP` | lower of 4 and the effective queue depth | 1 to the effective queue depth, in requests | `shared-host` |
+| `Server.SharedHost.MaxWorkers` | `GXMCP_SHARED_MAX_WORKERS` | 4 | 1-16 Workers | `shared-host` |
+| `Server.SharedHost.MemoryFloorMB` | `GXMCP_SHARED_MEMORY_FLOOR_MB` | 1024 | 256-8192 MB | `shared-host` |
+| `Server.SharedHost.ColdStartConcurrency` | `GXMCP_SHARED_COLD_START_CONCURRENCY` | 1 | 1-4 concurrent cold starts | `shared-host` |
+| `Server.SharedHost.AttachReadyTimeoutSeconds` | `GXMCP_SHARED_ATTACH_READY_TIMEOUT_S` | 120 | 10-600 s | `shared-host` |
+
+- `GXMCP_BUSY_REJECT_MS` is ignored in shared-host mode: an SDK operation that
+  arrives while the Worker is busy is queued under the settings above instead of
+  being rejected early. Diagnostics report the variable as `ignored` when it is set.
+- `GXMCP_BUSY_WAIT_MS` is the legacy source for the queue wait. When neither
+  `GXMCP_SHARED_QUEUE_WAIT_MS` nor `Server.SharedHost.QueueWaitMs` is set, its
+  value is used if it is an integer from 1000 to 600000; otherwise the queue wait
+  is 30000 ms. In `isolated` mode both busy variables keep the meaning described
+  under STA scheduler busy handling above.
+- `config.shared-host.sample.json` sets `QueueWaitMs` explicitly, so a copy of it
+  disables the `GXMCP_BUSY_WAIT_MS` fallback. Remove the `QueueWaitMs` key from
+  the copy to keep using `GXMCP_BUSY_WAIT_MS`.
+- The `$comment` array in `Server.SharedHost` of the sample is documentation
+  only; the loader reads just the seven keys above.
+
 ## AI-completion proxy (`genexus_ai_complete`)
 
 | Variable | Purpose | Default |
