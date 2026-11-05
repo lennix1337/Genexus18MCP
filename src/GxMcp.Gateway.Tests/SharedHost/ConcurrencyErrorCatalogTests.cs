@@ -206,7 +206,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
         [Fact]
         public void Build_HintAndMessage_NeverContainDetailValues()
         {
-            const string source = "Event Start\n  &Secret = 'payload-text-7f3a'\nEndEvent";
+            const string source = "Event Start\n  &Body = 'payload-text-7f3a'\nEndEvent";
             const string lease = "lease-token-9c1e2b";
             const string credential = "Password=hunter2-x91";
 

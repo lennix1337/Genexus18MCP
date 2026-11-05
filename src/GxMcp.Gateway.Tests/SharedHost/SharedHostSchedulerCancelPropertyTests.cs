@@ -111,7 +111,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
             // Shared by every Session, so ids collide across Sessions.
             private static readonly string[] ClientIdPool = { "1", "2", "3", "4", "\"a\"", "\"b\"", "5", "6" };
             private static readonly string?[] TokenPool = { null, null, "tok-1", "tok-2", "tok-3" };
-            private const string UnusedToken = "tok-none";
+            private const string UnusedToken = "tok-0";
             private const string UnknownClientId = "\"unknown\"";
 
             private readonly PbtCase _c;
