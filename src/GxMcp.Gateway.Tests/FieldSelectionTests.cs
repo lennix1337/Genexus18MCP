@@ -37,6 +37,18 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void Parts_WithOffsetAndLimit_ForwardsThePagingWindow()
+        {
+            var args = JObject.Parse(
+                "{\"name\":\"Customer\",\"parts\":[\"Events\"],\"offset\":200,\"limit\":0}");
+            var obj = JObject.FromObject(_router.ConvertToolCall("genexus_read", args)!);
+
+            Assert.Equal("ExtractParts", obj["action"]?.ToString());
+            Assert.Equal(200, obj["offset"]?.ToObject<int?>());
+            Assert.Equal(0, obj["limit"]?.ToObject<int?>());
+        }
+
+        [Fact]
         public void Parts_MultipleParts_AllPassedThrough()
         {
             var args = JObject.Parse(
