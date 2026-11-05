@@ -55,7 +55,9 @@ namespace GxMcp.Gateway.Tests
 
             Assert.True(arguments.ContainsKey("shared-host"));
             Assert.Equal(identity.Key, arguments["identity-key"]);
-            Assert.Equal(SharedWorkerRegistry.PipeName(identity), arguments["pipe-name"]);
+            // Registry v2 (decision A4, task 4.4): the host accepts only the "GxMcpShared2_" pipe prefix
+            // (SharedWorkerHostOwnershipTests, task 4.8), so the launcher passes PipeNameV2.
+            Assert.Equal(SharedWorkerRegistry.PipeNameV2(identity), arguments["pipe-name"]);
             Assert.Equal(@"C:\Worker\GxMcp.Worker.exe", arguments["worker-executable"]);
             Assert.Equal(@"C:\KBs\KbA", arguments["kb"]);
             Assert.Equal(@"C:\GeneXus18", arguments["installation"]);
