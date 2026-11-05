@@ -152,12 +152,12 @@ namespace GxMcp.Gateway.Tests
         {
             // Pins the Worker-side rules that PreviousReleaseBusyWaitMs/RejectMs mirror, so a change to
             // a default or to the parse rule fails here instead of drifting from the corpus baseline.
-            string wait = MethodBody(RepoSource.Read("src", "GxMcp.Worker", "Services", "StaScheduler.cs"), "public static int ResolveBusyWaitMs(");
+            string wait = SourceAssert.MethodBody(RepoSource.Read("src", "GxMcp.Worker", "Services", "StaScheduler.cs"), "public static int ResolveBusyWaitMs(");
             Assert.Contains("Environment.GetEnvironmentVariable(\"GXMCP_BUSY_WAIT_MS\")", wait);
             Assert.Contains("int.TryParse(env, out int envParsed) && envParsed > 0", wait);
             Assert.Contains("return 15000;", wait);
 
-            string reject = MethodBody(RepoSource.Read("src", "GxMcp.Worker", "Program.cs"), "private static int ResolveBusyRejectThresholdMs(");
+            string reject = SourceAssert.MethodBody(RepoSource.Read("src", "GxMcp.Worker", "Program.cs"), "private static int ResolveBusyRejectThresholdMs(");
             Assert.Contains("Environment.GetEnvironmentVariable(\"GXMCP_BUSY_REJECT_MS\")", reject);
             Assert.Contains("return v <= 0 ? int.MaxValue : v;", reject);
             Assert.Contains("return 3000;", reject);
@@ -229,20 +229,6 @@ namespace GxMcp.Gateway.Tests
                 .Where(w => w != null)
                 .Select(w => w!)
                 .ToArray();
-        }
-
-        private static string MethodBody(string source, string signature)
-        {
-            int start = source.IndexOf(signature, StringComparison.Ordinal);
-            Assert.True(start >= 0, $"Signature '{signature}' not found.");
-            int open = source.IndexOf('{', start);
-            int depth = 0;
-            for (int i = open; i < source.Length; i++)
-            {
-                if (source[i] == '{') depth++;
-                else if (source[i] == '}' && --depth == 0) return source.Substring(open, i - open + 1);
-            }
-            throw new InvalidOperationException($"Unbalanced body for '{signature}'.");
         }
 
         private static string CorpusDirectory() =>
