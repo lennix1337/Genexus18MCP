@@ -121,15 +121,17 @@ impl TransactionClass {
         for part in &object.source_parts {
             match part.name.as_str() {
                 "STRUCTURE" | "TRANSACTION_STRUCTURE" => {
-                    if let Ok(st) = parse_transaction_structure(&part.source) {
+                    if !part.source.trim().is_empty() {
+                        let st = parse_transaction_structure(&part.source)
+                            .map_err(|e| format!("structure of '{}': {e}", object.name))?;
                         structure_opt = Some(st);
                     }
                 }
                 "VARIABLES" => {
-                    if let Ok(vars) =
-                        serde_json::from_str::<BTreeMap<String, DataType>>(&part.source)
-                    {
-                        variables = vars;
+                    if !part.source.trim().is_empty() {
+                        variables =
+                            serde_json::from_str::<BTreeMap<String, DataType>>(&part.source)
+                                .map_err(|e| format!("variables of '{}': {e}", object.name))?;
                     }
                 }
                 "RULES" => {
@@ -296,6 +298,115 @@ impl TransactionClass {
         let _ = writeln!(out);
     }
 
+    fn attribute_data_type(&self, attribute: &str) -> DataType {
+        if let Some(ref st) = self.structure {
+            if let Some(attr) = st
+                .root
+                .attributes
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(attribute))
+            {
+                if let Some(ref dt) = attr.data_type {
+                    return dt.clone();
+                }
+            }
+            for lvl in &st.root.levels {
+                if let Some(attr) = lvl
+                    .attributes
+                    .iter()
+                    .find(|a| a.name.eq_ignore_ascii_case(attribute))
+                {
+                    if let Some(ref dt) = attr.data_type {
+                        return dt.clone();
+                    }
+                }
+            }
+        }
+        if let Some((_, dt)) = self
+            .attributes
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(attribute))
+        {
+            return dt.clone();
+        }
+        DataType::Numeric {
+            precision: 10,
+            scale: 0,
+        }
+    }
+
+    fn format_default_value_expr(&self, value: &str, dt: &DataType) -> String {
+        let trimmed = value.trim();
+        if let Some(var_name) = trimmed.strip_prefix('&') {
+            return to_csharp_var_name(var_name);
+        }
+        if (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+            || (trimmed.starts_with('"') && trimmed.ends_with('"'))
+        {
+            let inner = &trimmed[1..trimmed.len() - 1].replace('"', "\\\"");
+            return format!("\"{inner}\"");
+        }
+        match dt {
+            DataType::Character { .. } | DataType::Varchar { .. } => {
+                format!("\"{}\"", trimmed.replace('"', "\\\""))
+            }
+            DataType::Boolean {} => {
+                if trimmed.eq_ignore_ascii_case("true") || trimmed == "1" {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            }
+            DataType::Numeric { scale, .. } if *scale > 0 => {
+                if trimmed.ends_with('m') || trimmed.ends_with('M') {
+                    trimmed.to_string()
+                } else if trimmed.parse::<f64>().is_ok() {
+                    format!("{trimmed}m")
+                } else {
+                    to_csharp_default_value(dt)
+                }
+            }
+            DataType::Numeric { .. } => {
+                if trimmed.parse::<i64>().is_ok() {
+                    trimmed.to_string()
+                } else {
+                    to_csharp_default_value(dt)
+                }
+            }
+            _ => to_csharp_default_value(dt),
+        }
+    }
+
+    fn translate_rule_condition(&self, cond: &str) -> String {
+        let trimmed = cond.trim();
+        if trimmed.is_empty() {
+            return "true".to_string();
+        }
+        if let Some(target) = trimmed
+            .strip_suffix(".IsEmpty()")
+            .or_else(|| trimmed.strip_suffix(".isempty()"))
+        {
+            let target = target.trim();
+            if let Some(var_name) = target.strip_prefix('&') {
+                let cs_var = to_csharp_var_name(var_name);
+                return format!("string.IsNullOrEmpty({cs_var}.ToString())");
+            }
+            let dt = self.attribute_data_type(target);
+            let field = to_csharp_attr_name(target);
+            return match dt {
+                DataType::Character { .. } | DataType::Varchar { .. } => {
+                    format!("string.IsNullOrEmpty({field})")
+                }
+                DataType::Date {} | DataType::DateTime {} => {
+                    format!("({field} == DateTime.MinValue)")
+                }
+                DataType::Boolean {} => format!("(!{field})"),
+                _ => format!("({field} == 0)"),
+            };
+        }
+        "true".to_string()
+    }
+
     fn emit_rules(&self, out: &mut String) {
         let _ = writeln!(out, "      public void ValidateRules( )");
         let _ = writeln!(out, "      {{");
@@ -307,22 +418,32 @@ impl TransactionClass {
                 match rule {
                     TransactionRule::Default { attribute, value } => {
                         let attr_field = to_csharp_attr_name(attribute);
-                        let _ = writeln!(
-                            out,
-                            "         if ( string.IsNullOrEmpty({attr_field}.ToString()) || {attr_field} == 0 )"
-                        );
+                        let dt = self.attribute_data_type(attribute);
+                        let empty_check = match dt {
+                            DataType::Character { .. } | DataType::Varchar { .. } => {
+                                format!("string.IsNullOrEmpty({attr_field})")
+                            }
+                            DataType::Date {} | DataType::DateTime {} => {
+                                format!("{attr_field} == DateTime.MinValue")
+                            }
+                            DataType::Boolean {} => format!("!{attr_field}"),
+                            DataType::Numeric { .. } => format!("{attr_field} == 0"),
+                            _ => format!("string.IsNullOrEmpty({attr_field}.ToString())"),
+                        };
+                        let value_expr = self.format_default_value_expr(value, &dt);
+                        let _ = writeln!(out, "         /* Default rule: {attribute} = {value} */");
+                        let _ = writeln!(out, "         if ( {empty_check} )");
                         let _ = writeln!(out, "         {{");
-                        let _ =
-                            writeln!(out, "            /* Default rule: {attribute} = {value} */");
+                        let _ = writeln!(out, "            {attr_field} = {value_expr};");
                         let _ = writeln!(out, "         }}");
                     }
                     TransactionRule::Error { message, condition } => {
                         let escaped_msg = message.replace('"', "\\\"");
-                        if let Some(cond) = condition {
-                            let _ = writeln!(out, "         if ( /* {cond} */ true )");
-                        } else {
-                            let _ = writeln!(out, "         if ( true )");
-                        }
+                        let cond_expr = condition
+                            .as_deref()
+                            .map(|c| self.translate_rule_condition(c))
+                            .unwrap_or_else(|| "true".to_string());
+                        let _ = writeln!(out, "         if ( {cond_expr} )");
                         let _ = writeln!(out, "         {{");
                         let _ = writeln!(out, "            LclMsgLst.addItem(\"{escaped_msg}\");");
                         let _ = writeln!(out, "            Errors = (short)(Errors + 1);");
@@ -330,11 +451,11 @@ impl TransactionClass {
                     }
                     TransactionRule::Msg { message, condition } => {
                         let escaped_msg = message.replace('"', "\\\"");
-                        if let Some(cond) = condition {
-                            let _ = writeln!(out, "         if ( /* {cond} */ true )");
-                        } else {
-                            let _ = writeln!(out, "         if ( true )");
-                        }
+                        let cond_expr = condition
+                            .as_deref()
+                            .map(|c| self.translate_rule_condition(c))
+                            .unwrap_or_else(|| "true".to_string());
+                        let _ = writeln!(out, "         if ( {cond_expr} )");
                         let _ = writeln!(out, "         {{");
                         let _ = writeln!(out, "            LclMsgLst.addItem(\"{escaped_msg}\");");
                         let _ = writeln!(out, "         }}");

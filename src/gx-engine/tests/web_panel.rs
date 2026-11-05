@@ -346,43 +346,38 @@ fn test_webpanel_events_lifecycle_and_grid_load() {
     });
 
     let ev_start = WebPanelEvent::new("Start", "&Count = 0");
-    assert!(ev_start.is_start());
-    assert!(!ev_start.is_refresh());
-
+    assert!(ev_start.is_start() && !ev_start.is_refresh());
     let ev_refresh = WebPanelEvent::new("Refresh", "Do 'CheckAuth'");
     assert!(ev_refresh.is_refresh());
-
     let ev_grid_load = WebPanelEvent::new("Grid1.Load", "Load");
     assert!(ev_grid_load.is_load());
     match ev_grid_load.event_kind() {
         EventKind::Load { grid } => assert_eq!(grid.as_deref(), Some("Grid1")),
         _ => panic!("Expected Grid1 Load event"),
     }
-
     let ev_user = WebPanelEvent::new("'DoExport'", "Call(ExportPdf)");
     assert!(ev_user.is_user());
-
     let ev_enter = WebPanelEvent::new("Enter", "&Count = &Count + 1");
     assert!(ev_enter.is_enter());
-
-    wp.events.push(ev_start);
-    wp.events.push(ev_refresh);
-    wp.events.push(ev_grid_load);
-    wp.events.push(ev_user);
-    wp.events.push(ev_enter);
-
+    wp.events
+        .extend([ev_start, ev_refresh, ev_grid_load, ev_user, ev_enter]);
     assert!(wp.validate().is_ok());
 
     let class = gx_engine::csharp::WebPanelClass::from_webpanel(&wp);
     let code = class.emit();
-    assert!(code.contains("E13_Enter();"));
-    assert!(code.contains("protected void E13_Enter( )"));
+    assert!(code.contains("E13_Enter();") && code.contains("protected void E13_Enter( )"));
+    assert!(code.contains("protected void E13_Grid1_Load( )"));
 
-    // Fails closed if multiple Start events defined
+    let mut wp_dup_enter = wp.clone();
+    wp_dup_enter
+        .events
+        .push(WebPanelEvent::new("'Enter'", "&Count = 2"));
+    assert!(wp_dup_enter.validate().is_err());
+
     let mut wp_dup_start = wp.clone();
     wp_dup_start
         .events
-        .push(WebPanelEvent::new("start", "&Count = 1")); // same name case-insensitive
+        .push(WebPanelEvent::new("start", "&Count = 1"));
     assert!(wp_dup_start.validate().is_err());
 
     // Fails closed if Grid.Load points to non-existent grid

@@ -146,8 +146,8 @@ Plan 133 & 134 parity roadmap. Each item is bounded coverage, not the full SDK r
 - Autonomous UDM metadata & deterministic version token resolution directly from SQL Server tables (`ModelEntityVersion`, `UtcTicks`, `ParentIdentity`).
 - C# ADO.NET cursor generation with `ParDef` parameter inference (`@Param`, `GXType`, length, decimals) and deterministic handle cleanup.
 - WebPanel `Enter` event lifecycle generation (`E13_Enter()`).
-- Business Component companion class emission (`[Transaction]BC.cs`) with full CRUD and transaction API (`Load`, `Save`, `Insert`, `Update`, `Delete`, `Success`, `Fail`, `GetMessages`) during `rebuild-all`.
-- Native single-part edit routing contract (`EngineEditContract.cs`) and async engine execution pipeline (`DispatchEngineEditAsync`).
+- Business Component companion class emission (`[Transaction]BC.cs` / `[Transaction]_bc.cs`) with full CRUD and transaction API (`Load`, `Save`, `Insert`, `Update`, `Delete`, `Success`, `Fail`, `GetMessages`) during `rebuild-all`.
+- Native single-part edit routing contract (`EngineEditContract.cs`) with fail-closed safety guards and explicit Gateway SDK deferral (`DispatchEngineEdit`).
 - Native UDM XML part decoding for `PatternInstance` (WorkWithPlus), `WebForm`, `Variables`, and `Structure` directly from storage without COM STA.
 - Transactional live UDM persistence (`UdmWriter`) with atomic T-SQL batching (`plan_save_existing_object_sql`) and fail-closed safety guards.
 - Streaming zero-allocation row parsing (`live_rows.rs`) and pre-allocated buffers in read sessions.

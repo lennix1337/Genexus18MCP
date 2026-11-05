@@ -100,7 +100,7 @@ fn test_procedure_for_each_parameterized_cursor_emission() {
 
     let emitted = class.emit_checked().expect("emit_checked");
 
-    assert!(emitted.contains("new ParDef(\"@AV8CustomerStatus\",GXType.NVarChar,100,0)"));
+    assert!(emitted.contains("new ParDef(\"@AV8CustomerStatus\",GXType.Int16,4,0)"));
     assert!(emitted.contains("new CursorDef(\"P00011\", @\""));
 }
 
@@ -214,6 +214,7 @@ fn test_cursor_parameters_from_joins_formulas_and_dml() {
     // Verify type inferences:
     assert_eq!(infer_param_def("@lV8CustomerName").0, "GXType.NVarChar");
     assert_eq!(infer_param_def("@AV9CustomerId").0, "GXType.Int32");
+    assert_eq!(infer_param_def("@AV9InvalidCount").0, "GXType.Int32");
     assert_eq!(infer_param_def("@AV12MaxDiscount").0, "GXType.Decimal");
     assert_eq!(infer_param_def("@FromDate").0, "GXType.Date");
     assert_eq!(infer_param_def("@AV13DiscountPercent").0, "GXType.Decimal");

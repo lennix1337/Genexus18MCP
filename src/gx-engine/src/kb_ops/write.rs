@@ -4,7 +4,6 @@ use super::*;
 use crate::catalog::{KbObject, ObjectId, ObjectKind, SourcePart};
 use crate::udm::UdmClient;
 use crate::udm::decoder::UdmPartKind;
-use crate::udm::reader::UdmReader;
 use crate::udm::writer::UdmWriter;
 
 /// Replaces one known part of an existing object (or creates the object
@@ -43,10 +42,9 @@ pub fn write_object_part(
         ));
     }
 
-    let reader = UdmReader::new(shared_client(client));
     let writer = UdmWriter::new(shared_client(client));
 
-    let existing = reader.read_object_by_name(trimmed)?;
+    let existing = writer.load_raw_object(trimmed)?;
     let created = existing.is_none();
     let mut object = match existing {
         Some(object) => object,

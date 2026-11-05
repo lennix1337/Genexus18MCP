@@ -1,7 +1,79 @@
 //! ADO.NET Cursor definitions and emission for GeneXus C# procedures and panels.
 
+use crate::model::DataType;
 use crate::navigation::NavigationLevel;
-use std::{collections::BTreeSet, fmt::Write};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write,
+};
+
+/// Maps a declared `DataType` to its ADO.NET `ParDef` tuple `(GXType, length, decimals)`.
+pub fn data_type_to_par_def(data_type: &DataType) -> (&'static str, usize, usize) {
+    match data_type {
+        DataType::Numeric { precision, scale } => {
+            let p = *precision as usize;
+            let s = *scale as usize;
+            if s > 0 {
+                ("GXType.Decimal", p, s)
+            } else if p <= 4 {
+                ("GXType.Int16", p, 0)
+            } else if p <= 9 {
+                ("GXType.Int32", p, 0)
+            } else {
+                ("GXType.Int64", p, 0)
+            }
+        }
+        DataType::Character { length } => ("GXType.Char", *length as usize, 0),
+        DataType::Varchar { length } => ("GXType.NVarChar", *length as usize, 0),
+        DataType::Boolean {} => ("GXType.Boolean", 1, 0),
+        DataType::Date {} => ("GXType.Date", 8, 0),
+        DataType::DateTime {} => ("GXType.DateTime", 8, 5),
+        _ => ("GXType.NVarChar", 100, 0),
+    }
+}
+
+fn strip_param_prefix(name: &str) -> &str {
+    let raw = name.trim_start_matches(['@', ':']);
+    let lower = raw.to_ascii_lowercase();
+    if let Some(rest) = raw.strip_prefix("AV_").or_else(|| raw.strip_prefix("av_")) {
+        return rest;
+    }
+    if lower.starts_with("av") || lower.starts_with("lv") || lower.starts_with("lp") {
+        let after_prefix = &raw[2..];
+        let after_digits = after_prefix.trim_start_matches(|c: char| c.is_ascii_digit());
+        if !after_digits.is_empty() {
+            return after_digits;
+        }
+    }
+    if let Some(rest) = raw.strip_prefix("A_").or_else(|| raw.strip_prefix("a_")) {
+        return rest;
+    }
+    raw
+}
+
+/// Resolves the `ParDef` tuple for a cursor parameter from declared variables first,
+/// falling back to `infer_param_def` only when the symbol is not in `variables`.
+pub fn resolve_param_def(
+    name: &str,
+    variables: &BTreeMap<String, DataType>,
+) -> (&'static str, usize, usize) {
+    let lower = name.to_ascii_lowercase();
+    if lower.starts_with("@lv")
+        || lower.starts_with("lv")
+        || lower.starts_with("@lp")
+        || lower.starts_with("lp")
+    {
+        return ("GXType.NVarChar", 100, 0);
+    }
+    let bare = strip_param_prefix(name);
+    if let Some((_, dt)) = variables
+        .iter()
+        .find(|(k, _)| k.trim_start_matches('&').eq_ignore_ascii_case(bare))
+    {
+        return data_type_to_par_def(dt);
+    }
+    infer_param_def(name)
+}
 
 /// Infers the GXType, length and decimals for a query parameter based on GeneXus conventions.
 pub fn infer_param_def(name: &str) -> (&'static str, usize, usize) {
@@ -34,7 +106,7 @@ pub fn infer_param_def(name: &str) -> (&'static str, usize, usize) {
         || lower.contains("rate")
         || lower.contains("salary")
         || lower.contains("cost")
-        || lower.contains("val")
+        || (lower.contains("val") && !lower.contains("invalid") && !lower.contains("valid"))
         || lower.contains("qty")
         || lower.contains("quantity")
         || lower.contains("discount")
@@ -171,6 +243,16 @@ pub fn extract_parameters(level: &NavigationLevel) -> Vec<String> {
 
 /// Emits the C# `public override void cursorDefinitions( )` method for a set of navigation levels.
 pub fn emit_cursor_definitions(levels: &[NavigationLevel], out: &mut String) {
+    emit_cursor_definitions_with_vars(levels, &BTreeMap::new(), out);
+}
+
+/// Emits the C# `public override void cursorDefinitions( )` method resolving parameter types
+/// against declared `variables` first.
+pub fn emit_cursor_definitions_with_vars(
+    levels: &[NavigationLevel],
+    variables: &BTreeMap<String, DataType>,
+    out: &mut String,
+) {
     let _ = writeln!(out, "      public override void cursorDefinitions( )");
     let _ = writeln!(out, "      {{");
     let _ = writeln!(out, "         if ( def == null )");
@@ -181,7 +263,7 @@ pub fn emit_cursor_definitions(levels: &[NavigationLevel], out: &mut String) {
         let _ = writeln!(out, "            Object[] prmP0001{num};");
         let _ = writeln!(out, "            prmP0001{num} = new Object[] {{");
         for (idx, p) in params.iter().enumerate() {
-            let (gx_type, len, dec) = infer_param_def(p);
+            let (gx_type, len, dec) = resolve_param_def(p, variables);
             let comma = if idx + 1 < params.len() { " ," } else { "" };
             let _ = writeln!(
                 out,

@@ -921,6 +921,14 @@ impl ProcedureClass {
     }
 
     fn emit_cursor_definitions(&self, out: &mut String) {
-        crate::csharp::cursor::emit_cursor_definitions(&self.navigation_levels, out);
+        if self.variables.is_empty() {
+            crate::csharp::cursor::emit_cursor_definitions(&self.navigation_levels, out);
+        } else {
+            crate::csharp::cursor::emit_cursor_definitions_with_vars(
+                &self.navigation_levels,
+                &self.variables,
+                out,
+            );
+        }
     }
 }

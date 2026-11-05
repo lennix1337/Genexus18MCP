@@ -96,6 +96,15 @@ namespace GxMcp.Gateway.Tests
             Assert.NotNull(error);
             Assert.Null(plan);
             Assert.Contains("mode", error);
+
+            var badContent = new JObject { ["name"] = "ProcTest", ["content"] = new JObject { ["x"] = 1 } };
+            Assert.Contains("`content` must be a string", EngineEditContract.TryPlan(badContent, out _) ?? "");
+
+            foreach (string extra in new[] { "ifMatch", "expectedVersionToken", "idempotencyKey", "line", "operations", "unknownOption" })
+            {
+                var unrec = new JObject { ["name"] = "ProcTest", ["content"] = "//", [extra] = "v" };
+                Assert.Contains($"`{extra}` is outside the native edit space", EngineEditContract.TryPlan(unrec, out _) ?? "");
+            }
         }
 
         [Fact]
@@ -120,6 +129,7 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(7, payload["bytes"]?.Value<int>());
             Assert.Equal(4, payload["versionId"]?.Value<int>());
             Assert.Equal("gxengine", payload["engine"]?["backend"]?.ToString());
+            Assert.Contains("kb-write", EngineEditContract.ToEngineArguments("C:\\KB", plan, "C:\\tmp.txt"));
         }
     }
 }

@@ -365,44 +365,6 @@ namespace GxMcp.Gateway
             EngineOutsideResult(ctx,
                 "engine UDM writes are not persisted through Gateway genexus_edit yet to safeguard IDE pattern synchronization; the SDK path must serve `genexus_edit`");
 
-        /// <summary>
-        /// Dispatches an admitted single-part edit to gx-engine kb-write, or falls
-        /// back to the SDK if the edit is outside the native admitted space.
-        /// </summary>
-        internal async Task<JObject?> DispatchEngineEditAsync(EngineRouteContext ctx)
-        {
-            JObject args = ctx.Args ?? new JObject();
-            string? planRefusal = EngineEditContract.TryPlan(args, out EngineEditPlan? plan);
-            if (planRefusal != null || plan == null)
-                return EngineOutsideResult(ctx, planRefusal ?? "the edit could not be planned");
-
-            string tempFile = System.IO.Path.GetTempFileName();
-            try
-            {
-                await System.IO.File.WriteAllTextAsync(tempFile, plan.Content, ctx.CancellationToken).ConfigureAwait(false);
-                var engineArgs = EngineEditContract.ToEngineArguments(ctx.KbPath, plan, tempFile);
-
-                var (json, _, executable, failure) = await InvokeActiveScopeEngineJsonAsync(
-                    ctx, engineArgs, "kb-write").ConfigureAwait(false);
-                if (json == null) return failure;
-
-                JObject engineInfo = EngineInfoBlock(ctx, executable);
-                if (!EngineEditContract.TryShape(plan, json, engineInfo, out JObject? payload, out string? shapeRefusal)
-                    || payload == null)
-                {
-                    return EngineOutsideResult(ctx, shapeRefusal ?? "the engine edit answer could not be shaped");
-                }
-
-                _log($"[Engine] genexus_edit served by gx-engine: {plan.Name}/{plan.Part} "
-                    + $"bytes={payload["bytes"]} versionId={payload["versionId"]}");
-                return _buildToolResult(payload, false, ctx.ToolName, ctx.Args);
-            }
-            finally
-            {
-                try { if (System.IO.File.Exists(tempFile)) System.IO.File.Delete(tempFile); } catch { }
-            }
-        }
-
         // ------------------------------------------------------------------
         // genexus_lifecycle build/rebuild -> rebuild-all
         // ------------------------------------------------------------------

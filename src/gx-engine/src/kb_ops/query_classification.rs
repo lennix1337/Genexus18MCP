@@ -78,38 +78,67 @@ pub(super) fn matches_name_pattern(name: &str, pattern: &str) -> bool {
     if !pattern.contains('*') {
         return name.eq_ignore_ascii_case(pattern);
     }
-    let pattern_lower = pattern.to_ascii_lowercase();
-    let name_lower = name.to_ascii_lowercase();
 
-    let parts: Vec<&str> = pattern_lower.split('*').collect();
-    if parts.len() == 2 {
-        let prefix = parts[0];
-        let suffix = parts[1];
-        if name_lower.len() < prefix.len() + suffix.len() {
-            return false;
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        if !suffix.contains('*') {
+            if name.len() < prefix.len() + suffix.len() {
+                return false;
+            }
+            return starts_with_ignore_ascii_case(name, prefix)
+                && ends_with_ignore_ascii_case(name, suffix);
         }
-        return name_lower.starts_with(prefix) && name_lower.ends_with(suffix);
     }
 
-    let mut remainder = &name_lower[..];
-    for (i, part) in parts.iter().enumerate() {
+    let mut remainder = name;
+    let mut parts = pattern.split('*').peekable();
+    let mut is_first = true;
+    while let Some(part) = parts.next() {
+        let is_last = parts.peek().is_none();
         if part.is_empty() {
+            is_first = false;
             continue;
         }
-        if i == 0 {
-            if !remainder.starts_with(part) {
+        if is_first {
+            if !starts_with_ignore_ascii_case(remainder, part) {
                 return false;
             }
             remainder = &remainder[part.len()..];
-        } else if i == parts.len() - 1 && !pattern_lower.ends_with('*') {
-            return remainder.ends_with(part);
-        } else if let Some(idx) = remainder.find(part) {
+        } else if is_last && !pattern.ends_with('*') {
+            return ends_with_ignore_ascii_case(remainder, part);
+        } else if let Some(idx) = find_ignore_ascii_case(remainder, part) {
             remainder = &remainder[idx + part.len()..];
         } else {
             return false;
         }
+        is_first = false;
     }
     true
+}
+
+fn starts_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .as_bytes()
+        .get(..needle.len())
+        .is_some_and(|slice| slice.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+fn ends_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .len()
+        .checked_sub(needle.len())
+        .and_then(|start| haystack.as_bytes().get(start..))
+        .is_some_and(|slice| slice.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let needle_bytes = needle.as_bytes();
+    haystack
+        .as_bytes()
+        .windows(needle_bytes.len())
+        .position(|window| window.eq_ignore_ascii_case(needle_bytes))
 }
 
 #[cfg(test)]

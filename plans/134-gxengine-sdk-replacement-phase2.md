@@ -5,10 +5,10 @@
 **Goal:** Expand native `gx-engine` coverage and MCP Gateway routing to replace the GeneXus SDK across native edits, expanded reads (Variables, SDT Structure, DataProvider), pattern instance UDM inspection, and Business Component C# generation.
 
 **Architecture:**
-1. Gateway MCP: Implement `EngineEditContract.cs` to route single-part textual edits (`genexus_edit`) directly to `gx-engine kb-write` with transactional T-SQL persistence, removing the unconditional deferral for admitted Procedures, WebPanels, and Transactions.
-2. Engine UDM & Reads: Expand `EngineReadContract.cs` and `kb-read` to admit `Variables` XML part and `StructuredDataType` (SDT), `DataProvider`, and `DataSelector` objects.
+1. Gateway MCP: Implement `EngineEditContract.cs` to validate single-part textual edits (`genexus_edit` -> `gx-engine kb-write`), while keeping Gateway `DispatchEngineEdit` deferred to the SDK until IDE pattern synchronization and cross-reference integrity are natively maintained.
+2. Engine UDM & Reads: Expand `kb-read` and `source_projection.rs` to decode `Variables` XML, `Structure` XML, and `PatternInstance` parts directly from UDM storage, while keeping `EngineReadContract.cs` restricted to verbatim text parts (`Source`, `Events`, `Rules`, `Conditions`).
 3. Pattern Metadata: Add native extraction of `PatternInstance` parts directly from UDM `EntityPart` tables in `gx-engine`.
-4. C# Generator: Integrate `TransactionClass` Business Component (`[Transaction]BC.cs`) emission into `rebuild-all`.
+4. C# Generator: Integrate `TransactionClass` Business Component (`[Transaction]BC.cs` with class `<name>_bc`) emission into `rebuild-all`.
 
 **Tech Stack:** Rust (edition 2021, `gx-engine`, `tiberius`, `tokio`), C# (.NET 10 `GxMcp.Gateway`), T-SQL (UDM SQL Server/LocalDB), JSON-RPC MCP.
 

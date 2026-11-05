@@ -62,7 +62,7 @@ namespace GxMcp.Gateway
                 return "a single `part` is required";
             string? part = CanonicalPart(requestedPart!);
             if (part == null)
-                return $"`part` '{requestedPart}' is outside the native read space; it serves Source, Events, Rules, Conditions, Variables and Structure";
+                return $"`part` '{requestedPart}' is outside the native read space; it serves Source, Events, Rules and Conditions";
 
             if (!TryOptionalString(args, "format", out string? format, out bool hasFormat, out string? formatError))
                 return formatError!;
