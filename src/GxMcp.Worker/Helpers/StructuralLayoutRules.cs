@@ -117,6 +117,20 @@ namespace GxMcp.Worker.Helpers
             return !string.IsNullOrEmpty(elementName) && Kinds.ContainsKey(elementName);
         }
 
+        /// <summary>
+        /// Whether a raw PatternInstance edit may remove this element: any permitted leaf,
+        /// or a table with no child elements. Issue #869: add_table creates such a table and
+        /// move_control can leave one behind, and nothing else could remove it. A table that
+        /// still holds children stays refused, because removing it would drop them too.
+        /// </summary>
+        internal static bool IsRemovable(XElement element)
+        {
+            if (element == null) return false;
+            string kind = element.Name.LocalName;
+            if (IsPermittedKind(kind)) return true;
+            return string.Equals(kind, "table", System.StringComparison.OrdinalIgnoreCase) && !element.HasElements;
+        }
+
         internal static string RequiredIdentityAttribute(string elementName)
         {
             return Kinds.TryGetValue(elementName ?? "", out var kind)

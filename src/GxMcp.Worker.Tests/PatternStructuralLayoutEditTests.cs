@@ -229,6 +229,63 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("gridLevel", plan.Error, StringComparison.Ordinal);
         }
 
+        // ── issue #869: an empty table left by add_table or move_control ───────────
+
+        private const string WithEmptyTable = Header
+            + "<transaction name=\"T1\"><table name=\"TableMain\">"
+            + "<textBlock controlName=\"A\" /><table name=\"TblVazia\" />"
+            + "</table></transaction></instance>";
+
+        [Fact]
+        public void Removing_An_Empty_Table_Is_Permitted()
+        {
+            var plan = PatternXmlEditPlan.Create(WithEmptyTable, Header
+                + "<transaction name=\"T1\"><table name=\"TableMain\">"
+                + "<textBlock controlName=\"A\" />"
+                + "</table></transaction></instance>");
+
+            Assert.Null(plan.ErrorCode);
+            var change = Assert.Single(plan.Changes);
+            Assert.Equal("Remove", (string)change["operation"]);
+            Assert.Equal("table", (string)change["element"]);
+            Assert.Equal("TblVazia", (string)change["identity"]);
+        }
+
+        [Fact]
+        public void Removing_An_Empty_Table_Together_With_A_Leaf_Is_Permitted()
+        {
+            var plan = PatternXmlEditPlan.Create(WithEmptyTable, Header
+                + "<transaction name=\"T1\"><table name=\"TableMain\" /></transaction></instance>");
+
+            Assert.Null(plan.ErrorCode);
+            Assert.Equal(2, plan.Changes.Count);
+            Assert.All(plan.Changes, c => Assert.Equal("Remove", (string)c["operation"]));
+        }
+
+        [Fact]
+        public void Removing_A_Table_That_Still_Has_Children_Is_Rejected()
+        {
+            var before = Header
+                + "<transaction name=\"T1\"><table name=\"TableMain\">"
+                + "<textBlock controlName=\"A\" /><table name=\"TblCheia\"><textBlock controlName=\"B\" /></table>"
+                + "</table></transaction></instance>";
+            var after = Header
+                + "<transaction name=\"T1\"><table name=\"TableMain\">"
+                + "<textBlock controlName=\"A\" />"
+                + "</table></transaction></instance>";
+
+            var plan = PatternXmlEditPlan.Create(before, after);
+
+            Assert.Equal("PatternStructureChangeUnsupported", plan.ErrorCode);
+            Assert.Contains("table", plan.Error, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void The_Scope_Hint_Names_Empty_Table_Removal()
+        {
+            Assert.Contains("empty table", PatternXmlEditPlan.RawXmlEditScopeHint, StringComparison.Ordinal);
+        }
+
         // ── the reporter's case 2: move between containers ─────────────────────────
 
         private const string TwoContainers = Header

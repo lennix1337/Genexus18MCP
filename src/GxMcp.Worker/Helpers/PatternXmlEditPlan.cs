@@ -222,7 +222,7 @@ namespace GxMcp.Worker.Helpers
             "raw PatternInstance XML accepts property changes on existing elements, one leaf"
             + " element (textBlock, attribute, variable, userAction, image, userControl,"
             + " actionGroup, errorViewer, data; or a webComponent into a table) added per"
-            + " container, several leaf removals, a leaf moved between containers, siblings"
+            + " container, several leaf removals, an empty table removed, a leaf moved between containers, siblings"
             + " reordered by identity inside a table, actionGroup, tabs or tab, and a <prompt>"
             + " added to or removed from an <attribute>; it still refuses identity and"
             + " childrenOrderedList edits, container-valued or nested additions, more than one"
@@ -431,7 +431,7 @@ namespace GxMcp.Worker.Helpers
             }
 
             string removedKind = removed.Name.LocalName;
-            if (!StructuralLayoutRules.IsPermittedKind(removedKind)) return false;
+            if (!StructuralLayoutRules.IsRemovable(removed)) return false;
 
             string removedIdentity = StructuralLayoutRules.ReportIdentity(removedKind, removed);
             Changes.Add(new JObject
@@ -952,8 +952,7 @@ namespace GxMcp.Worker.Helpers
                 {
                     if (oldNodes[oldIdx] is XElement removedEl)
                     {
-                        string kind = removedEl.Name.LocalName;
-                        if (!StructuralLayoutRules.IsPermittedKind(kind)) return false;
+                        if (!StructuralLayoutRules.IsRemovable(removedEl)) return false;
                         removedElements.Add(new ElementPosition(removedEl, oldIdx));
                     }
                     else return false;
@@ -966,8 +965,7 @@ namespace GxMcp.Worker.Helpers
             {
                 if (oldNodes[oldIdx] is XElement removedEl)
                 {
-                    string kind = removedEl.Name.LocalName;
-                    if (!StructuralLayoutRules.IsPermittedKind(kind)) return false;
+                    if (!StructuralLayoutRules.IsRemovable(removedEl)) return false;
                     removedElements.Add(new ElementPosition(removedEl, oldIdx));
                 }
                 else return false;

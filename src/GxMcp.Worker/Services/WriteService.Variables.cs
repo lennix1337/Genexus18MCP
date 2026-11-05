@@ -2477,6 +2477,25 @@ namespace GxMcp.Worker.Services
                         target: target);
                 }
 
+                // issue #864: a primitive-to-primitive retype that keeps the shape changes
+                // the variable in place, as the IDE and the Variables text patch do. The
+                // delete+add below gives the variable a new identity, so a WebForm control
+                // bound to it (<data attribute="var:N">) is left pointing at nothing and the
+                // save fails validation.
+                bool shapeUnchanged = !dimensions.HasValue
+                    && (!collection.HasValue || collection.Value == existingIsCollection);
+                if (shapeUnchanged
+                    && string.IsNullOrEmpty(existingAttrName)
+                    && resolution.CanonicalType != "DomainReference"
+                    && resolution.CanonicalType != "AttributeReference"
+                    && IsPlainPrimitiveVariable(existing)
+                    && VariableInjector.TryParseDbType(resolvedTypeForSdk, out var inPlaceType))
+                {
+                    return RetypePrimitiveVariableInPlace(target, varName, obj, existing, inPlaceType,
+                        length ?? resolvedLength, decimals ?? resolvedDecimals, description,
+                        resolution.CanonicalType, newTypeName, basedOn, basedOnAttribute);
+                }
+
                 // Snapshot for rollback: capture every variable's identity + shape so we
                 // can re-add the original if obj.Save() throws halfway through.
                 string preservedDescription = null;
@@ -2855,6 +2874,88 @@ namespace GxMcp.Worker.Services
         /// <c>newTypeName</c>, and retyping to the same SDT/built-in type failed closed, so a
         /// variable of a non-Domain type could not be marked as a collection at all.
         /// </summary>
+        private static bool IsPlainPrimitiveVariable(global::Artech.Genexus.Common.Variable variable)
+        {
+            try
+            {
+                var type = variable.Type;
+                if (type == global::Artech.Genexus.Common.eDBType.GX_SDT
+                    || type == global::Artech.Genexus.Common.eDBType.GX_BUSCOMP
+                    || type == global::Artech.Genexus.Common.eDBType.GX_USRDEFTYP
+                    || type == global::Artech.Genexus.Common.eDBType.GX_EXTERNAL_OBJECT)
+                    return false;
+                return string.IsNullOrEmpty(GxMcp.Worker.Helpers.DomainPropertyApplier.GetDomainBasedOnName((object)variable));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private string RetypePrimitiveVariableInPlace(string target, string varName,
+            global::Artech.Architecture.Common.Objects.KBObject obj,
+            global::Artech.Genexus.Common.Variable existing,
+            global::Artech.Genexus.Common.eDBType newType, int? newLength, int? newDecimals,
+            string description, string canonicalType, string newTypeName, string basedOn, string basedOnAttribute)
+        {
+            var previousType = existing.Type;
+            int previousLength = existing.Length;
+            int previousDecimals = existing.Decimals;
+            string previousDescription = null;
+            try { previousDescription = existing.Description; } catch { }
+            try
+            {
+                existing.Type = newType;
+                if (newLength.HasValue) existing.Length = newLength.Value;
+                if (newDecimals.HasValue) existing.Decimals = newDecimals.Value;
+                if (description != null) existing.Description = description;
+                ForceSaveVariableOwner(obj);
+                ScheduleFlush(force: true);
+
+                string verifyName = varName;
+                ResolveVariableTarget(target, ref verifyName, out _, out var persistedPart, out _);
+                string persistError = VerifyPersistedVariable(persistedPart, varName, RequestedTypeForVerify(newTypeName, basedOn, basedOnAttribute));
+                if (persistError != null)
+                    throw new InvalidOperationException(persistError);
+
+                string persistedDesc = newType.ToString();
+                if (newLength.HasValue)
+                    persistedDesc += "(" + newLength.Value + (newDecimals.HasValue && newDecimals.Value > 0 ? "," + newDecimals.Value : "") + ")";
+                return McpResponse.Ok(
+                    target: target,
+                    code: "VariableRenamed",
+                    result: new JObject
+                    {
+                        ["requestedType"] = canonicalType,
+                        ["persistedType"] = persistedDesc,
+                        ["inPlace"] = true,
+                        ["details"] = $"Variable '&{varName}' retyped to '{persistedDesc}' in place; control bindings kept."
+                    });
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    existing.Type = previousType;
+                    existing.Length = previousLength;
+                    existing.Decimals = previousDecimals;
+                    if (description != null) existing.Description = previousDescription;
+                    obj.EnsureSave();
+                    ScheduleFlush();
+                }
+                catch { /* swallow - rollback is best-effort */ }
+                return McpResponse.Err(
+                    code: "ModifyVariableFailed",
+                    message: ex.Message,
+                    hint: "The in-place retype failed; the previous type was restored.",
+                    nextSteps: new JArray(McpResponse.NextStep(
+                        tool: "genexus_read",
+                        args: new JObject { ["name"] = target, ["part"] = "Variables" },
+                        why: "Verifies the variable state after the rollback.")),
+                    target: target);
+            }
+        }
+
         private string ModifyVariableWithoutRetype(string target, string varName, string description, bool? collection)
         {
             try

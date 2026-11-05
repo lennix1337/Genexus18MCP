@@ -17,7 +17,9 @@
 - `genexus_edit part=Structure` on an SDT keeps `Character(N)` members as CHARACTER and adds new members, instead of turning them into NUMERIC and ending in `WriteNotPersisted`: the DSL writer sets the member type through the same shadow-safe path as `update_visual`. https://github.com/lennix1337/Genexus18MCP/issues/865
 - Report `genexus_layout set_properties` on `/Report/PrintBlock[N]/Control[i]` changes only the addressed control when several controls share a name (`&nome` twice), instead of moving all of them. https://github.com/lennix1337/Genexus18MCP/issues/867
 - `add_report_control` and `move_report_control` no longer refuse to place a control inside a box or across a line (`ReportControlOverlap`): `ReportRectangle` and `ReportLine` are frames, not obstacles; overlapping content controls are still refused. https://github.com/lennix1337/Genexus18MCP/issues/866
-- A failed `genexus_variable` save (`add`, `modify`, rollback) now carries the GeneXus validator messages after `Detailed Messages:`, instead of only "Web Panel '<name>' validation failed.". The bound NUMERIC(n,2) retype failure itself is still under investigation. https://github.com/lennix1337/Genexus18MCP/issues/864
+- A failed `genexus_variable` save (`add`, `modify`, rollback) now carries the GeneXus validator messages after `Detailed Messages:`, instead of only "Web Panel '<name>' validation failed.". https://github.com/lennix1337/Genexus18MCP/issues/864
+- `genexus_variable modify` retypes a primitive variable bound to a WebForm control (e.g. `NUMERIC(10,2)` to `NUMERIC(12,2)`) in place, like the IDE and the Variables patch, instead of deleting and re-adding it, which left the `<data attribute="var:N">` binding pointing at nothing and failed the save. https://github.com/lennix1337/Genexus18MCP/issues/864
+- A raw `PatternInstance` patch may remove an empty `<table>` (one left by `genexus_wwp add_table` or emptied by `move_control`); a table that still has children is still refused. https://github.com/lennix1337/Genexus18MCP/issues/869
 
 ### Internal
 
