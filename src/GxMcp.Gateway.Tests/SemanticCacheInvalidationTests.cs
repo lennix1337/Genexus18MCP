@@ -82,6 +82,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_lifecycle", "build")]
         [InlineData("genexus_lifecycle", "rebuild")]
         [InlineData("genexus_lifecycle", "specify")]
+        [InlineData("genexus_lifecycle", "specify_only")]
         [InlineData("genexus_lifecycle", "validate")]
         [InlineData("genexus_lifecycle", "validate-kb")]
         [InlineData("genexus_lifecycle", "sync")]

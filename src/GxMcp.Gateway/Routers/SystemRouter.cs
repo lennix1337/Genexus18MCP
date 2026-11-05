@@ -72,6 +72,21 @@ namespace GxMcp.Gateway.Routers
                             buildPlanCap = args?["buildPlanCap"]?.ToObject<int?>(),
                             dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false
                         };
+                        // specify_only: Specify for ONE object by GUID and nothing else (no Generate, Compile,
+                        // reorganization or deploy). dryRun is answered by the Worker with the plan. A real run is
+                        // normally dispatched as a lifecycle job by the Gateway (ShouldDispatchLifecycleBuildAsync),
+                        // so this case sees it only when the caller declared it short (estimated_seconds below the
+                        // sync threshold): the Worker then answers with the accepted task.
+                        case "specify_only": return new {
+                            queueLifecycle = true,
+                            module = "Build",
+                            action = "SpecifyOnly",
+                            target = target,
+                            targetGuid = args?["targetGuid"]?.ToString(),
+                            expectedVersion = args?["expectedVersion"]?.ToString(),
+                            environment = args?["environment"]?.ToString(),
+                            dryRun = args?["dryRun"]?.ToObject<bool?>() ?? false
+                        };
                         case "rebuild": return new {
                             module = "Build",
                             action = "RebuildAll",

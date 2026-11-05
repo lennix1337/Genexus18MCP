@@ -32,7 +32,7 @@ namespace GxMcp.Worker.Services
     // shares that instance via the task's public `KB` property instead of
     // spawning MSBuild.exe and re-opening the KB out-of-process. Expected
     // speedup: 5-10 min → 5-30 s for targeted builds.
-    internal static class InProcessBuildRunner
+    internal static partial class InProcessBuildRunner
     {
         // Type cache — Assembly.LoadFrom is amortised across calls.
         private static Type _typeSpecifyOneOnly;
@@ -85,7 +85,9 @@ namespace GxMcp.Worker.Services
             bool fullDeploy = false,
             bool forceFullBuild = false,
             IReadOnlyList<string> skipSpecifyTargets = null,
-            bool refuseStaleEnvironmentCopy = false)
+            bool refuseStaleEnvironmentCopy = false,
+            SpecifyOnlyRequest specifyOnlyRequest = null,
+            Func<string> generatorOutputPath = null)
         {
             if (status == null) return InProcessBuildOutcome.CouldNotRun;
             if (kbHandle == null)
@@ -170,6 +172,9 @@ namespace GxMcp.Worker.Services
                     // target(s) and stop — no Compile, no IdeWebBuildAndDeploy. Surfaces spc*/gen*
                     // diagnostics via the engine sink (→ status errors, split by #13) without the
                     // full build's compile+deploy cost. Reuses the proven ExecuteSpecifyOneOnly path.
+                    if (specifyOnly && isBuildWithTargets && specifyOnlyRequest != null)
+                        return RunSpecifyOnlyStrict(status, kbHandle, specifyOnlyRequest, lineSink, generatorOutputPath);
+
                     if (specifyOnly && isBuildWithTargets)
                     {
                         lineSink("[BUILD-INPROCESS] specifyOnly=true — running SpecifyOneOnly (Spec+Gen) only; Compile and deploy are SKIPPED. Use this for a fast spec check, not to produce runnable output.", false);

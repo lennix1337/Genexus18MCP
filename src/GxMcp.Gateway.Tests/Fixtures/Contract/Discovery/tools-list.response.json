@@ -3004,6 +3004,7 @@
               "build_all",
               "cancel",
               "specify",
+              "specify_only",
               "rebuild",
               "reorg",
               "reorg_preview",
@@ -3050,7 +3051,7 @@
           },
           "dryRun": {
             "default": false,
-            "description": "build/build_all/rebuild/index: returns…",
+            "description": "build/build_all/rebuild/index/specify_o…",
             "type": "boolean"
           },
           "environment": {
@@ -3060,6 +3061,10 @@
           "estimated_seconds": {
             "description": "Build: <20 sync, >=20 async (default…",
             "type": "integer"
+          },
+          "expectedVersion": {
+            "description": "specify_only: refuse if the object's…",
+            "type": "string"
           },
           "fastIncremental": {
             "description": "build: experimental fast incremental…",
@@ -3176,6 +3181,10 @@
             "description": "Object/task ID/op:<id>. compile_check…",
             "type": "string"
           },
+          "targetGuid": {
+            "description": "specify_only: GUID of the object to…",
+            "type": "string"
+          },
           "until": {
             "description": "Status wait stop condition: change…",
             "enum": [
@@ -3197,7 +3206,7 @@
             "type": "integer"
           },
           "wait_until_done": {
-            "description": "Build/build_all/rebuild: block in one…",
+            "description": "Build/build_all/rebuild/specify_only:…",
             "type": "boolean"
           }
         },

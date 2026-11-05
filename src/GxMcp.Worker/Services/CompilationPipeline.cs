@@ -138,6 +138,13 @@ namespace GxMcp.Worker.Services
         {
         }
 
+        private static string FirstNonBlank(params string[] values)
+        {
+            foreach (string value in values)
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            return null;
+        }
+
         public string ExecuteBuild(string action, string target, JObject args, JObject request = null)
         {
             if (args == null) args = new JObject();
@@ -168,6 +175,28 @@ namespace GxMcp.Worker.Services
             if (action == "Cancel") return _buildService.Cancel(target);
 
             string requestedEnv = args["environment"]?.ToString() ?? request["environment"]?.ToString();
+
+            // lifecycle action=specify_only plans (dryRun) and refuses on its own: BuildDryRun below plans a
+            // build, which is not what specify_only would do. It runs against the active environment: the
+            // EnvironmentScope below is undone when this call returns, which a queued task would outlive.
+            if (string.Equals(action, "SpecifyOnly", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(requestedEnv)
+                    && !string.Equals(requestedEnv.Trim(), _envManager?.GetActiveEnvironmentName(), StringComparison.OrdinalIgnoreCase))
+                {
+                    return McpResponse.Err(
+                        code: SpecifyOnlyCodes.EnvironmentNotSupported,
+                        message: "specify_only uses the active environment ('" + _envManager?.GetActiveEnvironmentName() + "'); it cannot switch to '" + requestedEnv + "'.",
+                        hint: "Switch first with genexus_kb action=set_environment, then run specify_only.");
+                }
+                // The Gateway sends an explicit null for a field the caller left out, and a JSON null reads back as ""
+                // (not null): take the first value that says something, so target=<guid> still identifies the object.
+                return _buildService.SpecifyOnly(
+                    FirstNonBlank(args["targetGuid"]?.ToString(), request["targetGuid"]?.ToString(), target),
+                    FirstNonBlank(args["expectedVersion"]?.ToString(), request["expectedVersion"]?.ToString()),
+                    (request["dryRun"]?.ToObject<bool?>() ?? false) || (args["dryRun"]?.ToObject<bool?>() ?? false),
+                    args["queueLifecycle"]?.ToObject<bool?>() ?? request["queueLifecycle"]?.ToObject<bool?>() ?? true);
+            }
 
             using (new EnvironmentScope(_envManager, requestedEnv))
             {
