@@ -41,6 +41,19 @@ if ($publicationStarts -lt 0 -or $publicationStarts -gt $mainPush) {
     throw 'Publication must disable the undo before main is pushed, so a published run is resumed and never undone.'
 }
 
+# 1b. The undo's "already dirty before the run" list is captured before the run writes any file;
+# captured later, the files the run itself wrote (release-issues.json, server.json, generated
+# docs) look like operator edits and a failed run leaves them modified.
+$dirtyCapture = $releaseSource.IndexOf('$script:releasePreRunDirtyPaths = @(git status --porcelain', [StringComparison]::Ordinal)
+$firstWrites = @('Step "Snapshotting release issues"', 'Step "Synchronizing release-facing metadata"', 'Step "Resolving version"') |
+    ForEach-Object { $releaseSource.IndexOf($_, [StringComparison]::Ordinal) }
+if ($dirtyCapture -lt 0 -or @($firstWrites | Where-Object { $_ -lt 0 }).Count) {
+    throw 'release.ps1 lost the pre-run dirty capture or the first writing steps this guard relies on.'
+}
+if (@($firstWrites | Where-Object { $_ -lt $dirtyCapture }).Count) {
+    throw 'The pre-run dirty paths must be captured before the run snapshots issues, syncs metadata or bumps the version.'
+}
+
 # 2. Every terminal path prints the RELEASE SUMMARY line (failure, trap, prepare, dry run, complete).
 $summaryCalls = [regex]::Matches($releaseSource, 'Write-ReleaseFinalSummary -ExitCode').Count
 if ($summaryCalls -lt 5) { throw "Expected the RELEASE SUMMARY line on every terminal path (found $summaryCalls call sites, need 5)." }
