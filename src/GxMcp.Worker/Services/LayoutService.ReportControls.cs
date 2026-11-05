@@ -445,12 +445,12 @@ namespace GxMcp.Worker.Services
 
         private static string FindReportOverlap(XElement block, XElement candidate, string candidateName)
         {
-            if (candidate == null) return null;
+            if (candidate == null || IsReportFrameControl(candidate)) return null;
             var rect = ReadRect(candidate);
             if (rect == null) return null;
             foreach (var other in block.Elements().Where(e => e.Name.LocalName.Equals("Control", StringComparison.OrdinalIgnoreCase)))
             {
-                if (SameName(other, candidateName)) continue;
+                if (SameName(other, candidateName) || IsReportFrameControl(other)) continue;
                 var otherRect = ReadRect(other);
                 if (otherRect == null) continue;
                 if (rect.Left < otherRect.Right && rect.Right > otherRect.Left && rect.Top < otherRect.Bottom && rect.Bottom > otherRect.Top)
@@ -458,6 +458,14 @@ namespace GxMcp.Worker.Services
                         ?? "unnamed control, AttributeReference=" + (Text(Attr(other, "AttributeReference")) ?? "(none)")) + "'.";
             }
             return null;
+        }
+
+        // Boxes and lines are drawn around or across content (as in the IDE), so they never block placement.
+        private static bool IsReportFrameControl(XElement control)
+        {
+            string type = Text(Attr(control, "TypeName"));
+            return string.Equals(type, "ReportRectangle", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(type, "ReportLine", StringComparison.OrdinalIgnoreCase);
         }
 
         private static System.Drawing.RectangleF ReadRect(XElement e)

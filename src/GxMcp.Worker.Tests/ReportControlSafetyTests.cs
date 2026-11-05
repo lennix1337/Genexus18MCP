@@ -182,6 +182,39 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("print block 'header'", sameBlockError);
         }
 
+        [Theory]
+        [InlineData("ReportRectangle", "ReportLabel")]
+        [InlineData("ReportLine", "ReportAttribute")]
+        [InlineData("ReportLabel", "ReportRectangle")]
+        public void FramesAndLinesAreNotOverlapObstacles(string existingType, string candidateType)
+        {
+            var block = XElement.Parse(
+                "<PrintBlock Name=\"pbTeste\"><Control TypeName=\"" + existingType + "\" ControlName=\"Box1\" Left=\"10\" Top=\"10\" Width=\"400\" Height=\"200\" /></PrintBlock>");
+            var candidate = XElement.Parse(
+                "<Control TypeName=\"" + candidateType + "\" ControlName=\"Lbl1\" Left=\"50\" Top=\"50\" Width=\"150\" Height=\"20\" />");
+
+            Assert.Null(InvokeFindReportOverlap(block, candidate, "Lbl1"));
+        }
+
+        [Fact]
+        public void OverlappingContentControlsAreStillRefused()
+        {
+            var block = XElement.Parse(
+                "<PrintBlock Name=\"pbTeste\"><Control TypeName=\"ReportLabel\" ControlName=\"Lbl0\" Left=\"10\" Top=\"10\" Width=\"400\" Height=\"200\" /></PrintBlock>");
+            var candidate = XElement.Parse(
+                "<Control TypeName=\"ReportAttribute\" ControlName=\"nome1\" Left=\"50\" Top=\"100\" Width=\"150\" Height=\"20\" />");
+
+            Assert.Contains("'Lbl0'", InvokeFindReportOverlap(block, candidate, "nome1"));
+        }
+
+        private static string InvokeFindReportOverlap(XElement block, XElement candidate, string name)
+        {
+            var method = typeof(LayoutService).GetMethod("FindReportOverlap",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(method);
+            return (string)method.Invoke(null, new object[] { block, candidate, name });
+        }
+
         private sealed class FakeReportControl
         {
             public FakeReportControl(string name) { Name = name; }

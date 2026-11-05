@@ -13,6 +13,11 @@
 
 ### Fixed
 
+- `genexus_wwp remove_action`/`update_action`/`move_action` now reach a form-level user action (in `TableActions` or another form container) by `group`, `containerName` or `container`, instead of failing with `ActionGroupNotFound`. https://github.com/lennix1337/Genexus18MCP/issues/868
+- `genexus_edit part=Structure` on an SDT keeps `Character(N)` members as CHARACTER and adds new members, instead of turning them into NUMERIC and ending in `WriteNotPersisted`: the DSL writer sets the member type through the same shadow-safe path as `update_visual`. https://github.com/lennix1337/Genexus18MCP/issues/865
+- Report `genexus_layout set_properties` on `/Report/PrintBlock[N]/Control[i]` changes only the addressed control when several controls share a name (`&nome` twice), instead of moving all of them. https://github.com/lennix1337/Genexus18MCP/issues/867
+- `add_report_control` and `move_report_control` no longer refuse to place a control inside a box or across a line (`ReportControlOverlap`): `ReportRectangle` and `ReportLine` are frames, not obstacles; overlapping content controls are still refused. https://github.com/lennix1337/Genexus18MCP/issues/866
+
 ### Internal
 
 - `AGENTS.md` drops from 30.9 KB to 21.5 KB so Antigravity `agy` no longer truncates it at 24,000 bytes: the KB selection contracts, test KB table, runtime iteration and install/update decision matrix moved verbatim to `docs/agent-operations.md`, with the rules and pointers kept in `AGENTS.md`; `scripts/tests/docs.test.js` fails if `AGENTS.md` grows past the limit again.
