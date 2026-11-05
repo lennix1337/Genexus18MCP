@@ -10,6 +10,10 @@ namespace GxMcp.Gateway
 {
     partial class Program
     {
+        // Room for the serialized envelope after trimming rows, under the 80000-character ceiling and
+        // leaving space for the fields NormalizeToolPayloadForAxi adds (meta, help, nextOffset).
+        private const int ResultsTrimBudget = 78000;
+
         private static JToken TruncateResponseIfNeeded(JToken? result, string toolName)
         {
             if (result == null) return JValue.CreateNull();
@@ -87,11 +91,26 @@ namespace GxMcp.Gateway
                     string currentRaw = obj.ToString(Formatting.None);
                     if (currentRaw.Length > 80000)
                     {
-                        // Drastic pruning: keep only first 5
-                        while (searchResults.Count > 5) searchResults.RemoveAt(searchResults.Count - 1);
+                        // Keep the longest prefix of rows that fits the budget (never a fixed handful),
+                        // and make the page contract match what is left so the caller can continue.
+                        int fixedLen = currentRaw.Length;
+                        foreach (var row in searchResults) fixedLen -= row.ToString(Formatting.None).Length + 1;
+                        int room = ResultsTrimBudget - Math.Max(0, fixedLen);
+                        int kept = 0, used = 0;
+                        foreach (var row in searchResults)
+                        {
+                            int rowLen = row.ToString(Formatting.None).Length + 1;
+                            if (kept > 0 && used + rowLen > room) break;
+                            used += rowLen;
+                            kept++;
+                        }
+                        while (searchResults.Count > kept) searchResults.RemoveAt(searchResults.Count - 1);
                         obj["isTruncated"] = true;
-                        obj["returnedCount"] = 5;
+                        obj["returnedCount"] = kept;
                         obj["originalCount"] = originalCount;
+                        obj["returned"] = kept;
+                        obj["hasMore"] = true;
+                        obj.Remove("nextOffset");
                         return obj;
                     }
                 }
