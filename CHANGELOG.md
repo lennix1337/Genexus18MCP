@@ -7,6 +7,32 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Internal
+
+## v4.3.1 - 2026-11-05
+
+
+### Tracked issues
+
+- [#861](https://github.com/lennix1337/Genexus18MCP/issues/861) — Checagens de CI do release: fiação Quiet/Assert, decisão de candidata e espera pré-tag não têm teste
+- [#864](https://github.com/lennix1337/Genexus18MCP/issues/864) — [4.3.0] genexus_variable modify: retyping a NUMERIC(n,2) variable bound to a WebForm control fails with an opaque "validation failed"
+- [#865](https://github.com/lennix1337/Genexus18MCP/issues/865) — [4.3.0][Integrity] genexus_edit part=Structure on an SDT turns every CHARACTER member into NUMERIC, drops new members, and the rollback fails (follow-up #542/#581)
+- [#866](https://github.com/lennix1337/Genexus18MCP/issues/866) — [4.3.0] Report layout: add/move_report_control refuse to place a control inside a ReportRectangle (ReportControlOverlap)
+- [#867](https://github.com/lennix1337/Genexus18MCP/issues/867) — [4.3.0][Integrity] Report layout: set_properties on /Report/PrintBlock[N]/Control[i] changes ALL same-name controls in the block (reports 1 applied)
+- [#868](https://github.com/lennix1337/Genexus18MCP/issues/868) — [4.3.0] genexus_wwp remove_action cannot remove a form-level user action (TableActions) on a WebPanel: ActionGroupNotFound ''
+- [#869](https://github.com/lennix1337/Genexus18MCP/issues/869) — [4.3.0] WorkWithPlus: no way to delete an empty table (no typed action; PatternInstance patch refused)
+- [#876](https://github.com/lennix1337/Genexus18MCP/issues/876) — genexus_create_popup reports PopupCreated when the WebForm write failed (flat layout on a GX18 KB without WWP)
+
+
+<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+     subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
+
+### Added
+
 - The native `gx-engine` backend covers more of the GeneXus compiler: a content-addressed build cache that prunes itself, object metadata and version tokens read straight from the KB's SQL Server tables, C# `For Each` cursor loops with typed parameters, WebPanel `Enter` and `E11`-`E15` event methods, Business Component companion classes with the `Load`/`Save`/`Insert`/`Update`/`Delete` API, transactional writes of objects back to the KB with fail-closed guards, and decoding of `PatternInstance`, `WebForm`, `Variables` and `Structure` parts. Single-part edits through the engine validate their arguments strictly.
 
 ### Changed

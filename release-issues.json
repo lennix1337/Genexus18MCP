@@ -1,7 +1,89 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "4.3.0",
-  "tag": "v4.3.0",
-  "collectedAtUtc": "2026-11-03T14:34:24.0443073Z",
-  "issues": []
+  "version": "4.3.1",
+  "tag": "v4.3.1",
+  "collectedAtUtc": "2026-11-05T17:02:30.9335993Z",
+  "issues": [
+    {
+      "number": 861,
+      "title": "Checagens de CI do release: fiação Quiet/Assert, decisão de candidata e espera pré-tag não têm teste",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/861",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 864,
+      "title": "[4.3.0] genexus_variable modify: retyping a NUMERIC(n,2) variable bound to a WebForm control fails with an opaque \"validation failed\"",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/864",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 865,
+      "title": "[4.3.0][Integrity] genexus_edit part=Structure on an SDT turns every CHARACTER member into NUMERIC, drops new members, and the rollback fails (follow-up #542/#581)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/865",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 866,
+      "title": "[4.3.0] Report layout: add/move_report_control refuse to place a control inside a ReportRectangle (ReportControlOverlap)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/866",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 867,
+      "title": "[4.3.0][Integrity] Report layout: set_properties on /Report/PrintBlock[N]/Control[i] changes ALL same-name controls in the block (reports 1 applied)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/867",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 868,
+      "title": "[4.3.0] genexus_wwp remove_action cannot remove a form-level user action (TableActions) on a WebPanel: ActionGroupNotFound ''",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/868",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 869,
+      "title": "[4.3.0] WorkWithPlus: no way to delete an empty table (no typed action; PatternInstance patch refused)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/869",
+      "state": "open",
+      "labels": [
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 876,
+      "title": "genexus_create_popup reports PopupCreated when the WebForm write failed (flat layout on a GX18 KB without WWP)",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/876",
+      "state": "open",
+      "labels": [
+        "bug",
+        "fixed-pending-release"
+      ],
+      "milestone": null
+    }
+  ]
 }
