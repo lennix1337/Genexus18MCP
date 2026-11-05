@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod calls;
+pub mod cursor;
 pub mod data_provider;
 pub mod developer_menu;
 pub mod domain;

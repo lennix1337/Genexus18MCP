@@ -75,8 +75,10 @@ Source of truth: `config/gx-versions.json`.
   for MCP routing, read [`docs/engine_backend.md`](docs/engine_backend.md).
   The objective is independent full SDK replacement; current bounded coverage
   is not that outcome. `Engine.Backend` defaults to `gxengine`: admitted blocking
-  builds and field-limited type-only queries use gx-engine. Reads and edits use
-  SDK fallback until native identity, freshness and token parity is verified.
+  builds, field-limited type-only queries, and single-part reads (`kb-read`) can be
+  served natively. Native UDM writes (`kb-write` / `UdmWriter`) support transactional
+  live T-SQL persistence in `gx-engine`; Gateway MCP `genexus_edit` retains SDK
+  fallback to safeguard IDE pattern synchronization and cross-reference integrity.
   `auto` routes only builds; explicit `sdk` opts out entirely. Preserve capability/argument
   gates, SDK fallback before build start, and reconciliation instead of replay
   after a started build fails or has an uncertain outcome.
@@ -105,6 +107,8 @@ Source of truth: `config/gx-versions.json`.
   output when behavior changes. Preserve the final `build.ps1` ordering below;
   identify the exact packaged binary in postchecks rather than borrowing timings
   from another target directory.
+- **Current native capabilities (Plan 133 & 134 parity roadmap):** listed in
+  [`docs/agent-operations.md`](docs/agent-operations.md#native-gx-engine-capabilities).
 
 ## KB and harness contracts
 

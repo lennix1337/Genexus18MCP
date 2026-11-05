@@ -78,5 +78,32 @@ namespace GxMcp.Gateway.Tests
             Assert.True(EngineReadContract.TryShape(new EngineReadPlan("Alpha", "Source", 9, 0),
                 page, new JObject(), out _, out var error), error);
         }
+
+        [Theory]
+        [InlineData("Source")]
+        [InlineData("Events")]
+        [InlineData("Rules")]
+        [InlineData("Conditions")]
+        public void TryPlanAdmitsSupportedParts(string part)
+        {
+            var args = new JObject { ["name"] = "MyObject", ["part"] = part };
+            string? error = EngineReadContract.TryPlan(args, out var plan);
+            Assert.Null(error);
+            Assert.NotNull(plan);
+            Assert.Equal(part, plan.Part);
+        }
+
+        [Theory]
+        [InlineData("Variables")]
+        [InlineData("Structure")]
+        [InlineData("PatternInstance")]
+        [InlineData("WebForm")]
+        public void TryPlanDefersComplexPartsToSdk(string part)
+        {
+            var args = new JObject { ["name"] = "MyObject", ["part"] = part };
+            string? error = EngineReadContract.TryPlan(args, out var plan);
+            Assert.NotNull(error);
+            Assert.Null(plan);
+        }
     }
 }

@@ -183,6 +183,7 @@ pub(super) fn emission_phase(
     // 2. Write the Procedures that are generated; each refusal is reported by name.
     write_procedures(&mut out, &emissions, &options.target_framework);
     write_web_classes(&mut out, manifest, options);
+    write_business_components(&mut out, manifest);
     write_model_support(&mut out, options);
 
     // The values class of each enumerated Domain (`gxdomain<name>.cs`), written with the model's classes.
@@ -489,6 +490,18 @@ fn write_web_classes(
     // The KB's own GxWebStd helper, which every emitted panel calls; written only with a panel.
     if let Some(support) = options.web_environment.support_class.as_deref() {
         out.write_generated_file("GxWebStd.cs", support);
+    }
+}
+
+/// Companion Business Component classes emitted for Transactions flagged as business components.
+fn write_business_components(out: &mut OutputTree<'_>, manifest: &ObjectManifest<'_>) {
+    for txn in &manifest.transactions {
+        if let Ok(tc) = crate::csharp::transaction::TransactionClass::from_kb_object(txn) {
+            if tc.is_business_component {
+                let file_name = format!("{}_bc.cs", txn.name.to_lowercase());
+                out.write_generated_file(&file_name, &tc.emit());
+            }
+        }
     }
 }
 

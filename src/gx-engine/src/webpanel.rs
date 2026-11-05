@@ -183,6 +183,7 @@ impl ScreenVariable {
 pub enum EventKind {
     Start,
     Refresh,
+    Enter,
     Load {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         grid: Option<String>,
@@ -226,6 +227,10 @@ impl WebPanelEvent {
         matches!(self.event_kind(), EventKind::Refresh)
     }
 
+    pub fn is_enter(&self) -> bool {
+        matches!(self.event_kind(), EventKind::Enter)
+    }
+
     pub fn is_load(&self) -> bool {
         matches!(self.event_kind(), EventKind::Load { .. })
     }
@@ -241,6 +246,8 @@ impl WebPanelEvent {
             EventKind::Start
         } else if lower == "refresh" {
             EventKind::Refresh
+        } else if lower == "enter" {
+            EventKind::Enter
         } else if lower == "load" {
             EventKind::Load { grid: None }
         } else if let Some((grid, ev)) = clean.split_once('.') {

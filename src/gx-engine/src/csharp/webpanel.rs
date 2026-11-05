@@ -652,6 +652,7 @@ impl WebPanelClass {
             let method_call = match ev.event_kind() {
                 EventKind::Start => "E12_Start();".to_string(),
                 EventKind::Refresh => "E11_Refresh();".to_string(),
+                EventKind::Enter => "E13_Enter();".to_string(),
                 EventKind::Load { grid } => {
                     if let Some(g) = grid {
                         format!("E13_{}_Load();", clean_ident(&g))
@@ -678,6 +679,7 @@ impl WebPanelClass {
             let method_name = match ev.event_kind() {
                 EventKind::Start => "E12_Start".to_string(),
                 EventKind::Refresh => "E11_Refresh".to_string(),
+                EventKind::Enter => "E13_Enter".to_string(),
                 EventKind::Load { grid } => {
                     if let Some(g) = grid {
                         format!("E13_{}_Load", clean_ident(&g))
@@ -757,7 +759,7 @@ impl WebPanelClass {
 
     /// Emits complete C# source code (.cs) for this WebPanel.
     pub fn emit(&self) -> String {
-        let mut out = String::new();
+        let mut out = String::with_capacity(4096);
 
         self.emit_usings(&mut out);
         let _ = writeln!(out, "namespace {} {{", self.namespace);

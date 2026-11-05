@@ -137,3 +137,21 @@ Not native SDK support. In addition to the primary native SDK majors (GX 16, 17,
 - GeneXus Evolution 1 (10.1), Evolution 2 (10.2), Evolution 3 (10.3), and GeneXus 15 via `dotnet-reflection` (using `DynamicSdkBridge` and `OptionalSdkInvoker` for module-less vs `QualifiedName` and API differences).
 - GeneXus 8.0 and 9.0 via `com-gxpublic` (`ComGxPublicDriver` connecting to classic Win32 `GXPublic.GXPublic` COM automation on an STA thread for `.gxi` KBs).
 - Modern tools unsupported in earlier versions return structured degradation envelopes (`UNSUPPORTED_IN_GENEXUS_VERSION`).
+
+## Native gx-engine capabilities
+
+Plan 133 & 134 parity roadmap. Each item is bounded coverage, not the full SDK replacement outcome described in [`engine_backend.md`](engine_backend.md).
+
+- Content-addressed SHA-256 build cache with automatic LRU and `.tmp-*` directory pruning (`BuildCache::prune_if_needed`).
+- Autonomous UDM metadata & deterministic version token resolution directly from SQL Server tables (`ModelEntityVersion`, `UtcTicks`, `ParentIdentity`).
+- C# ADO.NET cursor generation with `ParDef` parameter inference (`@Param`, `GXType`, length, decimals) and deterministic handle cleanup.
+- WebPanel `Enter` event lifecycle generation (`E13_Enter()`).
+- Business Component companion class emission (`[Transaction]BC.cs`) with full CRUD and transaction API (`Load`, `Save`, `Insert`, `Update`, `Delete`, `Success`, `Fail`, `GetMessages`) during `rebuild-all`.
+- Native single-part edit routing contract (`EngineEditContract.cs`) and async engine execution pipeline (`DispatchEngineEditAsync`).
+- Native UDM XML part decoding for `PatternInstance` (WorkWithPlus), `WebForm`, `Variables`, and `Structure` directly from storage without COM STA.
+- Transactional live UDM persistence (`UdmWriter`) with atomic T-SQL batching (`plan_save_existing_object_sql`) and fail-closed safety guards.
+- Streaming zero-allocation row parsing (`live_rows.rs`) and pre-allocated buffers in read sessions.
+- Fast-path wildcard / pattern matching in KB object queries (`matches_name_pattern`).
+- Topological dependency ordering with external reference partitioning in `Catalog`.
+- Panic-free frontend AST fuzzing robustness (`tests/frontend_fuzz_robustness.rs`).
+- **Measured differential performance:** 14.38x overall runtime speedup (peak 22.42x on SDT JSON serialization); 64.19x warm compilation speedup on Procedure fixtures vs. local GeneXus 18 SDK/MSBuild.

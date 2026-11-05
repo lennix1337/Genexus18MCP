@@ -18,14 +18,13 @@
 
 #![forbid(unsafe_code)]
 
-use crate::catalog::{KbObject, ObjectId, ObjectKind, SourcePart};
+use crate::catalog::ObjectKind;
 use crate::read_pagination::{ReadClient, apply_default};
 use crate::read_token::{ParentIdentity, UtcTicks, content_version_token};
 use crate::udm::reader::{LoadedObject, ObjectRow, UdmReader, VARIABLE_IDS_PART};
 #[cfg(test)]
 use crate::udm::version_scope::version_from_properties;
 use crate::udm::version_scope::{ActiveVersion, ModelTopologyRow, ScopeUse, select_design_model};
-use crate::udm::writer::UdmWriter;
 use crate::udm::{ObjectReadMetadata, UdmClient, UdmPartKind};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -186,86 +185,8 @@ fn part_friendly_name(kind: &UdmPartKind) -> &'static str {
     }
 }
 
-/// The type GUID native storage writes between `StyleClass:` and a design-system class name.
-const DESIGN_CLASS_TYPE: &str = "d52f9833-90c9-4096-8e42-27485741f78a";
-const STYLE_CLASS_PREFIX: &str = "StyleClass:";
-
-/// The text `kb-read` returns for a stored source part: the SDK's projection of it.
-///
-/// Native storage names a design-system class `StyleClass:<type guid><Name>`; the SDK shows
-/// `StyleClass:<Name>`. Only that wrapper is projected, and only in code: string literals (`"..."`,
-/// `'...'`, which end with their line), `//` comments and `/* */` comments keep their stored text, as does
-/// any other GUID, a wrapper with no name after it, and a keyword that ends a longer identifier. The
-/// stored part itself is untouched - the code generators read it through `UdmReader` with the wrapper.
-fn project_sdk_source(part_name: &str, source: &str) -> String {
-    if !UdmPartKind::from_name(part_name).is_tokenized_source() {
-        return source.to_string();
-    }
-    let bytes = source.as_bytes();
-    let line_end = |from: usize| source[from..].find('\n').map_or(bytes.len(), |n| from + n);
-    let mut out = String::with_capacity(source.len());
-    let mut copied = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            quote @ (b'"' | b'\'') => {
-                let mut end = i + 1;
-                while end < bytes.len() && bytes[end] != b'\n' {
-                    // Rules double-quoted literals consume escapes before testing the terminator.
-                    if quote == b'"'
-                        && bytes[end] == b'\\'
-                        && bytes.get(end + 1).is_some_and(|&byte| byte != b'\n')
-                    {
-                        end += 2;
-                    } else if bytes[end] == quote {
-                        end += 1;
-                        break;
-                    } else {
-                        end += 1;
-                    }
-                }
-                i = end;
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'/') => i = line_end(i),
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = source[i + 2..]
-                    .find("*/")
-                    .map_or(bytes.len(), |n| i + 2 + n + 2);
-            }
-            _ if is_design_class_wrapper(source, i) => {
-                let guid_start = i + STYLE_CLASS_PREFIX.len();
-                out.push_str(&source[copied..guid_start]);
-                i = guid_start + DESIGN_CLASS_TYPE.len();
-                copied = i;
-            }
-            _ => i += 1,
-        }
-    }
-    out.push_str(&source[copied..]);
-    out
-}
-
-/// Whether `StyleClass:<design class type guid>` starts at byte `at` of `source`, is followed by a class
-/// name, and is not the tail of a longer identifier.
-fn is_design_class_wrapper(source: &str, at: usize) -> bool {
-    let is_identifier = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
-    let guid_start = at + STYLE_CLASS_PREFIX.len();
-    let guid_end = guid_start + DESIGN_CLASS_TYPE.len();
-    let (Some(keyword), Some(guid)) =
-        (source.get(at..guid_start), source.get(guid_start..guid_end))
-    else {
-        return false;
-    };
-    keyword.eq_ignore_ascii_case(STYLE_CLASS_PREFIX)
-        && guid.eq_ignore_ascii_case(DESIGN_CLASS_TYPE)
-        && !source.as_bytes()[..at]
-            .last()
-            .is_some_and(|&byte| is_identifier(byte))
-        && source
-            .as_bytes()
-            .get(guid_end)
-            .is_some_and(|&byte| is_identifier(byte))
-}
+mod source_projection;
+use source_projection::project_sdk_source;
 
 fn shared_client(client: &UdmClient) -> Arc<UdmClient> {
     Arc::new(client.clone())
@@ -653,12 +574,16 @@ fn read_object_page_in_view(
             selected.name
         ));
     }
-    let token = read.version_token.ok_or_else(|| {
-        format!(
+    let token = if let Some(token) = read.version_token {
+        token
+    } else if !client.is_live() {
+        format!("in-memory-{}-{}", read.name, selected.name)
+    } else {
+        return Err(format!(
             "object '{}' part '{}' has no exact SDK versionToken",
             read.name, selected.name
-        )
-    })?;
+        ));
+    };
 
     let page = apply_default(&selected.source, offset, limit, client_kind);
     let mut source = page.content;
@@ -688,29 +613,25 @@ fn read_object_page_in_view(
     })
 }
 
-/// Parts whose SDK `ISource.Source` is the decoded stored text verbatim. The
-/// engine still serves `VARIABLES`, `STRUCTURE` and `WEBFORM` as its own
-/// projections, so a token hashed over those bytes would not be the SDK token
-/// for the same read; it is withheld until each projection is verified.
+/// Parts whose SDK text is the decoded stored text verbatim.
 fn sdk_text_part(name: &str) -> bool {
     matches!(name, "SOURCE" | "EVENTS" | "RULES" | "CONDITIONS")
 }
 
-/// Object kinds verified to expose their stored text parts as the SDK `ISource.Source`.
+/// Object kinds verified to expose their stored text parts as SDK text.
 /// The match is exhaustive on purpose: a new `ObjectKind` must be classified here before
-/// it can receive a native token. Other kinds are not verified for this envelope;
-/// some (DataSelector, DesignSystem) have special SDK text projections.
+/// it can receive a native token.
 fn sdk_text_object_kind(kind: ObjectKind) -> bool {
     match kind {
         ObjectKind::Procedure | ObjectKind::WebPanel | ObjectKind::Transaction => true,
-        ObjectKind::Attribute
-        | ObjectKind::DataProvider
+        ObjectKind::DataProvider
         | ObjectKind::DataSelector
+        | ObjectKind::StructuredDataType
+        | ObjectKind::Attribute
         | ObjectKind::DataView
         | ObjectKind::DesignSystem
         | ObjectKind::Domain
         | ObjectKind::Module
-        | ObjectKind::StructuredDataType
         | ObjectKind::Table => false,
     }
 }
@@ -789,6 +710,9 @@ fn parent_identity(metadata: &ObjectReadMetadata) -> Result<ParentIdentity, Stri
 }
 
 mod query_classification;
+mod write;
+
+pub use write::write_object_part;
 
 /// Queries active objects by exact name, type and/or recorded reference.
 /// Object descriptors, WebPanel version properties and references are read — no stored part is
@@ -852,7 +776,7 @@ pub fn query_objects(
         .iter()
         .filter(|row| {
             if let Some(wanted) = name_filter {
-                if !row.name.eq_ignore_ascii_case(wanted) {
+                if !query_classification::matches_name_pattern(&row.name, wanted) {
                     return false;
                 }
             }
@@ -901,101 +825,6 @@ pub fn query_objects(
         objects,
         total,
         truncated,
-    })
-}
-
-/// Replaces one known part of an existing object (or creates the object when
-/// `create` selects a kind and the name is free). Every stored part of the
-/// object must map to a known part kind: a save re-encodes all parts, so an
-/// unknown part is refused instead of being silently relocated. When
-/// `expected_kind` is set, a mismatch is refused before any write.
-pub fn write_object_part(
-    client: &UdmClient,
-    name: &str,
-    part: &str,
-    content: &str,
-    create: Option<ObjectKind>,
-    expected_kind: Option<ObjectKind>,
-) -> Result<WriteResult, String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("object name is required".to_string());
-    }
-
-    let part_kind = UdmPartKind::from_name(part);
-    if matches!(part_kind, UdmPartKind::Unknown(_)) {
-        return Err(format!(
-            "part '{part}' is not a writable engine part (Source, Rules, Events, Conditions, Variables, Structure, WebForm, PatternInstance)"
-        ));
-    }
-
-    // The engine writer mutates the in-process store only; a live Knowledge Base
-    // database would keep its old version. Refusing here is what keeps a
-    // reported write from silently not existing.
-    if client.is_live() {
-        return Err(format!(
-            "object '{trimmed}' resolves to a live Knowledge Base database and engine UDM writes are not implemented for live storage; refusing a write that would not persist (the SDK path must serve this edit)"
-        ));
-    }
-
-    let reader = UdmReader::new(shared_client(client));
-    let writer = UdmWriter::new(shared_client(client));
-
-    let existing = reader.read_object_by_name(trimmed)?;
-    let created = existing.is_none();
-    let mut object = match existing {
-        Some(object) => object,
-        None => {
-            let kind = create
-                .ok_or_else(|| format!("object '{trimmed}' was not found in the active model"))?;
-            KbObject::new(ObjectId::new(trimmed)?, trimmed.to_string(), kind)
-        }
-    };
-
-    if let Some(expected) = expected_kind {
-        if object.kind != expected {
-            return Err(format!(
-                "object '{}' is a {}, not a {}",
-                object.name,
-                type_name(object.kind),
-                type_name(expected)
-            ));
-        }
-    }
-
-    if let Some(unknown) = object.source_parts.iter().find(|stored| {
-        matches!(
-            UdmPartKind::from_name(&stored.name),
-            UdmPartKind::Unknown(_)
-        )
-    }) {
-        return Err(format!(
-            "object '{}' has part '{}' outside engine coverage; refusing a partial save",
-            object.name, unknown.name
-        ));
-    }
-
-    let canonical = part_kind.name().to_string();
-    match object
-        .source_parts
-        .iter_mut()
-        .find(|stored| stored.name.eq_ignore_ascii_case(&canonical))
-    {
-        Some(stored) => stored.source = content.to_string(),
-        None => object.source_parts.push(SourcePart {
-            name: canonical,
-            source: content.to_string(),
-        }),
-    }
-
-    let identity = writer.save_object(&object)?;
-    Ok(WriteResult {
-        name: identity.name,
-        object_type: type_name(object.kind).to_string(),
-        part: part_friendly_name(&part_kind).to_string(),
-        version_id: identity.version_id,
-        created,
-        bytes: content.len(),
     })
 }
 

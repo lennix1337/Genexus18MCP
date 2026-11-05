@@ -58,18 +58,30 @@ fn reference_target(
     object_name: &str,
     target: &str,
 ) -> Result<(i32, i32), String> {
-    if target.eq_ignore_ascii_case(object_name) {
+    let bare_object = object_name.rsplit('.').next().unwrap_or(object_name);
+    let bare_target = target.rsplit('.').next().unwrap_or(target);
+    if target.eq_ignore_ascii_case(object_name) || bare_target.eq_ignore_ascii_case(bare_object) {
         return Ok(self_entity);
     }
-    active
+    if let Some(rec) = active
         .iter()
         .find(|rec| rec.name.eq_ignore_ascii_case(target))
-        .map(|rec| (rec.entity_type_id, rec.entity_id))
-        .ok_or_else(|| {
-            format!(
-                "'{object_name}' references '{target}', which is not an object of this model; refusing to store a dangling reference"
-            )
+    {
+        return Ok((rec.entity_type_id, rec.entity_id));
+    }
+    let bare_matches: Vec<_> = active
+        .iter()
+        .filter(|rec| {
+            let rec_bare = rec.name.rsplit('.').next().unwrap_or(&rec.name);
+            rec_bare.eq_ignore_ascii_case(bare_target)
         })
+        .collect();
+    if bare_matches.len() == 1 {
+        return Ok((bare_matches[0].entity_type_id, bare_matches[0].entity_id));
+    }
+    Err(format!(
+        "'{object_name}' references '{target}', which is not an object of this model; refusing to store a dangling reference"
+    ))
 }
 
 fn validate_object_name_for_sql(name: &str) -> Result<(), String> {
@@ -84,7 +96,7 @@ fn validate_object_name_for_sql(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn format_sql_varbinary_hex(bytes: &[u8]) -> String {
+pub(crate) fn format_sql_varbinary_hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(2 + bytes.len() * 2);
     out.push_str("0x");
     for &byte in bytes {
@@ -93,7 +105,7 @@ fn format_sql_varbinary_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn escape_sql_literal(value: &str) -> String {
+pub(crate) fn escape_sql_literal(value: &str) -> String {
     value.replace('\'', "''")
 }
 
@@ -188,6 +200,12 @@ impl UdmWriter {
 
             let entity_id = self.client.allocate_entity_id()?;
             let version_id = 1;
+
+            if self.client.is_live() && self.client.live_writes_enabled() {
+                let guid = object.id.as_str();
+                self.client
+                    .insert_entity_guid(entity_type_id, entity_id, guid)?;
+            }
 
             // 1. Insert ModelEntityVersion
             self.client
@@ -300,6 +318,18 @@ impl UdmWriter {
             ));
         }
         let parts = stored_parts(&resolver, object)?;
+
+        if self.client.is_live() && self.client.live_writes_enabled() {
+            let mut allocated_part_ids = Vec::with_capacity(parts.len());
+            for _ in 0..parts.len() {
+                allocated_part_ids.push(self.client.allocate_entity_id()?);
+            }
+            let (identity, sql) =
+                self.plan_save_existing_object_sql(object, &allocated_part_ids)?;
+            self.client.execute_live_sql(&sql)?;
+            self.verify_saved_object_readback(&identity, object)?;
+            return Ok(identity);
+        }
 
         self.client.begin_transaction()?;
 

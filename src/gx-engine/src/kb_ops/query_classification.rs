@@ -68,3 +68,81 @@ fn webpanel_type(properties: Option<&str>) -> Result<&'static str, String> {
         Some(_) => Err("unsupported WEB_COMP value".into()),
     }
 }
+
+/// Matches an object name against a query pattern.
+/// If `pattern` does not contain '*', performs an exact case-insensitive match.
+/// If `pattern` contains '*', supports prefix ('P*'), suffix ('*trn'), substring ('*cust*'), or multi-wildcard globs.
+pub(super) fn matches_name_pattern(name: &str, pattern: &str) -> bool {
+    let pattern = pattern.trim();
+    let name = name.trim();
+    if !pattern.contains('*') {
+        return name.eq_ignore_ascii_case(pattern);
+    }
+    let pattern_lower = pattern.to_ascii_lowercase();
+    let name_lower = name.to_ascii_lowercase();
+
+    let parts: Vec<&str> = pattern_lower.split('*').collect();
+    if parts.len() == 2 {
+        let prefix = parts[0];
+        let suffix = parts[1];
+        if name_lower.len() < prefix.len() + suffix.len() {
+            return false;
+        }
+        return name_lower.starts_with(prefix) && name_lower.ends_with(suffix);
+    }
+
+    let mut remainder = &name_lower[..];
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            if !remainder.starts_with(part) {
+                return false;
+            }
+            remainder = &remainder[part.len()..];
+        } else if i == parts.len() - 1 && !pattern_lower.ends_with('*') {
+            return remainder.ends_with(part);
+        } else if let Some(idx) = remainder.find(part) {
+            remainder = &remainder[idx + part.len()..];
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matches_name_pattern;
+
+    #[test]
+    fn test_exact_matches() {
+        assert!(matches_name_pattern("Customer", "Customer"));
+        assert!(matches_name_pattern("customer", "CUSTOMER"));
+        assert!(!matches_name_pattern("Customer", "Vendor"));
+    }
+
+    #[test]
+    fn test_prefix_matches() {
+        assert!(matches_name_pattern("CustomerList", "Customer*"));
+        assert!(matches_name_pattern("customerlist", "CUSTOMER*"));
+        assert!(!matches_name_pattern("VendorList", "Customer*"));
+    }
+
+    #[test]
+    fn test_suffix_matches() {
+        assert!(matches_name_pattern("CustomerTrn", "*Trn"));
+        assert!(matches_name_pattern("customertrn", "*TRN"));
+        assert!(!matches_name_pattern("CustomerTrn", "*Pr"));
+    }
+
+    #[test]
+    fn test_substring_matches() {
+        assert!(matches_name_pattern("PGetCustomerData", "*Customer*"));
+        assert!(matches_name_pattern("pgetcustomerdata", "*CUSTOMER*"));
+        assert!(!matches_name_pattern("PVendorData", "*Customer*"));
+        assert!(matches_name_pattern("  CustomerList  ", "  Customer*  "));
+        assert!(matches_name_pattern("PGetCustomerData", "*Get*Data*"));
+    }
+}

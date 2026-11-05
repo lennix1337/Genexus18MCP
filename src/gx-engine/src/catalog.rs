@@ -511,6 +511,7 @@ impl Catalog {
                 .references
                 .iter()
                 .map(|reference| reference.target.clone())
+                .filter(|target| self.objects.contains_key(target))
                 .collect();
             remaining_dependencies.insert(id.clone(), unique_dependencies.len());
             for dependency in unique_dependencies {

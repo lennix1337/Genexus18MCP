@@ -1,6 +1,7 @@
 use super::*;
+use crate::catalog::{KbObject, ObjectId, SourcePart};
 use crate::udm::ModelEntityVersionRecord;
-use crate::udm::writer::UdmObjectIdentity;
+use crate::udm::writer::{UdmObjectIdentity, UdmWriter};
 
 const ALPHA_SHA: &str = "8d6e1d4ad45838c31ecd8f897bb9909f6f81f58695b62e20b932165db2ac3e8b";
 
@@ -818,4 +819,46 @@ fn scoped_reads_validate_inputs_before_selecting_version_scope() {
         read_object_page_scoped(&trunk, None, " ", "Source", None, None, ReadClient::Mcp),
         Err(KbReadError::Operation("object name is required".into()))
     );
+}
+
+#[test]
+fn autonomous_metadata_and_version_token_resolution() {
+    assert!(sdk_text_part("SOURCE"));
+    assert!(sdk_text_part("EVENTS"));
+    assert!(sdk_text_part("RULES"));
+    assert!(sdk_text_part("CONDITIONS"));
+    assert!(sdk_text_token_eligible(ObjectKind::Procedure, "SOURCE"));
+
+    let client = UdmClient::new_in_memory();
+    let source_text = "// autonomous procedure logic";
+    let identity = UdmWriter::new(Arc::new(client.clone()))
+        .create_object(&object("PAutoTokenProc", &[("SOURCE", source_text)]))
+        .expect("create PAutoTokenProc");
+    seed_metadata(
+        &client,
+        &identity,
+        None,
+        None,
+        None,
+        Some(SAVED_TICKS),
+        None,
+    );
+
+    let read_all = read_object(&client, "PAutoTokenProc", None).expect("read PAutoTokenProc");
+    assert_eq!(read_all.parts.len(), 1);
+    let part = &read_all.parts[0];
+    assert_eq!(part.name, "SOURCE");
+    assert_eq!(part.source, source_text);
+
+    let token_page = read_object_page(
+        &client,
+        "PAutoTokenProc",
+        "SOURCE",
+        None,
+        None,
+        ReadClient::Mcp,
+    )
+    .expect("read page with token");
+    assert_eq!(token_page.source, source_text);
+    assert!(!token_page.version_token.is_empty());
 }

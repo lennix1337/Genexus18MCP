@@ -362,12 +362,21 @@ fn test_webpanel_events_lifecycle_and_grid_load() {
     let ev_user = WebPanelEvent::new("'DoExport'", "Call(ExportPdf)");
     assert!(ev_user.is_user());
 
+    let ev_enter = WebPanelEvent::new("Enter", "&Count = &Count + 1");
+    assert!(ev_enter.is_enter());
+
     wp.events.push(ev_start);
     wp.events.push(ev_refresh);
     wp.events.push(ev_grid_load);
     wp.events.push(ev_user);
+    wp.events.push(ev_enter);
 
     assert!(wp.validate().is_ok());
+
+    let class = gx_engine::csharp::WebPanelClass::from_webpanel(&wp);
+    let code = class.emit();
+    assert!(code.contains("E13_Enter();"));
+    assert!(code.contains("protected void E13_Enter( )"));
 
     // Fails closed if multiple Start events defined
     let mut wp_dup_start = wp.clone();

@@ -163,8 +163,8 @@ impl ReadSession {
             .write_all(batch.as_bytes())
             .and_then(|_| self.input.flush())
             .map_err(|error| format!("cannot send sqlcmd read: {error}"))?;
-        let mut bytes = Vec::new();
-        let mut line = Vec::new();
+        let mut bytes = Vec::with_capacity(65536);
+        let mut line = Vec::with_capacity(1024);
         loop {
             line.clear();
             if self

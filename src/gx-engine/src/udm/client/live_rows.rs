@@ -45,32 +45,52 @@ pub(super) fn entity_version_from_fields(
 /// by a dashed separator is still skipped, and blank lines are ignored. Any other
 /// line with the wrong field count is an error: a row dropped here would be a
 /// missing object, part or reference in the answer, which is a false answer.
-pub(super) fn parse_live_rows(raw: &str, columns: usize) -> Result<Vec<Vec<&str>>, String> {
-    let lines: Vec<&str> = raw
+/// Splits `sqlcmd -s <tab>` output and streams each row of exactly `columns` fields into `callback`.
+/// Uses a single reusable buffer to avoid heap allocations per row.
+pub(super) fn for_each_live_row<'a>(
+    raw: &'a str,
+    columns: usize,
+    mut callback: impl FnMut(&[&'a str]) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut fields = Vec::with_capacity(columns);
+    let mut iter = raw
         .lines()
         .map(|line| line.trim_end_matches('\r'))
         .filter(|line| !line.trim().is_empty())
-        .collect();
-    let mut rows = Vec::with_capacity(lines.len());
-    for (index, line) in lines.iter().enumerate() {
+        .peekable();
+
+    while let Some(line) = iter.next() {
         if is_separator_line(line) {
             continue;
         }
-        if lines
-            .get(index + 1)
-            .is_some_and(|next| is_separator_line(next))
-        {
+        if iter.peek().is_some_and(|next| is_separator_line(next)) {
             continue;
         }
-        let fields: Vec<&str> = line.split('\t').map(str::trim).collect();
+        fields.clear();
+        for field in line.split('\t') {
+            fields.push(field.trim());
+        }
         if fields.len() != columns {
             return Err(format!(
                 "sqlcmd returned a row with {} tab-separated fields; expected {columns}",
                 fields.len()
             ));
         }
-        rows.push(fields);
+        callback(&fields)?;
     }
+    Ok(())
+}
+
+/// Splits `sqlcmd -s <tab>` output into rows of exactly `columns` fields. `live.rs` passes `-y 0`,
+/// which makes sqlcmd print no header. A header followed by a dashed separator is still skipped, and blank
+/// lines are ignored. Any other line with the wrong field count is an error: a row dropped here would be a
+/// missing object, part or reference in the answer, which is a false answer.
+pub(super) fn parse_live_rows(raw: &str, columns: usize) -> Result<Vec<Vec<&str>>, String> {
+    let mut rows = Vec::new();
+    for_each_live_row(raw, columns, |fields| {
+        rows.push(fields.to_vec());
+        Ok(())
+    })?;
     Ok(rows)
 }
 
@@ -84,10 +104,12 @@ impl UdmClient {
         decode: impl Fn(&[&str]) -> Result<T, String>,
     ) -> Result<Vec<T>, String> {
         let raw = self.execute_live_sql(sql)?;
-        parse_live_rows(&raw, columns)?
-            .iter()
-            .map(|row| decode(row))
-            .collect()
+        let mut records = Vec::new();
+        for_each_live_row(&raw, columns, |row| {
+            records.push(decode(row)?);
+            Ok(())
+        })?;
+        Ok(records)
     }
 }
 

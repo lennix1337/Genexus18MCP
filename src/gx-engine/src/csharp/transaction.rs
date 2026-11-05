@@ -195,6 +195,10 @@ impl TransactionClass {
     }
 
     fn emit_bc_methods(&self, out: &mut String) {
+        if !self.is_business_component {
+            return;
+        }
+
         let key_attrs: Vec<&TransactionAttributeRef> = self
             .structure
             .as_ref()
@@ -246,6 +250,20 @@ impl TransactionClass {
         let _ = writeln!(out, "            }}");
         let _ = writeln!(out);
         let _ = writeln!(out, "         }}");
+        let _ = writeln!(out, "      }}");
+        let _ = writeln!(out);
+
+        let _ = writeln!(out, "      public void Insert( )");
+        let _ = writeln!(out, "      {{");
+        let _ = writeln!(out, "         Mode = \"INS\";");
+        let _ = writeln!(out, "         Save();");
+        let _ = writeln!(out, "      }}");
+        let _ = writeln!(out);
+
+        let _ = writeln!(out, "      public void Update( )");
+        let _ = writeln!(out, "      {{");
+        let _ = writeln!(out, "         Mode = \"UPD\";");
+        let _ = writeln!(out, "         Save();");
         let _ = writeln!(out, "      }}");
         let _ = writeln!(out);
 
