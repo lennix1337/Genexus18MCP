@@ -35,6 +35,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\GxMcp.Shared\JsonIngress.cs" Link="Shared\JsonIngress.cs" />
+    <Compile Include="..\GxMcp.Shared\SharedHost\*.cs" LinkBase="Shared\SharedHost" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\config\gx-versions.json" Link="config\gx-versions.json">
