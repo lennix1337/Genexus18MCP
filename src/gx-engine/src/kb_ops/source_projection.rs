@@ -24,16 +24,15 @@ pub(super) fn project_sdk_source(part_name: &str, source: &str) -> String {
             quote @ (b'"' | b'\'') => {
                 let mut end = i + 1;
                 while end < bytes.len() && bytes[end] != b'\n' {
-                    // Rules double-quoted literals consume escapes before testing the terminator.
-                    if quote == b'"'
+                    // Rules double-quoted literals consume escapes before testing the terminator;
+                    // a doubled single quote is an escaped quote inside a single-quoted literal.
+                    let escaped_double = quote == b'"'
                         && bytes[end] == b'\\'
-                        && bytes.get(end + 1).is_some_and(|&byte| byte != b'\n')
-                    {
-                        end += 2;
-                    } else if quote == b'\''
+                        && bytes.get(end + 1).is_some_and(|&byte| byte != b'\n');
+                    let doubled_single = quote == b'\''
                         && bytes[end] == b'\''
-                        && bytes.get(end + 1) == Some(&b'\'')
-                    {
+                        && bytes.get(end + 1) == Some(&b'\'');
+                    if escaped_double || doubled_single {
                         end += 2;
                     } else if bytes[end] == quote {
                         end += 1;
