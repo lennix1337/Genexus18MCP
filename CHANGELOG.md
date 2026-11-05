@@ -7,7 +7,7 @@
 
 ### Added
 
-- **Plan 133 & 134 gx-engine architectural parity milestones:** Content-addressed SHA-256 build cache with automatic LRU and stale `.tmp-*` directory pruning (`BuildCache::prune_if_needed`); autonomous UDM metadata and deterministic version token resolution directly from SQL Server tables (`ModelEntityVersion`, `UtcTicks`, `ParentIdentity`); C# ADO.NET For Each cursor loop generation with declared variable type resolution and `ParDef` parameter inference (`@Param`, `GXType`, length, decimals); WebPanel `Enter` event lifecycle generation (`E13_Enter()`) and distinct `E11`–`E15` event method prefixes; Business Component companion class emission (`[Transaction]BC.cs` / `<name>_bc`) with type-safe rule conditions, defaults, and CRUD/transaction API (`Load`, `Save`, `Insert`, `Update`, `Delete`, `Success`, `Fail`, `GetMessages`); transactional live UDM persistence (`UdmWriter`) with raw composition loading (`load_raw_object`), atomic `SERIALIZABLE` T-SQL batching (`plan_create_object_sql`, `plan_save_existing_object_sql`, `plan_delete_object_sql`), and fail-closed safety guards; native UDM XML part decoding (`PatternInstance`, `WebForm`, `Variables`, `Structure`); native single-part edit contract (`EngineEditContract.cs`) with strict argument validation; streaming zero-allocation row parsing (`live_rows.rs`); zero-allocation ASCII case-insensitive wildcard pattern matching in KB object queries (`matches_name_pattern`); topological dependency ordering with external reference partitioning in `Catalog`; panic-free frontend AST fuzzing robustness (`tests/frontend_fuzz_robustness.rs`).
+- The native `gx-engine` backend covers more of the GeneXus compiler: a content-addressed build cache that prunes itself, object metadata and version tokens read straight from the KB's SQL Server tables, C# `For Each` cursor loops with typed parameters, WebPanel `Enter` and `E11`-`E15` event methods, Business Component companion classes with the `Load`/`Save`/`Insert`/`Update`/`Delete` API, transactional writes of objects back to the KB with fail-closed guards, and decoding of `PatternInstance`, `WebForm`, `Variables` and `Structure` parts. Single-part edits through the engine validate their arguments strictly.
 
 ### Changed
 
@@ -29,6 +29,7 @@
 - `release.ps1` ends every run with one `RELEASE SUMMARY:` line (version, tag, release, assets, npm, exit code and, on failure, the failed step).
 - `release.ps1 -DryRun` rehearses the whole flow with git and gh stubbed; `scripts/tests/test-release-dryrun.ps1` runs it in the CI release script suite and fails if a write call is reached.
 - The protected SDK job runs the Worker net48 suite and the ProcessSmoke lane through `release-preflight.ps1 -OnlyLanes`, the same lane definitions `release.ps1` certifies with; `scripts/tests/test-release-lane-parity.ps1` guards the lane names.
+- The CI-check wiring in `release.ps1` (quiet check vs. hard assert before the build, the decision to create a candidate, and the wait before tagging) is covered by `scripts/tests/test-release-ci-wiring.ps1`. https://github.com/lennix1337/Genexus18MCP/issues/861
 
 ## v4.3.0 - 2026-11-03
 
