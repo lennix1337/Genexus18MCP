@@ -278,6 +278,20 @@ namespace GxMcp.Worker.Services
             catch { /* best-effort */ }
         }
 
+        // Issue #886: add never changes the type of a variable that is already declared.
+        // WriteNoChange alone does not say so, and a caller read it as "type already right".
+        internal static JObject BuildVariableBatchResult(int added, int existed, int failed, JArray outcomes)
+        {
+            var result = new JObject
+            {
+                ["counts"] = new JObject { ["added"] = added, ["existed"] = existed, ["failed"] = failed },
+                ["outcomes"] = outcomes
+            };
+            if (existed > 0)
+                result["hint"] = "Variables already declared were left as they are (itemStatus=Exists): adding never changes their type. Use genexus_modify_variable to change it.";
+            return result;
+        }
+
         private string DeleteVariableInternal(string target, string varName)
         {
             try
@@ -879,11 +893,7 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Ok(
                     target: target,
                     code: added > 0 ? "VariableAdded" : "WriteNoChange",
-                    result: new JObject
-                    {
-                        ["counts"] = new JObject { ["added"] = added, ["existed"] = existed, ["failed"] = failed },
-                        ["outcomes"] = outcomes
-                    });
+                    result: BuildVariableBatchResult(added, existed, failed, outcomes));
             }
             catch (Exception ex)
             {
