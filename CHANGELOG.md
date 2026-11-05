@@ -15,6 +15,7 @@
 
 ### Internal
 
+- `AGENTS.md` drops from 30.9 KB to 21.5 KB so Antigravity `agy` no longer truncates it at 24,000 bytes: the KB selection contracts, test KB table, runtime iteration and install/update decision matrix moved verbatim to `docs/agent-operations.md`, with the rules and pointers kept in `AGENTS.md`; `scripts/tests/docs.test.js` fails if `AGENTS.md` grows past the limit again.
 - `release.ps1` runs the complete local preflight before any remote state: the candidate branch and its PR are created only after the preflight passes. A failed run undoes only what it created (the local release commit, its local tag and the candidate branch/PR), and a rerun replaces its own stale candidate branch instead of failing on a non-fast-forward push.
 - `release.ps1` ends every run with one `RELEASE SUMMARY:` line (version, tag, release, assets, npm, exit code and, on failure, the failed step).
 - `release.ps1 -DryRun` rehearses the whole flow with git and gh stubbed; `scripts/tests/test-release-dryrun.ps1` runs it in the CI release script suite and fails if a write call is reached.
