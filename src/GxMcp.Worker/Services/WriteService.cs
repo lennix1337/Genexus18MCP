@@ -2124,6 +2124,7 @@ namespace GxMcp.Worker.Services
 
                 // 1. SET CONTENT
                 bool contentSet = false;
+                IReadOnlyList<VariableInjector.InjectedVariable> autoCreatedVariables = null;
                 if (part is global::Artech.Genexus.Common.Parts.VariablesPart varPart)
                 {
                     VariableInjector.SetVariablesFromText(varPart, decodedCode);
@@ -2138,7 +2139,7 @@ namespace GxMcp.Worker.Services
                     {
                         try {
                             var index = _objectService.GetKbService().GetIndexCache().GetIndex();
-                            VariableInjector.InjectVariables(obj, decodedCode, index);
+                            autoCreatedVariables = VariableInjector.InjectVariables(obj, decodedCode, index);
                         } catch (Exception ex) {
                             Logger.Warn("[DEBUG-SAVE] Auto-inject variables failed: " + ex.Message);
                         }
@@ -2220,6 +2221,7 @@ namespace GxMcp.Worker.Services
                                     };
                                     string fpMsgs = GetSdkMessagesSafe(part);
                                     if (!string.IsNullOrWhiteSpace(fpMsgs)) fpResult["sdkMessages"] = fpMsgs;
+                                    WritePolicy.AddAutoCreatedVariables(fpResult, autoCreatedVariables);
                                     return Models.McpResponse.Ok(target: target, code: "WriteApplied", result: fpResult);
                                 }
                             }
@@ -2237,6 +2239,7 @@ namespace GxMcp.Worker.Services
                                 };
                                 string fpMsgs = GetSdkMessagesSafe(part);
                                 if (!string.IsNullOrWhiteSpace(fpMsgs)) fpResult["sdkMessages"] = fpMsgs;
+                                WritePolicy.AddAutoCreatedVariables(fpResult, autoCreatedVariables);
                                 return Models.McpResponse.Ok(target: target, code: "WriteApplied", result: fpResult);
                             }
                         }
@@ -2444,6 +2447,7 @@ namespace GxMcp.Worker.Services
                                     ["objectSaved"] = true,
                                     ["metadataStampPersisted"] = metadataStampPersisted
                                 };
+                                WritePolicy.AddAutoCreatedVariables(warnPayload, autoCreatedVariables);
                                 return Models.McpResponse.Ok(
                                     target: target,
                                     code: "WriteApplied",
@@ -2477,6 +2481,7 @@ namespace GxMcp.Worker.Services
                     }
                     if (writeWarnings.Count > 0)
                         writeResult["warnings"] = writeWarnings;
+                    WritePolicy.AddAutoCreatedVariables(writeResult, autoCreatedVariables);
                     return Models.McpResponse.Ok(
                         target: target,
                         code: "WriteApplied",

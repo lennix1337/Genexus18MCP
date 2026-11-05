@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **`genexus_edit` Source reports the variables the save declared** (#889): the result carries `autoCreatedVariables` (name, type, length, decimals) and a warning when an undeclared `&Variable` was declared on its own, instead of leaving a `VarChar(100)` to surface later as a `Varchar=Date` build error.
 
 <!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
      subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
