@@ -105,7 +105,6 @@ namespace GxMcp.Worker.Services
                 if (method == "system" && action == "GetSdkBusyStatus")
                     return true;
 
-                
                 // Any operation interacting with GeneXus SDK (COM objects) MUST run in the STA thread to prevent corruption
                 return false;
             }
