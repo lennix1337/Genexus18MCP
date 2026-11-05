@@ -282,6 +282,29 @@ namespace GxMcp.Worker.Helpers
         }
 
         /// <summary>
+        /// Write an SDT member's primitive type through the unambiguous <c>Type</c> property.
+        /// The Artech SDTItem hierarchy shadows <c>Type</c> (issues #542, #865): a plain
+        /// reflection lookup throws AmbiguousMatchException and a <c>dynamic</c> assignment
+        /// binds the shadowed member, so the saved member loses its type. No-op when the
+        /// member already carries <paramref name="dbType"/>.
+        /// </summary>
+        public static void SetMemberType(object target, object dbType)
+        {
+            if (target == null || dbType == null) return;
+            try
+            {
+                var p = GetPropertyUnambiguous(target.GetType(), "Type");
+                if (p == null || !p.CanWrite)
+                {
+                    Logger.Debug("[SDT WRITE] No writable Type property on " + target.GetType().Name);
+                    return;
+                }
+                if (!Equals(p.GetValue(target, null), dbType)) p.SetValue(target, dbType, null);
+            }
+            catch (Exception ex) { Logger.Debug("[SDT WRITE] Updating member Type failed: " + ex.Message); }
+        }
+
+        /// <summary>
         /// Apply a domain reference by setting <c>attr.DomainBasedOn</c> via reflection.
         /// Caller is responsible for resolving <paramref name="domainObj"/> from the KB
         /// (e.g. <c>Artech.Genexus.Common.Objects.Domain.Get(model, name)</c>).

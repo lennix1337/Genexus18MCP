@@ -574,7 +574,7 @@ namespace GxMcp.Worker.Parsers
                             object dbType;
                             try { dbType = ((dynamic)attributeMemberObj).Type; }
                             catch { dbType = Enum.Parse(eDBTypeT, "VARCHAR"); }
-                            targetChild.Type = dbType;
+                            GxMcp.Worker.Helpers.AttributeTypeApplier.SetMemberType((object)targetChild, dbType);
                         } catch { }
                         // issue #109: bind attribute reference to SDT member
                         DomainPropertyApplier.ApplyAttributeBasedOn((object)targetChild, attributeMemberObj);
@@ -591,7 +591,7 @@ namespace GxMcp.Worker.Parsers
                             object dbType;
                             try { dbType = ((dynamic)domainMemberObj).DataType; }
                             catch { dbType = Enum.Parse(eDBTypeT, "VARCHAR"); }
-                            targetChild.Type = dbType;
+                            GxMcp.Worker.Helpers.AttributeTypeApplier.SetMemberType((object)targetChild, dbType);
                         } catch { }
                         // issue #51: bind domain reference to SDT member
                         DomainPropertyApplier.ApplyDomainBasedOn((object)targetChild, domainMemberObj);
@@ -607,7 +607,7 @@ namespace GxMcp.Worker.Parsers
                         try {
                             Type eDBType = targetChild.GetType().Assembly.GetType("Artech.Genexus.Common.eDBType");
                             var resolvedDb = ResolveDbType(eDBType, pNode.TypeStr);
-                            if (resolvedDb != null) targetChild.Type = resolvedDb;
+                            GxMcp.Worker.Helpers.AttributeTypeApplier.SetMemberType((object)targetChild, resolvedDb);
                         } catch { }
 
                         // issue #31.1: apply Length/Decimals when the type carries them

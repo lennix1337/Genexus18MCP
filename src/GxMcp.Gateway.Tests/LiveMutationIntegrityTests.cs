@@ -122,6 +122,34 @@ public sealed class LiveMutationIntegrityTests : IClassFixture<LiveGatewayHarnes
     }
 
     [LiveKbFact]
+    public async Task SdtStructureDslWriteKeepsCharacterMembersAndAddsNewOnes()
+    {
+        await Call("genexus_whoami", new JObject());
+        string name = "McpSdtChar" + Guid.NewGuid().ToString("N").Substring(0, 10);
+        bool created = false;
+        try
+        {
+            await Call("genexus_create", new JObject { ["action"] = "object", ["name"] = name, ["type"] = "SDT", ["firstItem"] = "plaprtimp", ["firstItemType"] = "Character(5)" });
+            created = true;
+            await Call("genexus_edit", new JObject
+            {
+                ["name"] = name,
+                ["part"] = "Structure",
+                ["mode"] = "full",
+                ["content"] = "plaprtimp : CHARACTER(5)\nconsig : CHARACTER(1)\nvaltot : NUMERIC(8,2)",
+            });
+            string persisted = (await Read(name, "Structure")).ToString();
+            Assert.Contains("plaprtimp : CHARACTER(5)", persisted);
+            Assert.Contains("consig : CHARACTER(1)", persisted);
+            Assert.Contains("valtot : NUMERIC(8,2)", persisted);
+        }
+        finally
+        {
+            if (created) await Call("genexus_delete_object", new JObject { ["name"] = name, ["type"] = "SDT", ["confirm"] = true });
+        }
+    }
+
+    [LiveKbFact]
     public async Task MultipartPreviewAndVariablesDeltaPreservePersistedState()
     {
         JObject identity = await Call("genexus_whoami", new JObject());

@@ -745,25 +745,8 @@ namespace GxMcp.Worker.Services
             return applied;
         }
 
-        // issue #542: the Artech SDTItem hierarchy shadows `Type`, so a plain
-        // GetProperty("Type") throws AmbiguousMatchException and the member silently
-        // kept its old type. No-op when the member already carries the requested type.
         private static void SetMemberType(object target, object baseType)
-        {
-            if (target == null || baseType == null) return;
-            try
-            {
-                var p = GxMcp.Worker.Helpers.AttributeTypeApplier.GetPropertyUnambiguous(target.GetType(), "Type");
-                if (p == null || !p.CanWrite)
-                {
-                    Logger.Debug("[SDT WRITE] No writable Type property on " + target.GetType().Name);
-                    return;
-                }
-                object curType = p.GetValue(target, null);
-                if (!Equals(curType, baseType)) p.SetValue(target, baseType, null);
-            }
-            catch (Exception ex) { Logger.Debug("[SDT WRITE] Updating member Type failed: " + ex.Message); }
-        }
+            => GxMcp.Worker.Helpers.AttributeTypeApplier.SetMemberType(target, baseType);
 
         private static void SetIntProperty(object target, string propName, int value)
         {

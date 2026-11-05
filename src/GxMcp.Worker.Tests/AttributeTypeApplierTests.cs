@@ -195,5 +195,40 @@ namespace GxMcp.Worker.Tests
         {
             Assert.Null(AttributeTypeApplier.InvokeGetByName(null, "SampleDomain"));
         }
+
+        public enum FakeDbType { NUMERIC = 4, CHARACTER = 5 }
+
+        // Mirrors the Artech SDTItem hierarchy, where a derived class shadows Type.
+        public class FakeSdtItemBase
+        {
+            public object Type { get; set; }
+        }
+
+        public sealed class FakeSdtItem : FakeSdtItemBase
+        {
+            public new FakeDbType Type { get; set; } = FakeDbType.NUMERIC;
+        }
+
+        [Fact]
+        public void SetMemberType_writes_the_shadowing_Type_property_of_an_sdt_member()
+        {
+            var item = new FakeSdtItem();
+
+            AttributeTypeApplier.SetMemberType(item, FakeDbType.CHARACTER);
+
+            Assert.Equal(FakeDbType.CHARACTER, item.Type);
+            Assert.Null(((FakeSdtItemBase)item).Type);
+        }
+
+        [Fact]
+        public void SetMemberType_ignores_null_target_and_null_type()
+        {
+            var item = new FakeSdtItem();
+
+            AttributeTypeApplier.SetMemberType(null, FakeDbType.CHARACTER);
+            AttributeTypeApplier.SetMemberType(item, null);
+
+            Assert.Equal(FakeDbType.NUMERIC, item.Type);
+        }
     }
 }
