@@ -640,6 +640,24 @@ namespace GxMcp.Worker.Services
             string actionName = args?["actionName"]?.ToString();
             XElement group = FindGroup(document, groupName);
 
+            if (group == null && IsExistingActionOperation(operation))
+            {
+                string formContainerName = FirstNonBlank(groupName, args?["containerName"]?.ToString(), args?["container"]?.ToString());
+                if (formContainerName != null)
+                {
+                    groupName = formContainerName;
+                    List<XElement> formContainers = FindFormContainers(document, formContainerName).ToList();
+                    if (formContainers.Count > 1)
+                        return new JObject
+                        {
+                            ["code"] = "FormActionContainerAmbiguous",
+                            ["error"] = "Form action container '" + formContainerName + "' matched more than one table.",
+                            ["matchingContainers"] = new JArray(formContainers.Select(DescribeFormContainer))
+                        };
+                    group = formContainers.SingleOrDefault();
+                }
+            }
+
             if (operation == "add_grid_action" && group == null)
             {
                 if (string.IsNullOrWhiteSpace(groupName)) return Error("MissingActionGroup", "group is required.");
@@ -973,6 +991,12 @@ namespace GxMcp.Worker.Services
             ["controlName"] = Attr(container, "controlName"),
             ["path"] = ContainerPath(container)
         };
+
+        private static bool IsExistingActionOperation(string operation) =>
+            operation == "remove_action" || operation == "update_action" || operation == "move_action";
+
+        private static string FirstNonBlank(params string[] values) =>
+            values.Select(v => v?.Trim()).FirstOrDefault(v => !string.IsNullOrEmpty(v));
 
         private static XElement FindGroup(XDocument doc, string name) => string.IsNullOrWhiteSpace(name) ? null
             : doc.Descendants().FirstOrDefault(e => Is(e, "actionGroup") && Attr(e, "name").Equals(name, StringComparison.OrdinalIgnoreCase));
