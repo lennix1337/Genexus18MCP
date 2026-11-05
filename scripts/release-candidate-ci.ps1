@@ -183,52 +183,54 @@ function Cleanup-ReleaseCandidate {
     $candidateBranch = "candidate/$Tag"
     Step "Cleaning up candidate branch and PR ($candidateBranch)"
 
+    # Runs after publication: direct commands and Warn only, because Invoke-Cmd's Fail would turn a
+    # published release into a failed run. The candidate PR is normally already merged by then.
     $prNumber = if ($null -ne $statusState -and $statusState.Contains('candidate')) { $statusState.candidate.prNumber } else { $null }
     $closedPr = $false
 
     if ($prNumber) {
-        try {
-            Invoke-Cmd 'gh' @('pr', 'close', [string]$prNumber, '--delete-branch')
-            $closedPr = $true
-            Ok "Candidate PR #$prNumber closed and remote branch $candidateBranch deleted."
-        } catch {
-            Warn "Could not close candidate PR #${prNumber}: $($_.Exception.Message)"
+        $prState = @(& gh pr view ([string]$prNumber) --json state --jq '.state' 2>$null) -join ''
+        if ($LASTEXITCODE -eq 0 -and $prState.Trim() -ne 'OPEN') {
+            Ok "Candidate PR #$prNumber is already $($prState.Trim()); nothing to close."
+        } else {
+            & gh pr close ([string]$prNumber) --delete-branch 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $closedPr = $true
+                Ok "Candidate PR #$prNumber closed and remote branch $candidateBranch deleted."
+            } else {
+                Warn "Could not close candidate PR #$prNumber."
+            }
         }
     }
 
     if (-not $closedPr) {
-        try {
-            $prsRaw = @(gh pr list --head $candidateBranch --state open --json number 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $prsRaw.Count -gt 0) {
-                $openPrs = ($prsRaw -join [Environment]::NewLine) | ConvertFrom-Json
-                foreach ($p in $openPrs) {
-                    Invoke-Cmd 'gh' @('pr', 'close', [string]$p.number, '--delete-branch')
-                    Ok "Closed candidate PR #$($p.number) and deleted $candidateBranch."
+        $prsRaw = @(& gh pr list --head $candidateBranch --state open --json number 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $prsRaw.Count -gt 0) {
+            foreach ($p in @(($prsRaw -join [Environment]::NewLine) | ConvertFrom-Json)) {
+                & gh pr close ([string]$p.number) --delete-branch 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) {
                     $closedPr = $true
+                    Ok "Closed candidate PR #$($p.number) and deleted $candidateBranch."
+                } else {
+                    Warn "Could not close candidate PR #$($p.number)."
                 }
             }
-        } catch {
-            Warn "Could not clean up candidate PR via search: $($_.Exception.Message)"
         }
     }
 
     if (-not $closedPr) {
-        try {
-            $remoteCheck = @(& git ls-remote --heads origin "refs/heads/$candidateBranch" 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $remoteCheck.Count -gt 0) {
-                Invoke-Cmd 'git' @('push', 'origin', ":refs/heads/$candidateBranch")
-                Ok "Deleted remote candidate branch $candidateBranch."
-            }
-        } catch {
-            Warn "Could not delete remote candidate branch ${candidateBranch}: $($_.Exception.Message)"
+        $remoteCheck = @(& git ls-remote --heads origin "refs/heads/$candidateBranch" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $remoteCheck.Count -gt 0) {
+            & git push origin ":refs/heads/$candidateBranch" 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { Ok "Deleted remote candidate branch $candidateBranch." }
+            else { Warn "Could not delete remote candidate branch $candidateBranch." }
         }
     }
 
-    try {
-        $localExists = (& git branch --list $candidateBranch 2>$null).Trim()
-        if ($localExists) {
-            Invoke-Cmd 'git' @('branch', '-D', $candidateBranch)
-            Ok "Deleted local branch $candidateBranch."
-        }
-    } catch { }
+    $localExists = @(& git branch --list $candidateBranch 2>$null) -join ''
+    if ($localExists.Trim()) {
+        & git branch -D $candidateBranch 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Ok "Deleted local branch $candidateBranch." }
+        else { Warn "Could not delete local branch $candidateBranch." }
+    }
 }

@@ -110,6 +110,38 @@ $reopenProbe = {
 }
 $reopenResult = & $reopenProbe $candidateCiScript
 if (-not $reopenResult) { throw 'Ensure-ReleaseCandidateCi did not create a new candidate PR when the closed one could not be reopened.' }
+
+# Regression (v4.3.1): the candidate PR is merged into main before publication, so cleanup after
+# publication found it MERGED; 'gh pr close' exited 1 and Invoke-Cmd's Fail turned a published
+# release into a failed run. Cleanup must skip a PR that is no longer open and never call Fail.
+$cleanupProbe = {
+    param($ScriptPath)
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $script:closeCalls = 0
+    function Step($m) {}
+    function Ok($m) {}
+    function Warn($m) {}
+    function Fail($m) { throw "Fail: $m" }
+    function Invoke-Cmd {
+        param([string]$Exe, [string[]]$Arguments)
+        & $Exe @Arguments
+        if ($LASTEXITCODE -ne 0) { Fail "Command failed (exit $LASTEXITCODE): $Exe $($Arguments -join ' ')" }
+    }
+    function git { $global:LASTEXITCODE = 0 }
+    function gh {
+        $global:LASTEXITCODE = 0
+        if ($args[0] -eq 'pr' -and $args[1] -eq 'view') { return 'MERGED' }
+        if ($args[0] -eq 'pr' -and $args[1] -eq 'list') { return '[]' }
+        if ($args[0] -eq 'pr' -and $args[1] -eq 'close') { $script:closeCalls++; $global:LASTEXITCODE = 1; return }
+    }
+    $statusState = [ordered]@{ candidate = @{ prNumber = 883 } }
+    . $ScriptPath
+    Cleanup-ReleaseCandidate -Tag 'v0.0.1'
+    $script:closeCalls
+}
+$cleanupCloseCalls = & $cleanupProbe $candidateCiScript
+if ($cleanupCloseCalls -ne 0) { throw "Cleanup-ReleaseCandidate tried to close an already merged candidate PR ($cleanupCloseCalls call(s))." }
 $minorPatchRun = & pwsh -NoProfile -File (Join-Path $root 'release.ps1') -Minor -Patch -DryRun 2>&1
 if ($LASTEXITCODE -eq 0 -or ($minorPatchRun -join "`n") -notmatch 'Cannot specify both -Minor and -Patch') {
     throw 'Running release.ps1 with -Minor and -Patch must fail with conflict guidance.'

@@ -13,6 +13,8 @@
 
 ### Internal
 
+- `release.ps1`: the candidate-branch cleanup after publication no longer fails the run when the candidate PR is already merged; it skips a PR that is not open and only warns on cleanup errors (seen in v4.3.1, which published but ended as `failed`).
+
 ## v4.3.1 - 2026-11-05
 
 
