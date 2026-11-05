@@ -426,7 +426,7 @@ namespace GxMcp.Worker.Tests
 
         private static void AssertDisconnectPurges(Harness h, FakeAttachment a, FakeAttachment b, Action disconnect)
         {
-            h.Send(a, Sdk(1, progressToken: "progress-a"));
+            h.Send(a, Sdk(1, progressToken: "p-a"));
             var running = h.Pump().Single();
             h.Send(a, Sdk(2));
             h.Send(a, Sdk(3));

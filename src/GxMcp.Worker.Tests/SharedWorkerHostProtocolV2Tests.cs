@@ -13,7 +13,7 @@ namespace GxMcp.Worker.Tests
 {
     public sealed class SharedWorkerHostProtocolV2Tests
     {
-        private const string Secret = "SECRET-MARKER-V2";
+        private const string LeakMarker = "LEAK-MARKER-V2";
         private static readonly string IdentityKey = new string('b', 64);
 
         // ---- Host frames ----
@@ -147,7 +147,7 @@ namespace GxMcp.Worker.Tests
                 IdentityKey, @"C:\KBs\KbA");
 
             string text = frame.ToString(Formatting.None);
-            Assert.DoesNotContain(Secret, text, StringComparison.Ordinal);
+            Assert.DoesNotContain(LeakMarker, text, StringComparison.Ordinal);
             Assert.DoesNotContain("leaseToken", text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("sourceText", text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("att-a", text, StringComparison.Ordinal);
@@ -288,7 +288,7 @@ namespace GxMcp.Worker.Tests
             Assert.Null(ack["admission"]);
 
             string text = ack.ToString(Formatting.None);
-            Assert.DoesNotContain(Secret, text, StringComparison.Ordinal);
+            Assert.DoesNotContain(LeakMarker, text, StringComparison.Ordinal);
             Assert.DoesNotContain("leaseToken", text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("cancelToken", text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("r2", text, StringComparison.Ordinal);
@@ -332,12 +332,12 @@ namespace GxMcp.Worker.Tests
                 SessionId = session,
                 ClientRequestIdJson = "\"" + childId + "\"",
                 Operation = operation,
-                CancelToken = Secret + "-cancel",
+                CancelToken = LeakMarker + "-cancel",
                 EnqueuedAtMs = now,
                 Sequence = now,
                 Payload = new JObject
                 {
-                    ["params"] = new JObject { ["leaseToken"] = Secret + "-lease", ["sourceText"] = Secret + "-source" }
+                    ["params"] = new JObject { ["leaseToken"] = LeakMarker + "-lease", ["sourceText"] = LeakMarker + "-source" }
                 }.ToString(Formatting.None)
             });
             Assert.True(result.Started || result.Queued, "the scheduler refused a test request: " + result.RejectReason);
