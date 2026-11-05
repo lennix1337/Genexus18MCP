@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -28,8 +29,14 @@ namespace GxMcp.Gateway
     /// </summary>
     internal sealed class SharedWorkerConnection : IDisposable
     {
-        internal const int ProtocolVersion = 1;
+        // RFC #854: version 2 adds the status/status_ack diagnostics frames and the
+        // top-level "_gxmcpShared" response metadata. A version 1 host is refused at
+        // attach, because it would answer neither.
+        internal const int ProtocolVersion = 2;
         internal const int MaxFrameBytes = 4 * 1024 * 1024;
+
+        /// <summary>Top-level response key the broker uses for queue metadata (RFC #854).</summary>
+        internal const string SharedMetadataKey = "_gxmcpShared";
 
         /// <summary>
         /// Absolute ceiling past which a frame is abusive rather than merely large.
@@ -45,6 +52,8 @@ namespace GxMcp.Gateway
         private readonly string _nonce = Guid.NewGuid().ToString("N");
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly SemaphoreSlim _writeGate = new SemaphoreSlim(1, 1);
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<JObject?>> _pendingStatus =
+            new ConcurrentDictionary<string, TaskCompletionSource<JObject?>>(StringComparer.Ordinal);
         private NamedPipeClientStream? _pipe;
         private StreamReader? _reader;
         private StreamWriter? _writer;
@@ -117,6 +126,87 @@ namespace GxMcp.Gateway
         {
             if (rpc == null) throw new ArgumentNullException(nameof(rpc));
             return WriteLineAsync(rpc.ToString(Formatting.None), cancellationToken);
+        }
+
+        /// <summary>
+        /// Asks the host for its queue and child state (RFC #854 diagnostics). Returns the
+        /// <c>status_ack</c> frame whose <c>requestId</c> matches, or null when none arrives
+        /// within <paramref name="timeoutMs"/> or the attachment is not connected. A timeout
+        /// leaves the attachment connected; an acknowledgement that arrives later is
+        /// dropped by the read loop. Only <paramref name="cancellationToken"/> throws.
+        /// </summary>
+        internal async Task<JObject?> RequestStatusAsync(int timeoutMs, CancellationToken cancellationToken = default)
+        {
+            if (timeoutMs <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMs));
+            if (!IsConnected) return null;
+
+            string requestId = Guid.NewGuid().ToString("N");
+            var completion = new TaskCompletionSource<JObject?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingStatus[requestId] = completion;
+            try
+            {
+                using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                budget.CancelAfter(timeoutMs);
+                try
+                {
+                    await WriteLineAsync(new JObject
+                    {
+                        ["gxmcp"] = "status",
+                        ["type"] = "status",
+                        ["version"] = ProtocolVersion,
+                        ["protocolVersion"] = ProtocolVersion,
+                        ["key"] = _identity.Key,
+                        ["identityKey"] = _identity.Key,
+                        ["attachId"] = AttachId ?? string.Empty,
+                        ["attachmentId"] = AttachId ?? string.Empty,
+                        ["requestId"] = requestId
+                    }, budget.Token).ConfigureAwait(false);
+                    return await completion.Task.WaitAsync(budget.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return null;
+                }
+                catch (Exception ex) when (ex is IOException || ex is ObjectDisposedException || ex is InvalidDataException)
+                {
+                    return null;
+                }
+            }
+            finally
+            {
+                _pendingStatus.TryRemove(requestId, out _);
+            }
+        }
+
+        /// <summary>
+        /// Moves the broker's top-level <c>_gxmcpShared</c> object into
+        /// <c>result._meta.sharedHost</c>, keeping any existing <c>result._meta</c> members,
+        /// and removes the top-level key (RFC #854, Requirement 11 criterion 4). A response
+        /// without a result object has nowhere to carry the metadata, so the key is only
+        /// removed there: it is transport metadata and must not reach the MCP client.
+        /// Returns false, leaving the response unchanged, when the key is absent.
+        /// </summary>
+        internal static bool TryMoveSharedMetadata(JObject response)
+        {
+            if (response == null) return false;
+            JToken? shared = response[SharedMetadataKey];
+            if (shared == null) return false;
+            response.Remove(SharedMetadataKey);
+
+            if (response["result"] is JObject result)
+            {
+                JToken? existingMeta = result["_meta"];
+                if (existingMeta is JObject meta)
+                {
+                    meta["sharedHost"] = shared;
+                }
+                else if (existingMeta == null || existingMeta.Type == JTokenType.Null)
+                {
+                    result["_meta"] = new JObject { ["sharedHost"] = shared };
+                }
+                // A non-object result._meta is the Worker's own and is left as it is.
+            }
+            return true;
         }
 
         internal static JObject BuildAttachRequest(
@@ -295,6 +385,17 @@ namespace GxMcp.Gateway
                         continue;
                     if (frame != null && IsControlFrame(frame, "host_error"))
                         throw new InvalidOperationException(frame["message"]?.ToString() ?? "Shared Worker host error.");
+                    if (frame != null && IsControlFrame(frame, "status_ack"))
+                    {
+                        // RFC #854: a status acknowledgement is host control, never a Worker
+                        // line. One whose requester already timed out is dropped here.
+                        string statusRequestId = frame["requestId"]?.ToString() ?? string.Empty;
+                        if (statusRequestId.Length > 0 && _pendingStatus.TryRemove(statusRequestId, out var statusWaiter))
+                            statusWaiter.TrySetResult(frame);
+                        continue;
+                    }
+                    if (frame != null && TryMoveSharedMetadata(frame))
+                        line = frame.ToString(Formatting.None);
                     LineReceived?.Invoke(line);
                 }
             }
@@ -383,6 +484,11 @@ namespace GxMcp.Gateway
         {
             if (Interlocked.Exchange(ref _disconnected, 1) != 0) return;
             _lastError = failure?.ToString();
+            foreach (var statusRequestId in _pendingStatus.Keys)
+            {
+                if (_pendingStatus.TryRemove(statusRequestId, out var statusWaiter))
+                    statusWaiter.TrySetResult(null);
+            }
             try { Disconnected?.Invoke(failure); } catch { }
         }
 

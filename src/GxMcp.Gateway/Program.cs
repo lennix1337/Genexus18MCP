@@ -200,6 +200,9 @@ namespace GxMcp.Gateway
             public string? WorkerAlias { get; init; }
             /// <summary>Worker instance the command was offered to; tells an exit whether the command was delivered.</summary>
             public WorkerProcess? Worker { get; init; }
+            /// <summary>Worker command method and action (RFC #854): select the Operation_Class of a shared-host disconnect error.</summary>
+            public string? WorkerMethod { get; init; }
+            public string? WorkerAction { get; init; }
             /// <summary>MCP client request id (tools/call `id`) that spawned this worker request, when known.
             /// notifications/cancelled carries THIS id, not the gateway-generated key of _pendingRequests,
             /// so the cancel handler needs the bridge to find what to abort.</summary>

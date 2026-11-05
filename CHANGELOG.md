@@ -11,6 +11,8 @@
 
 ### Changed
 
+- In `shared-host` mode the Gateway speaks shared-host protocol version 2 and refuses a version 1 host at attach. It moves the host's queue metadata into `result._meta.sharedHost`, can ask the host for its status, extends a request's wait by the effective `Server.SharedHost.QueueWaitMs`, and answers a request left unanswered by a host disconnect with `SHARED_WORKER_RESTARTED` (`dispatchState="delivered-unanswered"`, `retryable` only for read commands). `isolated` mode is unchanged. https://github.com/lennix1337/Genexus18MCP/issues/854
+
 ### Fixed
 
 ### Internal
