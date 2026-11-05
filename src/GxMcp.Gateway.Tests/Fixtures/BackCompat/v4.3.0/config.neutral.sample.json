@@ -1,0 +1,17 @@
+{
+  "ConfigSchemaVersion": 2,
+  "GatewayMode": "stdio-isolated",
+  "GeneXus": {
+    "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
+    "WorkerExecutable": "C:\\path\\to\\GxMcp.Worker.exe"
+  },
+  "Server": {
+    "HttpPort": 0,
+    "McpStdio": true,
+    "BindAddress": "127.0.0.1",
+    "WorkerSharingMode": "isolated"
+  },
+  "Environment": {
+    "ResolutionPolicy": "strict"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "GeneXus": {
+    "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
+    "WorkerExecutable": "C:\\Projetos\\Genexus18MCP\\publish\\worker\\GxMcp.Worker.exe"
+  },
+  "Server": {
+    "HttpPort": 5000,
+    "McpStdio": true,
+    "BindAddress": "127.0.0.1",
+    "ArtifactOutputDirectory": "C:\\GenexusMCP\\Artifacts"
+  },
+  "Logging": {
+    "Level": "Debug",
+    "Path": "logs"
+  },
+  "Environment": {
+    "KBPath": "C:\\KBs\\AcademicoHomolog1",
+    "GX_SHADOW_PATH": "C:\\Projetos\\Genexus18MCP\\.gx_mirror",
+    "DataStoreAliases": {
+      "production": {
+        "dataStore": "Default",
+        "family": "sqlserver",
+        "server": "SERVER\\INSTANCE",
+        "database": "APP_PROD",
+        "schema": "dbo",
+        "integratedSecurity": true
+      }
+    }
+  }
+}
