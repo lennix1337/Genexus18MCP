@@ -4459,7 +4459,8 @@ namespace GxMcp.Worker.Services
         /// When requestedParts is null/empty the full default set is returned (backward-compatible).
         /// </summary>
         public string ReadObjectSourceParts(string target, IEnumerable<string> requestedParts, string typeFilter = null,
-            string guid = null, string entityKey = null, string path = null, bool refresh = false, string correlationId = null)
+            string guid = null, string entityKey = null, string path = null, bool refresh = false, string correlationId = null,
+            int? offset = null, int? limit = null)
         {
             var diagContext = new ReadDiagnosticContext
             {
@@ -4514,7 +4515,7 @@ namespace GxMcp.Worker.Services
                             ResolvedObject = obj,
                             RequestedSelector = diagContext.RequestedSelector
                         };
-                        string partJson = ReadObjectSourceInternal(obj, pName, null, null, "mcp", false, partContext);
+                        string partJson = ReadObjectSourceInternal(obj, pName, offset, limit, "mcp", false, partContext);
                         var pObj = JObject.Parse(partJson);
                         if (pName.IndexOf("Variables", StringComparison.OrdinalIgnoreCase) >= 0
                             && pObj["variables"] is JArray variableRows)

@@ -1954,7 +1954,8 @@ namespace GxMcp.Worker.Services
                 var requestedParts = partsTok?.Select(p => p.ToString()) ?? Enumerable.Empty<string>();
                 bool refresh = args?["refresh"]?.ToObject<bool?>() ?? false;
                 return ObjectService.DescribeReadFreshness(_objectService.ReadObjectSourceParts(target, requestedParts, args?["type"]?.ToString(),
-                    args?["guid"]?.ToString(), args?["entityKey"]?.ToString(), args?["path"]?.ToString(), refresh, correlationId), refresh);
+                    args?["guid"]?.ToString(), args?["entityKey"]?.ToString(), args?["path"]?.ToString(), refresh, correlationId,
+                    args?["offset"]?.ToObject<int?>(), args?["limit"]?.ToObject<int?>()), refresh);
             }
             if (action == "GetVariables") return _analyzeService.GetVariables(target);
             if (action == "GetAttribute") return _analyzeService.GetAttributeMetadata(target);
