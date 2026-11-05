@@ -147,6 +147,8 @@ pub struct CSharpEmitter<'a> {
     /// The class names (upper-cased) of the Procedures this class calls. A build refuses a caller whose
     /// callee it does not generate, so it needs to know these.
     callees: RefCell<BTreeSet<String>>,
+    navigation_levels: Option<&'a [crate::navigation::NavigationLevel]>,
+    cursor_index: std::cell::Cell<usize>,
 }
 
 /// The SDTs a Procedure resolves its member accesses against. Without a scope, member access is written
@@ -201,7 +203,23 @@ impl<'a> CSharpEmitter<'a> {
             call_temps: RefCell::new(BTreeMap::new()),
             temps: RefCell::new(TempPool::default()),
             callees: RefCell::new(BTreeSet::new()),
+            navigation_levels: None,
+            cursor_index: std::cell::Cell::new(0),
         }
+    }
+
+    /// Sets navigation levels for database DML generation.
+    pub fn with_navigation_levels(
+        mut self,
+        levels: &'a [crate::navigation::NavigationLevel],
+    ) -> Self {
+        self.navigation_levels = Some(levels);
+        self
+    }
+
+    /// Sets navigation levels on a mutable emitter reference.
+    pub fn set_navigation_levels(&mut self, levels: &'a [crate::navigation::NavigationLevel]) {
+        self.navigation_levels = Some(levels);
     }
 
     /// Sets the stored id of each variable, so that variables are written with the SDK's field names.

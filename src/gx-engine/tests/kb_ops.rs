@@ -271,6 +271,14 @@ fn write_on_a_live_connection_is_refused_instead_of_lost() {
 }
 
 #[test]
+fn live_writes_enabled_flag_toggles_safely() {
+    let client = UdmClient::new_in_memory();
+    assert!(!client.live_writes_enabled());
+    let client = client.with_live_writes(true);
+    assert!(client.live_writes_enabled());
+}
+
+#[test]
 fn type_name_mapping_round_trips() {
     assert_eq!(type_name(ObjectKind::Procedure), "Procedure");
     assert_eq!(type_name(ObjectKind::StructuredDataType), "SDT");
@@ -493,4 +501,123 @@ fn operations_serve_the_design_model_the_client_targets() {
     let read = read_object(&branch, "PBranch", None).expect("branch read");
     let source = read.parts.iter().find(|part| part.name == "SOURCE");
     assert_eq!(source.map(|part| part.source.as_str()), Some("// branch"));
+}
+
+#[test]
+fn test_query_objects_wildcard_patterns() {
+    let client = UdmClient::new_in_memory();
+    let writer = UdmWriter::new(Arc::new(client.clone()));
+    writer
+        .create_object(&object(
+            "CustomerList",
+            ObjectKind::Procedure,
+            &[("SOURCE", "// 1")],
+        ))
+        .unwrap();
+    writer
+        .create_object(&object(
+            "CustomerDetail",
+            ObjectKind::Procedure,
+            &[("SOURCE", "// 2")],
+        ))
+        .unwrap();
+    writer
+        .create_object(&object(
+            "VendorList",
+            ObjectKind::Procedure,
+            &[("SOURCE", "// 3")],
+        ))
+        .unwrap();
+
+    // Prefix wildcard query
+    let res_prefix = query_objects(&client, Some("Customer*"), None, None, 0).unwrap();
+    assert_eq!(res_prefix.total, 2);
+    let names: Vec<_> = res_prefix.objects.into_iter().map(|o| o.name).collect();
+    assert!(names.contains(&"CustomerList".to_string()));
+    assert!(names.contains(&"CustomerDetail".to_string()));
+
+    // Suffix wildcard query
+    let res_suffix = query_objects(&client, Some("*List"), None, None, 0).unwrap();
+    assert_eq!(res_suffix.total, 2);
+    let names_suffix: Vec<_> = res_suffix.objects.into_iter().map(|o| o.name).collect();
+    assert!(names_suffix.contains(&"CustomerList".to_string()));
+    assert!(names_suffix.contains(&"VendorList".to_string()));
+
+    // Substring wildcard query
+    let res_sub = query_objects(&client, Some("*omer*"), None, None, 0).unwrap();
+    assert_eq!(res_sub.total, 2);
+
+    // Exact query remains exact
+    let res_exact = query_objects(&client, Some("CustomerList"), None, None, 0).unwrap();
+    assert_eq!(res_exact.total, 1);
+    assert_eq!(res_exact.objects[0].name, "CustomerList");
+}
+
+#[test]
+fn read_object_serves_variables_and_structure_parts() {
+    let client = UdmClient::new_in_memory();
+    let writer = UdmWriter::new(Arc::new(client.clone()));
+
+    let vars_xml = r#"<Variables>
+        <Variable Name="Today">
+            <Properties>
+                <Property><Name>OBJ_TYPE</Name><Value>id_OTYPE_VAR</Value></Property>
+                <Property><Name>ATTCUSTOMTYPE</Name><Value>&lt;AttCustomType&gt;&lt;DataType&gt;6&lt;/DataType&gt;&lt;/AttCustomType&gt;</Value></Property>
+                <Property><Name>Length</Name><Value>8</Value></Property>
+            </Properties>
+        </Variable>
+    </Variables>"#;
+
+    writer
+        .create_object(&object(
+            "ProcWithVars",
+            ObjectKind::Procedure,
+            &[("SOURCE", "// proc body"), ("VARIABLES", vars_xml)],
+        ))
+        .unwrap();
+
+    let read_vars = read_object(&client, "ProcWithVars", Some(&["VARIABLES".to_string()])).unwrap();
+    assert_eq!(read_vars.parts.len(), 1);
+    assert_eq!(read_vars.parts[0].name, "VARIABLES");
+    assert!(read_vars.parts[0].source.contains("Today"));
+}
+
+#[test]
+fn read_object_serves_pattern_instance_and_webform() {
+    let client = UdmClient::new_in_memory();
+    let writer = UdmWriter::new(Arc::new(client.clone()));
+
+    let pattern_xml = r#"<PatternInstance Version="1.0" Pattern="WorkWithPlus">
+        <Instance Root="True"/>
+    </PatternInstance>"#;
+    let webform_xml = r#"<WebForm Layout="Responsive">
+        <Table Name="MainTable"/>
+    </WebForm>"#;
+
+    writer
+        .create_object(&object(
+            "WpWithPattern",
+            ObjectKind::WebPanel,
+            &[
+                ("EVENTS", "Event Start\nEndEvent"),
+                ("PATTERNINSTANCE", pattern_xml),
+                ("WEBFORM", webform_xml),
+            ],
+        ))
+        .unwrap();
+
+    let read_pattern = read_object(
+        &client,
+        "WpWithPattern",
+        Some(&["PATTERNINSTANCE".to_string()]),
+    )
+    .unwrap();
+    assert_eq!(read_pattern.parts.len(), 1);
+    assert_eq!(read_pattern.parts[0].name, "PATTERNINSTANCE");
+    assert!(read_pattern.parts[0].source.contains("WorkWithPlus"));
+
+    let read_form = read_object(&client, "WpWithPattern", Some(&["WEBFORM".to_string()])).unwrap();
+    assert_eq!(read_form.parts.len(), 1);
+    assert_eq!(read_form.parts[0].name, "WEBFORM");
+    assert!(read_form.parts[0].source.contains("MainTable"));
 }

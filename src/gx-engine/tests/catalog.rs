@@ -226,6 +226,24 @@ fn cycles_are_preserved_but_dependency_order_reports_blocked_objects() {
 }
 
 #[test]
+fn topological_dependency_order_resolves_linear_dag() {
+    let proc1 = object("p1", "Proc1", ObjectKind::Procedure);
+    let mut proc2 = object("p2", "Proc2", ObjectKind::Procedure);
+    proc2.references.push(Reference {
+        kind: ReferenceKind::Calls,
+        target: id("p1"),
+    });
+
+    let mut catalog = Catalog::empty();
+    catalog
+        .apply(0, &[Edit::Upsert(proc2), Edit::Upsert(proc1)])
+        .unwrap();
+
+    let order = catalog.dependency_order().expect("must order linear DAG");
+    assert_eq!(order, [id("p1"), id("p2")]);
+}
+
+#[test]
 fn source_parts_and_references_serialize_deterministically() {
     let mut a = object("a", "Alpha", ObjectKind::StructuredDataType);
     a.source_parts = vec![

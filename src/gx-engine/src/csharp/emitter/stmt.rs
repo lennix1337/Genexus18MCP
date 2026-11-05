@@ -3,6 +3,7 @@
 use super::calls::statement_has_procedure_call;
 use super::literal_shapes::literal_message_format;
 use super::*;
+use crate::frontend::ForEachStmt;
 
 impl<'a> CSharpEmitter<'a> {
     /// Emits a C# statement string with indentation and trailing newline.
@@ -390,6 +391,13 @@ impl<'a> CSharpEmitter<'a> {
                 out
             }
             Stmt::ForEach(for_each_stmt) => {
+                if let Some(levels) = self.navigation_levels {
+                    let idx = self.cursor_index.get();
+                    if let Some(level) = levels.get(idx) {
+                        self.cursor_index.set(idx + 1);
+                        return self.emit_for_each_cursor(for_each_stmt, level, idx, &indent, vars);
+                    }
+                }
                 self.refuse_database_statement("For Each");
                 let mut out = format!("{indent}/* GeneXus For Each block */\n");
                 for s in &for_each_stmt.body {
@@ -400,7 +408,9 @@ impl<'a> CSharpEmitter<'a> {
             Stmt::AssignAttribute(attr, expr) => {
                 // The parser reads an attribute assignment only inside a For Each or New, where it writes a
                 // column of the current row. No Procedure statement has a bare attribute field to assign.
-                self.refuse_database_statement(&format!("attribute assignment '{attr}'"));
+                if self.navigation_levels.is_none() {
+                    self.refuse_database_statement(&format!("attribute assignment '{attr}'"));
+                }
                 let cs_attr = to_csharp_attr_name(attr);
                 let e = self.emit_expr(expr);
                 format!("{indent}{cs_attr} = {e};\n")
@@ -462,5 +472,40 @@ impl<'a> CSharpEmitter<'a> {
             Stmt::Commit => format!("{indent}context.CommitDataStores();\n"),
             Stmt::Rollback => format!("{indent}context.RollbackDataStores();\n"),
         }
+    }
+
+    fn emit_for_each_cursor(
+        &mut self,
+        for_each_stmt: &ForEachStmt,
+        level: &crate::navigation::NavigationLevel,
+        idx: usize,
+        indent: &str,
+        vars: &BTreeMap<String, DataType>,
+    ) -> String {
+        let num = level.number;
+        let mut out = format!("{indent}/* Using cursor P0001{num} */\n");
+        out.push_str(&format!("{indent}pr_default.execute({idx});\n"));
+        out.push_str(&format!(
+            "{indent}while ( (pr_default.getStatus({idx}) != 101) )\n{indent}{{\n"
+        ));
+        self.indented(|this| {
+            for s in &for_each_stmt.body {
+                out.push_str(&this.emit_stmt(s, vars));
+            }
+            out.push_str(&format!("{indent}   pr_default.readNext({idx});\n"));
+        });
+        out.push_str(&format!("{indent}}}\n{indent}pr_default.close({idx});\n"));
+        if level.has_when_none && !for_each_stmt.when_none.is_empty() {
+            out.push_str(&format!(
+                "{indent}if ( pr_default.getStatus({idx}) == 101 )\n{indent}{{\n"
+            ));
+            self.indented(|this| {
+                for s in &for_each_stmt.when_none {
+                    out.push_str(&this.emit_stmt(s, vars));
+                }
+            });
+            out.push_str(&format!("{indent}}}\n"));
+        }
+        out
     }
 }

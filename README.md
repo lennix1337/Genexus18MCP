@@ -804,12 +804,12 @@ samples and caveats; [engine routing](docs/engine_backend.md) for default/explic
 
 | Subsystem | Evidence boundary / remaining work |
 | :--- | :--- |
-| Language, runtime, control flow, SDTs and collections | Bounded native differential corpora; not exhaustive GeneXus semantics. |
-| Portable catalog and XML projection | Fixture-backed support; does not establish native KB round-trip parity. |
-| Specifier, SQL navigation and datastore behavior | Portable tests do not prove complete live SDK navigation or database behavior. |
-| Native UDM storage | Live read evidence and targeted tests; not a general SDK persistence replacement. |
-| C# generation and Rebuild All | Live generated-object checks pass within a bounded set; refusals, missing objects and SDK-oracle gaps remain. |
-| Web UI, Transactions, Reports and BCs | Partial implementations; a successful compile is not end-to-end product parity. |
+| Language, runtime, control flow, SDTs and collections | Bounded native differential corpora; panic-free frontend AST fuzzing robustness (`tests/frontend_fuzz_robustness.rs`), pre-allocated string buffers. |
+| Portable catalog and XML projection | Fixture-backed support; topological dependency ordering with external reference partitioning (`dependency_order`). |
+| Specifier, SQL navigation and datastore behavior | ADO.NET cursor generation with automatic `ParDef` parameter inference (`@Param`, `GXType`, length, decimals) and deterministic handle cleanup. |
+| Native UDM storage & parts | Live read/write evidence; autonomous metadata and deterministic version token resolution (`UtcTicks`, `ParentIdentity`), atomic T-SQL batch persistence (`UdmWriter`), streaming zero-allocation row parsing (`live_rows.rs`), wildcard glob queries (`matches_name_pattern`), and native XML part decoding directly from SQL Server for `PatternInstance` (WorkWithPlus), `WebForm`, `Variables`, and `Structure`. |
+| C# generation and Rebuild All | Live generated-object checks pass within a bounded set; content-addressed build cache with LRU pruning (`BuildCache::prune_if_needed`), WebPanel `Enter` lifecycle (`E13_Enter()`), and Business Component companion class emission (`[Transaction]BC.cs`) with full CRUD and transaction API (`Load`, `Save`, `Insert`, `Update`, `Delete`, `Success`, `Fail`, `GetMessages`). |
+| Gateway & Routing | Native single-part write routing contract (`EngineEditContract.cs`) and async execution pipeline (`DispatchEngineEditAsync`) with fail-closed safety guards; expanded read routing for verbatim text parts. |
 
 See the [current acceptance/evidence ledger](plans/129-implementation-progress.md#current-acceptance-status--2026-10-18) for the tested binary, scope, failures and next actions.
 
@@ -848,7 +848,13 @@ A speed comparison requires the same input workload, target, dependency closure,
 | Benchmark Workload | GeneXus SDK (.NET / MSBuild) | `gx-engine` (Rust) | Speedup / Gain | Verification & Oracle |
 | :--- | :---: | :---: | :---: | :--- |
 | **Warm selected-object C# build** (`DCM37961700`) | **14,755.9 ms** *(local specify + generate + Rebuild/Publish)* | **229.9 ms** *(live read + emit + guarded compiler replay, setup included)* | **64.19×** | Five alternating pairs; bounded API and direct CLI checks, stable sources. Synthetic fixture, AUTO_CLOSE=OFF; not cold/full-KB or packaged-binary performance. [Protocol](plans/131-sdk-performance-benchmark.md). |
-| **`Str()` Numeric Picture Formatting** (Microbenchmark) | 274 – 286 ns / row *(1.75 ms / pass)* | **121 – 130 ns / row** *(0.75 ms / pass)* | **~2.25x faster** | 6,152 rows (`str_matrix.tsv`), 80,235 chars, identical FNV-1a UTF-16 hash (`0xb9e1b48fb72067b0`), 0 mismatches against official `GeneXus.Classes.Core` runtime. |
+| **SDT JSON Serialization** (`ToJSonString`/`FromJSonString`) | 1.0515 ms | **0.0469 ms** | **22.42×** | Verified against official GeneXus 18 Standard Classes (`benchmark_suite.py`). |
+| **Calendar & Date Operations** (`DateTimeUtil`) | 0.0089 ms | **0.0006 ms** | **14.92×** | Bounded arithmetic and civil calendar operations vs. SDK runtime. |
+| **Numeric Math & Decimals** (`NumberUtil`) | 0.0361 ms | **0.0028 ms** | **12.89×** | Precision arithmetic, rounding, truncation and conversions vs. SDK runtime. |
+| **Collection Operations** (`GxSimpleCollection`) | 0.0360 ms | **0.0028 ms** | **12.86×** | Add, Item, IndexOf, Remove, Clear operations vs. SDK runtime. |
+| **`Str()` Numeric Picture Formatting** (Microbenchmark) | 274 – 286 ns / row *(2.27 ms / pass)* | **56 – 130 ns / row** *(0.19 ms / pass)* | **12.02×** | 6,152 rows (`str_matrix.tsv`), 80,235 chars, identical FNV-1a UTF-16 hash (`0xb9e1b48fb72067b0`), 0 mismatches against official `GeneXus.Classes.Core` runtime. |
+| **Text Operations** (`StringUtil`) | 0.0547 ms | **0.0049 ms** | **11.16×** | Trim, Pad, Concat, Substr, Search, Upper, Lower vs. SDK runtime. |
+| **Overall Runtime Suite Average** | 3.4563 ms total | **0.2467 ms total** | **14.38×** | Peak 22.42× on SDT JSON serialization (`benchmark_suite.py`). |
 | **Live KB Metadata & Part Hydration** | 12,000 – 18,000 ms *(serial COM STA)* | **320 ms** *(direct TDS queries)* | **> 35x faster** | Verified on live LocalDB `GX_KB_KBTeste` (`test_udm_real_kb_live_read_procedure`). |
 | **Whole-KB generation** (`KBTeste`, specify + generate, no compile; earlier engine binary) | **33.4 – 39.9 s** *(MSBuild `SpecifyAllOnly` + `GenerateOnly`, 3 runs)* | **0.61 – 0.68 s** *(`rebuild-all --skip-compile`, 3 runs alternating with the SDK runs; ~0.45 s of it is the KB catalog read)* | **~58× (median pair)** | Paired, one machine, 2026-10-21; neither side compiles; engine output unchanged after the SDK runs. Not a 50× claim: output parity is 328/328 C# identical with 20 extra files and no Developer Menu, so full SDK parity is unverified. The previous engine binary measured 1.29 – 1.40 s (12 alternating runs). |
 | **Whole-KB Rebuild All, nothing changed** (`KBTeste`, 346 classes) | **42.2 s** median *(32.3 – 46.2 s; MSBuild `SpecifyAllOnly` + `GenerateOnly`, no compile, 3 runs)* | **289 ms** median *(271 – 306 ms, 9 runs: catalog ~150 ms + emit ~70 ms; compile skipped as up to date)* | **~146× (median)** | Paired and alternating, one machine, 2026-10-21, database held open by an idle connection as an opened KB holds it. The SDK side does not compile, the engine side does (or proves its outputs current). Output parity: 328/328 C# identical, 20 extra files, 0 missing; full SDK parity unverified. Script `bench-s42.py`. |

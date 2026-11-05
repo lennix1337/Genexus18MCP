@@ -65,6 +65,8 @@ pub struct UdmClient {
     consistent_read: bool,
     /// The Design model readers and writers of this client target (see `udm::version_scope`).
     design_model_id: i32,
+    /// Whether writes are executed against the live SQL Server / LocalDB database.
+    live_writes: bool,
 }
 
 impl UdmClient {
@@ -78,6 +80,7 @@ impl UdmClient {
             read_session: None,
             consistent_read: false,
             design_model_id: crate::udm::reader::DEFAULT_DESIGN_MODEL_ID,
+            live_writes: false,
         }
     }
 
@@ -94,6 +97,7 @@ impl UdmClient {
             read_session: None,
             consistent_read: false,
             design_model_id: crate::udm::reader::DEFAULT_DESIGN_MODEL_ID,
+            live_writes: false,
         }
     }
 
@@ -108,6 +112,7 @@ impl UdmClient {
             read_session: None,
             consistent_read: false,
             design_model_id: crate::udm::reader::DEFAULT_DESIGN_MODEL_ID,
+            live_writes: false,
         }
     }
 
@@ -153,6 +158,18 @@ impl UdmClient {
         self.connection_info.is_some()
     }
 
+    /// Enables live SQL Server mutations on this client.
+    /// By default, live writes are disabled to prevent unintended database modifications.
+    pub fn with_live_writes(mut self, enabled: bool) -> Self {
+        self.live_writes = enabled;
+        self
+    }
+
+    /// Whether live SQL Server mutations are enabled on this client.
+    pub fn live_writes_enabled(&self) -> bool {
+        self.live_writes
+    }
+
     /// Begins a transactional boundary.
     pub fn begin_transaction(&self) -> Result<(), String> {
         let mut store = self
@@ -169,7 +186,8 @@ impl UdmClient {
             .storage
             .write()
             .map_err(|e| format!("Storage lock poisoned: {e}"))?;
-        store.commit_transaction()
+        store.commit_transaction()?;
+        Ok(())
     }
 
     /// Rolls back the active transaction.

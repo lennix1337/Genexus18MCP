@@ -7,6 +7,8 @@
 
 ### Added
 
+- **Plan 133 gx-engine architectural parity milestones:** Content-addressed SHA-256 build cache with automatic LRU and .tmp-* directory pruning (`BuildCache::prune_if_needed`); autonomous UDM metadata and deterministic version token resolution directly from SQL Server tables (`ModelEntityVersion`, `UtcTicks`, `ParentIdentity`); C# ADO.NET For Each cursor loop generation with automatic `ParDef` parameter inference (`@Param`, `GXType`, length, decimals); WebPanel `Enter` event lifecycle generation (`E13_Enter()`); transactional live UDM persistence (`UdmWriter`) with atomic T-SQL batching (`plan_save_existing_object_sql`) and fail-closed safety guards; streaming zero-allocation row parsing (`live_rows.rs`); fast-path wildcard/glob pattern matching in KB object queries (`matches_name_pattern`); topological dependency ordering with external reference partitioning in `Catalog`; panic-free frontend AST fuzzing robustness (`tests/frontend_fuzz_robustness.rs`).
+
 ### Changed
 
 ### Fixed

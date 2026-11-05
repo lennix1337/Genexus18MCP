@@ -1,12 +1,16 @@
-//! Fresh native builds with generation-isolated outputs. No incomplete cache hits.
+//! Fresh native builds with generation-isolated outputs. Content-addressed executable cache.
 use crate::model::Project;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -32,6 +36,126 @@ struct Manifest<'a> {
     executable: &'a str,
     project: &'a str,
     cache_hit: bool,
+}
+
+fn compute_build_cache_key(
+    project_json: &str,
+    source: &str,
+    compiler: &str,
+    args: &[&str],
+    engine_version: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(engine_version.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(compiler.as_bytes());
+    hasher.update(b"\0");
+    for arg in args {
+        hasher.update(arg.as_bytes());
+        hasher.update(b"\0");
+    }
+    hasher.update(source.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(project_json.as_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        hex.push(char::from(b"0123456789abcdef"[usize::from(byte >> 4)]));
+        hex.push(char::from(b"0123456789abcdef"[usize::from(byte & 0x0f)]));
+    }
+    hex
+}
+
+struct BuildCache {
+    dir: PathBuf,
+}
+
+impl BuildCache {
+    fn new(output: &Path, key: &str) -> Self {
+        Self {
+            dir: output.join(".cache").join(key),
+        }
+    }
+
+    fn try_restore(&self, staging: &Path, exe_name: &str) -> bool {
+        let cached_exe = self.dir.join(exe_name);
+        let cached_source = self.dir.join("program.rs");
+        let cached_project = self.dir.join("project.json");
+
+        if cached_exe.is_file()
+            && cached_source.is_file()
+            && cached_project.is_file()
+            && fs::metadata(&cached_exe)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+        {
+            fs::copy(&cached_exe, staging.join(exe_name)).is_ok()
+                && fs::copy(&cached_source, staging.join("program.rs")).is_ok()
+                && fs::copy(&cached_project, staging.join("project.json")).is_ok()
+        } else {
+            false
+        }
+    }
+
+    fn store(&self, staging: &Path, exe_name: &str) {
+        let parent = match self.dir.parent() {
+            Some(p) => p,
+            None => return,
+        };
+        if fs::create_dir_all(parent).is_err() {
+            return;
+        }
+        let tmp_name = format!(
+            ".tmp-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let tmp_dir = parent.join(tmp_name);
+        if fs::create_dir_all(&tmp_dir).is_err() {
+            return;
+        }
+        let copy_ok = fs::copy(staging.join(exe_name), tmp_dir.join(exe_name)).is_ok()
+            && fs::copy(staging.join("program.rs"), tmp_dir.join("program.rs")).is_ok()
+            && fs::copy(staging.join("project.json"), tmp_dir.join("project.json")).is_ok();
+        if !copy_ok || self.dir.exists() || fs::rename(&tmp_dir, &self.dir).is_err() {
+            let _ = fs::remove_dir_all(&tmp_dir);
+        } else {
+            Self::prune_if_needed(parent, 128);
+        }
+    }
+
+    /// Prune cache directory to prevent disk bloating, removing stale `.tmp-*` directories
+    /// and oldest cache entries when total entries exceed `max_entries`.
+    pub fn prune_if_needed(cache_dir: &Path, max_entries: usize) {
+        let entries = match fs::read_dir(cache_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let mut items = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(".tmp-") {
+                let _ = fs::remove_dir_all(&path);
+                continue;
+            }
+            if path.is_dir() {
+                let modified = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                items.push((modified, path));
+            }
+        }
+        if items.len() > max_entries {
+            items.sort_by_key(|(m, _)| *m);
+            let to_remove = items.len() - max_entries;
+            for (_, path) in items.into_iter().take(to_remove) {
+                let _ = fs::remove_dir_all(path);
+            }
+        }
+    }
 }
 
 struct Staging(PathBuf);
@@ -125,6 +249,28 @@ fn run_compiler(
     })
 }
 
+fn cached_rustc_version(staging: &Path) -> Result<String, String> {
+    static CACHE: OnceLock<Result<String, String>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let compiler = run_compiler(
+                Command::new("rustc").arg("-vV"),
+                staging,
+                "version",
+                Duration::from_secs(10),
+            )?;
+            if !compiler.status.success() {
+                return Err(format!(
+                    "rustc version probe failed: {}",
+                    String::from_utf8_lossy(&compiler.stderr)
+                ));
+            }
+            String::from_utf8(compiler.stdout)
+                .map_err(|_| "rustc version output is not UTF-8".to_string())
+        })
+        .clone()
+}
+
 /// Build an admitted project using rustc directly, without loading SDK assemblies.
 /// Each success publishes a distinct generation only after rustc has succeeded.
 /// Never reuse an executable based solely on timestamps or source-only cache keys.
@@ -144,29 +290,12 @@ pub fn build(project: &Project, output: &Path) -> Result<BuildArtifact, String> 
     );
     let staging = Staging(output.join(format!(".pending-{name}")));
     fs::create_dir(&staging.0).map_err(|e| format!("cannot create staging directory: {e}"))?;
-    let compiler = run_compiler(
-        Command::new("rustc").arg("-vV"),
-        &staging.0,
-        "version",
-        Duration::from_secs(10),
-    )?;
-    if !compiler.status.success() {
-        return Err(format!(
-            "rustc version probe failed: {}",
-            String::from_utf8_lossy(&compiler.stderr)
-        ));
-    }
-    let compiler = String::from_utf8(compiler.stdout)
-        .map_err(|_| "rustc version output is not UTF-8".to_string())?;
+    let compiler = cached_rustc_version(&staging.0)?;
     let executable_name = if cfg!(windows) {
         "program.exe"
     } else {
         "program"
     };
-    fs::write(staging.0.join("program.rs"), source)
-        .map_err(|e| format!("cannot write generated source: {e}"))?;
-    fs::write(staging.0.join("project.json"), project.to_json()?)
-        .map_err(|e| format!("cannot write portable input: {e}"))?;
     let args = [
         "--crate-name",
         "gx_program",
@@ -176,32 +305,53 @@ pub fn build(project: &Project, output: &Path) -> Result<BuildArtifact, String> 
         "-C",
         "overflow-checks=yes",
     ];
-    let compiled = run_compiler(
-        Command::new("rustc")
-            .args(args)
-            .arg("program.rs")
-            .arg("-o")
-            .arg(executable_name),
-        &staging.0,
-        "compile",
-        Duration::from_secs(120),
-    )?;
-    if !compiled.status.success() {
-        let len = compiled.stderr.len();
-        let detail = if len > 16_384 {
-            &compiled.stderr[len - 16_384..]
-        } else {
-            &compiled.stderr[..]
-        };
-        return Err(format!(
-            "native compilation failed ({}):\n{}",
-            compiled.status,
-            String::from_utf8_lossy(detail)
-        ));
+
+    let project_json = project.to_json()?;
+    let cache_key = compute_build_cache_key(
+        &project_json,
+        &source,
+        &compiler,
+        &args,
+        env!("CARGO_PKG_VERSION"),
+    );
+    let cache = BuildCache::new(&output, &cache_key);
+    let cache_hit = cache.try_restore(&staging.0, executable_name);
+
+    if !cache_hit {
+        fs::write(staging.0.join("program.rs"), &source)
+            .map_err(|e| format!("cannot write generated source: {e}"))?;
+        fs::write(staging.0.join("project.json"), &project_json)
+            .map_err(|e| format!("cannot write portable input: {e}"))?;
+        let compiled = run_compiler(
+            Command::new("rustc")
+                .args(args)
+                .arg("program.rs")
+                .arg("-o")
+                .arg(executable_name),
+            &staging.0,
+            "compile",
+            Duration::from_secs(120),
+        )?;
+        if !compiled.status.success() {
+            let len = compiled.stderr.len();
+            let detail = if len > 16_384 {
+                &compiled.stderr[len - 16_384..]
+            } else {
+                &compiled.stderr[..]
+            };
+            return Err(format!(
+                "native compilation failed ({}):\n{}",
+                compiled.status,
+                String::from_utf8_lossy(detail)
+            ));
+        }
+        if !staging.0.join(executable_name).is_file() {
+            return Err("compiler succeeded without producing the executable".into());
+        }
+
+        cache.store(&staging.0, executable_name);
     }
-    if !staging.0.join(executable_name).is_file() {
-        return Err("compiler succeeded without producing the executable".into());
-    }
+
     let manifest = Manifest {
         format_version: 1,
         engine_version: env!("CARGO_PKG_VERSION"),
@@ -217,7 +367,7 @@ pub fn build(project: &Project, output: &Path) -> Result<BuildArtifact, String> 
         source: "program.rs",
         executable: executable_name,
         project: "project.json",
-        cache_hit: false,
+        cache_hit,
     };
     fs::write(
         staging.0.join("manifest.json"),
@@ -230,8 +380,10 @@ pub fn build(project: &Project, output: &Path) -> Result<BuildArtifact, String> 
         "compile.stdout.log",
         "compile.stderr.log",
     ] {
-        fs::remove_file(staging.0.join(log))
-            .map_err(|e| format!("cannot remove temporary compiler log: {e}"))?;
+        let p = staging.0.join(log);
+        if p.exists() {
+            let _ = fs::remove_file(p);
+        }
     }
     let published = output.join(format!("build-{name}"));
     fs::rename(&staging.0, &published)
@@ -273,5 +425,135 @@ mod tests {
             .expect("long-running compiler must time out");
         assert!(error.contains("exceeded 50ms deadline"), "{error}");
         assert!(error.contains("wait=Ok"), "{error}");
+    }
+
+    #[test]
+    fn content_addressed_cache_hits_on_identical_project() {
+        let scratch = std::env::temp_dir().join(format!(
+            "gx-build-cache-hit-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch).unwrap();
+
+        let project_json = r#"{
+            "format_version": 1,
+            "entry": "MAIN",
+            "procedures": [
+                {
+                    "name": "MAIN",
+                    "params": [],
+                    "source": "Print(42)\nReturn 0"
+                }
+            ]
+        }"#;
+        let project = Project::from_json(project_json).unwrap();
+
+        let first_build = build(&project, &scratch).unwrap();
+        assert!(first_build.executable.is_file());
+        let first_manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&first_build.manifest).unwrap()).unwrap();
+        assert_eq!(first_manifest["cache_hit"], false);
+
+        let first_run = Command::new(&first_build.executable).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&first_run.stdout).trim(), "42");
+
+        let second_build = build(&project, &scratch).unwrap();
+        assert!(second_build.executable.is_file());
+        let second_manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&second_build.manifest).unwrap()).unwrap();
+        assert_eq!(second_manifest["cache_hit"], true);
+
+        let second_run = Command::new(&second_build.executable).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&second_run.stdout).trim(), "42");
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn content_addressed_cache_invalidates_on_source_change() {
+        let scratch = std::env::temp_dir().join(format!(
+            "gx-build-cache-inval-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch).unwrap();
+
+        let project1_json = r#"{
+            "format_version": 1,
+            "entry": "MAIN",
+            "procedures": [
+                {
+                    "name": "MAIN",
+                    "params": [],
+                    "source": "Print(100)\nReturn 0"
+                }
+            ]
+        }"#;
+        let project1 = Project::from_json(project1_json).unwrap();
+        let build1 = build(&project1, &scratch).unwrap();
+        let m1: serde_json::Value =
+            serde_json::from_slice(&fs::read(&build1.manifest).unwrap()).unwrap();
+        assert_eq!(m1["cache_hit"], false);
+
+        let project2_json = r#"{
+            "format_version": 1,
+            "entry": "MAIN",
+            "procedures": [
+                {
+                    "name": "MAIN",
+                    "params": [],
+                    "source": "Print(200)\nReturn 0"
+                }
+            ]
+        }"#;
+        let project2 = Project::from_json(project2_json).unwrap();
+        let build2 = build(&project2, &scratch).unwrap();
+        let m2: serde_json::Value =
+            serde_json::from_slice(&fs::read(&build2.manifest).unwrap()).unwrap();
+        assert_eq!(m2["cache_hit"], false);
+
+        let run2 = Command::new(&build2.executable).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run2.stdout).trim(), "200");
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn build_cache_prune_removes_oldest_entries_and_tmp_dirs() {
+        let scratch = std::env::temp_dir().join(format!(
+            "gx-build-cache-prune-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch).unwrap();
+
+        let dir1 = scratch.join("entry1");
+        let dir2 = scratch.join("entry2");
+        let dir3 = scratch.join("entry3");
+        let tmp = scratch.join(".tmp-1234");
+        fs::create_dir_all(&dir1).unwrap();
+        fs::create_dir_all(&dir2).unwrap();
+        fs::create_dir_all(&dir3).unwrap();
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Prune to max 2 entries
+        BuildCache::prune_if_needed(&scratch, 2);
+
+        // Stale tmp dir must always be purged
+        assert!(!tmp.exists());
+
+        // Total remaining dirs must be at most 2
+        let remaining: Vec<_> = fs::read_dir(&scratch)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .collect();
+        assert_eq!(remaining.len(), 2);
+
+        let _ = fs::remove_dir_all(&scratch);
     }
 }
