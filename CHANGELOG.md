@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- **Multi-class `themeClass` with dashed utility classes no longer rolls the save back** (#880): the layout verifier treats names such as `u-w-14` as symbolic theme classes, so their `<guid>-<int>` re-read is accepted instead of failing as `PatternProjectionFailed`. Unit-tested on synthetic values only; not run on a real WWP KB.
 ### Internal
 
 - `genexus_lifecycle action=specify_only` raises the tool-schema budgets for the action value and its `targetGuid`/`expectedVersion` inputs: tokens 40000 -> 40100 and the profile byte budgets all 103700, core 27100, authoring 72050, devops 53050, ui 50800. It runs on the lifecycle task machinery (FIFO, status/result/cancel) as a Gateway job (`wait_until_done=true` waits for its receipt), with an admission identity that includes the GUID and `expectedVersion`, so it is never coalesced with a plain `specify` of the same target or with a request for another object; the compact status/result keeps `outcome`, `specified` and the receipt (its diagnostics capped at 50); the specifier diagnostics parser now also reads warning codes.
