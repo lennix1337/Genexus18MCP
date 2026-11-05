@@ -256,7 +256,11 @@ namespace GxMcp.Gateway.Tests
             // The typed genexus_wwp add_layout (the action value plus one description sentence) takes the schema from ~39844 to ~39879 tokens, so 39850 -> 39900.
             // Issue #830: 39900 -> 40000 for genexus_lifecycle status/result `log_offset`/`log_limit` (paging into a
             // finished build's log, the unit a capped error list points to). Measured ~39947 tokens; ~53 headroom.
-            Assert.True(approxTokens < 40000, $"tool_definitions.json is ~{approxTokens} tokens; budget 40000.");
+            // genexus_lifecycle action=specify_only: 40000 -> 40100 for the action value and its two inputs
+            // (`targetGuid`, which names the object by GUID instead of the overloaded `target`, and
+            // `expectedVersion`, the optimistic-concurrency check the operation is asked to make) plus one
+            // sentence in the tool summary. Measured ~40041 tokens; ~59 headroom.
+            Assert.True(approxTokens < 40100, $"tool_definitions.json is ~{approxTokens} tokens; budget 40100.");
         }
 
         [Theory]
@@ -319,12 +323,16 @@ namespace GxMcp.Gateway.Tests
         // Issue #830 adds genexus_lifecycle `log_offset`/`log_limit` (the same two properties in every profile
         // that carries the tool): all 103250 -> 103500 (measured 103445), authoring 71650 -> 71900 (measured
         // 71816), devops 52600 -> 52850 (measured 52791), ui 50400 -> 50600 (measured 50545).
-        [InlineData("all", 103500)]
-        [InlineData("core", 27000)]
+        // genexus_lifecycle action=specify_only adds the action value and the `targetGuid`/`expectedVersion` inputs to every
+        // profile that carries the tool (+197 bytes each): all 103500 -> 103700 (measured 103642), core 27000 -> 27100
+        // (measured 27070), authoring 71900 -> 72050 (measured 72013), devops 52850 -> 53050 (measured 52988),
+        // ui 50600 -> 50800 (measured 50742).
+        [InlineData("all", 103700)]
+        [InlineData("core", 27100)]
         [InlineData("standard", 61000)]
-        [InlineData("authoring", 71900)]
-        [InlineData("devops", 52850)]
-        [InlineData("ui", 50600)]
+        [InlineData("authoring", 72050)]
+        [InlineData("devops", 53050)]
+        [InlineData("ui", 50800)]
         [InlineData("db", 40000)]
         public void PublishedToolProfileStaysWithinItsByteBudget(string profile, int maxBytes)
         {

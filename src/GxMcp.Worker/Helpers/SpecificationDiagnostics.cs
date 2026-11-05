@@ -23,6 +23,12 @@ namespace GxMcp.Worker.Helpers
             @"\berror\s+(?<code>[A-Za-z]{2,4}\d+)\s*:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // The same, for loose lines of either severity (ParseLines): a warning line carries "warning spc0022:".
+        // Kept apart so Parse (the status envelope's error rows) reads exactly what it always read.
+        private static readonly Regex _rxAnyCode = new Regex(
+            @"\b(?:error|warning)\s+(?<code>[A-Za-z]{2,4}\d+)\s*:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         // Issue #56 style: "Variable Empresaid definition is incorrect or not available."
         // Also matches "&DataLimite" tokens and single-quoted identifiers.
         private static readonly Regex _rxMember = new Regex(
@@ -189,7 +195,7 @@ namespace GxMcp.Worker.Helpers
                     string raw = d["raw"]?.ToString() ?? string.Empty;
                     string rewritten = d["rewritten"]?.ToString();
                     string line = string.IsNullOrWhiteSpace(rewritten) ? raw : rewritten;
-                    var diag = BuildDiagnostic(line, d["gxObject"]?.ToString());
+                    var diag = BuildDiagnostic(line, d["gxObject"]?.ToString(), _rxErrorCode);
                     if (diag != null) result.Add(diag);
                 }
                 // Some SDK builds populate ErrorsDetailed with metadata rows that
@@ -204,19 +210,37 @@ namespace GxMcp.Worker.Helpers
             {
                 foreach (var item in flat)
                 {
-                    var diag = BuildDiagnostic(item?.ToString() ?? string.Empty, null);
+                    var diag = BuildDiagnostic(item?.ToString() ?? string.Empty, null, _rxErrorCode);
                     if (diag != null) result.Add(diag);
                 }
             }
             return result;
         }
 
-        private static JObject BuildDiagnostic(string line, string gxObject)
+        /// <summary>
+        /// Structured diagnostics for loose lines (the same shape <see cref="Parse(string)"/> produces),
+        /// each tagged with the given severity. Blank lines are skipped.
+        /// </summary>
+        public static JArray ParseLines(IEnumerable<string> lines, string severity)
+        {
+            var result = new JArray();
+            if (lines == null) return result;
+            foreach (var line in lines)
+            {
+                var diag = BuildDiagnostic(line, null, _rxAnyCode);
+                if (diag == null) continue;
+                diag["severity"] = severity;
+                result.Add(diag);
+            }
+            return result;
+        }
+
+        private static JObject BuildDiagnostic(string line, string gxObject, Regex codePattern)
         {
             if (string.IsNullOrWhiteSpace(line)) return null;
 
             string code = null;
-            var m = _rxErrorCode.Match(line);
+            var m = codePattern.Match(line);
             if (m.Success) code = m.Groups["code"].Value;
 
             string message = line.Trim();
@@ -224,6 +248,7 @@ namespace GxMcp.Worker.Helpers
             {
                 // Strip the "error spc0056:" prefix so the message reads cleanly.
                 int idx = message.IndexOf("error " + code + ":", StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) idx = message.IndexOf("warning " + code + ":", StringComparison.OrdinalIgnoreCase);
                 if (idx < 0) idx = message.IndexOf("error :", StringComparison.OrdinalIgnoreCase);
                 if (idx >= 0)
                 {

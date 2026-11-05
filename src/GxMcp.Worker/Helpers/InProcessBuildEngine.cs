@@ -37,12 +37,44 @@ namespace GxMcp.Worker.Helpers
         private readonly System.Diagnostics.Stopwatch _profileSw = System.Diagnostics.Stopwatch.StartNew();
         private static readonly Regex _rxSectionStartProfile = new Regex(@"^>S(?<name>[^:]+?)(?:[: ]|$)", RegexOptions.Compiled);
         private static readonly Regex _rxSectionEndProfile = new Regex(@"^>E[01](?<name>[^:]+?)(?:[: ]|$)", RegexOptions.Compiled);
+        // Names of the sections the SDK opened (">SSpecification:-:...", ">SDefault (.NET Framework) Generation:-:..."),
+        // in order. specify_only reports them as evidence of which steps actually ran.
+        private static readonly Regex _rxSectionStartName = new Regex(@"^>S(?<name>[^:\r\n]+)", RegexOptions.Compiled);
+        private readonly System.Collections.Generic.List<string> _startedSections = new System.Collections.Generic.List<string>();
+
+        public System.Collections.Generic.IReadOnlyList<string> StartedSections
+        {
+            get { lock (_startedSections) return _startedSections.ToArray(); }
+        }
+
+        // Every GeneXus diagnostic code (spc0217, gen0001, ...) any message mentioned. The line parsers downstream
+        // classify a line by its shape; this answers "did the SDK say spc0217 at all", whatever the shape. The SDK
+        // glues the code to its output marker (">O2spc0217: ..."), so the code is delimited by "not a letter before,
+        // not a letter or digit after" rather than by a word boundary.
+        private static readonly Regex _rxDiagnosticCode = new Regex(@"(?<![A-Za-z])(?:spc|gen|src|qry)\d{4}(?![0-9A-Za-z])", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private readonly System.Collections.Generic.HashSet<string> _seenCodes =
+            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public bool SawCode(string code)
+        {
+            lock (_seenCodes) return _seenCodes.Contains(code);
+        }
+
         private void Record(string s)
         {
             lock (_trace)
             {
                 _trace.Enqueue(s);
                 while (_trace.Count > TraceCap) _trace.Dequeue();
+            }
+            if (s != null)
+            {
+                int sectionPayloadStart = s.IndexOf("] ", StringComparison.Ordinal);
+                var sectionMatch = _rxSectionStartName.Match(sectionPayloadStart >= 0 ? s.Substring(sectionPayloadStart + 2) : s);
+                if (sectionMatch.Success)
+                    lock (_startedSections) _startedSections.Add(sectionMatch.Groups["name"].Value.Trim());
+                foreach (Match code in _rxDiagnosticCode.Matches(s))
+                    lock (_seenCodes) _seenCodes.Add(code.Value);
             }
             if (_profileEnabled && s != null)
             {

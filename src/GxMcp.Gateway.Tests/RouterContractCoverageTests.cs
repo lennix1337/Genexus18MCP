@@ -392,6 +392,7 @@ namespace GxMcp.Gateway.Tests
         [InlineData("build", "Build", "Build")]
         [InlineData("cancel", "Build", "Cancel")]
         [InlineData("specify", "Build", "Specify")]
+        [InlineData("specify_only", "Build", "SpecifyOnly")]
         [InlineData("rebuild", "Build", "RebuildAll")]
         [InlineData("reorg", "Build", "Reorg")]
         [InlineData("reorg_preview", "Build", "ReorgPreview")]

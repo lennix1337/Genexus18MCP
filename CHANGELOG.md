@@ -7,12 +7,15 @@
 
 ### Added
 
+- **`genexus_lifecycle action=specify_only`** — Specify one object, named by `targetGuid`, and nothing else: no Generate, compile, reorganization, deploy, execution or test, and never an external full build. `dryRun=true` returns the plan without touching the Knowledge Base, and `expectedVersion` (the object's version or a `versionToken` from `genexus_read`) refuses the call when the object changed since it was read. GeneXus specifies the environment's copy of an object, so an object that was never built (or whose copy is stale) gets that copy created or refreshed first, and the copy is re-read to confirm it; this is done only for Procedure, WebPanel and API, whose copy cannot change what a reorganization would do (a Data Provider can populate tables during one), and any other type that needs a copy is refused. Like `build`, the call returns an operation id; `wait_until_done=true` waits for the receipt in the same call. The reply carries `outcome` and `specified` (true only when the specifier analyzed the object and completed without errors on the version it reports; an object GeneXus skips as unreachable, a generation step the SDK opened anyway, a version that cannot be confirmed afterwards and an edit made meanwhile are reported, not hidden). The named object is always re-specified, even when the SDK considers it up to date, and a Smart Devices panel is refused because specifying it makes the SDK write the object itself and an offline database object, the object's version before and after, the steps that ran and the ones that never do, the diagnostics, what was persisted (environment copy, specification output files) and the observations about generation (the SDK's sections and the files written in the generator output folder).
+
 ### Changed
 
 ### Fixed
 
 ### Internal
 
+- `genexus_lifecycle action=specify_only` raises the tool-schema budgets for the action value and its `targetGuid`/`expectedVersion` inputs: tokens 40000 -> 40100 and the profile byte budgets all 103700, core 27100, authoring 72050, devops 53050, ui 50800. It runs on the lifecycle task machinery (FIFO, status/result/cancel) as a Gateway job (`wait_until_done=true` waits for its receipt), with an admission identity that includes the GUID and `expectedVersion`, so it is never coalesced with a plain `specify` of the same target or with a request for another object; the compact status/result keeps `outcome`, `specified` and the receipt (its diagnostics capped at 50); the specifier diagnostics parser now also reads warning codes.
 - `release.ps1`: the candidate-branch cleanup after publication no longer fails the run when the candidate PR is already merged; it skips a PR that is not open and only warns on cleanup errors (seen in v4.3.1, which published but ended as `failed`).
 
 ## v4.3.1 - 2026-11-05

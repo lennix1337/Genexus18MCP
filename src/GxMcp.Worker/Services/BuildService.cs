@@ -944,6 +944,73 @@ namespace GxMcp.Worker.Services
             // (lifecycle action=specify) refuses a target changed since its last build
             // instead of reporting the last build's diagnostics as current.
             [JsonIgnore] internal bool RefuseStaleEnvironmentCopy { get; set; }
+            // lifecycle action=specify_only: the strict, generation-free specification of one object
+            // by GUID. The request is what the caller asked for; the run is what the task did, set by
+            // the in-process runner. The receipt is rendered from both on every serialization, so the
+            // diagnostics it carries are always the ones the status itself holds.
+            [JsonIgnore] internal SpecifyOnlyRequest SpecifyOnlyRequest { get; set; }
+            [JsonIgnore] internal SpecifyOnlyRun SpecifyOnlyRun { get; set; }
+            [JsonProperty("specifyOnly", NullValueHandling = NullValueHandling.Ignore)]
+            public JObject SpecifyOnlyReceipt
+            {
+                get
+                {
+                    var run = SpecifyOnlyRun;
+                    var request = SpecifyOnlyRequest;
+                    if (run == null || request == null || !SpecifyOnlyFinal) return null;
+                    JObject receipt = SpecifyOnlyReceiptBuilder.Build(request, run, SpecifyOnlyStatusDiagnostics(), Status);
+                    // The task keeps the first lines of each list only (HandleLine caps them), so the receipt's
+                    // diagnostics are as complete as the task's: say when the task saw more than it kept.
+                    if (ErrorCount > (Errors?.Count ?? 0) || WarningCount > (Warnings?.Count ?? 0))
+                    {
+                        receipt["diagnosticsTruncated"] = true;
+                        receipt["diagnosticsTotals"] = new JObject { ["errors"] = ErrorCount, ["warnings"] = WarningCount };
+                    }
+                    return receipt;
+                }
+            }
+            // The receipt describes a finished run. The strict runner records the run a moment before the terminal
+            // status is written, so while the task is still queued or running it is not yet the answer.
+            private bool SpecifyOnlyFinal
+                => !string.IsNullOrEmpty(Status)
+                   && !string.Equals(Status, "Running", StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(Status, "Queued", StringComparison.OrdinalIgnoreCase);
+            // The two answers a caller asks first, at the top level of the status and the result (the receipt
+            // above holds the rest). Absent for every task that is not a specify_only one.
+            [JsonProperty("outcome", NullValueHandling = NullValueHandling.Ignore)]
+            public string SpecifyOnlyOutcome
+            {
+                get
+                {
+                    var run = SpecifyOnlyRun;
+                    return run == null || SpecifyOnlyRequest == null || !SpecifyOnlyFinal
+                        ? null
+                        : SpecifyOnlyReceiptBuilder.OutcomeOf(run, SpecifyOnlyStatusDiagnostics(), Status);
+                }
+            }
+            [JsonProperty("specified", NullValueHandling = NullValueHandling.Ignore)]
+            public bool? SpecifyOnlySpecified
+            {
+                get
+                {
+                    string outcome = SpecifyOnlyOutcome;
+                    return outcome == null ? (bool?)null : string.Equals(outcome, SpecifyOnlyVerdictKind.Specified.ToString(), StringComparison.Ordinal);
+                }
+            }
+            // The specifier's own diagnostics, taken from the task's error and warning lines. The lines
+            // specify_only emits itself carry SpecifyOnlyCodes.LineMarker and are reported by the receipt
+            // directly, with their code, so they are left out here.
+            private JArray SpecifyOnlyStatusDiagnostics()
+            {
+                bool Own(string line) => (line ?? string.Empty).IndexOf(SpecifyOnlyCodes.LineMarker, StringComparison.Ordinal) >= 0;
+                var lines = (ErrorsDetailed != null && ErrorsDetailed.Count > 0)
+                    ? ErrorsDetailed.Select(e => e.rewritten ?? e.raw)
+                    : (Errors ?? new List<string>());
+                var diagnostics = SpecificationDiagnostics.ParseLines(lines.Where(l => !Own(l)), "error");
+                foreach (var w in SpecificationDiagnostics.ParseLines((Warnings ?? new List<string>()).Where(l => !Own(l)), "warning"))
+                    diagnostics.Add(w);
+                return diagnostics;
+            }
             // build with force=true and one or more named objects: re-specify and regenerate
             // exactly those objects even when the KB considers them up to date (the SDK's
             // Rebuild flag: BuildOne.ForceRebuild, SpecifyOneOnly.ForceRebuild). Set only for
@@ -1408,6 +1475,91 @@ namespace GxMcp.Worker.Services
                 refuseStaleEnvironmentCopy: refuseStaleEnvironmentCopy);
         }
 
+        // lifecycle action=specify_only: Specify for ONE object, identified by GUID, and nothing else
+        // (no Generate, Compile, reorganization, deploy or execution). dryRun plans without touching
+        // anything. Otherwise a request the planner refuses is answered here, without a task; the rest
+        // is accepted as a lifecycle task, so it shares the FIFO, status/result/cancel and the KB lock
+        // with every other build action. The answer is the accepted task: the Gateway's lifecycle
+        // machinery (wait_until_done, status, result) waits for it off the SDK thread, and the receipt
+        // is what the finished task's status and result carry.
+        internal Func<ISpecifyOnlyEnvironment> SpecifyOnlyEnvironmentFactory { get; set; }
+
+        // What keeps a specify_only task from being coalesced with another request for the same target
+        // (a plain specify, or a specify_only expecting another version).
+        internal static string StrictAdmissionVariant(SpecifyOnlyRequest request)
+            => request == null ? null : "specify_only:" + (request.ExpectedVersion ?? string.Empty);
+
+        private string ResolveGeneratorOutputPath()
+        {
+            try { return _kbService?.GetActiveEnvironmentWebPath(); }
+            catch { return null; }
+        }
+
+        private ISpecifyOnlyEnvironment CreateSpecifyOnlyEnvironment()
+        {
+            if (SpecifyOnlyEnvironmentFactory != null) return SpecifyOnlyEnvironmentFactory();
+            if (_kbService == null || !_kbService.IsOpen) return null;
+            return InProcessBuildRunner.CreateSpecifyOnlyEnvironment(_kbService.KbObject, null, ResolveGeneratorOutputPath);
+        }
+
+        public string SpecifyOnly(string targetGuid, string expectedVersion, bool dryRun, bool queueLifecycle)
+        {
+            if (!Guid.TryParse((targetGuid ?? string.Empty).Trim(), out Guid guid) || guid == Guid.Empty)
+            {
+                return McpResponse.Err(
+                    code: SpecifyOnlyCodes.InvalidGuid,
+                    message: "specify_only identifies the object by GUID; '" + targetGuid + "' is not a GUID.",
+                    hint: "Pass targetGuid=<GUID> (genexus_read, genexus_query and genexus_inspect return it).",
+                    target: targetGuid);
+            }
+
+            var request = new SpecifyOnlyRequest
+            {
+                Guid = guid,
+                ExpectedVersion = string.IsNullOrWhiteSpace(expectedVersion) ? null : expectedVersion.Trim()
+            };
+            ISpecifyOnlyEnvironment environment = CreateSpecifyOnlyEnvironment();
+            if (environment == null)
+            {
+                return McpResponse.Err(
+                    code: SpecifyOnlyCodes.KbNotOpen,
+                    message: "specify_only needs an open Knowledge Base and the GeneXus SDK build services; neither is available.",
+                    hint: "Open the KB (genexus_kb action=open) and run genexus_doctor if it stays unavailable.",
+                    target: guid.ToString("D"));
+            }
+
+            SpecifyOnlyRun planned = new SpecifyOnlyExecutor(environment).Plan(request);
+            planned.DryRun = dryRun;
+            SpecifyOnlyRefusal refusal = planned.Plan?.Refusal ?? planned.Failure;
+            if (dryRun)
+            {
+                JObject preview = SpecifyOnlyReceiptBuilder.BuildDryRun(request, planned);
+                return McpResponse.Ok(
+                    target: guid.ToString("D"),
+                    code: "DryRun",
+                    result: new JObject
+                    {
+                        ["dryRun"] = true,
+                        ["outcome"] = preview["outcome"],
+                        ["message"] = refusal == null
+                            ? "Plan only: nothing was changed. Run again without dryRun to specify the object."
+                            : "Plan only: nothing was changed, and the request would be refused (" + refusal.Code + ").",
+                        ["specifyOnly"] = preview
+                    });
+            }
+            if (refusal != null)
+            {
+                JObject receipt = SpecifyOnlyReceiptBuilder.Build(request, planned, new JArray());
+                return McpResponse.Err(
+                    code: refusal.Code, message: refusal.Message, hint: refusal.Hint, target: guid.ToString("D"),
+                    extra: new JObject { ["specified"] = false, ["outcome"] = receipt["outcome"], ["specifyOnly"] = receipt });
+            }
+
+            return Build("Build", guid.ToString("D"), includeCallees: "none", buildPlanCap: 200,
+                skipFullDeploy: false, notifyOnFailure: null, fastIncremental: false, specifyOnly: true,
+                compileCheck: false, compileCheckCallers: null, compileCheckTruncated: false, compileCheckGraphAvailable: true,
+                queueLifecycle: queueLifecycle, specifyOnlyRequest: request);
+        }
         // mode=compile_check: "did my edits break the build?" without the ~200s
         // DeveloperMenu regeneration a full build-all pays. Expands the requested
         // objects to include everything that CALLS them (transitive, via the caller
@@ -1823,14 +1975,16 @@ namespace GxMcp.Worker.Services
         private static string NewBuildTaskId()
             => Guid.NewGuid().ToString("N").Substring(0, 8);
 
-        private static BuildTaskStatus CreateAdmissionStatus(
+        internal static BuildTaskStatus CreateAdmissionStatus(
             string taskId,
             string action,
             string target,
             List<string> targets,
             string kbPath,
             bool queued,
-            int queuePosition)
+            int queuePosition,
+            bool specifyOnly = false,
+            SpecifyOnlyRequest specifyOnlyRequest = null)
         {
             var now = DateTime.UtcNow;
             return new BuildTaskStatus
@@ -1840,6 +1994,12 @@ namespace GxMcp.Worker.Services
                 Target = target,
                 Targets = targets == null ? null : targets.ToList(),
                 KbPath = kbPath,
+                // What the task does is part of the status from the moment it is queued: a queued entry is
+                // promoted to run by whoever finishes the active build, which can happen before Build has
+                // finished filling the status in, and a task that did not yet know it is a specification
+                // would run as a full build.
+                SpecifyOnly = specifyOnly,
+                SpecifyOnlyRequest = specifyOnlyRequest,
                 Status = queued ? "Queued" : "Running",
                 Phase = queued ? "Queued" : "Starting",
                 QueuePosition = queued ? (int?)queuePosition : null,
@@ -1850,7 +2010,7 @@ namespace GxMcp.Worker.Services
             };
         }
 
-        private static string BuildAdmissionKey(
+        internal static string BuildAdmissionKey(
             string action,
             string target,
             string includeCallees,
@@ -1860,14 +2020,15 @@ namespace GxMcp.Worker.Services
             bool fastIncremental,
             bool specifyOnly,
             bool compileCheck,
-            string environment)
+            string environment,
+            string variant = null)
         {
             var targets = ParseTargets(target)
                 .Select(item => item.Trim().ToLowerInvariant())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            return string.Join("|", new[]
+            string key = string.Join("|", new[]
             {
                 (action ?? string.Empty).Trim().ToLowerInvariant(),
                 string.Join(",", targets),
@@ -1880,6 +2041,9 @@ namespace GxMcp.Worker.Services
                 compileCheck ? "1" : "0",
                 (environment ?? string.Empty).Trim().ToLowerInvariant()
             });
+            // A variant keeps two requests that name the same target but ask for different work (lifecycle
+            // specify vs specify_only) from being coalesced into one execution.
+            return variant == null ? key : key + "|" + variant.Trim().ToLowerInvariant();
         }
 
         private static BuildAdmissionDecision AdmitBuildRequest(
@@ -1894,17 +2058,23 @@ namespace GxMcp.Worker.Services
             bool specifyOnly,
             bool compileCheck,
             string environment,
-            bool allowQueue)
+            bool allowQueue,
+            string variant = null,
+            SpecifyOnlyRequest specifyOnlyRequest = null)
         {
             var targets = ParseTargets(target);
             string scope = BuildAdmissionScope(kbPath);
             string key = BuildAdmissionKey(action, target, includeCallees, buildPlanCap,
-                skipFullDeploy, fullDeploy, fastIncremental, specifyOnly, compileCheck, environment);
+                skipFullDeploy, fullDeploy, fastIncremental, specifyOnly, compileCheck, environment, variant);
+            // The same condition Build applies when it fills the status in afterwards.
+            bool specifyingTargets = specifyOnly && action != null
+                && action.Equals("Build", StringComparison.OrdinalIgnoreCase) && targets.Count > 0;
+            SpecifyOnlyRequest strictRequest = specifyingTargets ? specifyOnlyRequest : null;
 
             if (ConcurrentBuildsAllowed())
             {
                 string taskId = NewBuildTaskId();
-                var status = CreateAdmissionStatus(taskId, action, target, targets, kbPath, false, 0);
+                var status = CreateAdmissionStatus(taskId, action, target, targets, kbPath, false, 0, specifyingTargets, strictRequest);
                 return new BuildAdmissionDecision
                 {
                     Execute = true,
@@ -1996,7 +2166,8 @@ namespace GxMcp.Worker.Services
 
                     string queuedTaskId = NewBuildTaskId();
                     var queuedStatus = CreateAdmissionStatus(
-                        queuedTaskId, action, target, targets, kbPath, true, queue.Pending.Count + 1);
+                        queuedTaskId, action, target, targets, kbPath, true, queue.Pending.Count + 1,
+                        specifyingTargets, strictRequest);
                     var queued = new BuildAdmissionEntry
                     {
                         TaskId = queuedTaskId,
@@ -2015,7 +2186,7 @@ namespace GxMcp.Worker.Services
 
                 string admittedTaskId = NewBuildTaskId();
                 var admittedStatus = CreateAdmissionStatus(
-                    admittedTaskId, action, target, targets, kbPath, false, 0);
+                    admittedTaskId, action, target, targets, kbPath, false, 0, specifyingTargets, strictRequest);
                 var admitted = new BuildAdmissionEntry
                 {
                     TaskId = admittedTaskId,
@@ -2282,7 +2453,7 @@ namespace GxMcp.Worker.Services
                             bool compileCheck, List<string> compileCheckCallers, bool compileCheckTruncated, bool compileCheckGraphAvailable,
                             bool fullDeploy = false, bool compileCheckCallersRequested = true, int compileCheckCallerCap = 0,
                             bool queueLifecycle = true, bool refuseStaleEnvironmentCopy = false,
-                            bool forceTargets = false)
+                            bool forceTargets = false, SpecifyOnlyRequest specifyOnlyRequest = null)
         {
             string globalRejection = RejectGlobalActionWithTarget(action, target);
             if (globalRejection != null) return globalRejection;
@@ -2346,7 +2517,10 @@ namespace GxMcp.Worker.Services
             // before callers and every per-object csproj sees its dependency DLLs.
             // Only applies to Build action with concrete targets; RebuildAll/Reorg/etc. ignore.
             BuildPlan plan = null;
-            if (action != null && action.Equals("Build", StringComparison.OrdinalIgnoreCase) && targets.Count > 0)
+            // specify_only identifies its object by GUID and resolves it through the SDK itself, so the
+            // index-backed expansion (which can lag behind a just-created object) is not consulted.
+            if (action != null && action.Equals("Build", StringComparison.OrdinalIgnoreCase) && targets.Count > 0
+                && specifyOnlyRequest == null)
             {
                 plan = ExpandTargets(targets, includeCallees ?? "transitive", buildPlanCap);
                 if (plan.Truncated)
@@ -2404,7 +2578,9 @@ namespace GxMcp.Worker.Services
                 specifyOnly,
                 compileCheck,
                 environment: null,
-                allowQueue: queueLifecycle);
+                allowQueue: queueLifecycle,
+                variant: StrictAdmissionVariant(specifyOnlyRequest),
+                specifyOnlyRequest: specifyOnlyRequest);
             if (admission.Reject)
                 return BuildAdmissionResponse(admission);
             if (!admission.Execute && admission.Coalesced)
@@ -2491,6 +2667,7 @@ namespace GxMcp.Worker.Services
             status.SpecifyOnly = specifyOnly && targetedBuild;
             if (status.SpecifyOnly) status.ValidatedSource = "environment-copy";
             status.RefuseStaleEnvironmentCopy = status.SpecifyOnly && refuseStaleEnvironmentCopy;
+            status.SpecifyOnlyRequest = status.SpecifyOnly ? specifyOnlyRequest : null;
             status.ForceRebuildTargets = forceTargets && string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase);
             status.SkipFullDeploy = effectiveSkipFullDeploy;
             status.FullDeploy = fullDeploy
@@ -2512,7 +2689,7 @@ namespace GxMcp.Worker.Services
             status.CompileCheckGraphAvailable = compileCheck && compileCheckGraphAvailable;
 
             // Best-effort caller lookup for hint (only meaningful for single-object builds)
-            if (targets.Count == 1)
+            if (targets.Count == 1 && specifyOnlyRequest == null)
             {
                 var callers = TryGetDirectCallers(targets[0]);
                 if (callers != null && callers.Count > 0)
@@ -4311,6 +4488,14 @@ namespace GxMcp.Worker.Services
             bool useInProcess =
                 !string.Equals(Environment.GetEnvironmentVariable("GXMCP_INPROCESS_BUILD"), "0", StringComparison.OrdinalIgnoreCase)
                 && _kbService != null && _kbService.IsOpen;
+            // specify_only must never reach RunExternalMsBuildPhase: that project runs the SDK's normal concurrent
+            // generation and then a Generate + Compile + deploy.
+            if (!useInProcess && status.SpecifyOnlyRequest != null)
+            {
+                TerminalizeSpecUnavailable(status, SpecifyOnlyCodes.InProcessDisabled,
+                    "The in-process build pipeline is unavailable (GXMCP_INPROCESS_BUILD=0, or the KB is not open in this Worker), and specify_only never falls back to an external full build. Nothing was specified.");
+                return true;
+            }
             if (!useInProcess) return false;
             status.Phase = "InProcess-Specifying";
             EmitPhaseProgress(status.Phase);
@@ -4335,7 +4520,9 @@ namespace GxMcp.Worker.Services
                     fullDeploy: status.FullDeploy,
                     forceFullBuild: status.FastIncrementalForceFullBuild,
                     skipSpecifyTargets: status.FastIncrementalCanSkipSpecify,
-                    refuseStaleEnvironmentCopy: status.RefuseStaleEnvironmentCopy);
+                    refuseStaleEnvironmentCopy: status.RefuseStaleEnvironmentCopy,
+                    specifyOnlyRequest: status.SpecifyOnlyRequest,
+                    generatorOutputPath: ResolveGeneratorOutputPath);
             }
             catch (Exception ex)
             {
@@ -4462,22 +4649,60 @@ namespace GxMcp.Worker.Services
             // specifyOnly asked for. Report spec-unavailable instead.
             if (status.SpecifyOnly)
             {
-                status.Status = "Failed";
-                status.ExitCode = 1;
-                status.FailureOrigin = "spec_unavailable";
-                status.ChildProcessState = "none";
-                status.MsBuildExitCode = null;
-                status.Phase = "Done";
-                RecordStagesUpTo(status, "Done");
-                EmitPhaseProgress(status.Phase);
-                status.Error = "Spec-check (specifyOnly) could not run in-process (GeneXus MSBuild tasks unavailable in this worker). Not falling back to a full build. Run a normal build to see diagnostics.";
-                status.EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                status.ElapsedSeconds = Math.Round((DateTime.UtcNow - status.StartedAt).TotalSeconds, 1);
-                try { status.StateChangeSignal.Set(); } catch { }
+                TerminalizeSpecUnavailable(status, SpecifyOnlyCodes.ExecutionFailed,
+                    "Spec-check (specifyOnly) could not run in-process (GeneXus MSBuild tasks unavailable in this worker). Not falling back to a full build. Run a normal build to see diagnostics.");
                 return true;
             }
             Logger.Warn("[BUILD-INPROCESS-FALLBACK] taskId=" + status.TaskId + " falling back to MSBuild.exe spawn");
             return false;
+        }
+
+        // Every specify_only task that has ended carries a receipt that says why, also when it ended before the
+        // strict runner recorded anything (no KB path, an exception). RunBuild's finally calls this once the
+        // build thread is done with the task, so "nothing was specified" is a fact there, not a guess.
+        internal static void EnsureSpecifyOnlyRun(BuildTaskStatus status)
+        {
+            if (status == null || status.SpecifyOnlyRequest == null) return;
+            string reason = !string.IsNullOrWhiteSpace(status.Error) ? status.Error : "The task ended before the specifier ran.";
+            lock (status._lock)
+            {
+                if (status.SpecifyOnlyRun != null) return;
+                status.SpecifyOnlyRun = new SpecifyOnlyRun
+                {
+                    StartedUtc = status.StartedAt,
+                    Failure = new SpecifyOnlyRefusal
+                    {
+                        Code = SpecifyOnlyCodes.ExecutionFailed,
+                        Message = reason,
+                        Hint = "Nothing was specified."
+                    }
+                };
+            }
+        }
+
+        // A specification that cannot run in-process ends here, Failed, instead of falling back to an external
+        // full build (which would compile and deploy, the opposite of what a spec-check asks for). A specify_only
+        // task also gets a receipt that says why, so its caller reads the same shape on every outcome.
+        private void TerminalizeSpecUnavailable(BuildTaskStatus status, string code, string error)
+        {
+            if (status.SpecifyOnlyRequest != null && status.SpecifyOnlyRun == null)
+            {
+                var failure = new SpecifyOnlyRefusal { Code = code, Message = error, Hint = "Nothing was specified." };
+                lock (status._lock) status.SpecifyOnlyRun = new SpecifyOnlyRun { StartedUtc = DateTime.UtcNow, Failure = failure };
+                HandleLine(status, SpecifyOnlyCodes.Line(code, error), true);
+            }
+            status.Status = "Failed";
+            status.ExitCode = 1;
+            status.FailureOrigin = "spec_unavailable";
+            status.ChildProcessState = "none";
+            status.MsBuildExitCode = null;
+            status.Phase = "Done";
+            RecordStagesUpTo(status, "Done");
+            EmitPhaseProgress(status.Phase);
+            status.Error = error;
+            status.EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            status.ElapsedSeconds = Math.Round((DateTime.UtcNow - status.StartedAt).TotalSeconds, 1);
+            try { status.StateChangeSignal.Set(); } catch { }
         }
 
         // External MSBuild.exe fallback phase. Spawns MSBuild.exe against a generated
@@ -4817,6 +5042,8 @@ namespace GxMcp.Worker.Services
                 try { watchdog?.Dispose(); } catch { }
                 try { noProgressWatchdog?.Dispose(); } catch { }
                 try { buildHeartbeat?.Dispose(); } catch { }
+                try { EnsureSpecifyOnlyRun(status); }
+                catch (Exception ex) { Logger.Warn("[SPECIFY-ONLY] could not record how the task ended: " + ex.Message); }
                 // issue #42 — build-evidence gate. Single choke point for BOTH the
                 // in-process and MSBuild.exe branches (both reach here via return /
                 // fall-through). On a terminal success for a code-emitting action,

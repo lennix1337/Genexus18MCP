@@ -28,12 +28,21 @@ namespace GxMcp.Gateway
             return args?["dryRun"]?.ToObject<bool?>() == true;
         }
 
+        internal static bool IsLifecycleSpecifyOnly(string? lifecycleAction)
+            => string.Equals(lifecycleAction, "specify_only", StringComparison.OrdinalIgnoreCase);
+
         internal static bool ShouldDispatchLifecycleBuildAsync(
             string? toolName, string? lifecycleAction, JObject? args)
         {
             if (!string.Equals(toolName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase)
                 || IsLifecycleBuildDryRun(args))
                 return false;
+
+            // specify_only is a Worker lifecycle task like a build: its receipt belongs to the finished task, and
+            // the Gateway's job (operation id, queue position, wait_until_done, status/result/cancel) is what
+            // waits for it off the SDK thread. dryRun was excluded above: a plan is answered by the Worker at once.
+            if (IsLifecycleSpecifyOnly(lifecycleAction))
+                return true;
 
             if (string.Equals(lifecycleAction, "build", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(lifecycleAction, "build_all", StringComparison.OrdinalIgnoreCase)
@@ -77,6 +86,17 @@ namespace GxMcp.Gateway
                 ["limit"] = args?["limit"]?.ToObject<int?>() ?? 0,
                 ["mode"] = (args?["mode"]?.ToString() ?? string.Empty).Trim().ToLowerInvariant()
             };
+            // specify_only identifies its object by GUID, not by target: two requests for different objects (or
+            // expecting different versions) are different work and must not be coalesced into one operation.
+            // Added only when present, so the identity of every other action is unchanged.
+            string targetGuid = (args?["targetGuid"]?.ToString() ?? string.Empty).Trim();
+            if (targetGuid.Length > 0)
+                normalized["targetGuid"] = Guid.TryParse(targetGuid, out Guid parsedGuid)
+                    ? parsedGuid.ToString("D")
+                    : targetGuid.ToLowerInvariant();
+            string expectedVersion = (args?["expectedVersion"]?.ToString() ?? string.Empty).Trim();
+            if (expectedVersion.Length > 0)
+                normalized["expectedVersion"] = expectedVersion;
             return normalized.ToString(Formatting.None);
         }
 
@@ -192,6 +212,7 @@ namespace GxMcp.Gateway
                 bool rebuild = action == "rebuild";
                 bool buildAll = action == "build_all";
                 bool specify = action == "specify";
+                bool specifyOnly = IsLifecycleSpecifyOnly(action);
                 bool compileCheck = action == "build"
                     && string.Equals(args?["mode"]?.ToString(), "compile_check", StringComparison.OrdinalIgnoreCase);
                 // Issue #546 (supersedes the #359 targeted-rebuild mapping): `rebuild`
@@ -203,7 +224,8 @@ namespace GxMcp.Gateway
                 // forwarded below. The directed path is `action=build target=<object>`;
                 // the Worker's targeted "Rebuild" action stays reachable only through the
                 // legacy `genexus_build` route.
-                workerAction = specify ? "Specify"
+                workerAction = specifyOnly ? "SpecifyOnly"
+                    : specify ? "Specify"
                     : compileCheck ? "CompileCheck"
                     : rebuild ? "RebuildAll"
                     : buildAll ? "BuildAll"
@@ -233,6 +255,12 @@ namespace GxMcp.Gateway
                 // share the same per-worker admission contract.
                 ["queueLifecycle"] = true
             };
+            if (IsLifecycleSpecifyOnly(action))
+            {
+                // The object is identified by GUID; the Worker enforces the version and plans/refuses on its own.
+                command["targetGuid"] = args?["targetGuid"]?.ToString();
+                command["expectedVersion"] = args?["expectedVersion"]?.ToString();
+            }
             return command;
         }
 
@@ -397,7 +425,7 @@ namespace GxMcp.Gateway
                 && message.IndexOf("Task ID not found", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static JObject BuildWorkerLifecycleStatusEnvelope(
+        internal static JObject BuildWorkerLifecycleStatusEnvelope(
             JobEntry job,
             JObject workerPayload,
             JObject? args,
@@ -435,7 +463,8 @@ namespace GxMcp.Gateway
                 "newWarnings", "warningCount", "warningTotal", "warningCursor",
                 "warningsAggregated", "_meta", "phase", "Phase", "errorCount",
                 "ErrorCount", "warningCount", "WarningCount", "exitCode", "ExitCode",
-                "failureOrigin", "watchdogTriggered", "watchdogType", "childProcessState", "confirmedStages"
+                "failureOrigin", "watchdogTriggered", "watchdogType", "childProcessState", "confirmedStages",
+                "outcome", "specified"
             })
             {
                 if (result[propertyName] != null)

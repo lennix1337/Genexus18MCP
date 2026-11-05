@@ -1431,6 +1431,7 @@ namespace GxMcp.Gateway
                 "validate" => "Validate accepted;",
                 "validate-kb" => "KB validation accepted;",
                 "specify" => "Specify accepted;",
+                "specify_only" => "Specify-only accepted;",
                 "reorg" => "Reorganization accepted;",
                 "index" => "Index refresh accepted;",
                 "build_all" => "Build All accepted;",

@@ -122,6 +122,27 @@ namespace GxMcp.Gateway
             return 0;
         }
 
+        // The Worker keeps a specify_only receipt's diagnostics complete (compact=false returns them all); the
+        // compact shape bounds them like it bounds a build's errors. The verdict's own diagnostic comes first,
+        // so the cut never removes it.
+        public const int SpecifyOnlyDiagnosticCap = 50;
+
+        internal static JObject CompactSpecifyOnlyReceipt(JObject receipt)
+        {
+            var copy = (JObject)receipt.DeepClone();
+            if (copy["diagnostics"] is JArray diagnostics)
+            {
+                var kept = new JArray(diagnostics.Take(SpecifyOnlyDiagnosticCap).Select(CapErrorItem));
+                copy["diagnostics"] = kept;
+                if (diagnostics.Count > kept.Count)
+                {
+                    copy["diagnosticsTotal"] = diagnostics.Count;
+                    copy["diagnosticsOmitted"] = diagnostics.Count - kept.Count;
+                }
+            }
+            return copy;
+        }
+
         // PERFORMANCE (perf-review round 3): tree-based core shared with the gateway
         // dispatch paths — callers holding an in-memory JObject skip the
         // serialize→parse round-trip the string overload used to force.
@@ -324,6 +345,13 @@ namespace GxMcp.Gateway
             // issue #42 (P5) — objects edited but not yet successfully rebuilt.
             var stale = obj["staleGenerated"] as JArray;
             if (stale != null && stale.Count > 0) compactObj["staleGenerated"] = stale;
+
+            // lifecycle action=specify_only: the two answers a caller reads first and the receipt behind them
+            // (versions, steps run, what was persisted, diagnostics, evidence). Absent for every other task.
+            if (obj["outcome"] != null) compactObj["outcome"] = obj["outcome"];
+            if (obj["specified"] != null) compactObj["specified"] = obj["specified"];
+            if (obj["specifyOnly"] is JObject specifyOnlyReceipt)
+                compactObj["specifyOnly"] = CompactSpecifyOnlyReceipt(specifyOnlyReceipt);
 
             // Surface taskId/jobId for callers that want to fetch the raw payload later via action=result&compact=false.
             if (obj["jobId"] != null) compactObj["jobId"] = obj["jobId"];

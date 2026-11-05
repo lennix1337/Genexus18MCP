@@ -485,7 +485,7 @@ in GeneXus first.
 - `genexus_security` — audit KB security: `audit_gam` (env/GAM props), `scan_secrets` (regex over Source), `scan_native` (the SDK's own Security Scanner, `ISecurityScannerService`)
 
 **Lifecycle, build, test & DB**
-- `genexus_lifecycle` — directed `build` (incl. `compile_check`), incremental global `build_all`, forced global `rebuild`, specify, validate, index, reorg/`reorg_preview`, cancel, and poll status
+- `genexus_lifecycle` — directed `build` (incl. `compile_check`), incremental global `build_all`, forced global `rebuild`, specify, `specify_only` (one object by GUID, no Generate/compile), validate, index, reorg/`reorg_preview`, cancel, and poll status
 - `genexus_test` — run native GXtest tests
 - `genexus_db` — DB umbrella: schema-drift, `sql_ddl`/`sql_navigation`, static index advisor, `sample_data`, typed Transaction record query/insert/update with dry-run, optimistic versioning, reread and verified rollback, Domain/SDT type introspection, translation import, `reorg_impact`, and non-mutating `reorg_preview` with exact DDL only from a current Impact Analysis artifact
 - `genexus_deploy` — deploy application (`IDeploymentService`): `list_targets` (read) / `deploy` (destructive, `confirm=true`)
