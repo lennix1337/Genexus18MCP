@@ -149,9 +149,14 @@ setting at its default.
 | `Server.SharedHost.ColdStartConcurrency` | `GXMCP_SHARED_COLD_START_CONCURRENCY` | 1 | 1-4 concurrent cold starts | `shared-host` |
 | `Server.SharedHost.AttachReadyTimeoutSeconds` | `GXMCP_SHARED_ATTACH_READY_TIMEOUT_S` | 120 | 10-600 s | `shared-host` |
 
+- In this release only `QueueWaitMs`, `QueueDepth` and `SessionQueueCap` change
+  behavior: they bound the Worker host's request queue. `MaxWorkers`,
+  `MemoryFloorMB`, `ColdStartConcurrency` and `AttachReadyTimeoutSeconds` are
+  validated at load with the ranges above but are not applied yet; they are
+  reserved for the Worker admission and attach-readiness work that follows.
 - `GXMCP_BUSY_REJECT_MS` is ignored in shared-host mode: an SDK operation that
   arrives while the Worker is busy is queued under the settings above instead of
-  being rejected early. Diagnostics report the variable as `ignored` when it is set.
+  being rejected early. The Worker host starts its Worker with the variable set to 0.
 - `GXMCP_BUSY_WAIT_MS` is the legacy source for the queue wait. When neither
   `GXMCP_SHARED_QUEUE_WAIT_MS` nor `Server.SharedHost.QueueWaitMs` is set, its
   value is used if it is an integer from 1000 to 600000; otherwise the queue wait
