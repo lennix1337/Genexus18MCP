@@ -175,6 +175,17 @@ function Remove-OwnReleaseCandidate {
     }
 }
 
+function Invoke-CleanupWrite {
+    # Cleanup write that honours release.ps1 -DryRun and reports failure instead of calling Fail.
+    param([Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string[]]$Arguments)
+    if (Get-Variable -Name DryRun -ValueOnly -ErrorAction SilentlyContinue) {
+        Write-Host "    [DRY-RUN] would run: $Exe $($Arguments -join ' ')" -ForegroundColor DarkGray
+        return $true
+    }
+    & $Exe @Arguments 2>&1 | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Cleanup-ReleaseCandidate {
     param(
         [Parameter(Mandatory = $true)][string]$Tag
@@ -193,8 +204,7 @@ function Cleanup-ReleaseCandidate {
         if ($LASTEXITCODE -eq 0 -and $prState.Trim() -ne 'OPEN') {
             Ok "Candidate PR #$prNumber is already $($prState.Trim()); nothing to close."
         } else {
-            & gh pr close ([string]$prNumber) --delete-branch 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+            if (Invoke-CleanupWrite 'gh' @('pr', 'close', [string]$prNumber, '--delete-branch')) {
                 $closedPr = $true
                 Ok "Candidate PR #$prNumber closed and remote branch $candidateBranch deleted."
             } else {
@@ -207,8 +217,7 @@ function Cleanup-ReleaseCandidate {
         $prsRaw = @(& gh pr list --head $candidateBranch --state open --json number 2>$null)
         if ($LASTEXITCODE -eq 0 -and $prsRaw.Count -gt 0) {
             foreach ($p in @(($prsRaw -join [Environment]::NewLine) | ConvertFrom-Json)) {
-                & gh pr close ([string]$p.number) --delete-branch 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) {
+                if (Invoke-CleanupWrite 'gh' @('pr', 'close', [string]$p.number, '--delete-branch')) {
                     $closedPr = $true
                     Ok "Closed candidate PR #$($p.number) and deleted $candidateBranch."
                 } else {
@@ -221,16 +230,14 @@ function Cleanup-ReleaseCandidate {
     if (-not $closedPr) {
         $remoteCheck = @(& git ls-remote --heads origin "refs/heads/$candidateBranch" 2>$null)
         if ($LASTEXITCODE -eq 0 -and $remoteCheck.Count -gt 0) {
-            & git push origin ":refs/heads/$candidateBranch" 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) { Ok "Deleted remote candidate branch $candidateBranch." }
+            if (Invoke-CleanupWrite 'git' @('push', 'origin', ":refs/heads/$candidateBranch")) { Ok "Deleted remote candidate branch $candidateBranch." }
             else { Warn "Could not delete remote candidate branch $candidateBranch." }
         }
     }
 
     $localExists = @(& git branch --list $candidateBranch 2>$null) -join ''
     if ($localExists.Trim()) {
-        & git branch -D $candidateBranch 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { Ok "Deleted local branch $candidateBranch." }
+        if (Invoke-CleanupWrite 'git' @('branch', '-D', $candidateBranch)) { Ok "Deleted local branch $candidateBranch." }
         else { Warn "Could not delete local branch $candidateBranch." }
     }
 }
