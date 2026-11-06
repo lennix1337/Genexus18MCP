@@ -43,6 +43,26 @@
       "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~LifecycleResponseShaperTests", "--logger", "console;verbosity=minimal"],
       "timeoutMs": 120000
     },
+    "shared-host-test-host": {
+      "description": "Build the SDK-free broker executable used by shared-host process smoke tests",
+      "argv": ["dotnet", "build", "src/GxMcp.SharedHost.TestHost/GxMcp.SharedHost.TestHost.csproj", "-c", "Release", "--nologo"],
+      "timeoutMs": 120000
+    },
+    "shared-host-worker-regression": {
+      "description": "Shared-host Worker scheduling, protocol, routing, supervision and blocked-stdin regression; no KB or Cloud",
+      "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--filter", "FullyQualifiedName~SharedWorkerHost|FullyQualifiedName~SharedHostProcessChild|FullyQualifiedName~CommandLaneClassifier", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 120000
+    },
+    "shared-host-gateway-regression": {
+      "description": "Shared-host Gateway queue, compatibility and process tests; requires shared-host-test-host; no SDK KB or Cloud",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--filter", "FullyQualifiedName~SharedHost|FullyQualifiedName~SharedWorker|FullyQualifiedName~ReadLogsOffSdkLane", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 120000
+    },
+    "shared-host-child-shutdown": {
+      "description": "Shared-host child termination under blocked stdin; disposable owned process, no KB or Cloud",
+      "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--filter", "FullyQualifiedName~SharedHostProcessChildTests", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 120000
+    },
     "worker-unit": {
       "description": "Worker non-process tests; live SDK/KB evidence remains a separate lane",
       "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--filter", "Category!=ProcessSmoke", "--logger", "console;verbosity=minimal"],
