@@ -13,6 +13,31 @@
       "onEdit": true,
       "watch": ["release.ps1", "scripts"]
     },
+    "issues-read-layout-regression": {
+      "description": "Issue batch: stable search continuations, WWP projection and auto-declared variable unit contracts; no KB or Cloud",
+      "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--filter", "FullyQualifiedName~SourceSearch|FullyQualifiedName~WwpLayoutTests|FullyQualifiedName~AutoCreatedVariablesTests", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 120000
+    },
+    "issues-recovery-regression": {
+      "description": "Post-timeout recovery target and reconciliation Gateway contracts; no SDK KB or Cloud",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--filter", "FullyQualifiedName~MutationRecoveryRegistryTests|FullyQualifiedName~MutationJournalActionTests|FullyQualifiedName~RecoveryReadEmbeddedCertificateTests", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 120000
+    },
+    "live-read-tests-build": {
+      "description": "Compile live read acceptance tests without opening a KB; package remains untouched",
+      "argv": ["dotnet", "build", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--nologo", "-v:minimal"],
+      "timeoutMs": 120000
+    },
+    "live-reliable-reads": {
+      "description": "Serialized disposable-KB acceptance for SDK refresh and auto-declared variable receipt; requires explicit GXMCP_TEST_KB, GXMCP_TEST_FIXTURE, GX_CONFIG_PATH, GX_PATH and GXMCP_LOG_DIR, frozen publish package and Cloud off; never run concurrently with another KB owner",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-build", "--filter", "FullyQualifiedName~RefreshReadLiveTests.AutoDeclaredVariableIsReportedAndIndependentlyReloaded|FullyQualifiedName~RefreshReadLiveTests.SameSdkObjectCanBeIndependentlyReloadedByNameAndGuid|FullyQualifiedName~RefreshReadLiveTests.LargeSourceSingularAndPluralReadsPreserveEveryPage", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 600000
+    },
+    "live-events-read-parity": {
+      "description": "Separate Events parity acceptance; requires audited Events object-save SDK bundle, destination pins and the same serialized disposable-KB manifest as live-reliable-reads. A refused save is unavailable, never a successful read acceptance.",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-build", "--filter", "FullyQualifiedName~RefreshReadLiveTests.LargeEventsSingularAndPluralReadsPreserveEveryPage", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 600000
+    },
     "gateway-harness-cleanup": {
       "description": "Disposable process-tree cleanup smoke; no SDK, KB or Cloud",
       "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~LiveGatewayHarnessCleanupTests", "--logger", "console;verbosity=normal"],
