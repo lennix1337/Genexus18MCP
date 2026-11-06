@@ -1,6 +1,11 @@
 {
   "version": 1,
   "checks": {
+    "release-status-isolation": {
+      "description": "Synthetic release status stays outside live discovery; disposed headless child exits cleanly; no SDK, KB or publication",
+      "argv": ["pwsh", "-NoProfile", "-NonInteractive", "-File", "scripts/tests/test-release-status.ps1"],
+      "timeoutMs": 90000
+    },
     "release-scripts": {
       "description": "Release script suite the contracts job runs (scripts/tests/run-release-script-tests.ps1: dry run, entrypoint, lifecycle, candidate CI); mocked gh/git, no SDK, KB or publication",
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/tests/run-release-script-tests.ps1"],
