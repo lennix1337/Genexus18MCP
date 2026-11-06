@@ -109,7 +109,7 @@ jobs:
 
       - name: Setup .NET
         if: ${{ steps.dotnet-sdk.outputs.present != 'true' }}
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v5
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v5
         with:
           dotnet-version: 10.0.x
 
@@ -314,7 +314,7 @@ jobs:
       # the per-test time budget. No release build: the staged exe was never uploaded,
       # and the release workflow and build.ps1 build the shipped binary (~130s here).
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.146
 
@@ -525,7 +525,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v5
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v5
         with:
           dotnet-version: 10.0.x
 
