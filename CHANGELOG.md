@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+<!-- Next release: put new entries under a `### Added` / `- **`genexus_modify_variable` states that it retyped** (#886): the success result (code `VariableRenamed`, kept for existing clients) now also carries `retyped: true` and `persistedState: "confirmed"` — the new type was read back from the saved object — so a retype is no longer mistaken for a rename or for an unverified write.
+
+### Changed` / `### Fixed` / `### Internal`
      subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
 
 ### Added
