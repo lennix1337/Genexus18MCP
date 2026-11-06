@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- **Transfer fidelity preflight failures report uncertain effects**: when SDK preparation fails before `ImportFile`, the response advises inspecting target objects before retrying and reports `persistedState: "unknown"`; preparation itself may have changed the KB. https://github.com/lennix1337/Genexus18MCP/issues/886
 - **Shared-host recovery cannot wait behind a blocked stdin write**: terminate the child before closing its input stream, so a child that stops reading cannot block its own restart. A process regression reproduces the blocked pipe without a KB or GeneXus SDK operation.
 - **Multi-class `themeClass` with dashed utility classes no longer rolls the save back** (#880): the layout verifier treats names such as `u-w-14` as symbolic theme classes, so their `<guid>-<int>` re-read is accepted instead of failing as `PatternProjectionFailed`. Unit-tested on synthetic values only; not run on a real WWP KB.
 ### Internal

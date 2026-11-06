@@ -334,11 +334,14 @@ namespace GxMcp.Worker.Services
             }
             catch (Exception ex)
             {
+                var failure = ImportDiagnostics(diagnostics, imported: false);
+                failure["persistedState"] = "unknown";
                 return McpResponse.Err(
                     code: "TransferImportVerificationUnavailable",
-                    message: "The XPZ could not be inspected for WebForm preservation; no import was attempted. " + ex.Message,
-                    hint: "Retry after the XPZ is readable by the GeneXus SDK.",
-                    extra: ImportDiagnostics(diagnostics, imported: false));
+                    message: "The XPZ could not be inspected for WebForm preservation; ImportFile was not called, but SDK preparation may have changed the target KB. " + ex.Message,
+                    hint: "Inspect the target objects and reconcile any changes before retrying.",
+                    extra: failure,
+                    reconciliationRequired: true);
             }
 
             bool ok;

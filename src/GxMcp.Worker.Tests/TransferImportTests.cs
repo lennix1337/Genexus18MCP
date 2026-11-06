@@ -19,6 +19,22 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ImportFidelityFailure_RequiresReconciliationBeforeRetry()
+        {
+            string source = GxMcp.TestSupport.RepoSource.WithoutComments(
+                "src", "GxMcp.Worker", "Services", "TransferService.cs");
+            int start = source.IndexOf("code: \"TransferImportVerificationUnavailable\"", StringComparison.Ordinal);
+            int end = source.IndexOf("bool ok;", start, StringComparison.Ordinal);
+            Assert.True(start >= 0 && end > start);
+            int catchStart = source.LastIndexOf("catch (Exception ex)", start, StringComparison.Ordinal);
+            Assert.True(catchStart >= 0);
+            string failure = source.Substring(catchStart, end - catchStart);
+            Assert.Contains("persistedState", failure);
+            Assert.Contains("unknown", failure);
+            Assert.Contains("before retrying", failure);
+        }
+
+        [Fact]
         public void DescribeExportItem_ProjectsStableSdkMetadataWithoutCallingObject()
         {
             var descriptor = TransferService.DescribeExportItem(new FakeExportItem
