@@ -112,6 +112,7 @@ namespace GxMcp.Worker.Services
         private readonly IndexCacheService _index;
         private readonly ObjectService _objectService;
         internal Func<long> BudgetElapsedMillisecondsForTest { get; set; }
+        internal Func<IEnumerable<Models.SearchIndex.IndexEntry>, List<string>, SourceStoreCoverage> CoverageForTest { get; set; }
 
         // PERFORMANCE (perf round 4): compiled-regex cache. On net48,
         // RegexOptions.Compiled emits + JITs IL on EVERY new Regex(pattern,
@@ -227,6 +228,7 @@ namespace GxMcp.Worker.Services
 
         private const int LegacyResumeCursorVersion = 1;
         private const int ResumeCursorVersion = 2;
+        private const int CoverageResumeCursorVersion = 3;
         private const int MaxResumeCursorLength = 32 * 1024;
 
         private sealed class IndexGenerationMarker
@@ -430,6 +432,41 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private static SourceStoreCoverage ReadCoverage(JObject value)
+        {
+            int ReadCount(string name)
+            {
+                if (value[name]?.Type != JTokenType.Integer) throw new FormatException();
+                int count = value[name].Value<int>();
+                if (count < 0) throw new FormatException();
+                return count;
+            }
+            var result = new SourceStoreCoverage
+            {
+                StoredObjects = ReadCount("storedObjects"), StaleObjects = ReadCount("staleObjects"), TotalObjects = ReadCount("totalObjects")
+            };
+            if (!(value["parts"] is JObject parts)) throw new FormatException();
+            foreach (var part in parts.Properties())
+            {
+                if (!(part.Value is JObject nested)) throw new FormatException();
+                result.PartsByPart.Add(part.Name, ReadCoverage(nested));
+            }
+            return result;
+        }
+
+        private static void MergeCoverage(SourceStoreCoverage target, SourceStoreCoverage addition)
+        {
+            target.StoredObjects += addition.StoredObjects;
+            target.StaleObjects += addition.StaleObjects;
+            foreach (var part in addition.PartsByPart)
+            {
+                if (!target.PartsByPart.TryGetValue(part.Key, out var aggregate))
+                    target.PartsByPart[part.Key] = aggregate = new SourceStoreCoverage();
+                aggregate.TotalObjects += part.Value.TotalObjects;
+                MergeCoverage(aggregate, part.Value);
+            }
+        }
+
         private static bool CursorFieldEquals(JObject state, string field, string expected)
         {
             var token = state?[field];
@@ -452,11 +489,12 @@ namespace GxMcp.Worker.Services
                 var versionToken = state["v"];
                 if (versionToken == null || versionToken.Type != JTokenType.Integer) return false;
                 int version = versionToken.Value<int>();
-                if (version != LegacyResumeCursorVersion && version != ResumeCursorVersion) return false;
+                if (version != LegacyResumeCursorVersion && version != ResumeCursorVersion && version != CoverageResumeCursorVersion) return false;
 
                 string phase = state["phase"]?.ToString() ?? string.Empty;
                 if (!string.Equals(phase, "source", StringComparison.Ordinal)
-                    && !string.Equals(phase, "metadata", StringComparison.Ordinal))
+                    && !string.Equals(phase, "metadata", StringComparison.Ordinal)
+                    && !(version == CoverageResumeCursorVersion && string.Equals(phase, "coverage", StringComparison.Ordinal)))
                 {
                     return false;
                 }
@@ -475,7 +513,7 @@ namespace GxMcp.Worker.Services
 
                 if (requireBinding)
                 {
-                    if (version != ResumeCursorVersion
+                    if ((version != ResumeCursorVersion && version != CoverageResumeCursorVersion)
                         || !CursorFieldEquals(state, "query", expectedQuery)
                         || !CursorFieldEquals(state, "scope", expectedScope)
                         || !CursorFieldEquals(state, "index", expectedIndex)
@@ -705,11 +743,28 @@ namespace GxMcp.Worker.Services
                 string kbIdentity = GetKbIdentity();
                 string queryFingerprint = BuildQueryFingerprint(c);
                 string scopeFingerprint = BuildScopeFingerprint(c);
-                string BuildBoundCursor(int entryIndex, int skippedHits, bool metadata)
+                JObject cursorState = null;
+                bool resumeCoverage = false;
+                int coveragePosition = 0;
+                int initialStartIndex = Math.Max(0, c.StartIndex);
+                var coverage = new SourceStoreCoverage();
+                string BuildBoundCursor(int entryIndex, int skippedHits, bool metadata, bool census = false)
                 {
-                    return BuildResumeCursor(entryIndex, skippedHits, metadata,
+                    string token = BuildResumeCursor(entryIndex, skippedHits, metadata,
                         queryFingerprint, scopeFingerprint, indexGeneration, kbIdentity);
+                    TryDecodeResumeCursor(token, out var state);
+                    state["v"] = CoverageResumeCursorVersion;
+                    if (census) state["phase"] = "coverage";
+                    state["coveragePosition"] = coveragePosition;
+                    state["startIndex"] = initialStartIndex;
+                    state["coverage"] = coverage.ToJson();
+                    return Convert.ToBase64String(Encoding.UTF8.GetBytes(state.ToString(Newtonsoft.Json.Formatting.None)))
+                        .TrimEnd('=').Replace('+', '-').Replace('/', '_');
                 }
+
+                if (!string.IsNullOrWhiteSpace(c.Cursor) && TryDecodeResumeCursor(c.Cursor, out cursorState)
+                    && cursorState["v"]?.Type == JTokenType.Integer && cursorState["v"].Value<int>() < CoverageResumeCursorVersion)
+                    return Models.McpResponse.Err(code: "UnsupportedCursorVersion", message: "This cursor predates resumable coverage; start a new search.");
 
                 int resumeEntry = -1;
                 int resumeSkipped = 0;
@@ -722,10 +777,21 @@ namespace GxMcp.Worker.Services
                     return Models.McpResponse.Err(code: "InvalidCursor",
                         message: "cursor is not a valid continuation token for this search, scope, index generation and KB.");
                 }
+                if (cursorState != null)
+                {
+                    resumeCoverage = string.Equals(cursorState["phase"]?.ToString(), "coverage", StringComparison.Ordinal);
+                    if (cursorState["coveragePosition"]?.Type != JTokenType.Integer || cursorState["startIndex"]?.Type != JTokenType.Integer || !(cursorState["coverage"] is JObject savedCoverage))
+                        return Models.McpResponse.Err(code: "InvalidCursor", message: "cursor has no resumable coverage state.");
+                    coveragePosition = cursorState["coveragePosition"].Value<int>();
+                    initialStartIndex = cursorState["startIndex"].Value<int>();
+                    if (initialStartIndex < 0) return Models.McpResponse.Err(code: "InvalidCursor", message: "cursor start index is invalid.");
+                    try { coverage = ReadCoverage(savedCoverage); }
+                    catch (Exception) { return Models.McpResponse.Err(code: "InvalidCursor", message: "cursor coverage is invalid."); }
+                }
                 bool metadataPhaseAvailable = hasMetadataFields && rx != null;
                 if (!string.IsNullOrWhiteSpace(c.Cursor)
                     && ((resumeMetadata && !metadataPhaseAvailable)
-                        || (!resumeMetadata && scanScope.Count == 0)))
+                        || (!resumeMetadata && !resumeCoverage && scanScope.Count == 0)))
                 {
                     return Models.McpResponse.Err(code: "InvalidCursor",
                         message: "cursor phase does not match the fields and scope of this search.");
@@ -901,10 +967,8 @@ namespace GxMcp.Worker.Services
                     && string.IsNullOrWhiteSpace(c.TypeFilter);
                 // Server-owned broad scans are cooperative: one STA slice is capped at
                 // roughly 250ms and returns the opaque cursor for the next P2 slice.
-                // Explicitly scoped searches retain the caller's requested wall-clock cap.
-                int timeoutMs = broadSdkScan
-                    ? Math.Min(requestedTimeoutMs, 250)
-                    : requestedTimeoutMs;
+                // Scoped scans are capped below the Gateway's no-progress deadline.
+                int timeoutMs = Math.Min(requestedTimeoutMs, broadSdkScan ? 250 : 40000);
                 var swBudget = System.Diagnostics.Stopwatch.StartNew();
                 long BudgetElapsedMilliseconds() => BudgetElapsedMillisecondsForTest?.Invoke() ?? swBudget.ElapsedMilliseconds;
 
@@ -934,7 +998,63 @@ namespace GxMcp.Worker.Services
                     : new List<string>();
                 // Metadata-only fields are evaluated after the source/part walk;
                 // they never implicitly add a source scan to the candidate set.
-                var coverage = SourceStoreService.Instance.GetCoverage(entries, scanScope);
+                if (coveragePosition < 0 || coveragePosition > entries.Count || (!resumeCoverage && cursorState != null && coveragePosition != entries.Count))
+                    return Models.McpResponse.Err(code: "InvalidCursor", message: "cursor coverage position is invalid.");
+                coverage.TotalObjects = entries.Count;
+                JObject Progress(string phase, int phaseIndex)
+                {
+                    int sourceTotal = scanScope.Count > 0 ? entries.Count : 0;
+                    long cumulative = phaseIndex;
+                    if (phase != "coverage") cumulative += entries.Count;
+                    if (phase == "metadata") cumulative += sourceTotal;
+                    var progress = new JObject
+                    {
+                        ["phase"] = phase,
+                        ["phaseIndex"] = phaseIndex,
+                        ["cumulativePosition"] = cumulative
+                    };
+                    if (!metadataPhaseAvailable) progress["total"] = (long)entries.Count + sourceTotal;
+                    return progress;
+                }
+                while (coveragePosition < entries.Count)
+                {
+                    if (CoverageForTest == null && (scanScope.Count == 0 || string.IsNullOrWhiteSpace(entries[coveragePosition].Guid)))
+                    {
+                        coveragePosition++;
+                        continue;
+                    }
+                    if (ct.IsCancellationRequested || timeoutMs == 0 || BudgetElapsedMilliseconds() > timeoutMs)
+                    {
+                        return BuildInterruptedResponse(ct.IsCancellationRequested ? "Cancelled" : "Timeout", 0, indexStatus, new JObject
+                        {
+                            ["hits"] = hits,
+                            ["partialHits"] = hits.DeepClone(),
+                            ["totalScanned"] = 0,
+                            ["totalObjects"] = entries.Count,
+                            ["coverage"] = coverage.ToJson(),
+                            ["coverageComplete"] = false,
+                            ["progress"] = Progress("coverage", coveragePosition),
+                            ["resumeHint"] = "Pass cursor=nextCursor to resume coverage and subsequent phases.",
+                            ["nextOffset"] = coveragePosition,
+                            ["nextCursor"] = BuildBoundCursor(coveragePosition, 0, false, census: true),
+                            ["timeoutMs"] = timeoutMs,
+                            ["effectiveTimeoutMs"] = timeoutMs,
+                            ["requestedTimeoutMs"] = requestedTimeoutMs
+                        });
+                    }
+                    var one = new[] { entries[coveragePosition] };
+                    if (CoverageForTest != null)
+                        MergeCoverage(coverage, CoverageForTest(one, scanScope));
+                    else
+                        SourceStoreService.Instance.AccumulateCoverage(coverage, one, scanScope);
+                    coveragePosition++;
+                }
+                if (resumeCoverage)
+                {
+                    resumeEntry = -1;
+                    startIndex = initialStartIndex;
+                    cursor = scanScope.Count == 0 ? entries.Count : startIndex;
+                }
 
                 JObject BuildExecutionSnapshot()
                 {
@@ -1006,6 +1126,10 @@ namespace GxMcp.Worker.Services
                             ["totalObjects"] = entries.Count,
                             ["coverage"] = executionSnapshot["coverage"]?.DeepClone(),
                             ["partExecution"] = executionSnapshot["partExecution"]?.DeepClone(),
+                            ["coverageComplete"] = true,
+                            ["effectiveTimeoutMs"] = timeoutMs,
+                            ["requestedTimeoutMs"] = requestedTimeoutMs,
+                            ["progress"] = Progress("source", cursor),
                             ["nextCursor"] = BuildBoundCursor(cursor, skippedHits, metadata: false),
                             ["nextOffset"] = cursor,
                             ["resumeHint"] = "Pass cursor=nextCursor to resume this scan; legacy callers may pass startIndex=nextOffset."
@@ -1031,6 +1155,9 @@ namespace GxMcp.Worker.Services
                             ["coverage"] = executionSnapshot["coverage"]?.DeepClone(),
                             ["partExecution"] = executionSnapshot["partExecution"]?.DeepClone(),
                             ["timeoutMs"] = timeoutMs,
+                            ["effectiveTimeoutMs"] = timeoutMs,
+                            ["coverageComplete"] = true,
+                            ["progress"] = Progress("source", cursor),
                              ["requestedTimeoutMs"] = requestedTimeoutMs,
                              ["sliceBudgetMs"] = broadSdkScan ? 250 : timeoutMs,
                              ["sliceContinuation"] = broadSdkScan,
@@ -1255,7 +1382,7 @@ namespace GxMcp.Worker.Services
                         .ToList();
                     int metadataStart = resumeMetadata
                         ? Math.Max(0, resumeEntry)
-                        : Math.Max(0, c.StartIndex);
+                        : initialStartIndex;
                     metadataPosition = metadataStart;
                     for (int metadataCursor = metadataStart; metadataCursor < metadataEntries.Count; metadataCursor++)
                     {
@@ -1418,6 +1545,9 @@ namespace GxMcp.Worker.Services
                         ["coverage"] = executionSnapshot["coverage"]?.DeepClone(),
                         ["partExecution"] = executionSnapshot["partExecution"]?.DeepClone(),
                         ["timeoutMs"] = timeoutMs,
+                        ["effectiveTimeoutMs"] = timeoutMs,
+                        ["coverageComplete"] = true,
+                        ["progress"] = Progress("metadata", metadataNextEntry),
                         ["requestedTimeoutMs"] = requestedTimeoutMs,
                         ["nextCursor"] = continuationCursor,
                         ["nextOffset"] = metadataNextEntry,
@@ -1478,6 +1608,12 @@ namespace GxMcp.Worker.Services
                     ["indexStatus"] = indexStatus,
                     ["partial"] = partialIndex,
                     ["scannedObjects"] = scanned,
+                    ["coverageComplete"] = true,
+                    ["progress"] = metadataEntries != null
+                        ? Progress("metadata", hasMoreEntries ? nextOffset : metadataEntries.Count)
+                        : Progress("source", hasMoreEntries ? nextOffset : Math.Min(cursor, entries.Count)),
+                    ["effectiveTimeoutMs"] = timeoutMs,
+                    ["requestedTimeoutMs"] = requestedTimeoutMs,
                     ["totalObjects"] = entries.Count,
                     ["coverage"] = finalExecutionSnapshot["coverage"]?.DeepClone(),
                     ["partExecution"] = finalExecutionSnapshot["partExecution"]?.DeepClone(),

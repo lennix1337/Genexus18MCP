@@ -20,6 +20,7 @@
 ### Fixed
 
 - Shared-host launch refusals now retain their catalog details in `genexus_kb` error results and stdio JSON-RPC errors. https://github.com/lennix1337/Genexus18MCP/issues/914
+- **`genexus_search_source` resumes its source-store coverage census** without repeating completed freshness checks. The versioned cursor carries partial coverage; older cursors are refused. `progress` is cumulative across coverage, source and metadata, while `nextOffset` remains phase-local; use the opaque `nextCursor` across phases. Oversized timeouts are capped and the effective budget is reported. https://github.com/lennix1337/Genexus18MCP/issues/882
 - SDK and native page projections retain the original line endings, so their unmarked page contents can be concatenated without losing or changing newline bytes. The read response still embeds truncation markers and needs further work for end-to-end reconstruction. https://github.com/lennix1337/Genexus18MCP/issues/881
 - A singular `genexus_read` no longer cuts an oversized first line at an unreachable line-based continuation offset. https://github.com/lennix1337/Genexus18MCP/issues/881
 - Cold index search snapshots identify the cold state and explain how to wait before treating an empty result as definitive; impact analysis now gives the same guidance while the index is cold or the wait times out ([#887](https://github.com/lennix1337/Genexus18MCP/issues/887)).
