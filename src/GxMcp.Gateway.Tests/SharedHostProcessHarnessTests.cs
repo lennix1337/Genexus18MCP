@@ -255,6 +255,96 @@ namespace GxMcp.Gateway.Tests
             Assert.True(operationClock.ElapsedMilliseconds >= LongOperationMs, operationClock.ElapsedMilliseconds + " ms");
         });
 
+        // Requirement 13 criterion 6: the bound from the start of the new Gateway's KB open to its completed probe.
+        private const int RecoveryBoundMs = 10_000;
+
+        // Requirement 13 criterion 6, 7.2 and 7.4: a Gateway, its broker and its Worker are forcibly terminated
+        // (no shutdown handling), so the broker's registry v2 record stays behind naming dead processes. The
+        // harness also plants an Isolated_Mode ownership record of the same KB whose owner is the dead Gateway
+        // and whose Worker PID is a running sentinel with a different start time. A new Gateway opens the KB and
+        // completes a probe within 10 s of starting the open; the sentinel still runs, both stale records are
+        // gone, a new broker serves the KB, and the recovery is logged per removed record.
+        [Fact]
+        public Task New_gateway_recovers_after_forced_termination_without_stopping_an_unrelated_process() => RunAsync(async harness =>
+        {
+            string kb = harness.CreateKbDirectory();
+            var clients = await harness.StartClientsAsync(2);
+            var crashed = clients[0];
+            var recovering = clients[1];
+            var sentinel = harness.StartSentinel();
+
+            var open = await crashed.OpenOrThrowAsync(kb);
+            int oldHostPid = (int)open["hostPid"]!;
+            long oldHostTicks = (long)open["hostStartTimeUtcTicks"]!;
+            int oldWorkerPid = (int)open["workerPid"]!;
+            long oldWorkerTicks = (long)open["workerStartTimeUtcTicks"]!;
+            Assert.True(oldHostPid > 0 && oldWorkerPid > 0, open.ToString());
+            await crashed.CallAsync(kb, SharedHostGatewayClient.ProbeFrame(1, 0, "before-crash"));
+
+            // The sentinel's PID with a start time five minutes off, owned by the Gateway that is about to die.
+            long sentinelRecordedTicks = SharedHostProcessHarness.DifferentStartTime(sentinel.StartTimeUtcTicks);
+            Assert.False(harness.IsSameProcess(sentinel.Pid, sentinelRecordedTicks));
+            string ownershipPath = harness.PlantOwnershipRecord(
+                kb, crashed.Pid, crashed.Tracked.StartTimeUtcTicks, sentinel.Pid, sentinelRecordedTicks);
+
+            // Forced termination of the Gateway, the broker and the Worker, in that order, none of them graceful.
+            harness.KillClient(crashed);
+            var oldHost = harness.Track(oldHostPid, oldHostTicks, "broker");
+            var oldWorker = harness.Track(oldWorkerPid, oldWorkerTicks, "worker");
+            harness.KillOwned(oldHost, entireTree: false);
+            harness.KillOwned(oldWorker, entireTree: false);
+            Assert.False(harness.IsRunning(crashed.Tracked), "the crashed Gateway still runs");
+            Assert.False(harness.IsRunning(oldHost), "the old broker still runs");
+            Assert.False(harness.IsRunning(oldWorker), "the old Worker still runs");
+
+            // The stale records are still in place, and the sentinel runs.
+            var staleRecord = harness.ReadRecord(kb);
+            Assert.NotNull(staleRecord);
+            Assert.Equal(oldHostPid, staleRecord!.HostPid);
+            Assert.True(File.Exists(ownershipPath), "the planted ownership record is missing");
+            Assert.True(harness.IsRunning(sentinel), "the sentinel stopped before the recovery");
+
+            // The new Gateway: open plus one probe within 10 s of starting the open.
+            var clock = Stopwatch.StartNew();
+            var reopen = await recovering.OpenOrThrowAsync(kb);
+            var probe = await recovering.CallAsync(kb, SharedHostGatewayClient.ProbeFrame(2, 0, "after-recovery"));
+            long recoveryMs = clock.ElapsedMilliseconds;
+            _output.WriteLine("recovery open " + (long?)reopen["openMs"] + " ms, open plus probe " + recoveryMs + " ms; reopen "
+                + reopen.ToString(Newtonsoft.Json.Formatting.None));
+            Assert.True(recoveryMs <= RecoveryBoundMs, "open plus probe took " + recoveryMs + " ms");
+
+            int newHostPid = (int)reopen["hostPid"]!;
+            long newHostTicks = (long)reopen["hostStartTimeUtcTicks"]!;
+            int newWorkerPid = (int)reopen["workerPid"]!;
+            AssertOwnResponse(probe, 2, "after-recovery", (string)reopen["attachId"]!, newWorkerPid);
+            Assert.False(newHostPid == oldHostPid && newHostTicks == oldHostTicks, "the dead broker was reported as the host");
+            Assert.True(harness.IsSameProcess(newHostPid, newHostTicks), "the new broker is not running");
+
+            // Requirement 7.4: the sentinel, named in a record with another start time, was not terminated.
+            Assert.True(harness.IsRunning(sentinel), "the sentinel was terminated by the recovery");
+
+            // Requirement 7.2: both stale records were removed; the registry record now names the new broker.
+            Assert.False(File.Exists(ownershipPath), "the stale ownership record is still present");
+            var record = harness.ReadRecord(kb);
+            Assert.NotNull(record);
+            Assert.Equal(newHostPid, record!.HostPid);
+            Assert.Equal(newHostTicks, record.HostStartTimeUtcTicks);
+            Assert.Equal(newWorkerPid, record.WorkerPid);
+
+            // Requirement 7.7: one log entry per removed record, and no stopped process.
+            var recovery = recovering.Events
+                .Where(e => (string?)e["event"] == "log")
+                .Select(e => (string?)e["text"] ?? string.Empty)
+                .Where(t => t.Contains("stale-ownership-recovery", StringComparison.Ordinal))
+                .ToList();
+            foreach (string line in recovery) _output.WriteLine("recovery log: " + line);
+            Assert.Contains(recovery, t => t.Contains("action=removed-record registry=SharedWorkerRegistry", StringComparison.Ordinal)
+                && t.Contains(" pid=" + oldHostPid + " ", StringComparison.Ordinal));
+            Assert.Contains(recovery, t => t.Contains("action=removed-record registry=WorkerOwnershipRegistry", StringComparison.Ordinal)
+                && t.Contains(" pid=" + sentinel.Pid + " ", StringComparison.Ordinal));
+            Assert.DoesNotContain(recovery, t => t.Contains("action=stopped-process", StringComparison.Ordinal));
+        });
+
         private static void AssertOwnResponse(JObject response, int id, string method, string attachId, int workerPid)
         {
             Assert.Null(response["error"]);
