@@ -6,6 +6,15 @@ namespace GxMcp.Gateway.Tests
     public sealed class PropertiesRouterBatchTests
     {
         [Fact]
+        public void PropertiesGet_RefreshBypassesGatewayCacheAndReachesWorker()
+        {
+            var args = new JObject { ["action"] = "get", ["name"] = "Sample", ["refresh"] = true };
+            var routed = JObject.FromObject(new GxMcp.Gateway.Routers.PropertiesRouter().ConvertToolCall("genexus_properties", args)!);
+            Assert.True(routed["refresh"]?.Value<bool>());
+            Assert.True(Program.IsRefreshRead("genexus_properties", args));
+        }
+
+        [Fact]
         public void PropertiesRecoveryAndSafeSet_ForwardTypedArguments()
         {
             var router = new GxMcp.Gateway.Routers.PropertiesRouter();
