@@ -19,10 +19,18 @@ namespace GxMcp.Worker.Services
         // (Domain, External Object) hits 3s the first time because the SDK lazily
         // hydrates property definitions via reflection. Subsequent reads of the
         // same object usually want the same envelope, so we cache by GUID for a
-        // few seconds. SetProperty invalidates the entry explicitly.
-        private static readonly Dictionary<string, (DateTime expiresAt, JObject propsResult)> _propertyCache
-            = new Dictionary<string, (DateTime, JObject)>(StringComparer.OrdinalIgnoreCase);
+        // few seconds. Write stamps invalidate all entries because a name used by a writer
+        // need not be the GUID, qualified name or alias used by a reader.
+        private static readonly Dictionary<string, (DateTime expiresAt, JObject propsResult, long revision)> _propertyCache
+            = new Dictionary<string, (DateTime, JObject, long)>(StringComparer.OrdinalIgnoreCase);
         private static readonly object _propertyCacheLock = new object();
+        private static long _propertyCacheRevision;
+
+        // Keep entries as stale markers so the next read also reloads the SDK object.
+        internal static void InvalidatePropertiesAfterWrite()
+        {
+            lock (_propertyCacheLock) { _propertyCacheRevision++; }
+        }
         private const int PropertyCacheTtlSeconds = 30;
 
         /// <summary>
@@ -125,8 +133,13 @@ namespace GxMcp.Worker.Services
             try { guid = obj.Guid.ToString(); } catch { return; }
             lock (_propertyCacheLock)
             {
+                _propertyCacheRevision++;
                 var keys = _propertyCache.Keys.Where(k => k.StartsWith(guid + "|", StringComparison.OrdinalIgnoreCase)).ToList();
-                foreach (var k in keys) _propertyCache.Remove(k);
+                foreach (var k in keys)
+                {
+                    var entry = _propertyCache[k];
+                    _propertyCache[k] = (entry.expiresAt, entry.propsResult, -1);
+                }
             }
         }
 
@@ -161,10 +174,25 @@ namespace GxMcp.Worker.Services
 
                 string ck = TargetKey(obj, controlName);
                 JObject fullPropsResult = null;
-                if (!reconcileTimedOutWrite && !refresh) lock (_propertyCacheLock)
+                bool staleAfterWrite = false;
+                long revision;
+                lock (_propertyCacheLock)
                 {
-                    if (_propertyCache.TryGetValue(ck, out var hit) && hit.expiresAt > DateTime.UtcNow)
-                        fullPropsResult = (JObject)hit.propsResult.DeepClone();
+                    revision = _propertyCacheRevision;
+                    if (!reconcileTimedOutWrite && !refresh && _propertyCache.TryGetValue(ck, out var hit))
+                    {
+                        staleAfterWrite = hit.revision != revision;
+                        if (!staleAfterWrite && hit.expiresAt > DateTime.UtcNow)
+                            fullPropsResult = (JObject)hit.propsResult.DeepClone();
+                    }
+                }
+                if (staleAfterWrite)
+                {
+                    obj = FindFreshTarget(obj);
+                    if (obj == null)
+                        return FreshReadUnavailableEnvelope(target, "The persisted object could not be read independently after a write.",
+                            _objectService.GetLastResolutionDiagnostic());
+                    ck = TargetKey(obj, controlName);
                 }
 
                 if (fullPropsResult == null)
@@ -232,7 +260,8 @@ namespace GxMcp.Worker.Services
                     }
                     if (!reconcileTimedOutWrite && !refresh) lock (_propertyCacheLock)
                     {
-                        _propertyCache[ck] = (DateTime.UtcNow.AddSeconds(PropertyCacheTtlSeconds), (JObject)fullPropsResult.DeepClone());
+                        if (_propertyCacheRevision == revision)
+                            _propertyCache[ck] = (DateTime.UtcNow.AddSeconds(PropertyCacheTtlSeconds), (JObject)fullPropsResult.DeepClone(), revision);
                     }
                 }
 
