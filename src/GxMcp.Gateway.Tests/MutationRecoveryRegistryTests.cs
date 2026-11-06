@@ -27,6 +27,18 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void BlockedMessageIdentifiesTheExactObjectAndPart()
+        {
+            var registry = new MutationRecoveryRegistry();
+            registry.RequireRead("kb", "Qualified.Object", "Events", "op", "guid-123", null, null, null, null);
+            Assert.True(registry.TryGet("kb", "Qualified.Object", out var requirement));
+            string message = MutationRecoveryRegistry.BuildBlockedEnvelope(requirement)["error"]!["message"]!.ToString();
+            Assert.Contains("Qualified.Object", message);
+            Assert.Contains("guid-123", message);
+            Assert.Contains("Events", message);
+        }
+
+        [Fact]
         public void TimedOutPropertyBatch_RequiresAuthoritativeTypedReadOfEveryProperty()
         {
             var registry = new MutationRecoveryRegistry();
