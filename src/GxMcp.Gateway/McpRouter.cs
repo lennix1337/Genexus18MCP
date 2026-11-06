@@ -1975,7 +1975,7 @@ namespace GxMcp.Gateway
                 // Patch persistence receipt: these fields must survive terse error
                 // projection so WriteNotPersisted still tells the caller what the SDK
                 // saved, what the forced re-read proved, and whether rollback landed.
-                "saved", "verified", "persisted", "persistedVerified", "requestedHash",
+                "saved", "verified", "persisted", "persistedState", "persistedVerified", "requestedHash",
                 "retryable", "reconciliationRequired", "verifiedByReadback", "implicitLifecycleOperations",
                 "persistedHash", "normalizedRequestedHash", "normalizedPersistedHash",
                 "persistedMatchCount", "oldContentPresent", "verification", "rollback",
