@@ -85,6 +85,31 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ACoreAssemblyWithTheTriggerHash_RunsTheCompleteAuditWithoutTheOptionalAssembly()
+        {
+            // A bundle audited without WorkWithPlus is selected by its SDK core: with the optional assembly not loaded, the
+            // complete audit still runs, and a failure of that audit is a refusal, never a match.
+            var spy = new Spy();
+
+            var result = EventsIsolationFindings.Evaluate(Probe(spy, p =>
+                p.HashFile = path => { spy.Hashed++; return path.Contains("Core.A") ? "trigger" : "hash:" + path; }));
+
+            Assert.Empty(result.Findings);
+            Assert.Equal(1, spy.Verified);
+            Assert.Equal(1, spy.Matched);
+
+            var refused = EventsIsolationFindings.Evaluate(Probe(spy = new Spy(), p =>
+            {
+                p.HashFile = path => { spy.Hashed++; return path.Contains("Core.A") ? "trigger" : "hash:" + path; };
+                p.VerifyCompleteBundle = hashes => { spy.Verified++; throw new InvalidOperationException("Unknown loaded Events SDK implementation: Core.C"); };
+            }));
+
+            Assert.Equal(new[] { "SdkBundleAuditFailed" }, Codes(refused));
+            Assert.Equal(0, spy.Matched);
+            Assert.Null(refused.AuditedBuild);
+        }
+
+        [Fact]
         public void TheOptionalAssemblyWithAnotherHash_SkipsTheCompleteAuditAndIsNotAudited()
         {
             var spy = new Spy();
