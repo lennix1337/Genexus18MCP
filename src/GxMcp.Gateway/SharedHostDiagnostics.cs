@@ -218,16 +218,9 @@ namespace GxMcp.Gateway
 
         private IReadOnlyList<SharedHostDiagnosticsHost> ReadPoolView()
         {
-            try
-            {
-                return (_inputs.PoolView() ?? Array.Empty<SharedHostDiagnosticsHost>())
-                    .Where(h => h != null && !string.IsNullOrEmpty(h.IdentityKey))
-                    .ToList();
-            }
-            catch (Exception ex) when (!(ex is OutOfMemoryException))
-            {
-                return Array.Empty<SharedHostDiagnosticsHost>();
-            }
+            return _inputs.PoolView()
+                .Where(h => h != null && !string.IsNullOrEmpty(h.IdentityKey))
+                .ToList();
         }
 
         private IReadOnlyList<SharedHostDiagnosticsRecord> ReadRecords()
@@ -594,10 +587,10 @@ namespace GxMcp.Gateway
         }
 
         // A disappearing record is harmless; unreadable or uncertain records cannot support an exact count.
-        private static IReadOnlyList<SharedHostDiagnosticsRecord> ReadRegistryV2(IProcessProbe probe)
+        internal static IReadOnlyList<SharedHostDiagnosticsRecord> ReadRegistryV2(IProcessProbe probe, string? root = null)
         {
             var records = new List<SharedHostDiagnosticsRecord>();
-            string root = SharedWorkerRegistry.GetV2Root();
+            root ??= SharedWorkerRegistry.GetV2Root();
             string[] files;
             try
             {

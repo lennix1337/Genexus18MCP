@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -119,19 +120,20 @@ namespace GxMcp.Gateway.Tests
     [Collection("Gateway route state")]
     public sealed class SharedHostDiagnosticsTests
     {
-        // Virtual time advances in steps of StepMs, so a measured virtual elapsed time can exceed its exact value by
-        // at most a few steps.
-        [Fact]
-        public async Task RegistryReadFailure_DoesNotReportZeroWorkers()
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task SourceReadFailure_DoesNotReportEmptyDiagnostics(bool registryFailure)
         {
-            var diagnostics = new SharedHostDiagnostics(new SharedHostDiagnosticsInputs
-            {
-                ReadRegistry = () => throw new System.IO.IOException("registry unavailable")
-            });
+            var inputs = registryFailure
+                ? new SharedHostDiagnosticsInputs { ReadRegistry = () => throw new IOException("registry unavailable") }
+                : new SharedHostDiagnosticsInputs { PoolView = () => throw new IOException("pool unavailable") };
 
-            await Assert.ThrowsAsync<System.IO.IOException>(() => diagnostics.BuildAsync());
+            await Assert.ThrowsAsync<IOException>(() => new SharedHostDiagnostics(inputs).BuildAsync());
         }
 
+        // Virtual time advances in steps of StepMs, so a measured virtual elapsed time can exceed its exact value by
+        // at most a few steps.
         private const int StepMs = 25;
         private const int GatewayPid = 3900;
         private const int LaunchingGatewayPid = 3777;
