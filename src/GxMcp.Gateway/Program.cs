@@ -1036,71 +1036,8 @@ namespace GxMcp.Gateway
                     string capturedLine = line;
                     _ = Task.Run(async () =>
                     {
-                        JToken? capturedId = null;
-                        try
-                        {
-                            JObject request;
-                            try
-                            {
-                                request = GxMcp.Common.JsonIngress.ParseObject(capturedLine);
-                            }
-                            catch (Exception parseEx)
-                            {
-                                Log("MCP parse error: " + parseEx.Message);
-                                var parseErr = new JObject
-                                {
-                                    ["jsonrpc"] = "2.0",
-                                    ["id"] = JValue.CreateNull(),
-                                    ["error"] = new JObject { ["code"] = -32700, ["message"] = "Parse error" }
-                                };
-                                await TryWriteStdout(parseErr);
-                                return;
-                            }
-                            capturedId = request["id"];
-                            bool notification = IsJsonRpcNotification(request);
-                            var response = await ProcessMcpRequest(request);
-                            if (response != null && !notification)
-                            {
-                                await TryWriteStdout(response);
-                            }
-                        }
-                        catch (WorkerPoolFullException poolEx)
-                        {
-                            Log("MCP WorkerPoolFull: " + poolEx.Message);
-                            var errResp = new JObject
-                            {
-                                ["jsonrpc"] = "2.0",
-                                ["id"] = capturedId?.DeepClone() ?? JValue.CreateNull(),
-                                ["error"] = new JObject { ["code"] = -32000, ["message"] = poolEx.Message }
-                            };
-                            // Shared mode carries the catalog details; Isolated_Mode output is unchanged.
-                            if (poolEx.Error != null)
-                                errResp["error"]!["data"] = BuildKbPoolFullPayload(poolEx);
-                            if (capturedId != null && capturedId.Type != JTokenType.Null)
-                                await TryWriteStdout(errResp);
-                        }
-                        catch (SharedWorkerLaunchException ex)
-                        {
-                            Log("MCP shared Worker refusal: " + ex.Message);
-                            if (capturedId != null && capturedId.Type != JTokenType.Null)
-                            {
-                                await TryWriteStdout(BuildSharedWorkerLaunchErrorResponse(capturedId, ex));
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Log("MCP Error: " + ex.Message);
-                            if (capturedId != null && capturedId.Type != JTokenType.Null)
-                            {
-                                var errResp = new JObject
-                                {
-                                    ["jsonrpc"] = "2.0",
-                                    ["id"] = capturedId.DeepClone(),
-                                    ["error"] = new JObject { ["code"] = -32603, ["message"] = "Internal error" }
-                                };
-                                await TryWriteStdout(errResp);
-                            }
-                        }
+                        JObject? response = await ProcessStdioLine(capturedLine);
+                        if (response != null) await TryWriteStdout(response);
                     });
                 }
             }
@@ -1108,6 +1045,47 @@ namespace GxMcp.Gateway
             {
                 Log("[Gateway] MCP stdio disabled. Serving HTTP only.");
                 await Task.Delay(-1);
+            }
+        }
+
+        internal static async Task<JObject?> ProcessStdioLine(string line)
+        {
+            JToken? id = null;
+            try
+            {
+                JObject request;
+                try { request = GxMcp.Common.JsonIngress.ParseObject(line); }
+                catch (Exception ex)
+                {
+                    Log("MCP parse error: " + ex.Message);
+                    return new JObject { ["jsonrpc"] = "2.0", ["id"] = JValue.CreateNull(), ["error"] = new JObject { ["code"] = -32700, ["message"] = "Parse error" } };
+                }
+                id = request["id"];
+                bool notification = IsJsonRpcNotification(request);
+                JObject? response = await ProcessMcpRequest(request);
+                return notification ? null : response;
+            }
+            catch (WorkerPoolFullException ex)
+            {
+                Log("MCP WorkerPoolFull: " + ex.Message);
+                if (id == null || id.Type == JTokenType.Null) return null;
+                var error = new JObject { ["code"] = -32000, ["message"] = ex.Message };
+                if (ex.Error != null) error["data"] = BuildKbPoolFullPayload(ex);
+                return new JObject { ["jsonrpc"] = "2.0", ["id"] = id.DeepClone(), ["error"] = error };
+            }
+            catch (SharedWorkerLaunchException ex)
+            {
+                Log("MCP shared Worker refusal: " + ex.Message);
+                return id == null || id.Type == JTokenType.Null ? null : BuildSharedWorkerLaunchErrorResponse(id, ex);
+            }
+            catch (Exception ex)
+            {
+                Log("MCP Error: " + ex.Message);
+                return id == null || id.Type == JTokenType.Null ? null : new JObject
+                {
+                    ["jsonrpc"] = "2.0", ["id"] = id.DeepClone(),
+                    ["error"] = new JObject { ["code"] = -32603, ["message"] = "Internal error" }
+                };
             }
         }
 
