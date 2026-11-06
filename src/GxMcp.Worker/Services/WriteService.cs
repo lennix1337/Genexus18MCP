@@ -445,6 +445,10 @@ namespace GxMcp.Worker.Services
             if (colon < 0) return line;
             string name = line.Substring(0, colon).Trim();
             string rest = line.Substring(colon + 1).Trim();
+            // The renderer's detail comment (" // \"Description\" [Nullable]") is not part of
+            // the declaration; a Domain-typed line has no "(len)" that would cut it off below.
+            int comment = rest.IndexOf("//", StringComparison.Ordinal);
+            if (comment >= 0) rest = rest.Substring(0, comment).Trim();
             int paren = rest.IndexOf('(');
             if (paren >= 0) rest = rest.Substring(0, paren).Trim();
             return name + " : " + rest;
