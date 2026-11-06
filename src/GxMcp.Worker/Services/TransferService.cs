@@ -334,14 +334,7 @@ namespace GxMcp.Worker.Services
             }
             catch (Exception ex)
             {
-                var failure = ImportDiagnostics(diagnostics, imported: false);
-                failure["persistedState"] = "unknown";
-                return McpResponse.Err(
-                    code: "TransferImportVerificationUnavailable",
-                    message: "The XPZ could not be inspected for WebForm preservation; ImportFile was not called, but SDK preparation may have changed the target KB. " + ex.Message,
-                    hint: "Inspect the target objects and reconcile any changes before retrying.",
-                    extra: failure,
-                    reconciliationRequired: true);
+                return BuildImportFidelityFailure(ex.Message, ImportDiagnostics(diagnostics, imported: false));
             }
 
             bool ok;
@@ -388,6 +381,19 @@ namespace GxMcp.Worker.Services
                     ["fidelity"] = fidelity.Result
                 });
             }
+        }
+
+        internal static string BuildImportFidelityFailure(string reason, JObject diagnostics)
+        {
+            var failure = (JObject)diagnostics.DeepClone();
+            failure["imported"] = false;
+            failure["persistedState"] = "unknown";
+            return McpResponse.Err(
+                code: "TransferImportVerificationUnavailable",
+                message: "The XPZ could not be inspected for WebForm preservation; ImportFile was not called, but SDK preparation may have changed the target KB. " + reason,
+                hint: "Inspect the target objects and reconcile any changes before retrying.",
+                extra: failure,
+                reconciliationRequired: true);
         }
 
         internal static string ImportDeclined(string file, TransferDiagnostics diagnostics)

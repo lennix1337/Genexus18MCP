@@ -21,17 +21,16 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void ImportFidelityFailure_RequiresReconciliationBeforeRetry()
         {
-            string source = GxMcp.TestSupport.RepoSource.WithoutComments(
-                "src", "GxMcp.Worker", "Services", "TransferService.cs");
-            int start = source.IndexOf("code: \"TransferImportVerificationUnavailable\"", StringComparison.Ordinal);
-            int end = source.IndexOf("bool ok;", start, StringComparison.Ordinal);
-            Assert.True(start >= 0 && end > start);
-            int catchStart = source.LastIndexOf("catch (Exception ex)", start, StringComparison.Ordinal);
-            Assert.True(catchStart >= 0);
-            string failure = source.Substring(catchStart, end - catchStart);
-            Assert.Contains("persistedState", failure);
-            Assert.Contains("unknown", failure);
-            Assert.Contains("before retrying", failure);
+            var diagnostics = new JObject { ["sdkDiagnostics"] = new JArray() };
+            var result = JObject.Parse(TransferService.BuildImportFidelityFailure("unreadable", diagnostics));
+
+            Assert.Equal("error", result["status"]?.ToString());
+            Assert.Equal("TransferImportVerificationUnavailable", result["error"]?["code"]?.ToString());
+            Assert.False(result["imported"].Value<bool>());
+            Assert.Equal("unknown", result["persistedState"]?.ToString());
+            Assert.True(result["error"]["reconciliationRequired"].Value<bool>());
+            Assert.Contains("before retrying", result["error"]["hint"].ToString());
+            Assert.Contains("ImportFile was not called", result["error"]["message"].ToString());
         }
 
         [Fact]
