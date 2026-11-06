@@ -634,6 +634,12 @@ namespace GxMcp.Gateway
                     isError = true;
                     payload = BuildKbPoolFullPayload(ex);
                 }
+                catch (SharedWorkerLaunchException ex)
+                {
+                    isError = true;
+                    payload = (JObject)ex.Error.DeepClone();
+                    payload["error"] = ex.Message;
+                }
                 catch (WorkerCommandQueueFullException ex)
                 {
                     // issue #369: the Gateway-side command channel stayed full. The command

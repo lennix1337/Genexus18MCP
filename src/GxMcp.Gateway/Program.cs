@@ -1069,6 +1069,19 @@ namespace GxMcp.Gateway
                             if (capturedId != null && capturedId.Type != JTokenType.Null)
                                 await TryWriteStdout(errResp);
                         }
+                        catch (SharedWorkerLaunchException ex)
+                        {
+                            Log("MCP shared Worker refusal: " + ex.Message);
+                            if (capturedId != null && capturedId.Type != JTokenType.Null)
+                            {
+                                await TryWriteStdout(new JObject
+                                {
+                                    ["jsonrpc"] = "2.0",
+                                    ["id"] = capturedId.DeepClone(),
+                                    ["error"] = new JObject { ["code"] = -32000, ["message"] = ex.Message, ["data"] = ex.Error.DeepClone() }
+                                });
+                            }
+                        }
                         catch (Exception ex)
                         {
                             Log("MCP Error: " + ex.Message);
