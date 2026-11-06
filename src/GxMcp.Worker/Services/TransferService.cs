@@ -328,17 +328,15 @@ namespace GxMcp.Worker.Services
             using (var diagnostics = TransferDiagnostics.ForSdk())
             {
             ImportFidelityPlan fidelityPlan;
+            var targets = new JArray();
+            bool preparationStarted = false;
             try
             {
-                fidelityPlan = CaptureImportFidelity(svc, model, file, options);
+                fidelityPlan = CaptureImportFidelity(svc, model, file, options, targets, () => preparationStarted = true);
             }
             catch (Exception ex)
             {
-                return McpResponse.Err(
-                    code: "TransferImportVerificationUnavailable",
-                    message: "The XPZ could not be inspected for WebForm preservation; no import was attempted. " + ex.Message,
-                    hint: "Retry after the XPZ is readable by the GeneXus SDK.",
-                    extra: ImportDiagnostics(diagnostics, imported: false));
+                return ImportFidelityFailure(ex, ImportDiagnostics(diagnostics, imported: false), preparationStarted, targets);
             }
 
             bool ok;
@@ -387,6 +385,30 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        internal static string ImportFidelityFailure(Exception ex, JObject diagnostics, bool preparationStarted, JArray targets)
+        {
+            if (preparationStarted)
+            {
+                diagnostics["persistedState"] = "unknown";
+                diagnostics["targets"] = targets;
+                var calls = new JArray();
+                foreach (JObject target in targets)
+                {
+                    if (string.IsNullOrWhiteSpace(target["name"]?.ToString())) continue;
+                    var args = new JObject { ["name"] = target["name"] };
+                    calls.Add(new JObject { ["tool"] = "genexus_inspect", ["args"] = args });
+                }
+                diagnostics["reconciliationCalls"] = calls;
+                return McpResponse.Err(code: "TransferImportVerificationUnavailable",
+                    message: "The XPZ could not be inspected for WebForm preservation; ImportFile was not called, but SDK preparation may have changed the target KB. " + ex.Message,
+                    hint: "Run each reconciliationCalls genexus_inspect request and reconcile target objects before retrying; missing identities require manual inspection.",
+                    extra: diagnostics, reconciliationRequired: true);
+            }
+            return McpResponse.Err(code: "TransferImportVerificationUnavailable",
+                message: "The XPZ could not be inspected for WebForm preservation; no import was attempted. " + ex.Message,
+                hint: "Retry after the XPZ is readable by the GeneXus SDK.", extra: diagnostics);
+        }
+
         internal static string ImportDeclined(string file, TransferDiagnostics diagnostics)
         {
             return McpResponse.Err(
@@ -415,7 +437,7 @@ namespace GxMcp.Worker.Services
         }
 
         private ImportFidelityPlan CaptureImportFidelity(IKnowledgeManagerService svc, KBModel model,
-            string file, ImportOptions options)
+            string file, ImportOptions options, JArray targets, Action preparationStarted)
         {
             var plan = new ImportFidelityPlan();
             // IExportItem.Object is guarded by PrepareImport in GeneXus 18 U5.
@@ -432,14 +454,23 @@ namespace GxMcp.Worker.Services
             foreach (var raw in candidates)
             {
                 var descriptor = DescribeExportItem(raw);
+                targets.Add(new JObject { ["name"] = descriptor["name"], ["type"] = descriptor["type"] });
                 if (!(descriptor["identityAvailable"]?.Value<bool>() ?? false))
                     throw new InvalidDataException("The XPZ contains an import item without a stable object identity.");
             }
             if (candidates.Count == 0 && exportedWebForms.Count > 0)
                 throw new InvalidDataException("The XPZ contains raw WebForm payloads but the SDK exposed no import candidates for them.");
+            preparationStarted();
             var prepared = svc.PrepareImport(file, model, options);
             if (candidates.Count == 0)
+            {
                 candidates = AsEnumerable(prepared?.Items).ToList();
+                foreach (var raw in candidates)
+                {
+                    var descriptor = DescribeExportItem(raw);
+                    targets.Add(new JObject { ["name"] = descriptor["name"], ["type"] = descriptor["type"] });
+                }
+            }
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             bool sawWebFormCandidate = false;
 
