@@ -52,18 +52,6 @@ $tests = @(
 )
 if ($Name) { $tests = @($Name) }
 
-# The first Python start on a fresh hosted runner pays a one-time cold cost (seconds, against
-# ~0.15s warm) that would otherwise land inside whichever parallel script starts it first.
-# Pay it here, once, and print it so a slow image shows up as a number instead of a flake.
-$python = Get-Command python -ErrorAction SilentlyContinue
-if ($python) {
-    foreach ($label in 'cold', 'warm') {
-        $clock = [Diagnostics.Stopwatch]::StartNew()
-        & $python.Source -c 'import http.server, json' 2>&1 | Out-Null
-        Write-Host ("Python $label start: {0} ms (exit $LASTEXITCODE)" -f $clock.ElapsedMilliseconds)
-    }
-}
-
 # Each script runs in its own pwsh with its own GUID temp directory, so they run in
 # parallel: one after another they took ~215s of every CI run. Output is printed per
 # script, in list order, once all have finished.

@@ -26,9 +26,9 @@ $serverOut = Join-Path $work 'server.out'
 $serverErr = Join-Path $work 'server.err'
 $server = Start-Process -FilePath $python.Source -ArgumentList @($serverScript) -RedirectStandardOutput $serverOut `
     -RedirectStandardError $serverErr -WindowStyle Hidden -PassThru
+$null = $server.Handle  # keeps ExitCode readable after the process exits
 try {
-    # run-release-script-tests.ps1 warms Python before the parallel run, so 10s is ample;
-    # a miss reports whether the server died and what it wrote to stderr.
+    # The server announces its port in ~0.15s; a miss reports whether it died or hung, and its stderr.
     $port = $null
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while ($null -eq $port -and -not $server.HasExited -and [DateTime]::UtcNow -lt $deadline) {
