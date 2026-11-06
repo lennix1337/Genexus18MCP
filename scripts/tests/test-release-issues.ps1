@@ -18,7 +18,7 @@ $readTokens = $null
 $readErrors = $null
 [System.Management.Automation.Language.Parser]::ParseFile($readIssuePath, [ref]$readTokens, [ref]$readErrors) | Out-Null
 if ($readErrors.Count) { throw $readErrors[0] }
-foreach ($name in @('Get-GhJson', 'Get-ReleaseIssueData', 'Get-ReleaseIssueLabelNames', 'Assert-ReleaseIssueAction', 'Test-ReleaseIssuePublicationComment')) {
+foreach ($name in @('Get-GhJson', 'Get-ReleaseIssueData', 'Get-ReleaseIssueLabelNames', 'Assert-ReleaseIssueAction', 'Test-ReleaseIssuePublicationComment', 'ConvertTo-ReleaseIssueNumbers')) {
     $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if (-not $definition) { throw "Missing production function: $name" }
     . ([scriptblock]::Create($definition.Extent.Text))
@@ -30,6 +30,16 @@ function Expect-Failure([scriptblock]$Action, [string]$Message) {
     try { & $Action } catch { $failed = $true }
     if (-not $failed) { throw $Message }
 }
+
+# `pwsh -File ... -Issue 889,880` hands the list over as the single string
+# '889,880'; an [int[]] parameter turned it into issue 889880.
+$fromFile = @(ConvertTo-ReleaseIssueNumbers -Value @('889,880'))
+if (($fromFile -join ' ') -ne '889 880') { throw "A comma list from pwsh -File was parsed as '$($fromFile -join ' ')'." }
+$mixed = @(ConvertTo-ReleaseIssueNumbers -Value @('#184', '185, 186', '184'))
+if (($mixed -join ' ') -ne '184 185 186') { throw "Mixed issue list was parsed as '$($mixed -join ' ')'." }
+Expect-Failure { ConvertTo-ReleaseIssueNumbers -Value @('88a') } 'A non-numeric issue was accepted.'
+Expect-Failure { ConvertTo-ReleaseIssueNumbers -Value @('0') } 'Issue number zero was accepted.'
+Expect-Failure { ConvertTo-ReleaseIssueNumbers -Value @(' , ') } 'An empty issue list was accepted.'
 
 $openWithoutLabel = [pscustomobject]@{ state = 'OPEN'; labels = @() }
 $openWithLabel = [pscustomobject]@{
