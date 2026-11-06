@@ -267,7 +267,9 @@ namespace GxMcp.Worker
 
         public void Kill()
         {
-            try { lock (_writeGate) _stdin.Close(); } catch { }
+            // Terminate before touching stdin: a child that stopped reading can hold
+            // the writer inside WriteLine, so taking _writeGate would deadlock recovery.
+            // Dispose closes stdin after termination has released that writer.
             try
             {
                 if (!_process.HasExited)
