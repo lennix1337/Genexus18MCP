@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "supportedVersion": "10.3.16.146128",
+  "anchor": "Artech.Architecture.Common.dll",
+  "assemblies": [
+    { "path": "Artech.Architecture.Common.dll", "sha256": "95ac06cf9b31900fd7a498bc7843c43c78ed46b9c87a63c72c2586dd55252929" },
+    { "path": "Artech.Genexus.Common.dll", "sha256": "1f25020d82cab13c22d231ea5a8e60f17665eb3901d79eb5c5b0b5b28454b585" },
+    { "path": "Artech.Udm.Framework.dll", "sha256": "37297baedcfc7c9a973aa937cc7e2e17c5e25fc7b4a19bee7037654f8aafc288" },
+    { "path": "Artech.Architecture.BL.Framework.dll", "sha256": "9d3b97284da0c75298e97f1e5b5f43f0e63f96c06021df0e327729e3e1d73198" },
+    { "path": "Artech.Architecture.Language.dll", "sha256": "5142a5b3aee2f6190848f732ed3edf49a3852afbb43701dd5b443be8dd3be36e" },
+    { "path": "Artech.Common.Language.dll", "sha256": "1dac82d116597e98ce4afc4e3c9d7f50a8e2b9e5dcc7c1630b2fdd0440592914" },
+    { "path": "Artech.Common.Properties.dll", "sha256": "88081931b719b2ff052df187d5827c20ecc9ee8b44bacc1a7c0b747e58d09000" },
+    { "path": "Artech.Common.Helpers.dll", "sha256": "00de837d3125b1c952093f467b77227f62d343fa436fc497c1257beb98cd07fe" },
+    { "path": "Artech.Common.Controls.dll", "sha256": "f7c28d0ac3e5f0279fb80e8378f6bef9d4764da1859c32c69e76b46c20943e68" },
+    { "path": "Artech.Common.dll", "sha256": "65feead3cdca46b1c5a573347732d0aa5567ae177017e09a2725ea93254294cb" },
+    { "path": "Artech.Architecture.UI.Framework.dll", "sha256": "b1d5e77bcf34ee65de19bdb51f6975a3f97d51a3a43324895086796aa9a94ad6" },
+    { "path": "Packages/Artech.Packages.GAM.dll", "sha256": "151232ec17ab59674a9279a5b9d484bee57f8e66e1134acabafab70ff49001dc" },
+    { "path": "Packages/Artech.Packages.TeamDevClient.BL.dll", "sha256": "953ccd2fb1eca68bf398a0854b954bfd19b990617dd6ca833a4d92334fa79789" },
+    { "path": "Packages/Artech.Packages.GenexusBL.dll", "sha256": "63748a08256530c742d54d612d8ff382ec18db31df764a080864a00fb9a1230d" },
+    { "path": "Packages/Artech.Packages.Specifier.dll", "sha256": "736d89c52695f6b3f7a04104b73082ad4493a2523ca48e9a624b50cddfb16a9f" }
+  ]
+}

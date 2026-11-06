@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -197,13 +198,55 @@ namespace GxMcp.Worker.Tests
             }
         }
 
+        [Theory]
+        [InlineData("10.3.16.146128")]
+        [InlineData("10.3.0.86550")]
+        public void Evolution3Manifest_AcceptsEvolution3Sdk(string actual)
+        {
+            using (var fixture = new SdkFixture("10.3.16.146128", "ev3", "10.3", "16", "17", "18"))
+            {
+                var result = SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => actual);
+
+                Assert.True(result.IsCompatible, result.Diagnostic);
+                Assert.Contains("supportedMajors=10.3,16,17,18", result.Diagnostic);
+            }
+        }
+
+        [Theory]
+        [InlineData("10.3.16.146128", "18.0.10.184260")]
+        [InlineData("10.3.16.146128", "16.0.11.144151")]
+        [InlineData("18.0.10.184260", "10.3.16.146128")]
+        [InlineData("10.3.16.146128", "10.2.5.1000")]
+        public void A_Worker_Never_Runs_Against_The_Other_Sdk_Binary_Line(string reference, string actual)
+        {
+            using (var fixture = new SdkFixture(reference, "sdk", "10.3", "16", "17", "18"))
+            {
+                var result = SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => actual);
+
+                Assert.False(result.IsCompatible);
+                Assert.Equal("GXMCP_SDK_VERSION_MISMATCH", result.Code);
+            }
+        }
+
+        [Fact]
+        public void Evolution3Sdk_IsRejectedWhenTheCatalogDoesNotListIt()
+        {
+            using (var fixture = new SdkFixture("10.3.16.146128", "ev3"))
+            {
+                var result = SdkCompatibilityValidator.Validate(fixture.Root, fixture.Manifest, _ => "10.3.16.146128");
+
+                Assert.False(result.IsCompatible);
+                Assert.Equal("GXMCP_SDK_VERSION_MISMATCH", result.Code);
+            }
+        }
+
         private sealed class SdkFixture : IDisposable
         {
             public readonly string Root = Path.Combine(Path.GetTempPath(), "gxmcp-sdk-" + Guid.NewGuid().ToString("N"));
             public readonly string Manifest;
             public readonly string Catalog;
 
-            public SdkFixture(string version, string contents)
+            public SdkFixture(string version, string contents, params string[] catalogMajors)
             {
                 Directory.CreateDirectory(Root);
                 var assembly = Path.Combine(Root, "Artech.Architecture.Common.dll");
@@ -226,9 +269,8 @@ namespace GxMcp.Worker.Tests
                 var catalog = new JObject
                 {
                     ["supportedMajors"] = new JArray(
-                        new JObject { ["major"] = "16" },
-                        new JObject { ["major"] = "17" },
-                        new JObject { ["major"] = "18" })
+                        (catalogMajors.Length == 0 ? new[] { "16", "17", "18" } : catalogMajors)
+                            .Select(major => new JObject { ["major"] = major }))
                 };
                 File.WriteAllText(Catalog, catalog.ToString());
             }
