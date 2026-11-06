@@ -268,7 +268,7 @@ namespace GxMcp.Worker.Tests
         // --- 9.3 different objects or parts --------------------------------------------
 
         [Fact]
-        public void DifferentObjectsOrParts_FromTwoGateways_BothProceed()
+        public async Task DifferentObjectsOrParts_FromTwoGateways_BothProceed()
         {
             string other = _target + "Other";
             AcquireExplicit(_target, "Source", LeaseA);
@@ -291,7 +291,9 @@ namespace GxMcp.Worker.Tests
                     leases[1] = TryAcquireOperationLock(_kbPath, other, "Source", LeaseA, false, out errors[1]);
                 });
                 start.Set();
-                Assert.True(Task.WaitAll(new[] { first, second }, TimeSpan.FromSeconds(30)));
+                Task both = Task.WhenAll(first, second);
+                Assert.Same(both, await Task.WhenAny(both, Task.Delay(TimeSpan.FromSeconds(30))));
+                await both;
             }
 
             Assert.Null(errors[0]);
