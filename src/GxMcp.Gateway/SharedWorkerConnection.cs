@@ -5,6 +5,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using GxMcp.Common.SharedHost;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -27,7 +28,7 @@ namespace GxMcp.Gateway
     /// envelopes use the <c>gxmcp</c> marker; regular Worker JSON-RPC is passed
     /// through as one newline-delimited frame per request or notification.
     /// </summary>
-    internal sealed class SharedWorkerConnection : IDisposable
+    internal sealed class SharedWorkerConnection : ISharedWorkerAttachment
     {
         // RFC #854: version 2 adds the status/status_ack diagnostics frames and the
         // top-level "_gxmcpShared" response metadata. A version 1 host is refused at
@@ -47,7 +48,7 @@ namespace GxMcp.Gateway
         internal const int HardFrameCeilingBytes = 4 * MaxFrameBytes;
 
         private readonly SharedWorkerIdentity _identity;
-        private readonly SharedWorkerRecord _record;
+        private readonly string _pipeName;
         private readonly string _clientId;
         private readonly string _nonce = Guid.NewGuid().ToString("N");
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
@@ -64,13 +65,33 @@ namespace GxMcp.Gateway
         private string? _lastError;
 
         internal SharedWorkerConnection(SharedWorkerIdentity identity, SharedWorkerRecord record, string clientId)
+            : this(identity, (record ?? throw new ArgumentNullException(nameof(record))).PipeName, clientId)
+        {
+        }
+
+        // Registry v2: the pipe name comes from the v2 record of the KB directory.
+        internal SharedWorkerConnection(SharedWorkerIdentity identity, SharedHostRecord record, string clientId)
+            : this(identity, (record ?? throw new ArgumentNullException(nameof(record))).PipeName, clientId)
+        {
+        }
+
+        private SharedWorkerConnection(SharedWorkerIdentity identity, string? pipeName, string clientId)
         {
             _identity = identity ?? throw new ArgumentNullException(nameof(identity));
-            _record = record ?? throw new ArgumentNullException(nameof(record));
+            _pipeName = pipeName ?? string.Empty;
             _clientId = string.IsNullOrWhiteSpace(clientId) ? Guid.NewGuid().ToString("N") : clientId;
         }
 
-        internal SharedWorkerAttachInfo? AttachInfo { get; private set; }
+        public SharedWorkerAttachInfo? AttachInfo { get; private set; }
+
+        // Latest SDK readiness seen on this attachment: the attach_ack or worker_restarted "ready" flag, the
+        // routed notifications/worker/sdk_ready notification, or the launcher's readiness check (MarkSdkReady).
+        public bool IsSdkReady => Volatile.Read(ref _sdkReady) != 0;
+
+        private int _sdkReady;
+
+        // Called by the launcher when readiness was observed through the v2 record rather than on this pipe.
+        internal void MarkSdkReady() => Volatile.Write(ref _sdkReady, 1);
         internal bool IsConnected => Volatile.Read(ref _disconnected) == 0 && Volatile.Read(ref _disposed) == 0;
         internal int? HostPid => AttachInfo?.HostPid;
         internal int? WorkerPid => AttachInfo?.WorkerPid;
@@ -93,12 +114,12 @@ namespace GxMcp.Gateway
         internal void Connect(int timeoutMs)
         {
             if (timeoutMs <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMs));
-            if (string.IsNullOrWhiteSpace(_record.PipeName))
+            if (string.IsNullOrWhiteSpace(_pipeName))
                 throw new InvalidOperationException("Shared Worker registry record has no pipe name.");
 
             _pipe = new NamedPipeClientStream(
                 ".",
-                _record.PipeName,
+                _pipeName,
                 PipeDirection.InOut,
                 PipeOptions.Asynchronous);
             _pipe.Connect(timeoutMs);
@@ -118,6 +139,7 @@ namespace GxMcp.Gateway
                 throw new InvalidOperationException("Shared Worker attach handshake failed: " + error);
 
             AttachInfo = attachInfo;
+            if (attachInfo?.SdkReady == true) MarkSdkReady();
             _readerTask = Task.Run(ReadLoopAsync);
             _heartbeatTimer = new Timer(_ => _ = SendHeartbeatAsync(), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
         }
@@ -228,7 +250,17 @@ namespace GxMcp.Gateway
                 ["gatewayPid"] = gatewayPid,
                 ["gatewayStartTimeUtcTicks"] = gatewayStartTimeUtcTicks,
                 ["nonce"] = nonce,
-                ["attachNonce"] = nonce
+                ["attachNonce"] = nonce,
+                // Protocol v2: the requested Physical_KB_Identity components, so a refusing host can name each
+                // component that differs from its own.
+                ["identity"] = new JObject
+                {
+                    ["installationPath"] = identity.InstallationPath,
+                    ["driver"] = identity.Driver,
+                    ["major"] = identity.Major,
+                    ["workerExecutable"] = identity.WorkerExecutable,
+                    ["profileConfigPath"] = identity.ProfileConfigPath
+                }
             };
         }
 
@@ -394,6 +426,8 @@ namespace GxMcp.Gateway
                             statusWaiter.TrySetResult(frame);
                         continue;
                     }
+                    if (frame != null && string.Equals(frame["method"]?.ToString(), "notifications/worker/sdk_ready", StringComparison.Ordinal))
+                        MarkSdkReady();
                     if (frame != null && TryMoveSharedMetadata(frame))
                         line = frame.ToString(Formatting.None);
                     LineReceived?.Invoke(line);
@@ -525,6 +559,7 @@ namespace GxMcp.Gateway
                 Generation = generation,
                 SdkReady = frame.Value<bool?>("ready") ?? false
             };
+            Volatile.Write(ref _sdkReady, AttachInfo.SdkReady ? 1 : 0);
             LastRestartDiagnostic = frame["failureDiagnostic"]?.ToString();
             return true;
         }

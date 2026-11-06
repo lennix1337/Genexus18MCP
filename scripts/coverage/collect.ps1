@@ -124,6 +124,19 @@ if ($LASTEXITCODE -ne 0) {
 }
 $previousTestHostExe = $env:GXMCP_SHAREDHOST_TESTHOST_EXE
 $env:GXMCP_SHAREDHOST_TESTHOST_EXE = Join-Path $repoRoot "src\GxMcp.SharedHost.TestHost\bin\Debug\GxMcp.SharedHost.TestHost.exe"
+
+# On a fresh runner the first start of an executable reads it from a cold disk, which has cost
+# the process smoke tests 9-15s against their 10s per-test budget. Pay that once here, timed.
+foreach ($warmUp in @(
+        @{ Name = "node"; File = "node"; Arguments = @("-e", "0") },
+        @{ Name = "ping"; File = "ping.exe"; Arguments = @("-n", "1", "127.0.0.1") },
+        # --fake-script without a value exits at once (code 2) instead of serving stdin.
+        @{ Name = "shared-host test host"; File = $env:GXMCP_SHAREDHOST_TESTHOST_EXE; Arguments = @("--fake-script") })) {
+    if (-not (Get-Command $warmUp.File -ErrorAction SilentlyContinue)) { continue }
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    & $warmUp.File @($warmUp.Arguments) *> $null
+    Write-Host ("Process warm-up, {0}: {1} ms (exit {2})" -f $warmUp.Name, $watch.ElapsedMilliseconds, $LASTEXITCODE)
+}
 try {
     Invoke-CoverageTest `
         -ProjectPath (Join-Path $repoRoot "src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj") `
