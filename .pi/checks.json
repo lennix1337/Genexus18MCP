@@ -8,6 +8,11 @@
       "onEdit": true,
       "watch": ["release.ps1", "scripts"]
     },
+    "live-reliable-reads": {
+      "description": "Serialized disposable-KB acceptance for SDK refresh and auto-declared variable receipt; requires explicit GXMCP_TEST_KB, GXMCP_TEST_FIXTURE, GX_CONFIG_PATH, GX_PATH and GXMCP_LOG_DIR, frozen publish package and Cloud off; never run concurrently with another KB owner",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-build", "--filter", "FullyQualifiedName~RefreshReadLiveTests.AutoDeclaredVariableIsReportedAndIndependentlyReloaded|FullyQualifiedName~RefreshReadLiveTests.SameSdkObjectCanBeIndependentlyReloadedByNameAndGuid", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 600000
+    },
     "gateway-harness-cleanup": {
       "description": "Disposable process-tree cleanup smoke; no SDK, KB or Cloud",
       "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-restore", "--filter", "FullyQualifiedName~LiveGatewayHarnessCleanupTests", "--logger", "console;verbosity=normal"],
