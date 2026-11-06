@@ -17,7 +17,8 @@ namespace GxMcp.Worker.Tests
             {
                 ["Instance"] = new[] { "Template" },
                 ["Root"] = new[] { "Template", "childrenOrderedList" },
-                ["Table"] = new[] { "name", "type", "childrenOrderedList" },
+                ["Table"] = new[] { "name", "type", "numberOfColumns", "childrenOrderedList" },
+                ["TextBlock"] = new[] { "controlName", "caption", "mergeWithPrevious" },
                 ["UserAction"] = new[]
                 {
                     "name", "caption", "gxobject", "imageClass", "buttonClass", "ControlType", "imageType",
@@ -30,7 +31,8 @@ namespace GxMcp.Worker.Tests
                 ["Instance/WPRoot"] = "Root",
                 ["Root/table"] = "Table",
                 ["Table/table"] = "Table",
-                ["Table/userAction"] = "UserAction"
+                ["Table/userAction"] = "UserAction",
+                ["Table/textBlock"] = "TextBlock"
             };
 
             public string RootType() => "Instance";
@@ -40,6 +42,36 @@ namespace GxMcp.Worker.Tests
 
             public IReadOnlyCollection<string> AttributeNames(string typeName) =>
                 _attributes.TryGetValue(typeName, out string[] names) ? new HashSet<string>(names) : null;
+        }
+
+        // Derived from WWP 11.1.38 WorkWithPlusInstance.xml: WPRoot -> WPTable -> WPTable/control.
+        private static string Selection(string extra) =>
+            "<instance><WPRoot Template='Selection'><table name='Main'>" + extra + "</table></WPRoot></instance>";
+
+        [Fact]
+        public void Selection_NestedTableWithTypedChildren_IsAcceptedBySpecification()
+        {
+            var plan = PatternXmlEditPlan.Create(Selection(""), Selection("<table name='Rows' numberOfColumns='2'><textBlock controlName='Label' caption='Show' mergeWithPrevious='True'/></table>"), false, new FakeSpec());
+            Assert.Null(plan.ErrorCode);
+            Assert.Equal("table", (string)Assert.Single(plan.Changes)["element"]);
+        }
+
+        [Fact]
+        public void Selection_ChildAbsentFromSpecification_IsRefused()
+        {
+            var plan = PatternXmlEditPlan.Create(Selection(""), Selection("<table name='Rows'><variable name='Missing'/></table>"), false, new FakeSpec());
+            Assert.Equal("PatternStructureChangeUnsupported", plan.ErrorCode);
+            Assert.Contains("not declared", plan.Error);
+        }
+
+        [Fact]
+        public void Selection_ExplicitRow_IsRefusedWithSupportedShape()
+        {
+            var plan = PatternXmlEditPlan.Create(Selection(""), Selection("<table name='Rows'><row/></table>"), false, new FakeSpec());
+            Assert.Equal("PatternStructureChangeUnsupported", plan.ErrorCode);
+            Assert.Contains("Selection", plan.Error);
+            Assert.Contains("row", plan.Error);
+            Assert.Contains("numberOfColumns", plan.Error);
         }
 
         private const string Existing = "<userAction name=\"NotificationsWC\" caption=\"Notifications\" />";
