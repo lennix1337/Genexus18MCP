@@ -32,6 +32,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
     {
         private const int TimeoutMs = 20_000;
         private const int FirstDurationMs = 1500;
+        private const int MinMemoryFloorMb = 256; // SharedHostSettingsResolver range for MemoryFloorMB: 256-8192.
 
         private readonly ITestOutputHelper _output;
 
@@ -179,6 +180,9 @@ namespace GxMcp.Gateway.Tests.SharedHost
                     + " --driver sdk --major 18"
                     + " --idle-ms 60000"
                     + " --queue-wait-ms 30000 --queue-depth 8 --session-queue-cap 4"
+                    // The smoke tests queueing, not admission: the lowest allowed Memory_Floor
+                    // (256 MB) keeps a busy machine from refusing the start with low-memory.
+                    + " --memory-floor-mb " + MinMemoryFloorMb
                     + " --registry-dir \"" + registryDir + "\"",
                 WorkingDirectory = Path.GetDirectoryName(exe)!,
                 UseShellExecute = false,
