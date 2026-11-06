@@ -698,6 +698,16 @@ namespace GxMcp.Gateway
                 && server?.HttpPort > 0;
         }
 
+        internal static JObject BuildSharedWorkerLaunchErrorResponse(JToken id, SharedWorkerLaunchException ex)
+        {
+            return new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = id.DeepClone(),
+                ["error"] = new JObject { ["code"] = -32000, ["message"] = ex.Message, ["data"] = ex.Error.DeepClone() }
+            };
+        }
+
         public static async Task Main(string[] args)
         {
             // Short-circuit self-test before any I/O setup. The CLI installer calls this
@@ -1074,12 +1084,7 @@ namespace GxMcp.Gateway
                             Log("MCP shared Worker refusal: " + ex.Message);
                             if (capturedId != null && capturedId.Type != JTokenType.Null)
                             {
-                                await TryWriteStdout(new JObject
-                                {
-                                    ["jsonrpc"] = "2.0",
-                                    ["id"] = capturedId.DeepClone(),
-                                    ["error"] = new JObject { ["code"] = -32000, ["message"] = ex.Message, ["data"] = ex.Error.DeepClone() }
-                                });
+                                await TryWriteStdout(BuildSharedWorkerLaunchErrorResponse(capturedId, ex));
                             }
                         }
                         catch (Exception ex)

@@ -10,6 +10,20 @@ namespace GxMcp.Gateway.Tests
     [Collection("Gateway route state")]
     public sealed class SharedWorkerRefusalRouteTests
     {
+        [Fact]
+        public void StdioRefusal_ReturnsCatalogDetailsInJsonRpcErrorData()
+        {
+            var error = new JObject { ["code"] = "KB_POOL_FULL", ["reason"] = "low-memory", ["retryable"] = false };
+            var exception = new SharedWorkerLaunchException("KB_POOL_FULL", "low-memory", error);
+            JObject response = Program.BuildSharedWorkerLaunchErrorResponse(new JValue(17), exception);
+
+            Assert.Equal(17, (int)response["id"]!);
+            Assert.Equal(-32000, (int)response["error"]!["code"]!);
+            Assert.Equal("KB_POOL_FULL", (string?)response["error"]!["data"]!["code"]);
+            Assert.Equal("low-memory", (string?)response["error"]!["data"]!["reason"]);
+            Assert.False((bool)response["error"]!["data"]!["retryable"]!);
+        }
+
         [Theory]
         [InlineData("KB_WORKER_OWNED_ELSEWHERE", "liveness-unverified", false)]
         [InlineData("KB_POOL_FULL", "low-memory", false)]
