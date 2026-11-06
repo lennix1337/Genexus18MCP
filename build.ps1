@@ -210,14 +210,14 @@ if (Test-Path $workerBinRelease) {
 # Evolution 3 KBs fail with GXMCP_EV3_WORKER_MISSING instead of starting.
 $ev3GxPath = $env:GX_EV3_PATH
 if ([string]::IsNullOrWhiteSpace($ev3GxPath)) {
-    $ev3Entry = @($gxCatalog.legacyMajors | Where-Object { [string]$_.major -eq '10.3' }) | Select-Object -First 1
+    $ev3Entry = @(@($gxCatalog.supportedMajors) + @($gxCatalog.legacyMajors) | Where-Object { [string]$_.major -eq '10.3' }) | Select-Object -First 1
     if ($null -ne $ev3Entry) { $ev3GxPath = [string]$ev3Entry.defaultInstallPath }
 }
 if (-not [string]::IsNullOrWhiteSpace($ev3GxPath) -and (Test-Path (Join-Path $ev3GxPath 'Artech.Architecture.Common.dll'))) {
     $ev3PublishDir = Join-Path $publishDir "worker-ev3"
     Write-Host "   > Building Worker for GeneXus X Evolution 3 ($ev3GxPath) into $ev3PublishDir..."
     Invoke-DotNet (@("build", $workerProject, "-c", "Release", "--nologo", "-p:Platform=x86",
-        "-p:GX_PATH=$ev3GxPath", "-p:GxMcpSdkProfile=evolution3", "-p:GxMcpSkipSdkValidation=true",
+        "-p:GX_PATH=$ev3GxPath", "-p:GxMcpSdkProfile=evolution3",
         "-p:IntermediateOutputPath=obj\x86\Release-evolution3\", "-p:OutDir=$ev3PublishDir\") + $versionArguments) "Evolution 3 Worker build failed."
 } else {
     Write-Host "   > Skipping the GeneXus X Evolution 3 Worker: no Evolution 3 SDK found (set GX_EV3_PATH)." -ForegroundColor Gray

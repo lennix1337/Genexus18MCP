@@ -17,11 +17,10 @@ namespace GxMcp.Gateway
         private sealed class CatalogData
         {
             internal string PrimaryMajor { get; set; } = "18";
-            internal IReadOnlyList<string> SupportedMajors { get; set; } = new[] { "16", "17", "18" };
-            internal IReadOnlyList<string> LegacyMajors { get; set; } = new[] { "10.3", "10.2", "10.1", "15", "9", "8" };
+            internal IReadOnlyList<string> SupportedMajors { get; set; } = new[] { "16", "17", "18", "10.3" };
+            internal IReadOnlyList<string> LegacyMajors { get; set; } = new[] { "10.2", "10.1", "15", "9", "8" };
             internal Dictionary<string, string> LegacyDriverMap { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["10.3"] = "dotnet-reflection",
                 ["10.2"] = "dotnet-reflection",
                 ["10.1"] = "dotnet-reflection",
                 ["15"] = "dotnet-reflection",
@@ -238,11 +237,11 @@ namespace GxMcp.Gateway
                 {
                     new JObject { ["major"] = "16", ["displayName"] = "GeneXus 16" },
                     new JObject { ["major"] = "17", ["displayName"] = "GeneXus 17" },
-                    new JObject { ["major"] = "18", ["displayName"] = "GeneXus 18" }
+                    new JObject { ["major"] = "18", ["displayName"] = "GeneXus 18" },
+                    new JObject { ["major"] = "10.3", ["displayName"] = "GeneXus Evolution 3" }
                 },
                 LegacyEntries = new JArray
                 {
-                    new JObject { ["major"] = "10.3", ["displayName"] = "GeneXus Evolution 3", ["driver"] = "dotnet-reflection" },
                     new JObject { ["major"] = "10.2", ["displayName"] = "GeneXus Evolution 2", ["driver"] = "dotnet-reflection" },
                     new JObject { ["major"] = "10.1", ["displayName"] = "GeneXus Evolution 1", ["driver"] = "dotnet-reflection" },
                     new JObject { ["major"] = "15", ["displayName"] = "GeneXus 15", ["driver"] = "dotnet-reflection" },

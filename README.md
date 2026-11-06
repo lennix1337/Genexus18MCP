@@ -18,8 +18,8 @@
 In practice: you point the MCP at your KB, then ask your AI assistant things like *"list all transactions with attribute CustomerId"*, *"add a rule to the Order transaction that validates the total"*, or *"refactor this procedure to use the new SDT"* — and it does it.
 
 <!-- BEGIN GENERATED: gx-compatibility -->
-Supported SDK majors: **GeneXus 16, GeneXus 17, GeneXus 18** (native SDK).
-Basic legacy compatibility: **GeneXus Evolution 3, GeneXus Evolution 2, GeneXus Evolution 1, GeneXus 15, GeneXus 9.0, GeneXus 8.0** via `com-gxpublic` and `dotnet-reflection` (not the native SDK build).
+Supported SDK majors: **GeneXus 16, GeneXus 17, GeneXus 18, GeneXus Evolution 3** (native SDK).
+Basic legacy compatibility: **GeneXus Evolution 2, GeneXus Evolution 1, GeneXus 15, GeneXus 9.0, GeneXus 8.0** via `com-gxpublic` and `dotnet-reflection` (not the native SDK build).
 Primary SDK: **GeneXus 18**.
 Source of truth: `config/gx-versions.json`.
 <!-- END GENERATED: gx-compatibility -->
@@ -375,11 +375,19 @@ To add another native-SDK major in the future, add it to the explicit
 passing the focused tests plus a live KB smoke. This prevents the server from
 claiming native-SDK compatibility based only on a version string.
 
+GeneXus X Evolution 3 (10.3) is native through its own Worker build. Its SDK
+assemblies are 10.1.0.0, so `build.ps1` compiles a second Worker against the
+installed Evolution 3 (`GX_EV3_PATH`, or the catalog install path) into
+`publish/worker-ev3`, and the Gateway starts it for 10.3 KBs. Tools for features
+Evolution 3 does not have (module packages, deploy, GeneXus Server writes)
+return `UNSUPPORTED_IN_GENEXUS_VERSION`. WorkWithPlus needs a Theme imported once
+through the IDE Startup Wizard before its first apply, as on any GeneXus version.
+
 ### Basic legacy compatibility (not native SDK support)
 
 Every legacy version currently declared in `legacyMajors` uses a best-effort
 driver rather than the native SDK build:
-- **GeneXus Evolution 1 (10.1), Evolution 2 (10.2), Evolution 3 (10.3), and GeneXus 15**: Driven via runtime reflection (`dotnet-reflection`), dynamically adapting to missing types or structural differences (such as module-less KBs without `QualifiedName`).
+- **GeneXus Evolution 1 (10.1), Evolution 2 (10.2), and GeneXus 15**: Driven via runtime reflection (`dotnet-reflection`), dynamically adapting to missing types or structural differences (such as module-less KBs without `QualifiedName`).
 - **GeneXus 8.0 and GeneXus 9.0**: Driven through the classic GXPublic surface (`com-gxpublic`), detected from `gxw32.exe`/`gx.exe`/`gxdl32.dll` and classic `.gxi` Knowledge Bases. GXPublic is a metadata-oriented OLE DB surface; this path is intentionally limited to basic metadata/core operations and does not claim native-SDK source/edit parity.
 - **Graceful degradation**: Modern tools that require features introduced in newer GeneXus versions (such as `genexus_api`, `genexus_gam`, or `genexus_module`) return structured `UNSUPPORTED_IN_GENEXUS_VERSION` errors indicating the required minimum version rather than failing ungracefully.
 

@@ -7,11 +7,11 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $catalog = Get-GxVersionCatalog -Root $root
 if ($catalog.primaryMajor -ne '18') { throw 'The primary GeneXus major must remain 18.' }
 $majors = @($catalog.supportedMajors | ForEach-Object { [string]$_.major })
-if (($majors -join ',') -ne '16,17,18') { throw "Unexpected supported majors: $($majors -join ',')." }
+if (($majors -join ',') -ne '16,17,18,10.3') { throw "Unexpected supported majors: $($majors -join ',')." }
 if ((Get-GxPrimaryInstallPath -Catalog $catalog) -ne 'C:\Program Files (x86)\GeneXus\GeneXus18') {
     throw 'The primary install path does not come from the catalog.'
 }
-if ((Get-GxSupportedMajorsDisplay -Catalog $catalog) -ne '16, 17, 18') {
+if ((Get-GxSupportedMajorsDisplay -Catalog $catalog) -ne '16, 17, 18, 10.3') {
     throw 'The supported-major display does not come from the catalog.'
 }
 $minimalFutureCatalog = [pscustomobject]@{
