@@ -781,6 +781,14 @@ namespace GxMcp.Gateway.Tests
                     Clock = Clock,
                     RegistryPollInterval = TimeSpan.FromMilliseconds(100),
                     AcquireElectionMutex = (name, timeout) => Election.Acquire(name, Clock.UtcNow),
+                    // The admission pre-check (task 5.7) reads memory before StartHost; a fixed reading keeps these
+                    // tests independent of the machine's free memory.
+                    ReadAvailableMemory = (out long availableMb, out string? error) =>
+                    {
+                        availableMb = 1L << 20;
+                        error = null;
+                        return true;
+                    },
                     StartHost = request =>
                     {
                         Starts.Add(request);
