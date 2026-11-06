@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- Text write and patch verification receipts now report whether the requested content is confirmed, not persisted, or unknown when the verification read is unreliable, including in terse error responses. A later rollback invalidates the earlier patch verdict. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886)
+- Timeout fences now provide an exact opt-in certified recovery call that reads and clears the fence without asserting that the timed-out write landed. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886), [#887](https://github.com/lennix1337/Genexus18MCP/issues/887)
 - **WorkWithPlus Selection tables**: raw PatternInstance edits can insert a named nested table with specification-declared controls when the installed pattern specification is available, and `genexus_wwp add_table` can target a Selection root table without a conventional name. Explicit row/cell elements remain unsupported; use table column and cell layout properties. Unit-tested only; live projection remains to be verified. https://github.com/lennix1337/Genexus18MCP/issues/890
 - **XPZ import fidelity failures after SDK preparation now require reconciliation**: the response identifies available targets and read-only inspection calls, and reports their persisted state as unknown instead of implying preparation could not change the KB. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886)
 

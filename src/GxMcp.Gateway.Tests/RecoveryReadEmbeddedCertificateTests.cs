@@ -466,7 +466,7 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("PostTimeoutReadRequired", error["code"]!.ToString());
             Assert.Contains("recovery_read_complete", error["hint"]!.ToString());
             var steps = (JArray)error["nextSteps"]!;
-            Assert.Equal(2, steps.Count);
+            Assert.Equal(3, steps.Count);
             Assert.Equal("genexus_read", steps[0]["tool"]!.ToString());
             var recover = steps[1];
             Assert.Equal("genexus_connection_recover", recover["tool"]!.ToString());
@@ -488,6 +488,17 @@ namespace GxMcp.Gateway.Tests
             // The suggested call is one the published schema accepts as it stands.
             var validation = GatewayArgsValidator.Validate("genexus_connection_recover", (JObject)args.DeepClone());
             Assert.True(validation.Ok, string.Join("; ", validation.Violations.ConvertAll(v => v.Path + " " + v.Actual)));
+            var clear = steps[2];
+            Assert.Equal("genexus_connection_recover", clear["tool"]!.ToString());
+            var clearArgs = (JObject)clear["args"]!;
+            Assert.False(clearArgs["dryRun"]!.Value<bool>());
+            Assert.Equal(ObjectName, clearArgs["name"]!.ToString());
+            Assert.Equal(ObjectGuid, clearArgs["guid"]!.ToString());
+            Assert.Equal(PartName, clearArgs["part"]!.ToString());
+            Assert.Equal("op-1", clearArgs["operationId"]!.ToString());
+            Assert.Contains("does not", clear["why"]!.ToString());
+            var clearValidation = GatewayArgsValidator.Validate("genexus_connection_recover", (JObject)clearArgs.DeepClone());
+            Assert.True(clearValidation.Ok, string.Join("; ", clearValidation.Violations.ConvertAll(v => v.Path + " " + v.Actual)));
         }
 
         [Fact]
