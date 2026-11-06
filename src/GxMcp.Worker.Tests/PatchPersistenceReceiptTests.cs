@@ -12,6 +12,29 @@ namespace GxMcp.Worker.Tests
     /// </summary>
     public class PatchPersistenceReceiptTests
     {
+        [Theory]
+        [InlineData("confirmed")]
+        [InlineData("not_persisted")]
+        [InlineData("unknown")]
+        public void PatchTextVerificationReplacesPriorStateWithFinalVerdict(string expected)
+        {
+            var payload = new JObject { ["persistedState"] = "stale" };
+            if (expected == "confirmed") PatchPersistenceReceipt.MarkVerified(payload, saved: true);
+            else if (expected == "not_persisted") PatchPersistenceReceipt.MarkNotPersisted(payload, saved: true, verifyError: null);
+            else PatchPersistenceReceipt.MarkVerificationUnavailable(payload, saveAttempted: true, reason: "truncation");
+            Assert.Equal(expected, payload["persistedState"]?.ToString());
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ASubsequentRollbackInvalidatesThePreRollbackTextVerdict(bool verified)
+        {
+            var payload = new JObject { ["persistedState"] = "not_persisted" };
+            PatchPersistenceReceipt.MarkWriterRollback(payload, verified, null, null);
+            Assert.Equal("unknown", payload["persistedState"]?.ToString());
+        }
+
         [Fact]
         public void Issue547_MarkNotPersisted_NormalizedMatch_ReportsNormalizationMismatch()
         {

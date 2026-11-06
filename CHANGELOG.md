@@ -19,7 +19,7 @@
 
 ### Fixed
 
-- Text write verification receipts now report whether the requested content is confirmed, not persisted, or unknown when the verification read is unreliable, including in terse error responses. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886)
+- Text write and patch verification receipts now report whether the requested content is confirmed, not persisted, or unknown when the verification read is unreliable, including in terse error responses. A later rollback invalidates the earlier patch verdict. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886)
 - Timeout fences now provide an exact opt-in certified recovery call that reads and clears the fence without asserting that the timed-out write landed. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886), [#887](https://github.com/lennix1337/Genexus18MCP/issues/887)
 - **`genexus_create action=save_as` no longer fails on Evolution 3 with `SaveAsPartFailed` on the Documentation part**: an empty Documentation (`<Properties />`) is rewritten by the SDK on save, so a part the new object already holds verbatim is now left as it is instead of being written again.
 - **`genexus_kb_version changed_objects` finds the frozen model on Evolution 3**, where it is `KBVersion.ModelVersion` (`KBVersion.Model` there is the entity's empty Udm model), instead of answering `ChangedObjectsNotSupported`.
