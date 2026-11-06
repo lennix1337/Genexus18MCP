@@ -9,10 +9,11 @@ using Xunit;
 
 namespace GxMcp.Gateway.Tests
 {
-    // Native proof of an Events bundle audit whose manifest is still `pending`: only
+    // Native proof of an Events bundle audit: while its manifest is `pending`, only
     // the manifest's synthetic WebPanel may be saved. Runs only when
     // GXMCP_EVENTS_NATIVE_PROOF_OUT names the file that receives the sanitized result
     // (check name and pass/fail only), on a disposable KB with both write pins set.
+    [Trait("Category", "ProcessSmoke")]
     [Trait("Category", "LiveEventsNativeProof")]
     public sealed class EventsBundleNativeProofLiveTests : IClassFixture<LiveGatewayHarness>, IAsyncLifetime
     {
