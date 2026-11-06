@@ -727,6 +727,9 @@ namespace GxMcp.Gateway
 
     internal delegate bool ImagePathReader(int pid, out string? imagePath, out string? error);
 
+    // Available_Physical_Memory in MB for the Gateway admission pre-check. False means unreadable.
+    internal delegate bool AvailableMemoryReader(out long availableMb, out string? error);
+
     // Process and registry seams of stale-ownership recovery. The defaults are the production behavior; tests
     // replace every member that touches a real process or the real %LOCALAPPDATA%.
     internal sealed class SharedWorkerRecoveryContext
@@ -749,6 +752,9 @@ namespace GxMcp.Gateway
         public SharedWorkerPipeConnector ConnectPipe { get; init; } = SharedWorkerHostLauncher.ConnectPipeProcess;
         public SharedWorkerElectionMutexFactory AcquireElectionMutex { get; init; } = SharedWorkerHostLauncher.AcquireNamedMutex;
         public TimeSpan RegistryPollInterval { get; init; } = TimeSpan.FromMilliseconds(100);
+
+        // Read last by the advisory admission pre-check, right before the host start (decision A2).
+        public AvailableMemoryReader ReadAvailableMemory { get; init; } = MachineMemory.TryGetAvailablePhysicalMb;
 
         // Kills exactly one process (not its tree: only the root was verified). Returns null on success or when the
         // process has already exited, otherwise the error text.

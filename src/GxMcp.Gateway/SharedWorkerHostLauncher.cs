@@ -275,6 +275,8 @@ namespace GxMcp.Gateway
                 if (attempt + 1 >= MaxRecordChangedRetries) return null;
             }
 
+            RunAdmissionPreCheck(kbKey, request, context);
+
             var settings = request.Config.EffectiveSharedHost;
             context.StartHost(new SharedWorkerHostStartRequest
             {
@@ -303,6 +305,117 @@ namespace GxMcp.Gateway
             }
         }
 
+        // Decision A2: the advisory pre-check under the election mutex, before a broker process is spent on a start
+        // the host would refuse. Only Refuse acts here; Start, Hold and Evict launch the host, which re-decides
+        // authoritatively under the machine-wide admission mutex. Server.MaxOpenKbs belongs to the WorkerPool.
+        private static void RunAdmissionPreCheck(string kbKey, SharedWorkerLaunchRequest request, SharedWorkerRecoveryContext context)
+        {
+            var settings = request.Config.EffectiveSharedHost;
+            var hosts = ReadAdmissionHosts(context);
+
+            // Memory is read last, after every enumeration and probe.
+            long? availableMb = null;
+            if (context.ReadAvailableMemory(out long measuredMb, out string? memoryError))
+                availableMb = measuredMb;
+            else
+                context.Log("[Gateway] shared_host_precheck memory_unreadable kbKey=" + kbKey + " error=" + (memoryError ?? "unknown"));
+
+            var decision = SharedHostAdmissionPolicy.Decide(new AdmissionInput
+            {
+                SelfKey = kbKey,
+                Hosts = hosts,
+                MaxWorkers = settings.MaxWorkers,
+                MaxOpenKbsExceeded = false,
+                ColdStartConcurrency = settings.ColdStartConcurrency,
+                MemoryFloorMb = settings.MemoryFloorMb,
+                AvailableMb = availableMb
+            });
+            if (decision.Kind != AdmissionDecisionKind.Refuse) return;
+
+            var details = (JObject?)decision.Details?.DeepClone() ?? new JObject();
+            if (string.Equals(decision.Reason, AdmissionDecision.WorkerLimitReason, StringComparison.Ordinal))
+            {
+                details["limit"] = "Server.SharedHost." + SharedHostSettingsResolver.MaxWorkersKey;
+                details["value"] = settings.MaxWorkers;
+            }
+            else if (string.Equals(decision.Reason, AdmissionDecision.LowMemoryReason, StringComparison.Ordinal))
+            {
+                details["limit"] = "Server.SharedHost." + SharedHostSettingsResolver.MemoryFloorMbKey;
+                details["value"] = settings.MemoryFloorMb;
+            }
+            throw Catalog(request, decision.Code ?? ConcurrencyErrorCatalog.KbPoolFull, decision.Reason, null, details, null);
+        }
+
+        // Every registry v2 record of the registry root, classified with the context probe. Absent, unparseable and
+        // unreadable files carry no record and never take a slot, so they are skipped.
+        private static List<AdmissionHostView> ReadAdmissionHosts(SharedWorkerRecoveryContext context)
+        {
+            var hosts = new List<AdmissionHostView>();
+            string root = SharedWorkerRegistry.GetV2Root(context.RegistryRoot);
+            IEnumerable<string> files;
+            try
+            {
+                if (!Directory.Exists(root)) return hosts;
+                files = Directory.GetFiles(root, "*.json");
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                // The host check is authoritative; an unreadable registry leaves the pre-check without records.
+                context.Log("[Gateway] shared_host_precheck registry_unreadable error=" + ex.GetType().Name + ": " + ex.Message);
+                return hosts;
+            }
+
+            foreach (string file in files)
+            {
+                // "*.json" can also match longer extensions on Windows; temp files end in ".tmp-<pid>-<guid>".
+                if (!string.Equals(Path.GetExtension(file), ".json", StringComparison.OrdinalIgnoreCase)) continue;
+                var classification = SharedHostRecordClassifier.Classify(RecordReadResult.ReadFile(file), context.Probe);
+                var record = classification.Record;
+                if (record == null) continue;
+                hosts.Add(new AdmissionHostView
+                {
+                    Key = record.KbKey,
+                    State = record.State,
+                    WorkerPid = record.WorkerPid,
+                    Evictable = record.Evictable,
+                    Attachments = record.Attachments,
+                    LastActivityUtc = record.LastActivityUtc,
+                    HeldSinceUtc = record.HeldSinceUtc,
+                    Liveness = classification.Liveness
+                });
+            }
+            return hosts;
+        }
+
+        // A live host in state "refused" holds an admission refusal: return it instead of attaching. The record and
+        // every process stay unchanged. A refusal the catalog does not know is not reported here; the attach then
+        // proceeds as before.
+        private static void ThrowOnRefusedRecord(SharedHostRecord record, SharedWorkerLaunchRequest request)
+        {
+            if (!string.Equals(record.State, SharedHostRecordState.Refused, StringComparison.Ordinal)) return;
+            var refusal = record.Refusal;
+            if (refusal == null || string.IsNullOrEmpty(refusal.Code)) return;
+
+            var details = new JObject();
+            if (refusal.AvailableMb.HasValue) details["availableMb"] = refusal.AvailableMb.Value;
+            if (refusal.FloorMb.HasValue) details["floorMb"] = refusal.FloorMb.Value;
+            string? reason = string.IsNullOrEmpty(refusal.Reason) ? null : refusal.Reason;
+            JObject error;
+            try
+            {
+                error = ConcurrencyErrorCatalog.Build(refusal.Code, reason, new ConcurrencyErrorFields
+                {
+                    QueueWaitMs = request.Config.EffectiveSharedHost.QueueWaitMs,
+                    Details = details
+                });
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+            throw new SharedWorkerLaunchException(refusal.Code, reason, error);
+        }
+
         private static RecordClassification ReadAndClassify(string kbKey, SharedWorkerRecoveryContext context, out RecordReadResult read)
         {
             read = SharedWorkerRegistry.ReadRecordV2(kbKey, context.RegistryRoot);
@@ -318,6 +431,7 @@ namespace GxMcp.Gateway
             string clientId)
         {
             ThrowOnIdentityMismatch(identity, record, request);
+            ThrowOnRefusedRecord(record, request);
 
             ISharedWorkerAttachment attachment;
             try
@@ -602,8 +716,10 @@ namespace GxMcp.Gateway
         }
 
         /// <summary>
-        /// Attaches over the record's pipe. A host that is still admitting answers the attach without Worker process
-        /// identity; that handshake is retried until the child exists or the timeout ends.
+        /// Attaches over the record's pipe. A host without a Worker child yet (admitting, held, refused, no-worker)
+        /// acknowledges with workerPid 0 and its child state, and the attachment is kept; worker_restarted names
+        /// the child later. An acknowledgement that lacks the Worker identity without such a state is retried until
+        /// the child exists or the timeout ends.
         /// </summary>
         internal static ISharedWorkerAttachment ConnectPipeProcess(
             SharedWorkerIdentity identity, SharedHostRecord record, string clientId, int timeoutMs)
@@ -698,8 +814,9 @@ namespace GxMcp.Gateway
         }
 
         /// <summary>
-        /// The broker command line. The queue settings are the Gateway's resolved
-        /// <see cref="Configuration.EffectiveSharedHost"/> values, passed as arguments so the
+        /// The broker command line. Every Server.SharedHost setting is the Gateway's resolved
+        /// <see cref="Configuration.EffectiveSharedHost"/> value (the attach readiness wait in
+        /// milliseconds), and --heap-recycle-mb is Server.WorkerHeapRecycleMB, passed as arguments so the
         /// broker does not depend on inherited environment variables (RFC #854). The pipe name is
         /// the registry v2 name, the only prefix the host accepts (decision A4).
         /// </summary>
@@ -727,7 +844,12 @@ namespace GxMcp.Gateway
                 + " --idle-ms " + idleMs.ToString(invariant)
                 + " --queue-wait-ms " + settings.QueueWaitMs.ToString(invariant)
                 + " --queue-depth " + settings.QueueDepth.ToString(invariant)
-                + " --session-queue-cap " + settings.SessionQueueCap.ToString(invariant);
+                + " --session-queue-cap " + settings.SessionQueueCap.ToString(invariant)
+                + " --max-workers " + settings.MaxWorkers.ToString(invariant)
+                + " --memory-floor-mb " + settings.MemoryFloorMb.ToString(invariant)
+                + " --cold-start-concurrency " + settings.ColdStartConcurrency.ToString(invariant)
+                + " --attach-ready-timeout-ms " + ((long)settings.AttachReadyTimeoutSeconds * 1000L).ToString(invariant)
+                + " --heap-recycle-mb " + ResolveHeapRecycleMb(config).ToString(invariant);
             // The fifth identity component (decision D6), so the host's record and mismatch report name it.
             if (!string.IsNullOrWhiteSpace(profileConfigPath))
                 arguments += " --profile-config " + Quote(profileConfigPath!);
@@ -741,6 +863,10 @@ namespace GxMcp.Gateway
             if (minutes <= 0) return 60 * 60 * 1000;
             return Math.Min(minutes * 60 * 1000, 24 * 60 * 60 * 1000);
         }
+
+        // Server.WorkerHeapRecycleMB with the same default and clamp as an isolated Worker (WorkerProcess); 0 disables.
+        internal static int ResolveHeapRecycleMb(Configuration config) =>
+            Math.Max(0, config.Server?.WorkerHeapRecycleMB ?? new ServerConfig().WorkerHeapRecycleMB);
 
         private static string Quote(string value) => "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\"";
     }

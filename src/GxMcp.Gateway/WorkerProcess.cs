@@ -25,7 +25,8 @@ namespace GxMcp.Gateway
         Wedged,          // BUG-03: an in-flight command exceeded WedgedCommandTimeoutMinutes with no response
         HeapRecycle,      // idle worker exceeded WorkerHeapRecycleMB; recycled proactively so a long
                          // session can't drift into an OOM/fragmented state. Eager-respawns.
-        SdkCompatibilityRejected // Worker refused the configured SDK before opening the KB.
+        SdkCompatibilityRejected, // Worker refused the configured SDK before opening the KB.
+        CapacityEviction // shared mode: evicted for Server.MaxOpenKbs; the detach asks the host to stop if last.
     }
 
     /// <summary>
@@ -1836,9 +1837,45 @@ namespace GxMcp.Gateway
                 Interlocked.Exchange(ref _inFlightCommands, 0);
                 _supervisionTracker.ClearInFlight();
             }
-            try { connection?.Dispose(); } catch { }
+            try { connection?.Dispose(stopIfLast: StopIfLastFor(reason)); } catch { }
             Volatile.Write(ref _exitConfirmed, 1);
             FireWorkerExitedOnce(reason);
+        }
+
+        /// <summary>
+        /// Whether a shared-mode stop for <paramref name="reason"/> asks the host to stop its Worker when this
+        /// was the last Attachment. Only a Server.MaxOpenKbs eviction does: every other stop leaves the host to
+        /// the other Gateways and to idle reaping.
+        /// </summary>
+        internal static bool StopIfLastFor(WorkerStopReason reason) => reason == WorkerStopReason.CapacityEviction;
+
+        /// <summary>
+        /// The Physical_KB_Identity key <see cref="StartShared"/> attaches to for <paramref name="kb"/>, built from
+        /// the same Worker path, installation, driver, major and profile config path that Start resolves. Empty
+        /// when the Worker executable cannot be resolved or the identity cannot be built; Start then reports the
+        /// failure itself.
+        /// </summary>
+        internal static string ComputeSharedIdentityKey(Configuration config, KbHandle kb)
+        {
+            if (config == null || kb == null) return string.Empty;
+            try
+            {
+                WorkerExecutableResolution res = ResolveWorkerExecutable(config, AppDomain.CurrentDomain.BaseDirectory);
+                if (res.ResolvedPath == null) return string.Empty;
+                string? installationPath = string.IsNullOrWhiteSpace(kb.InstallationPath)
+                    ? config.GeneXus?.InstallationPath
+                    : kb.InstallationPath;
+                var sdkProbe = WorkerSdkCompatibilityProbe.Check(installationPath);
+                string driver = string.IsNullOrWhiteSpace(kb.Driver) ? (sdkProbe.Driver ?? "native-sdk") : kb.Driver!;
+                string major = string.IsNullOrWhiteSpace(kb.Major) ? (sdkProbe.Major ?? string.Empty) : kb.Major!;
+                return SharedWorkerIdentity.Create(res.ResolvedPath, kb.Path, installationPath ?? string.Empty,
+                    driver, major, Configuration.CurrentConfigPath).Key;
+            }
+            catch (Exception ex)
+            {
+                Program.Log($"[WorkerPool] shared identity key unavailable for '{kb.Alias}': {ex.Message}");
+                return string.Empty;
+            }
         }
 
         private void MarkActivity()

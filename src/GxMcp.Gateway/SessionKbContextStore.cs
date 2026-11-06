@@ -145,6 +145,33 @@ namespace GxMcp.Gateway
             return false;
         }
 
+        /// <summary>
+        /// Number of live sessions whose selected alias or canonical KB id satisfies
+        /// <paramref name="matchesAlias"/>; each session counts once. Used for the shared-mode
+        /// KB_POOL_FULL details.
+        /// </summary>
+        /// <remarks>
+        /// A pure read like <see cref="IsLeaseTokenReferenced"/>: it neither retires nor
+        /// refreshes a session. Idle entries that <see cref="CleanupExpired"/> would retire
+        /// are skipped, with the same stdio exemption.
+        /// </remarks>
+        internal int CountSessionsMatching(Func<string, bool> matchesAlias)
+        {
+            if (matchesAlias == null) throw new ArgumentNullException(nameof(matchesAlias));
+            DateTime cutoff = DateTime.UtcNow - _idleTimeout;
+            int count = 0;
+            foreach (var pair in _entries)
+            {
+                var entry = pair.Value;
+                bool stdio = string.Equals(pair.Key, "stdio", StringComparison.OrdinalIgnoreCase);
+                if (!stdio && entry.LastSeenUtc < cutoff) continue;
+                if ((!string.IsNullOrWhiteSpace(entry.Alias) && matchesAlias(entry.Alias!))
+                    || (!string.IsNullOrWhiteSpace(entry.KbId) && matchesAlias(entry.KbId!)))
+                    count++;
+            }
+            return count;
+        }
+
         private bool TryGetEntry(string sessionId, out Entry entry)
         {
             entry = null!;

@@ -74,6 +74,29 @@ namespace GxMcp.Gateway
                 major ?? handle.Major);
         }
 
+        /// <summary>
+        /// The KB_POOL_FULL tool payload. Isolated_Mode (no catalog error) keeps the original
+        /// { error, code, openKbs: [aliases] } shape; shared mode returns the catalog error
+        /// (reason, limit, value, per-KB openKbs details) with error set to the exception message.
+        /// </summary>
+        internal static JObject BuildKbPoolFullPayload(WorkerPoolFullException ex)
+        {
+            if (ex == null) throw new ArgumentNullException(nameof(ex));
+            if (ex.Error == null)
+            {
+                return new JObject
+                {
+                    ["error"] = ex.Message,
+                    ["code"] = "KB_POOL_FULL",
+                    ["openKbs"] = JArray.FromObject(ex.OpenKbs.Select(k => k.Alias))
+                };
+            }
+
+            var payload = (JObject)ex.Error.DeepClone();
+            payload["error"] = ex.Message;
+            return payload;
+        }
+
         internal static bool UpsertKbCatalogEntry(JObject environment, string alias, string path)
         {
             if (environment == null) throw new ArgumentNullException(nameof(environment));
@@ -609,12 +632,7 @@ namespace GxMcp.Gateway
                 catch (WorkerPoolFullException ex)
                 {
                     isError = true;
-                    payload = new JObject
-                    {
-                        ["error"] = ex.Message,
-                        ["code"] = "KB_POOL_FULL",
-                        ["openKbs"] = JArray.FromObject(ex.OpenKbs.Select(k => k.Alias))
-                    };
+                    payload = BuildKbPoolFullPayload(ex);
                 }
                 catch (WorkerCommandQueueFullException ex)
                 {

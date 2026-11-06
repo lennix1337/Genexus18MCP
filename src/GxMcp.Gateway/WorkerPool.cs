@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using GxMcp.Common.SharedHost;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Gateway
@@ -13,10 +14,25 @@ namespace GxMcp.Gateway
     public sealed class WorkerPoolFullException : Exception
     {
         public IReadOnlyList<KbHandle> OpenKbs { get; }
+
+        /// <summary>The Concurrency_Error_Table reason ("max-open-kbs" in shared mode); null in Isolated_Mode.</summary>
+        public string? Reason { get; }
+
+        /// <summary>The catalog error object with the per-KB details (shared mode); null in Isolated_Mode.</summary>
+        public JObject? Error { get; }
+
         public WorkerPoolFullException(IReadOnlyList<KbHandle> openKbs)
-            : base($"WorkerPool full ({openKbs.Count} KBs open). Close one with genexus_kb action=close before opening another.")
+            : this(openKbs, openKbs.Count, null, null)
+        {
+        }
+
+        /// <summary>Shared mode: <paramref name="openCount"/> counts Physical_KB_Identity entries, not aliases.</summary>
+        internal WorkerPoolFullException(IReadOnlyList<KbHandle> openKbs, int openCount, string? reason, JObject? error)
+            : base($"WorkerPool full ({openCount} KBs open). Close one with genexus_kb action=close before opening another.")
         {
             OpenKbs = openKbs;
+            Reason = reason;
+            Error = error;
         }
     }
 
@@ -147,6 +163,25 @@ namespace GxMcp.Gateway
         // real OS process. Always null in production.
         internal Func<KbHandle, WorkerProcess>? SpawnFactoryForTest;
 
+        // Shared mode (Server.WorkerSharingMode="shared-host"): _entries is keyed by the Physical_KB_Identity key,
+        // so every alias of one identity shares one WorkerProcess and one Attachment and counts once toward
+        // Server.MaxOpenKbs. This map resolves a normalized alias to its identity key; each Entry also holds its
+        // aliases. Empty in Isolated_Mode, where _entries stays keyed by alias.
+        private readonly ConcurrentDictionary<string, string> _aliasToKey =
+            new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The Physical_KB_Identity key of a handle (<see cref="SharedWorkerIdentity.Key"/>). Null in production:
+        /// the pool then uses <see cref="WorkerProcess.ComputeSharedIdentityKey"/>. Never called in Isolated_Mode.
+        /// </summary>
+        internal Func<KbHandle, string>? SharedIdentityKeyResolver { get; set; }
+
+        /// <summary>Session count of one open identity key, for KB_POOL_FULL details. Null means 0.</summary>
+        internal Func<string, int>? SessionCountForKey { get; set; }
+
+        private bool IsSharedMode =>
+            string.Equals(_config.Server?.WorkerSharingMode, "shared-host", StringComparison.OrdinalIgnoreCase);
+
         public WorkerPool(Configuration config) { _config = config; }
 
         private sealed class Entry
@@ -157,6 +192,11 @@ namespace GxMcp.Gateway
             private bool _isReloading;
 
             public KbHandle Handle = null!;
+            // The _entries key: the normalized alias in Isolated_Mode, the identity key in shared mode.
+            public string Key = string.Empty;
+            // Shared mode only: normalized alias -> the handle it was acquired with.
+            public readonly ConcurrentDictionary<string, KbHandle> Aliases =
+                new ConcurrentDictionary<string, KbHandle>(StringComparer.OrdinalIgnoreCase);
             public WorkerProcess? Worker;
             public DateTime LastActivityUtc = DateTime.UtcNow;
             public readonly SemaphoreSlim SpawnGate = new SemaphoreSlim(1, 1);
@@ -210,11 +250,116 @@ namespace GxMcp.Gateway
             }
         }
 
+        // Shared mode lists every alias of an open identity, so callers that resolve an alias against the open
+        // set find each one.
         public IReadOnlyList<KbHandle> ListOpen() =>
             _entries.Values
                 .Where(e => e.Worker != null)
-                .Select(e => e.Handle)
+                .SelectMany(HandlesOf)
                 .ToArray();
+
+        private IEnumerable<KbHandle> HandlesOf(Entry e)
+        {
+            if (!IsSharedMode) return new[] { e.Handle };
+            var handles = e.Aliases.OrderBy(a => a.Key, StringComparer.Ordinal).Select(a => a.Value).ToArray();
+            return handles.Length > 0 ? handles : new[] { e.Handle };
+        }
+
+        /// <summary>
+        /// Shared mode: identity key -> its normalized aliases, sorted ordinal. Empty in Isolated_Mode.
+        /// </summary>
+        internal IReadOnlyDictionary<string, IReadOnlyList<string>> AliasesByKey()
+        {
+            var map = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+            if (!IsSharedMode) return map;
+            foreach (var e in _entries.Values)
+                map[e.Key] = SortedAliases(e);
+            return map;
+        }
+
+        private static IReadOnlyList<string> SortedAliases(Entry e) =>
+            e.Aliases.Keys.OrderBy(a => a, StringComparer.Ordinal).ToArray();
+
+        // The _entries key for a handle being acquired.
+        private string EntryKeyFor(KbHandle handle)
+        {
+            string alias = handle.NormalizedAlias;
+            if (!IsSharedMode) return alias;
+
+            // Reuse the key of an alias already mapped with the same identity inputs, so a repeat acquire does
+            // not re-resolve the Worker executable and probe the installation.
+            if (_aliasToKey.TryGetValue(alias, out var known)
+                && _entries.TryGetValue(known, out var existing)
+                && existing.Aliases.TryGetValue(alias, out var previous)
+                && SameIdentityInputs(previous, handle))
+            {
+                return known;
+            }
+
+            string key = SharedIdentityKeyResolver != null
+                ? SharedIdentityKeyResolver(handle)
+                : WorkerProcess.ComputeSharedIdentityKey(_config, handle);
+            // No identity (unresolvable Worker executable): key by alias so Start reports the real failure.
+            return string.IsNullOrEmpty(key) ? alias : key;
+        }
+
+        private static bool SameIdentityInputs(KbHandle a, KbHandle b) =>
+            string.Equals(a.Path, b.Path, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.InstallationPath, b.InstallationPath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.Driver, b.Driver, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.Major, b.Major, StringComparison.OrdinalIgnoreCase);
+
+        // The _entries key for an alias: unchanged lookup in Isolated_Mode, through the alias map in shared mode.
+        private string EntryKeyForAlias(string alias)
+        {
+            string lowered = alias.ToLowerInvariant();
+            if (IsSharedMode && _aliasToKey.TryGetValue(alias.Trim().ToLowerInvariant(), out var key)) return key;
+            return lowered;
+        }
+
+        // Shared mode: records that the handle's alias resolves to the entry's identity key.
+        private void MapAlias(Entry entry, KbHandle handle)
+        {
+            if (!IsSharedMode) return;
+            string alias = handle.NormalizedAlias;
+            entry.Aliases[alias] = handle;
+            string? previousKey = null;
+            _aliasToKey.AddOrUpdate(alias, entry.Key, (_, old) => { previousKey = old; return entry.Key; });
+            // The alias now names another identity: the old entry no longer answers to it.
+            if (previousKey != null
+                && !string.Equals(previousKey, entry.Key, StringComparison.Ordinal)
+                && _entries.TryGetValue(previousKey, out var oldEntry))
+            {
+                oldEntry.Aliases.TryRemove(alias, out _);
+            }
+        }
+
+        // Removes exactly this entry and, once no entry holds its key, every alias mapped to it.
+        private bool RemoveEntry(Entry entry)
+        {
+            if (!_entries.TryRemove(new KeyValuePair<string, Entry>(entry.Key, entry))) return false;
+            UnmapAliases(entry);
+            return true;
+        }
+
+        private bool RemoveEntryByKey(string key, out Entry? removed)
+        {
+            if (!_entries.TryRemove(key, out var entry))
+            {
+                removed = null;
+                return false;
+            }
+            UnmapAliases(entry);
+            removed = entry;
+            return true;
+        }
+
+        private void UnmapAliases(Entry entry)
+        {
+            if (entry.Aliases.IsEmpty || _entries.ContainsKey(entry.Key)) return;
+            foreach (var alias in entry.Aliases.Keys)
+                _aliasToKey.TryRemove(new KeyValuePair<string, string>(alias, entry.Key));
+        }
 
         // issue #26 P3: every KB the user has opened this session, whether or not its
         // worker is currently alive. Callers resolve aliases against this so a momentarily
@@ -242,7 +387,8 @@ namespace GxMcp.Gateway
         public bool IsSpawning(string alias)
         {
             if (alias == null) return false;
-            return _entries.TryGetValue(alias, out var e) && (e.Spawning || e.Draining);
+            string key = IsSharedMode ? EntryKeyForAlias(alias) : alias;
+            return _entries.TryGetValue(key, out var e) && (e.Spawning || e.Draining);
         }
 
         public bool IsAtCapacity()
@@ -256,19 +402,21 @@ namespace GxMcp.Gateway
 
         public IReadOnlyList<string> GetKnownAliases()
         {
+            if (IsSharedMode)
+                return _entries.Values.SelectMany(e => e.Aliases.Keys).ToList();
             return _entries.Keys.ToList();
         }
 
         public WorkerProcess? TryGetWorker(string alias)
         {
             if (alias == null) return null;
-            if (_entries.TryGetValue(alias.ToLowerInvariant(), out var entry)) return entry.Worker;
+            if (_entries.TryGetValue(EntryKeyForAlias(alias), out var entry)) return entry.Worker;
             return null;
         }
 
         public WorkerProcess? TryGet(string alias)
         {
-            if (_entries.TryGetValue(alias.ToLowerInvariant(), out var entry))
+            if (_entries.TryGetValue(EntryKeyForAlias(alias), out var entry))
             {
                 return entry.Worker;
             }
@@ -280,11 +428,11 @@ namespace GxMcp.Gateway
         {
             return _entries.Values
                 .Where(e => e.Worker != null)
-                .Select(e => new KbPoolStatus(
-                    e.Handle,
+                .SelectMany(e => HandlesOf(e).Select(h => new KbPoolStatus(
+                    h,
                     e.Worker!.Pid,
                     e.Worker!.WorkingSetBytes,
-                    e.LastActivityUtc))
+                    e.LastActivityUtc)))
                 .ToArray();
         }
 
@@ -304,7 +452,9 @@ namespace GxMcp.Gateway
 
         public async Task<WorkerProcess> AcquireAsync(KbHandle handle, CancellationToken ct)
         {
-            var entry = _entries.GetOrAdd(handle.NormalizedAlias, _ => new Entry { Handle = handle });
+            string key = EntryKeyFor(handle);
+            var entry = _entries.GetOrAdd(key, _ => new Entry { Handle = handle, Key = key });
+            MapAlias(entry, handle);
             // issue #26 P3: remember this KB durably the moment it's acquired, so it
             // stays resolvable after the worker exits and gets torn out of _entries.
             _known[handle.NormalizedAlias] = handle;
@@ -328,7 +478,8 @@ namespace GxMcp.Gateway
                     throw new TimeoutException($"Worker reload for KB '{handle.Alias}' did not finish within 60s; acquire aborted instead of hanging.");
                 }
                 // After the drain the entry was replaced — re-read.
-                entry = _entries.GetOrAdd(handle.NormalizedAlias, _ => new Entry { Handle = handle });
+                entry = _entries.GetOrAdd(key, _ => new Entry { Handle = handle, Key = key });
+                MapAlias(entry, handle);
             }
             if (entry.DrainFailed)
                 throw new InvalidOperationException($"Worker reload for KB '{handle.Alias}' failed; acquire refused until the shutting-down worker exits.");
@@ -358,6 +509,8 @@ namespace GxMcp.Gateway
 
                 // Narrow lock around the capacity-window: cheap, prevents two different
                 // KBs from both deciding "not full" at the same instant.
+                List<OpenKbSnapshot>? sharedRefusal = null;
+                int refusedMax = 0;
                 lock (_capacityLock)
                 {
                     int max = _config.Server?.MaxOpenKbs ?? 3;
@@ -365,7 +518,8 @@ namespace GxMcp.Gateway
                     // here), so the number of *other* potentially-open KBs is Count - 1.
                     // Evict when those alone fill the cap; post-spawn total stays <= max.
                     // SelectVictim skips Worker == null entries, so it never evicts the
-                    // entry being created.
+                    // entry being created. In shared mode `_entries` holds one entry per
+                    // Physical_KB_Identity, so aliases of one identity count once.
                     int others = Math.Max(0, _entries.Count - 1);
                     if (others >= max)
                     {
@@ -378,11 +532,25 @@ namespace GxMcp.Gateway
                         others = Math.Max(0, _entries.Count - 1);
                         if (others >= max)
                         {
-                            _entries.TryRemove(handle.NormalizedAlias, out _);
-                            throw new WorkerPoolFullException(ListOpen());
+                            if (!IsSharedMode)
+                            {
+                                _entries.TryRemove(handle.NormalizedAlias, out _);
+                                throw new WorkerPoolFullException(ListOpen());
+                            }
+                            // Shared mode: capture the open identities under the lock and build the
+                            // catalog error outside it, so the session-count callback never runs here.
+                            sharedRefusal = _entries.Values
+                                .Where(e => e.Worker != null && !ReferenceEquals(e, entry))
+                                .Select(e => new OpenKbSnapshot(e.Key, SortedAliases(e), e.LastActivityUtc))
+                                .OrderBy(s => s.Key, StringComparer.Ordinal)
+                                .ToList();
+                            refusedMax = max;
+                            RemoveEntry(entry);
                         }
                     }
                 }
+                if (sharedRefusal != null)
+                    throw BuildSharedPoolFull(sharedRefusal, refusedMax);
 
                 WorkerProcess? createdWorker = null;
                 try
@@ -408,8 +576,9 @@ namespace GxMcp.Gateway
                     // they can finish spawning a replacement before this callback returns.
                     // Remove only the captured entry, preserving concurrent replacements,
                     // planned drains, and an entry reused by a completed planned reload.
+                    // Shared mode removes only this identity's entry and its aliases.
                     if (!entry.Draining && (entry.Worker == null || ReferenceEquals(entry.Worker, worker)))
-                        _entries.TryRemove(new KeyValuePair<string, Entry>(capturedHandle.NormalizedAlias, entry));
+                        RemoveEntry(entry);
                     // Keep the durable _known record so this KB remains resolvable.
                     OnWorkerExited?.Invoke(capturedHandle, reason);
                 };
@@ -436,14 +605,14 @@ namespace GxMcp.Gateway
                 _startupFailures.TryRemove(handle.NormalizedAlias, out _);
                 if (!worker.IsProcessAliveForPool)
                 {
-                    _entries.TryRemove(handle.NormalizedAlias, out _);
+                    RemoveEntryByKey(entry.Key, out _);
                     throw new InvalidOperationException($"Worker for KB '{handle.Alias}' exited before registration.");
                 }
-                if (!_entries.TryGetValue(handle.NormalizedAlias, out var current)
+                if (!_entries.TryGetValue(entry.Key, out var current)
                     || !ReferenceEquals(current, entry)
                     || !ReferenceEquals(current.Worker, worker))
                 {
-                    if (_entries.TryGetValue(handle.NormalizedAlias, out var replacement)
+                    if (_entries.TryGetValue(entry.Key, out var replacement)
                         && replacement.Worker != null)
                         return replacement.Worker;
                     throw new InvalidOperationException($"Worker for KB '{handle.Alias}' exited during startup.");
@@ -463,7 +632,7 @@ namespace GxMcp.Gateway
                     if (!entry.Draining)
                     {
                         entry.TransitionTo(WorkerPoolEntryState.Vacant);
-                        _entries.TryRemove(new KeyValuePair<string, Entry>(handle.NormalizedAlias, entry));
+                        RemoveEntry(entry);
                     }
                     throw;
                 }
@@ -482,6 +651,39 @@ namespace GxMcp.Gateway
                     }
                 }
             }
+        }
+
+        private sealed record OpenKbSnapshot(string Key, IReadOnlyList<string> Aliases, DateTime LastActivityUtc);
+
+        // Shared-mode Server.MaxOpenKbs refusal (Requirement 5.3): no Worker was started or stopped.
+        private WorkerPoolFullException BuildSharedPoolFull(IReadOnlyList<OpenKbSnapshot> open, int max)
+        {
+            const string reason = "max-open-kbs";
+            var openKbs = new JArray();
+            foreach (var kb in open)
+            {
+                int sessions = 0;
+                try { sessions = SessionCountForKey?.Invoke(kb.Key) ?? 0; }
+                catch (Exception ex) { Program.Log($"[WorkerPool] session count unavailable for an open KB: {ex.Message}"); }
+                openKbs.Add(new JObject
+                {
+                    ["key"] = kb.Key,
+                    ["aliases"] = new JArray(kb.Aliases.Cast<object>().ToArray()),
+                    ["sessions"] = sessions,
+                    ["lastActivityUtc"] = DateTime.SpecifyKind(kb.LastActivityUtc, DateTimeKind.Utc)
+                });
+            }
+
+            JObject error = ConcurrencyErrorCatalog.Build(ConcurrencyErrorCatalog.KbPoolFull, reason, new ConcurrencyErrorFields
+            {
+                Details = new JObject
+                {
+                    ["limit"] = "Server.MaxOpenKbs",
+                    ["value"] = max,
+                    ["openKbs"] = openKbs
+                }
+            });
+            return new WorkerPoolFullException(ListOpen(), open.Count, reason, error);
         }
 
         private void RememberStartupFailure(KbHandle handle, string? workerDiagnostic, int? exitCode, string fallback)
@@ -514,7 +716,7 @@ namespace GxMcp.Gateway
         public async Task<WorkerProcess> DrainAndReplaceAsync(KbHandle handle, int drainTimeoutMs, CancellationToken ct,
             Func<WorkerProcess?, Task>? afterDrainBeforeSpawn = null)
         {
-            if (!_entries.TryGetValue(handle.NormalizedAlias, out var entry))
+            if (!_entries.TryGetValue(EntryKeyForAlias(handle.NormalizedAlias), out var entry))
                 throw new InvalidOperationException($"No pool entry for alias '{handle.Alias}'.");
 
             if (!entry.TryBeginReload())
@@ -605,6 +807,7 @@ namespace GxMcp.Gateway
             // Explicit close is the ONE place the durable record is intentionally forgotten.
             _known.TryRemove(alias.ToLowerInvariant(), out _);
             _startupFailures.TryRemove(alias.ToLowerInvariant(), out _);
+            if (IsSharedMode) return CloseShared(alias, reason);
             if (_entries.TryRemove(alias.ToLowerInvariant(), out var entry))
             {
                 try { entry.Worker?.StopWithReason(reason); } catch { }
@@ -614,6 +817,28 @@ namespace GxMcp.Gateway
             return false;
         }
 
+        // Shared mode: closing one alias of an identity that other open aliases still use only unmaps that
+        // alias; the Attachment is released with the last alias.
+        private bool CloseShared(string alias, WorkerStopReason reason)
+        {
+            string normalized = alias.Trim().ToLowerInvariant();
+            string key = EntryKeyForAlias(alias);
+            if (!_entries.TryGetValue(key, out var entry))
+            {
+                _aliasToKey.TryRemove(new KeyValuePair<string, string>(normalized, key));
+                return false;
+            }
+
+            entry.Aliases.TryRemove(normalized, out _);
+            _aliasToKey.TryRemove(new KeyValuePair<string, string>(normalized, key));
+            if (!entry.Aliases.IsEmpty) return true;
+            if (RemoveEntry(entry))
+            {
+                try { entry.Worker?.StopWithReason(reason); } catch { }
+            }
+            return true;
+        }
+
         // issue #26 P3: drop only the live-worker entry (so the next AcquireAsync spawns
         // a fresh process) WITHOUT forgetting the durable _known record. Used by the
         // eager-respawn path, which must not erase the KB the user opened — Close() does
@@ -621,9 +846,9 @@ namespace GxMcp.Gateway
         public void DropLiveEntry(string alias)
         {
             if (alias == null) return;
-            if (_entries.TryRemove(alias.ToLowerInvariant(), out var entry))
+            if (RemoveEntryByKey(EntryKeyForAlias(alias), out var entry))
             {
-                try { entry.Worker?.StopWithReason(WorkerStopReason.ExplicitClose); } catch { }
+                try { entry!.Worker?.StopWithReason(WorkerStopReason.ExplicitClose); } catch { }
             }
         }
 
@@ -638,7 +863,8 @@ namespace GxMcp.Gateway
         public bool RecycleStalledWorker(string alias)
         {
             if (alias == null) return false;
-            if (!_entries.TryRemove(alias.ToLowerInvariant(), out var entry)) return false;
+            if (!RemoveEntryByKey(EntryKeyForAlias(alias), out var removed)) return false;
+            var entry = removed!;
 
             // The kill must succeed for the recycle to be real: if StopWithReason throws
             // (kill failed / process already gone), let it propagate so the caller does NOT
@@ -656,6 +882,7 @@ namespace GxMcp.Gateway
                 try { e.Worker?.StopWithReason(reason); } catch { }
             }
             _entries.Clear();
+            _aliasToKey.Clear();
         }
 
         /// <summary>
@@ -708,7 +935,21 @@ namespace GxMcp.Gateway
             e.Worker != null
             && e.State == WorkerPoolEntryState.Active
             && Volatile.Read(ref e.InFlightCommands) == 0
-            && !(WorkerSideActivity?.Invoke(e.Handle.NormalizedAlias) ?? false);
+            && !HasWorkerSideActivity(e);
+
+        // Shared mode: any alias of the identity with Worker-side work keeps the entry busy.
+        private bool HasWorkerSideActivity(Entry e)
+        {
+            var activity = WorkerSideActivity;
+            if (activity == null) return false;
+            if (activity(e.Handle.NormalizedAlias)) return true;
+            if (!IsSharedMode) return false;
+            foreach (var alias in e.Aliases.Keys)
+            {
+                if (activity(alias)) return true;
+            }
+            return false;
+        }
 
         /// <summary>
         /// issue #367: work the Worker still runs after its RPC returned (an async build, or a
@@ -744,7 +985,7 @@ namespace GxMcp.Gateway
             Entry? entry;
             lock (_capacityLock)
             {
-                if (!_entries.TryGetValue(alias.ToLowerInvariant(), out entry)) return null;
+                if (!_entries.TryGetValue(EntryKeyForAlias(alias), out entry)) return null;
                 if (worker != null && !ReferenceEquals(entry.Worker, worker)) return null;
                 Interlocked.Increment(ref entry.InFlightCommands);
             }
@@ -770,7 +1011,7 @@ namespace GxMcp.Gateway
         {
             lock (_capacityLock)
             {
-                return _entries.TryGetValue(alias.ToLowerInvariant(), out var e)
+                return _entries.TryGetValue(EntryKeyForAlias(alias), out var e)
                     ? Volatile.Read(ref e.InFlightCommands) : 0;
             }
         }
@@ -794,7 +1035,7 @@ namespace GxMcp.Gateway
         {
             lock (_capacityLock)
             {
-                if (_entries.TryGetValue(alias.ToLowerInvariant(), out var e))
+                if (_entries.TryGetValue(EntryKeyForAlias(alias), out var e))
                     Volatile.Write(ref e.InFlightCommands, count);
             }
         }
@@ -811,7 +1052,7 @@ namespace GxMcp.Gateway
         /// is what lets a test express that without exposing the entry type.
         /// </remarks>
         internal object CaptureEntryForTest(string alias) =>
-            _entries[alias.ToLowerInvariant()];
+            _entries[EntryKeyForAlias(alias)];
 
         /// <summary>
         /// Test-only: runs the real <see cref="EvictEntry"/> against an entry captured
@@ -822,12 +1063,14 @@ namespace GxMcp.Gateway
 
         private void EvictEntry(Entry entry)
         {
-            try { entry.Worker?.StopWithReason(WorkerStopReason.ExplicitClose); } catch { }
+            // Shared mode: the detach asks the host to stop its Worker if this was its last Attachment.
+            var reason = IsSharedMode ? WorkerStopReason.CapacityEviction : WorkerStopReason.ExplicitClose;
+            try { entry.Worker?.StopWithReason(reason); } catch { }
             // Remove only the entry we stopped: if this Worker's exit handler (which does
             // not take _capacityLock) already tore the alias out and a concurrent
             // AcquireAsync installed a replacement, the key overload would evict that
             // replacement and leave its process running with no entry to stop or report it.
-            _entries.TryRemove(new KeyValuePair<string, Entry>(entry.Handle.NormalizedAlias, entry));
+            RemoveEntry(entry);
         }
 
         // BUG-04: the per-call cap on how long ConfigureWarmSpares will wait for
@@ -873,7 +1116,7 @@ namespace GxMcp.Gateway
             foreach (var kb in declaredKbs)
             {
                 if (budget <= 0) break;
-                if (_entries.TryGetValue(kb.NormalizedAlias, out var existing) && existing.Worker != null)
+                if (FindEntry(kb.NormalizedAlias) is { } existing && existing.Worker != null)
                 {
                     skipped.Add(kb.Alias);
                     continue;
@@ -932,9 +1175,11 @@ namespace GxMcp.Gateway
 
         internal void RegisterForTest(KbHandle h, DateTime? lastActivity = null, WorkerProcess? worker = null)
         {
+            string key = EntryKeyFor(h);
             var entry = new Entry
             {
                 Handle = h,
+                Key = key,
                 LastActivityUtc = lastActivity ?? DateTime.UtcNow,
                 Worker = worker
             };
@@ -942,7 +1187,8 @@ namespace GxMcp.Gateway
             {
                 entry.TransitionTo(WorkerPoolEntryState.Active);
             }
-            _entries[h.NormalizedAlias] = entry;
+            _entries[key] = entry;
+            MapAlias(entry, h);
             // Mirror AcquireAsync: an acquired KB is also durably "known" (issue #26 P3).
             _known[h.NormalizedAlias] = h;
         }
@@ -959,7 +1205,7 @@ namespace GxMcp.Gateway
         /// </summary>
         internal TaskCompletionSource<bool> SetDrainingForTest(string alias)
         {
-            if (!_entries.TryGetValue(alias.ToLowerInvariant(), out var entry))
+            if (!_entries.TryGetValue(EntryKeyForAlias(alias), out var entry))
                 throw new InvalidOperationException($"No entry for alias '{alias}'.");
             entry.TransitionTo(WorkerPoolEntryState.Draining);
             return entry.DrainComplete;
@@ -972,14 +1218,14 @@ namespace GxMcp.Gateway
         /// </summary>
         internal void CompleteDrainForTest(string alias)
         {
-            if (!_entries.TryGetValue(alias.ToLowerInvariant(), out var entry))
+            if (!_entries.TryGetValue(EntryKeyForAlias(alias), out var entry))
                 throw new InvalidOperationException($"No entry for alias '{alias}'.");
             entry.TransitionTo(entry.Worker != null ? WorkerPoolEntryState.Active : WorkerPoolEntryState.Vacant);
             entry.DrainComplete.TrySetResult(true);
         }
 
         private Entry? FindEntry(string? alias) =>
-            alias != null && _entries.TryGetValue(alias.ToLowerInvariant(), out var e) ? e : null;
+            alias != null && _entries.TryGetValue(EntryKeyForAlias(alias), out var e) ? e : null;
 
         /// <summary>Returns true when the entry for <paramref name="alias"/> exists and Draining==true.</summary>
         internal bool IsDrainingForTest(string alias) =>
