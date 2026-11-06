@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- **Transfer import preflight avoids SDK preparation**: raw XPZ metadata and the initialized descriptor registry replace object construction before import, preventing empty stubs during preflight. https://github.com/lennix1337/Genexus18MCP/issues/886
 - **Transfer previews avoid an SDK item descriptor getter**: exported-item metadata no longer evaluates `TypeDescriptor`, whose SDK implementation can construct an object while projecting import data. https://github.com/lennix1337/Genexus18MCP/issues/886
 - **Transfer fidelity preflight failures report uncertain effects**: when SDK preparation fails before `ImportFile`, the response advises inspecting target objects before retrying and reports `persistedState: "unknown"`; preparation itself may have changed the KB. https://github.com/lennix1337/Genexus18MCP/issues/886
 - **Shared-host recovery cannot wait behind a blocked stdin write**: terminate the child before closing its input stream, so a child that stops reading cannot block its own restart. A process regression reproduces the blocked pipe without a KB or GeneXus SDK operation.

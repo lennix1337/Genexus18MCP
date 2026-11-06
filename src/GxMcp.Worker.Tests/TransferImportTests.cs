@@ -9,6 +9,69 @@ namespace GxMcp.Worker.Tests
 {
     public class TransferImportTests
     {
+        private static readonly Guid ProcedureType = new Guid("84a12160-f59b-4ad7-a683-ea4481ac23e9");
+        private static readonly Guid PanelType = new Guid("11111111-1111-1111-1111-111111111111");
+        private const string WebFormPart = "d24a58ad-57ba-41b7-9e6e-eaca3543c778";
+
+        private static string Package(string objects)
+        {
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".xpz");
+            using (var archive = ZipFile.Open(path, ZipArchiveMode.Create))
+            using (var writer = new StreamWriter(archive.CreateEntry("export.xml").Open()))
+                writer.Write("<ExportFile><Objects>" + objects + "</Objects></ExportFile>");
+            return path;
+        }
+
+        private static Tuple<string, bool> ResolveRawType(Guid type)
+        {
+            if (type == ProcedureType) return Tuple.Create("Procedure", false);
+            if (type == PanelType) return Tuple.Create("WebPanel", true);
+            return null;
+        }
+
+        [Fact]
+        public void CaptureImportFidelity_TwoProceduresRequireNoSdkPreparation()
+        {
+            var path = Package($"<Object name='A' type='{ProcedureType}'/><Object name='B' type='{ProcedureType}'/>");
+            try
+            {
+                var plan = TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => throw new Exception("unexpected snapshot"));
+                Assert.Empty(plan.Items);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public void CaptureImportFidelity_RejectsMalformedMixedPackageBeforeSnapshots()
+        {
+            var path = Package($"<Object name='A' type='{ProcedureType}'/><Object name='Panel' type='{PanelType}'><Part type='{WebFormPart}'/></Object>");
+            try { Assert.Throws<InvalidDataException>(() => TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => throw new Exception("unexpected snapshot"))); }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public void CaptureImportFidelity_RejectsUnknownType()
+        {
+            var path = Package($"<Object name='A' type='{Guid.NewGuid()}'/>");
+            try { Assert.Throws<InvalidDataException>(() => TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => null)); }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public void CaptureImportFidelity_PreservesRawBaselineAndExistingSnapshot()
+        {
+            var path = Package($"<Object name='Panel' type='{PanelType}'><Part type='{WebFormPart}'><Source><![CDATA[<GxMultiForm><BODY /></GxMultiForm>]]></Source></Part></Object>");
+            try
+            {
+                var plan = TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => Tuple.Create("before"));
+                var item = Assert.Single(plan.Items);
+                Assert.Equal("<GxMultiForm><BODY /></GxMultiForm>", item.ExpectedXml);
+                Assert.True(item.ExistingBefore);
+                Assert.Equal("before", item.BeforeXml);
+            }
+            finally { File.Delete(path); }
+        }
+
         private sealed class FakeExportItem
         {
             public string ObjectName { get; set; }
@@ -33,7 +96,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void ImportFidelityFailure_RequiresReconciliationBeforeRetry()
+        public void ImportFidelityFailure_ReportsNoImport()
         {
             var diagnostics = new JObject { ["sdkDiagnostics"] = new JArray() };
             var result = JObject.Parse(TransferService.BuildImportFidelityFailure("unreadable", diagnostics));
@@ -41,8 +104,8 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("error", result["status"]?.ToString());
             Assert.Equal("TransferImportVerificationUnavailable", result["error"]?["code"]?.ToString());
             Assert.False(result["imported"].Value<bool>());
-            Assert.Equal("unknown", result["persistedState"]?.ToString());
-            Assert.True(result["error"]["reconciliationRequired"].Value<bool>());
+            Assert.Equal("unchanged", result["persistedState"]?.ToString());
+            Assert.Null(result["error"]["reconciliationRequired"]);
             Assert.Contains("before retrying", result["error"]["hint"].ToString());
             Assert.Contains("ImportFile was not called", result["error"]["message"].ToString());
         }

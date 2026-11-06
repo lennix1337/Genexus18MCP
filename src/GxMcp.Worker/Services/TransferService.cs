@@ -9,6 +9,7 @@ using System.Xml;
 using System.Xml.Linq;
 using GxMcp.Worker.Helpers;
 using Artech.Architecture.Common.Objects;
+using Artech.Architecture.Common.Descriptors;
 using Artech.Architecture.Common.Services;
 using GxMcp.Worker.Models;
 using Newtonsoft.Json.Linq;
@@ -330,7 +331,7 @@ namespace GxMcp.Worker.Services
             ImportFidelityPlan fidelityPlan;
             try
             {
-                fidelityPlan = CaptureImportFidelity(svc, model, file, options);
+                fidelityPlan = CaptureImportFidelity(file);
             }
             catch (Exception ex)
             {
@@ -387,13 +388,12 @@ namespace GxMcp.Worker.Services
         {
             var failure = (JObject)diagnostics.DeepClone();
             failure["imported"] = false;
-            failure["persistedState"] = "unknown";
+            failure["persistedState"] = "unchanged";
             return McpResponse.Err(
                 code: "TransferImportVerificationUnavailable",
-                message: "The XPZ could not be inspected for WebForm preservation; ImportFile was not called, but SDK preparation may have changed the target KB. " + reason,
-                hint: "Inspect the target objects and reconcile any changes before retrying.",
-                extra: failure,
-                reconciliationRequired: true);
+                message: "The XPZ could not be inspected for WebForm preservation; ImportFile was not called. " + reason,
+                hint: "Inspect the XPZ metadata and correct the reported problem before retrying.",
+                extra: failure);
         }
 
         internal static string ImportDeclined(string file, TransferDiagnostics diagnostics)
@@ -423,85 +423,88 @@ namespace GxMcp.Worker.Services
                 ["diagnosticsTruncated"] = diagnostics.Truncated };
         }
 
-        private ImportFidelityPlan CaptureImportFidelity(IKnowledgeManagerService svc, KBModel model,
-            string file, ImportOptions options)
+        private ImportFidelityPlan CaptureImportFidelity(string file)
+        {
+            return CaptureImportFidelity(file, type =>
+            {
+                var descriptor = KBObjectDescriptor.Get(type);
+                return descriptor == null || descriptor.Parts == null || descriptor.Parts.Count == 0
+                    ? null : Tuple.Create(descriptor.Name, descriptor.Parts.Contains(WebFormPartId));
+            }, (name, type) =>
+            {
+                var existing = _objects?.FindObjectFresh(name, type);
+                return existing == null ? null : Tuple.Create(WebFormXmlHelper.ReadEditableXml(existing));
+            });
+        }
+
+        internal static ImportFidelityPlan CaptureImportFidelity(string file, Func<Guid, Tuple<string, bool>> resolve,
+            Func<string, string, Tuple<string>> readExisting)
         {
             var plan = new ImportFidelityPlan();
-            // IExportItem.Object is guarded by PrepareImport in GeneXus 18 U5.
-            // Read the source WebForm from the XPZ package before preparing the
-            // item; otherwise the SDK exposes only its normalized projection and
-            // the fidelity check becomes circular (issue #102).
-            var exportedWebForms = ReadExportWebForms(file);
-            var exploreOptions = new ExploreExportOptions();
-            svc.ExploreExport(file, model, exploreOptions, out var exportedObjects, out _, out _);
-            var candidates = AsEnumerable(exportedObjects).ToList();
-            // Validate the package's stable metadata before invoking PrepareImport.
-            // Some GeneXus SDKs perform normalization while preparing an item, so
-            // an unreadable/anonymous XPZ must fail before that call can touch the KB.
-            foreach (var raw in candidates)
+            foreach (var item in ReadRawImportWebForms(file, resolve))
             {
-                var descriptor = DescribeExportItem(raw);
-                if (!(descriptor["identityAvailable"]?.Value<bool>() ?? false))
-                    throw new InvalidDataException("The XPZ contains an import item without a stable object identity.");
+                var existing = readExisting(item.Name, item.TypeFilter);
+                item.BeforeXml = existing?.Item1;
+                item.ExistingBefore = existing != null;
+                plan.Items.Add(item);
             }
-            if (candidates.Count == 0 && exportedWebForms.Count > 0)
-                throw new InvalidDataException("The XPZ contains raw WebForm payloads but the SDK exposed no import candidates for them.");
-            var prepared = svc.PrepareImport(file, model, options);
-            if (candidates.Count == 0)
-                candidates = AsEnumerable(prepared?.Items).ToList();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            bool sawWebFormCandidate = false;
-
-            foreach (var raw in candidates)
-            {
-                var rawDescriptor = DescribeExportItem(raw);
-                if (!(rawDescriptor["identityAvailable"]?.Value<bool>() ?? false))
-                    throw new InvalidDataException("The XPZ contains an import item without a stable object identity.");
-                var item = raw as IExportItem;
-                if (item == null) continue;
-
-                // Object is intentionally accessed only after PrepareImport: U5
-                // throws when the guarded getter is used earlier.
-                item.PrepareImport(item.BaseModel ?? model, model, prepared);
-                var source = item.Object;
-                string sourceType = source?.TypeDescriptor?.Name;
-                if (source == null) continue;
-                var sourcePart = WebFormXmlHelper.GetWebFormPart(source);
-                // GetWebFormPart also returns a Procedure's print layout, which the XPZ
-                // serializes outside <Source>; it is not the WebForm payload this check guards.
-                if (sourcePart == null || !IsWebFormFidelityCandidate(sourcePart.GetType().FullName)) continue;
-                sawWebFormCandidate = true;
-
-                if (string.IsNullOrWhiteSpace(source.Name)
-                    || !exportedWebForms.TryGetValue(source.Name, out string expectedXml)
-                    || string.IsNullOrWhiteSpace(expectedXml))
-                    throw new InvalidDataException(
-                        "The XPZ contains a WebForm candidate without a readable raw WebForm payload for '"
-                        + (source.Name ?? "<unnamed>") + "'. Fidelity verification cannot use the SDK projection as a baseline.");
-
-                string typeFilter = sourceType ?? source.TypeDescriptor?.Name;
-                string partName = sourcePart.TypeDescriptor?.Name ?? "WebForm";
-                string key = (typeFilter ?? string.Empty) + "|" + source.Name + "|" + partName;
-                if (!seen.Add(key)) continue;
-
-                var existing = _objects?.FindObjectFresh(source.Name, typeFilter);
-                plan.Items.Add(new ImportWebFormSnapshot
-                {
-                    Name = source.Name,
-                    TypeFilter = typeFilter,
-                    PartName = partName,
-                    ExpectedXml = expectedXml,
-                    ExistingBefore = existing != null,
-                    BeforeXml = existing == null ? null : WebFormXmlHelper.ReadEditableXml(existing)
-                });
-            }
-
-            if (exportedWebForms.Count > 0 && !sawWebFormCandidate)
-                throw new InvalidDataException("The XPZ contains raw WebForm payloads, but the SDK could not map them to import candidates.");
-            if (sawWebFormCandidate && plan.Items.Count == 0)
-                throw new InvalidDataException("The XPZ exposed WebForm objects but no raw WebForm payload could be mapped.");
-
             return plan;
+        }
+
+        private static readonly Guid WebFormPartId = new Guid("d24a58ad-57ba-41b7-9e6e-eaca3543c778");
+
+        private static List<ImportWebFormSnapshot> ReadRawImportWebForms(string file, Func<Guid, Tuple<string, bool>> resolve)
+        {
+            var forms = new List<ImportWebFormSnapshot>();
+            var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int xmlEntries = 0, objectCount = 0;
+            long totalBytes = 0;
+            using (var archive = ZipFile.OpenRead(file))
+            foreach (var entry in archive.Entries.Where(e => e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (++xmlEntries > 2048 || entry.Length > 8L * 1024 * 1024 || (totalBytes += entry.Length) > 64L * 1024 * 1024)
+                    throw new InvalidDataException("The XPZ XML payload exceeds the safe fidelity-inspection limit.");
+                XDocument document;
+                using (var stream = entry.Open())
+                using (var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersFromEntities = 0 }))
+                    document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+                if (!string.Equals(document.Root?.Name.LocalName, "ExportFile", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("The XPZ contains an unrecognized XML document.");
+                var containers = document.Root.Elements().Where(e => e.Name.LocalName == "Objects").ToList();
+                if (containers.Count != 1) throw new InvalidDataException("The XPZ object list is ambiguous or missing.");
+                foreach (var obj in containers[0].Elements())
+                {
+                    if (obj.Name.LocalName != "Object") throw new InvalidDataException("Unrecognized XPZ object metadata.");
+                    objectCount++;
+                    string name = (string)obj.Attribute("name");
+                    if (string.IsNullOrWhiteSpace(name) || !Guid.TryParse((string)obj.Attribute("type"), out var type) || type == Guid.Empty
+                        || !identities.Add(name))
+                        throw new InvalidDataException("The XPZ contains an invalid or duplicate object identity.");
+                    var descriptor = resolve(type);
+                    if (descriptor == null || string.IsNullOrWhiteSpace(descriptor.Item1))
+                        throw new InvalidDataException("The XPZ contains an unknown object type: " + type);
+                    var partIds = new HashSet<Guid>();
+                    XElement webForm = null;
+                    foreach (var part in obj.Elements().Where(e => e.Name.LocalName == "Part"))
+                    {
+                        if (!Guid.TryParse((string)part.Attribute("type"), out var partId) || partId == Guid.Empty || !partIds.Add(partId))
+                            throw new InvalidDataException("The XPZ contains an invalid or duplicate part identity for " + name);
+                        if (partId == WebFormPartId) webForm = part;
+                        else if (part.Elements().Any(e => e.Name.LocalName == "Source" && IsWebFormPayload(e.Value)))
+                            throw new InvalidDataException("The XPZ contains an ambiguous visual source for " + name);
+                    }
+                    if (!descriptor.Item2 && webForm != null)
+                        throw new InvalidDataException("The XPZ contains an unexpected WebForm part for " + name);
+                    if (!descriptor.Item2) continue;
+                    var sources = webForm?.Elements().Where(e => e.Name.LocalName == "Source").ToList();
+                    string xml = sources?.Count == 1 ? sources[0].Value : null;
+                    if (string.IsNullOrWhiteSpace(xml) || !IsWebFormPayload(xml))
+                        throw new InvalidDataException("The XPZ has no unambiguous raw WebForm source for " + name);
+                    forms.Add(new ImportWebFormSnapshot { Name = name, TypeFilter = descriptor.Item1, PartName = "WebForm", ExpectedXml = xml.Trim() });
+                }
+            }
+            if (objectCount == 0) throw new InvalidDataException("The XPZ contains no import objects.");
+            return forms;
         }
 
         internal static bool IsWebFormFidelityCandidate(string partClassFullName)
@@ -714,12 +717,12 @@ namespace GxMcp.Worker.Services
                 || string.Equals(status, "partial", StringComparison.OrdinalIgnoreCase);
         }
 
-        private sealed class ImportFidelityPlan
+        internal sealed class ImportFidelityPlan
         {
             public List<ImportWebFormSnapshot> Items { get; } = new List<ImportWebFormSnapshot>();
         }
 
-        private sealed class ImportWebFormSnapshot
+        internal sealed class ImportWebFormSnapshot
         {
             public string Name { get; set; }
             public string TypeFilter { get; set; }
