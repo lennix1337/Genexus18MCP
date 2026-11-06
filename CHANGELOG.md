@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Internal
+
+- SDK CI builds the current package before process smoke and reuses that exact package for live tests, so a clean runner cannot certify missing or stale publish artifacts. Offline preflight clears live KB/configuration inputs temporarily and restores them before the mandatory live lane.
+
 <!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
      subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
 

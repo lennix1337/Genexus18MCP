@@ -93,6 +93,10 @@ try {
         [Environment]::SetEnvironmentVariable($name, $null)
     }
     try {
+        # Process smoke certifies the packaged binaries, not only bin/Release.
+        & pwsh -NoProfile -File (Join-Path $root 'build.ps1') 2>&1 | Tee-Object -FilePath $logPath -Append
+        if ($LASTEXITCODE -ne 0) { throw "SDK validation package build failed with exit code $LASTEXITCODE." }
+
         & pwsh -NoProfile -File (Join-Path $root 'scripts\release-preflight.ps1') -GxPath $env:GX_PATH `
             -OnlyLanes 'solution build and tests;solution process smoke tests' -SkipLive -SkipWarningBaseline `
             -SummaryPath (Join-Path $OutputRoot 'preflight-summary.json') 2>&1 | Tee-Object -FilePath $logPath -Append
@@ -105,7 +109,7 @@ try {
     }
 
     & pwsh -NoProfile -File (Join-Path $root 'scripts\test-live.ps1') `
-        -KbPath $env:GXMCP_TEST_KB -FixtureManifest $env:GXMCP_TEST_FIXTURE -GxPath $env:GX_PATH 2>&1 | Tee-Object -FilePath $logPath -Append
+        -KbPath $env:GXMCP_TEST_KB -FixtureManifest $env:GXMCP_TEST_FIXTURE -GxPath $env:GX_PATH -SkipBuild 2>&1 | Tee-Object -FilePath $logPath -Append
     if ($LASTEXITCODE -ne 0) { throw "Live Worker validation failed with exit code $LASTEXITCODE." }
 
     Write-Status 'pass' 'SDK fingerprint, Release warning baseline and live Worker validation completed.' 0

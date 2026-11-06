@@ -98,7 +98,7 @@ try {
     Copy-Item -LiteralPath $scriptPath -Destination $probeScript
     $probeHost = Join-Path $outputRoot 'invoke-clean-sdk-lane.ps1'
     @'
-param($ScriptPath, $Sdk, $Kb, $Fixture, $OutputRoot, $BuildExit, $PreflightExit)
+param($ScriptPath, $Sdk, $Kb, $Fixture, $OutputRoot, $BuildExit, $PreflightExit, $PackageExit)
 function dotnet {
     if ($args[0] -ne 'build' -or $args[1] -notlike '*GxMcp.Worker.Tests.csproj' -or
         $args -notcontains 'Release' -or $args -notcontains "-p:GX_PATH=$Sdk") {
@@ -115,9 +115,19 @@ function pwsh {
         if ($env:GXMCP_TEST_KB -or $env:GXMCP_TEST_FIXTURE -or $env:GX_CONFIG_PATH) {
             throw 'Offline preflight inherited live KB/configuration before the live harness prepared it.'
         }
+        if (-not (Test-Path (Join-Path (Split-Path (Split-Path $ScriptPath)) '../publish/GxMcp.Gateway.exe'))) {
+            throw 'Process smoke cannot bind a clean checkout without its current published package.'
+        }
         $global:LASTEXITCODE = [int]$PreflightExit
     }
+    if ($scriptName -eq 'build.ps1') {
+        $publish = Join-Path (Split-Path $args[2]) 'publish'
+        New-Item -ItemType Directory -Path $publish -Force | Out-Null
+        Set-Content (Join-Path $publish 'GxMcp.Gateway.exe') 'test-package'
+        $global:LASTEXITCODE = [int]$PackageExit
+    }
     if ($scriptName -eq 'test-live.ps1') {
+        if ($args -notcontains '-SkipBuild') { throw 'Live lane must use the exact package certified by process smoke.' }
         if (-not (Get-Content (Join-Path $OutputRoot 'calls.txt')).Contains('worker-build')) {
             throw 'Live lane ran before its Worker test assembly was built.'
         }
@@ -129,11 +139,12 @@ function pwsh {
 & $ScriptPath -GxPath $Sdk -KbPath $Kb -FixtureManifest $Fixture -OutputRoot $OutputRoot
 exit $LASTEXITCODE
 '@ | Set-Content -LiteralPath $probeHost -Encoding utf8
-    foreach ($case in @(@(0, 0), @(7, 0), @(0, 8))) {
-        $buildExit, $preflightExit = $case
-        $probeOutput = Join-Path $outputRoot "probe-$buildExit-$preflightExit"
-        & pwsh -NoProfile -File $probeHost $probeScript $sdk $kb $manifest $probeOutput $buildExit $preflightExit
-        $expectedExit = if ($buildExit -eq 0 -and $preflightExit -eq 0) { 0 } else { 1 }
+    foreach ($case in @(@(0, 0, 0), @(7, 0, 0), @(0, 8, 0), @(0, 0, 9))) {
+        $buildExit, $preflightExit, $packageExit = $case
+        Remove-Item (Join-Path $probeRoot 'publish') -Recurse -Force -ErrorAction SilentlyContinue
+        $probeOutput = Join-Path $outputRoot "probe-$buildExit-$preflightExit-$packageExit"
+        & pwsh -NoProfile -File $probeHost $probeScript $sdk $kb $manifest $probeOutput $buildExit $preflightExit $packageExit
+        $expectedExit = if ($buildExit -eq 0 -and $preflightExit -eq 0 -and $packageExit -eq 0) { 0 } else { 1 }
         if ($LASTEXITCODE -ne $expectedExit) { throw "Clean-checkout SDK lane expected exit $expectedExit, got $LASTEXITCODE." }
         $probeStatus = Get-Content (Join-Path $probeOutput 'status.json') -Raw | ConvertFrom-Json
         $expectedState = if ($expectedExit -eq 0) { 'pass' } else { 'fail' }
