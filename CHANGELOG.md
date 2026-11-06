@@ -21,6 +21,7 @@
 
 - SDK and native page projections retain the original line endings, so their unmarked page contents can be concatenated without losing or changing newline bytes. The read response still embeds truncation markers and needs further work for end-to-end reconstruction. https://github.com/lennix1337/Genexus18MCP/issues/881
 - A singular `genexus_read` no longer cuts an oversized first line at an unreachable line-based continuation offset. https://github.com/lennix1337/Genexus18MCP/issues/881
+- **XPZ import fidelity failures after SDK preparation now require reconciliation**: the response identifies available targets and read-only inspection calls, and reports their persisted state as unknown instead of implying preparation could not change the KB. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886)
 
 - **`genexus_create action=save_as` no longer fails on Evolution 3 with `SaveAsPartFailed` on the Documentation part**: an empty Documentation (`<Properties />`) is rewritten by the SDK on save, so a part the new object already holds verbatim is now left as it is instead of being written again.
 - **`genexus_kb_version changed_objects` finds the frozen model on Evolution 3**, where it is `KBVersion.ModelVersion` (`KBVersion.Model` there is the entity's empty Udm model), instead of answering `ChangedObjectsNotSupported`.
