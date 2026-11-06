@@ -2,9 +2,7 @@
 
 ## Unreleased
 
-<!-- Next release: put new entries under a `### Added` / `- **`genexus_modify_variable` states that it retyped** (#886): the success result (code `VariableRenamed`, kept for existing clients) now also carries `retyped: true` and `persistedState: "confirmed"` — the new type was read back from the saved object — so a retype is no longer mistaken for a rename or for an unverified write.
-
-### Changed` / `### Fixed` / `### Internal`
+<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
      subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
 
 ### Added
@@ -14,6 +12,8 @@
 - **`genexus_edit` Source reports the variables the save declared** (#889): the result carries `autoCreatedVariables` (name, type, length, decimals) and a warning when an undeclared `&Variable` was declared on its own, instead of leaving a `VarChar(100)` to surface later as a `Varchar=Date` build error.
 
 - **Adding a variable that already exists says so** (#886): the batch result carries a `hint` pointing to `genexus_modify_variable`, since add never changes the type of a declared variable.
+
+- **`genexus_modify_variable` states that it retyped** (#886): the success result (code `VariableRenamed`, kept for existing clients) now also carries `retyped: true` and `persistedState: "confirmed"` — the new type was read back from the saved object — so a retype is no longer mistaken for a rename or for an unverified write.
 
 ### Changed
 
