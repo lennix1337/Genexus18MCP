@@ -59,6 +59,7 @@ namespace GxMcp.Gateway.Tests
         [Theory]
         [InlineData("events-u16-wwp16.2-audit.json")]
         [InlineData("events-u11-wwp16.1-audit.json")]
+        [InlineData("events-u10-audit.json")]
         public void HardReload_CopiesTheImmutableEventsAuditManifestsWhenPresent(string manifest)
         {
             var source = CreateRealisticWorkerOutput();

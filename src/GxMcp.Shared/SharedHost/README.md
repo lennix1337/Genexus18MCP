@@ -1,7 +1,7 @@
 # SharedHost shared core
 
 Pure, SDK-free logic for the opt-in `Server.WorkerSharingMode="shared-host"` mode
-(scheduler, settings, catalogs).
+(scheduler, settings, admission policy, registry v2 record model, catalogs).
 
 Every `*.cs` file in this directory is compiled into both `GxMcp.Gateway` (net10.0)
 and `GxMcp.Worker` (net48 x86) through a wildcard link:

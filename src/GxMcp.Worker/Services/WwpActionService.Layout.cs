@@ -727,6 +727,9 @@ namespace GxMcp.Worker.Services
                 var after = XDocument.Parse(afterXml);
                 LayoutStructuralIds.Normalize(before);
                 LayoutStructuralIds.Normalize(after);
+                var projectedNames = after.Descendants().Select(e => Attr(e, "ControlName")).Where(n => n.Length > 0).ToList();
+                if (projectedNames.Count != projectedNames.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+                    return failed("duplicateControlName");
                 var originalNames = before.Descendants().Select(e => Attr(e, "ControlName")).Where(n => n.Length > 0).ToList();
                 var originalSet = new HashSet<string>(originalNames, StringComparer.OrdinalIgnoreCase);
                 var persistedOrder = after.Descendants().Select(e => Attr(e, "ControlName")).Where(originalSet.Contains).ToList();

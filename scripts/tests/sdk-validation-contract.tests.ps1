@@ -80,6 +80,11 @@ try {
     $catalog.supportedMajors = @(@{ major = [string]($fixtureMajor + 1) })
     $catalog | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $versionCatalog -Encoding utf8
     Assert-SdkValidation 1 'GXMCP_SDK_VERSION_MISMATCH'
+    # An Evolution 3 Worker never accepts a GeneXus 16+ SDK, even with both majors catalogued.
+    $catalog.supportedMajors = @(@{ major = '10.3' }, @{ major = [string]$fixtureMajor })
+    $catalog | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $versionCatalog -Encoding utf8
+    $spec.supportedVersion = '10.3.16.146128'
+    Assert-SdkValidation 1 'GXMCP_SDK_VERSION_MISMATCH'
     $catalog.supportedMajors = @(@{ major = [string]$fixtureMajor }, @{ major = [string]($fixtureMajor + 1) })
     $catalog | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $versionCatalog -Encoding utf8
     $spec.supportedVersion = 'invalid'

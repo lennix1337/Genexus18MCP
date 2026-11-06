@@ -39,10 +39,10 @@ namespace GxMcp.Worker
             catch (Exception ex) { return Fail("GXMCP_SDK_MANIFEST_INVALID", "GXMCP_SDK_MANIFEST_INVALID manifest=" + manifestPath + " error=" + ex.GetType().Name); }
 
             string expectedVersion = (string)manifest["supportedVersion"];
-            if (!TryParseMajor(expectedVersion, out int expectedMajor))
+            if (!TryParseMajor(expectedVersion, out string expectedMajor))
                 return Fail("GXMCP_SDK_MANIFEST_INVALID", "GXMCP_SDK_MANIFEST_INVALID manifest=" + manifestPath + " error=supportedVersion");
 
-            if (!TryLoadSupportedMajors(manifestPath, out string catalogPath, out HashSet<int> supportedMajors, out string catalogError))
+            if (!TryLoadSupportedMajors(manifestPath, out string catalogPath, out HashSet<string> supportedMajors, out string catalogError))
                 return Fail(catalogError, catalogError + " catalog=" + catalogPath);
 
             string anchor = (string)manifest["anchor"];
@@ -52,7 +52,9 @@ namespace GxMcp.Worker
 
             string actualVersion = versionReader(anchorPath);
             bool exactVersion = string.Equals(expectedVersion, actualVersion, StringComparison.OrdinalIgnoreCase);
-            if (!TryParseMajor(actualVersion, out int actualMajor) || !supportedMajors.Contains(actualMajor))
+            if (!TryParseMajor(actualVersion, out string actualMajor)
+                || !supportedMajors.Contains(actualMajor)
+                || SdkBinaryLine(actualMajor) != SdkBinaryLine(expectedMajor))
                 return Fail("GXMCP_SDK_VERSION_MISMATCH", "GXMCP_SDK_VERSION_MISMATCH expectedVersion=" + expectedVersion + " actualVersion=" + actualVersion + " supportedMajors=" + JoinMajors(supportedMajors));
 
             var assemblies = manifest["assemblies"] as JArray;
@@ -84,17 +86,34 @@ namespace GxMcp.Worker
             return new SdkCompatibilityResult(true, "GXMCP_SDK_COMPATIBLE", diagnostic);
         }
 
-        private static bool TryParseMajor(string version, out int major)
+        // GeneXus X Evolution 1-3 report their major as "10.<n>"; GeneXus 15 onwards as a
+        // single number.
+        private static bool TryParseMajor(string version, out string major)
         {
-            major = 0;
-            return !string.IsNullOrWhiteSpace(version)
-                && int.TryParse(version.Split('.')[0], out major)
-                && major > 0;
+            major = null;
+            if (string.IsNullOrWhiteSpace(version)) return false;
+            string[] parts = version.Trim().Split('.');
+            if (!int.TryParse(parts[0], out int first) || first <= 0) return false;
+            if (first == 10)
+            {
+                if (parts.Length < 2 || !int.TryParse(parts[1], out int minor) || minor < 1 || minor > 3) return false;
+                major = "10." + minor;
+                return true;
+            }
+            major = first.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return true;
         }
 
-        private static bool TryLoadSupportedMajors(string manifestPath, out string catalogPath, out HashSet<int> supportedMajors, out string error)
+        // GeneXus 16-18 share one SDK binary line, so a single Worker build serves them all.
+        // Evolution 3 ships assemblies 10.1.0.0: only a Worker built against that SDK may load it.
+        private static string SdkBinaryLine(string major)
         {
-            supportedMajors = new HashSet<int>();
+            return major != null && major.StartsWith("10.", StringComparison.Ordinal) ? major : "modern";
+        }
+
+        private static bool TryLoadSupportedMajors(string manifestPath, out string catalogPath, out HashSet<string> supportedMajors, out string error)
+        {
+            supportedMajors = new HashSet<string>(StringComparer.Ordinal);
             string manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath)) ?? string.Empty;
             var candidates = new List<string>();
             string configuredCatalog = Environment.GetEnvironmentVariable("GXMCP_VERSION_CATALOG");
@@ -131,7 +150,7 @@ namespace GxMcp.Worker
                 {
                     foreach (var entry in entries)
                     {
-                        if (TryParseMajor((string)entry["major"], out int major)) supportedMajors.Add(major);
+                        if (TryParseMajor((string)entry["major"], out string major)) supportedMajors.Add(major);
                     }
                 }
             }
@@ -150,10 +169,11 @@ namespace GxMcp.Worker
             return true;
         }
 
-        private static string JoinMajors(HashSet<int> majors)
+        private static string JoinMajors(HashSet<string> majors)
         {
-            var ordered = new List<int>(majors);
-            ordered.Sort();
+            var ordered = new List<string>(majors);
+            ordered.Sort((a, b) => double.Parse(a, System.Globalization.CultureInfo.InvariantCulture)
+                .CompareTo(double.Parse(b, System.Globalization.CultureInfo.InvariantCulture)));
             return string.Join(",", ordered);
         }
 

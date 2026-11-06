@@ -318,8 +318,12 @@ namespace GxMcp.Worker.Services
             {
                 if (args?["autoUpdate"] != null)
                 {
+#if GXMCP_SDK_EV3
+                    return Evolution3Unsupported.Refuse("genexus_kb_version", "set_active", "activation with autoUpdate");
+#else
                     bool autoUpdate = args["autoUpdate"].ToObject<bool>();
                     KBVersionHelper.SetAsActive(target, autoUpdate);
+#endif
                 }
                 else
                 {
@@ -517,7 +521,7 @@ namespace GxMcp.Worker.Services
 
             try
             {
-                changed = !comparer.AreEqualInContent(baseline, current, CompareObjectOptions.Default);
+                changed = !Compatibility.SdkCompat.AreEqualInContent(comparer, baseline, current);
                 return true;
             }
             catch (Exception ex)

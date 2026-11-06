@@ -1,0 +1,120 @@
+{
+  "generatedAt": "2026-11-06T11:29:34-03:00",
+  "note": "Resultado SANITIZADO de EventsBundleNativeProofLiveTests no bundle U10 18.0.10.184260 (sem WorkWithPlus), numa KB descartavel sem instancias de padrao. Nome da verificacao e ok/falhou; o resultado bruto ficou fora do repositorio (gx-events-u10-proof-20261106-112854).",
+  "sets": {
+    "u10-kb-sem-instancias": {
+      "total": 27,
+      "failed": 0,
+      "checks": [
+        {
+          "check": "object-count-readable-before",
+          "ok": true
+        },
+        {
+          "check": "create-synthetic-webpanel",
+          "ok": true
+        },
+        {
+          "check": "create-other-webpanel",
+          "ok": true
+        },
+        {
+          "check": "initial-read-has-version-token",
+          "ok": true
+        },
+        {
+          "check": "preview-can-apply",
+          "ok": true
+        },
+        {
+          "check": "preview-no-mutation",
+          "ok": true
+        },
+        {
+          "check": "object-save-receipt",
+          "ok": true
+        },
+        {
+          "check": "receipt-other-object-metadata-intact",
+          "ok": true
+        },
+        {
+          "check": "receipt-one-save-no-retry",
+          "ok": true
+        },
+        {
+          "check": "no-implicit-operations",
+          "ok": true
+        },
+        {
+          "check": "save-preserves-rules-and-variables",
+          "ok": true
+        },
+        {
+          "check": "fresh-reread-has-marker",
+          "ok": true
+        },
+        {
+          "check": "stale-token-rejected",
+          "ok": true
+        },
+        {
+          "check": "worker-restart-reread",
+          "ok": true
+        },
+        {
+          "check": "worker-restart-preserves-rules-and-variables",
+          "ok": true
+        },
+        {
+          "check": "syntax-error-rollback",
+          "ok": true
+        },
+        {
+          "check": "syntax-error-typed-incomplete",
+          "ok": true
+        },
+        {
+          "check": "queue-one-winner-one-version-conflict",
+          "ok": true
+        },
+        {
+          "check": "queue-loser-refused-before-write",
+          "ok": true
+        },
+        {
+          "check": "queue-preserves-rules-and-variables",
+          "ok": true
+        },
+        {
+          "check": "async-operation-result-consulted",
+          "ok": true
+        },
+        {
+          "check": "idempotent-save",
+          "ok": true
+        },
+        {
+          "check": "idempotent-save-runs-the-guarded-save",
+          "ok": true
+        },
+        {
+          "check": "other-object-preview-refused-by-bundle-audit",
+          "ok": true
+        },
+        {
+          "check": "other-object-refused-while-pending",
+          "ok": true
+        },
+        {
+          "check": "synthetic-objects-removed",
+          "ok": true
+        },
+        {
+          "check": "object-count-unchanged",
+          "ok": true
+        }
+      ]
+    }
+  }
+}

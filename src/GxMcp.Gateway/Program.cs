@@ -1063,6 +1063,9 @@ namespace GxMcp.Gateway
                                 ["id"] = capturedId?.DeepClone() ?? JValue.CreateNull(),
                                 ["error"] = new JObject { ["code"] = -32000, ["message"] = poolEx.Message }
                             };
+                            // Shared mode carries the catalog details; Isolated_Mode output is unchanged.
+                            if (poolEx.Error != null)
+                                errResp["error"]!["data"] = BuildKbPoolFullPayload(poolEx);
                             if (capturedId != null && capturedId.Type != JTokenType.Null)
                                 await TryWriteStdout(errResp);
                         }

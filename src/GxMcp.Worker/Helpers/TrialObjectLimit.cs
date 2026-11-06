@@ -1,10 +1,20 @@
 using System;
+#if !GXMCP_SDK_EV3
 using Artech.Common.Diagnostics;
+#endif
 using GxMcp.Worker.Models;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Helpers
 {
+#if GXMCP_SDK_EV3
+    /// <summary>GeneXus X Evolution 3 has no Trial object cap; this type is never thrown.</summary>
+    public sealed class MaxObjCountException : Exception
+    {
+        public int MaxCount => 0;
+    }
+#endif
+
     /// <summary>
     /// The GeneXus Trial licence caps the objects of a Knowledge Base; the SDK raises
     /// <see cref="MaxObjCountException"/> from <c>KBObject.Save()</c> once the cap is reached.

@@ -359,25 +359,28 @@ namespace GxMcp.Gateway.Tests
             catch { }
         }
 
-        private void RecordPayloadDiagnostics(JObject response)
+        internal void RecordPayloadDiagnostics(JObject response)
         {
             var payload = ParseToolPayload(response);
             if (payload == null) return;
             if (payload["workerPid"]?.Type == JTokenType.Integer)
                 _workerPid = payload["workerPid"]!.Value<int>();
+            // `result`, `kb` and `sessionSelection` are objects on most tools but plain values on some (lifecycle status).
             _lastKbAlias = payload["kbAlias"]?.ToString()
-                ?? payload["result"]?["kbAlias"]?.ToString()
+                ?? Child(payload["result"], "kbAlias")?.ToString()
                 ?? _lastKbAlias;
             _lastSelectionState = payload["selectionState"]?.ToString()
-                ?? payload["result"]?["selectionState"]?.ToString()
-                ?? payload["kb"]?["selectionState"]?.ToString()
-                ?? payload["sessionSelection"]?["state"]?.ToString()
-                ?? payload["kb"]?["sessionSelection"]?["state"]?.ToString()
+                ?? Child(payload["result"], "selectionState")?.ToString()
+                ?? Child(payload["kb"], "selectionState")?.ToString()
+                ?? Child(payload["sessionSelection"], "state")?.ToString()
+                ?? Child(Child(payload["kb"], "sessionSelection"), "state")?.ToString()
                 ?? _lastSelectionState;
             _lastLeaseState = payload["leaseState"]?.ToString() ?? _lastLeaseState;
             if (payload["queueWaitMs"]?.Type == JTokenType.Integer)
                 _lastQueueWaitMs = payload["queueWaitMs"]!.Value<long>();
         }
+
+        private static JToken? Child(JToken? token, string key) => token is JObject obj ? obj[key] : null;
 
         private static string SanitizeDiagnostics(string? value)
         {

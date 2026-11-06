@@ -50,8 +50,13 @@ GxMcp.Gateway (net10.0-windows, one logical MCP context per client)
   build fingerprints may be retained as diagnostics, but must not silently
   become a runtime compatibility gate again.
 - Legacy compatibility is intentionally best-effort and driver-backed rather
-  than SDK-backed: GeneXus 15 and Evolution 1–3 use `dotnet-reflection`, while
+  than SDK-backed: GeneXus 15 and Evolution 1–2 use `dotnet-reflection`, while
   GeneXus 8.0 and 9.0 use `com-gxpublic`/`GXPublic.GXPublic` COM automation.
+- GeneXus X Evolution 3 (10.3) is a native-SDK major with its own Worker build:
+  `-p:GxMcpSdkProfile=evolution3` compiles against the Evolution 3 SDK (assemblies
+  10.1.0.0), validates with `config/sdk-compatibility.ev3.json`, and publishes to
+  `publish/worker-ev3`; the Gateway starts that Worker for 10.3 KBs. A Worker never
+  loads the other SDK line (`SdkCompatibilityValidator`).
 - Design System compatibility: `DesignSystemSdkAdapter` uses the native helper
   when available and parses the `Tokens`/`Styles` source parts independently
   when an SDK helper member is absent.
@@ -59,8 +64,8 @@ GxMcp.Gateway (net10.0-windows, one logical MCP context per client)
   `worker/GxMcp.Worker.exe` is one level below. The npm package includes it.
 
 <!-- BEGIN GENERATED: gx-compatibility -->
-Supported SDK majors: **GeneXus 16, GeneXus 17, GeneXus 18** (native SDK).
-Basic legacy compatibility: **GeneXus Evolution 3, GeneXus Evolution 2, GeneXus Evolution 1, GeneXus 15, GeneXus 9.0, GeneXus 8.0** via `com-gxpublic` and `dotnet-reflection` (not the native SDK build).
+Supported SDK majors: **GeneXus 16, GeneXus 17, GeneXus 18, GeneXus Evolution 3** (native SDK).
+Basic legacy compatibility: **GeneXus Evolution 2, GeneXus Evolution 1, GeneXus 15, GeneXus 9.0, GeneXus 8.0** via `com-gxpublic` and `dotnet-reflection` (not the native SDK build).
 Primary SDK: **GeneXus 18**.
 Source of truth: `config/gx-versions.json`.
 <!-- END GENERATED: gx-compatibility -->

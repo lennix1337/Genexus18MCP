@@ -109,7 +109,7 @@ function getGeneXusVersionCatalog() {
         try {
             const catalog = JSON.parse(fs.readFileSync(candidate, 'utf8'));
             if (!catalog || !catalog.primaryMajor || !Array.isArray(catalog.supportedMajors)) continue;
-            const entries = catalog.supportedMajors.filter((entry) => entry && /^\d+$/.test(String(entry.major)));
+            const entries = catalog.supportedMajors.filter((entry) => entry && /^(?:10\.3|\d+)$/.test(String(entry.major)));
             const legacyEntries = Array.isArray(catalog.legacyMajors)
                 ? catalog.legacyMajors.filter((entry) => entry && /^(?:10\.[1-3]|\d+)$/.test(String(entry.major)))
                 : [];
@@ -124,10 +124,10 @@ function getGeneXusVersionCatalog() {
         primaryMajor: '18',
         supportedMajors: [
             { major: '17', displayName: 'GeneXus 17', defaultInstallPath: 'C:\\Program Files (x86)\\GeneXus\\GeneXus17Trial' },
-            { major: '18', displayName: 'GeneXus 18', defaultInstallPath: 'C:\\Program Files (x86)\\GeneXus\\GeneXus18' }
+            { major: '18', displayName: 'GeneXus 18', defaultInstallPath: 'C:\\Program Files (x86)\\GeneXus\\GeneXus18' },
+            { major: '10.3', displayName: 'GeneXus Evolution 3', defaultInstallPath: 'C:\\Program Files (x86)\\ARTech\\GeneXus\\GeneXusXEv3' }
         ],
         legacyMajors: [
-            { major: '10.3', displayName: 'GeneXus Evolution 3', defaultInstallPath: 'C:\\Program Files (x86)\\GeneXus\\GeneXusXEv3' },
             { major: '9', displayName: 'GeneXus 9.0', defaultInstallPath: 'C:\\Program Files (x86)\\ARTech\\GeneXus\\GeneXus 9.0' },
             { major: '8', displayName: 'GeneXus 8.0', defaultInstallPath: 'C:\\Program Files (x86)\\ARTech\\GeneXus\\gxw80' }
         ],

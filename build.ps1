@@ -203,6 +203,26 @@ if (Test-Path $workerBinRelease) {
     Get-ChildItem -Path "$workerBinRelease\*" -Recurse | Copy-Item -Destination "$workerPublishDir" -Recurse -Force
 }
 
+# 4.0.1 GeneXus X Evolution 3 Worker. Evolution 3 ships SDK assemblies 10.1.0.0 that
+# the GeneXus 16-18 Worker cannot bind to, so the Gateway starts publish\worker-ev3
+# for 10.3 KBs. It is compiled against an installed Evolution 3 SDK: GX_EV3_PATH, or
+# the catalog's default install path. Without one the folder is left as it was and
+# Evolution 3 KBs fail with GXMCP_EV3_WORKER_MISSING instead of starting.
+$ev3GxPath = $env:GX_EV3_PATH
+if ([string]::IsNullOrWhiteSpace($ev3GxPath)) {
+    $ev3Entry = @(@($gxCatalog.supportedMajors) + @($gxCatalog.legacyMajors) | Where-Object { [string]$_.major -eq '10.3' }) | Select-Object -First 1
+    if ($null -ne $ev3Entry) { $ev3GxPath = [string]$ev3Entry.defaultInstallPath }
+}
+if (-not [string]::IsNullOrWhiteSpace($ev3GxPath) -and (Test-Path (Join-Path $ev3GxPath 'Artech.Architecture.Common.dll'))) {
+    $ev3PublishDir = Join-Path $publishDir "worker-ev3"
+    Write-Host "   > Building Worker for GeneXus X Evolution 3 ($ev3GxPath) into $ev3PublishDir..."
+    Invoke-DotNet (@("build", $workerProject, "-c", "Release", "--nologo", "-p:Platform=x86",
+        "-p:GX_PATH=$ev3GxPath", "-p:GxMcpSdkProfile=evolution3",
+        "-p:IntermediateOutputPath=obj\x86\Release-evolution3\", "-p:OutDir=$ev3PublishDir\") + $versionArguments) "Evolution 3 Worker build failed."
+} else {
+    Write-Host "   > Skipping the GeneXus X Evolution 3 Worker: no Evolution 3 SDK found (set GX_EV3_PATH)." -ForegroundColor Gray
+}
+
 # 4.1 GeneXus Definitions/ - NOT copied into the artifact.
 # The Worker sets Directory.SetCurrentDirectory(buildGxPath) before calling any SDK
 # methods, so the SDK resolves Definitions/ from the selected local GeneXus install

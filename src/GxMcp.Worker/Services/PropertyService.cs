@@ -2407,7 +2407,7 @@ namespace GxMcp.Worker.Services
                         if (obj?.Model != null)
                         {
                             var qName = new Artech.Architecture.Common.Objects.QualifiedName(StripDomainQualifier(rawValue).Trim());
-                            domainObj = Artech.Genexus.Common.Objects.Domain.Get(obj.Model, qName);
+                            domainObj = GxMcp.Worker.Compatibility.SdkCompat.GetDomain(obj.Model, qName);
                         }
                     }
                     catch { }

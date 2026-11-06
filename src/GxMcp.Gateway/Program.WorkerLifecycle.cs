@@ -15,6 +15,8 @@ namespace GxMcp.Gateway
         {
             _kbResolver = new KbResolver(config);
             _workerPool = new WorkerPool(config);
+            var pool = _workerPool;
+            pool.SessionCountForKey = key => CountSessionsForPoolKey(pool, key);
             _workerPool.WorkerSideActivity = alias =>
                 JobRegistry.HasLiveJobOnWorker(alias)
                 || _pendingRequests.Values.Any(p => string.Equals(p.WorkerAlias, alias, StringComparison.OrdinalIgnoreCase));
@@ -76,6 +78,7 @@ namespace GxMcp.Gateway
                     stopReason == WorkerStopReason.GatewayShutdown ||
                     stopReason == WorkerStopReason.BusyReject ||
                     stopReason == WorkerStopReason.ExplicitClose ||
+                    stopReason == WorkerStopReason.CapacityEviction ||
                     stopReason == WorkerStopReason.PlannedReload ||
                     stopReason == WorkerStopReason.SdkCompatibilityRejected)
                 {
@@ -193,6 +196,7 @@ namespace GxMcp.Gateway
             "GxMcp.Worker.dll",
             "events-u16-wwp16.2-audit.json",
             "events-u11-wwp16.1-audit.json",
+            "events-u10-audit.json",
         };
 
         /// <summary>

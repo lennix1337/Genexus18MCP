@@ -22,17 +22,16 @@
       "defaultInstallPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
       "registryNames": ["GeneXus 18"],
       "legacyRegistryVersions": ["18.0"]
-    }
-  ],
-  "legacyMajors": [
+    },
     {
       "major": "10.3",
       "displayName": "GeneXus Evolution 3",
-      "driver": "dotnet-reflection",
-      "defaultInstallPath": "C:\\Program Files (x86)\\GeneXus\\GeneXusXEv3",
+      "defaultInstallPath": "C:\\Program Files (x86)\\ARTech\\GeneXus\\GeneXusXEv3",
       "registryNames": ["GeneXus X Evolution 3", "GeneXus 10.3"],
       "legacyRegistryVersions": ["10.3"]
-    },
+    }
+  ],
+  "legacyMajors": [
     {
       "major": "10.2",
       "displayName": "GeneXus Evolution 2",
