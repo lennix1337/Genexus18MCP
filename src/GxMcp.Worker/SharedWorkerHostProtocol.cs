@@ -25,6 +25,10 @@ namespace GxMcp.Worker
 
         // Protocol v2: a "detach" frame that asks the host to stop its Worker when this was the last Attachment.
         public bool StopIfLast { get; set; }
+
+        // Protocol v2: the "identity" object of an "attach" frame (the requesting Gateway's Physical_KB_Identity
+        // components), so the host can name each component that differs from its own. Null when absent.
+        public JObject Identity { get; set; }
     }
 
     /// <summary>
@@ -518,7 +522,15 @@ namespace GxMcp.Worker
             };
         }
 
-        private const string PipePrefix = "GxMcpShared_";
+        // Registry v2 (decision A4): a v1 "GxMcpShared_" name is not a valid host pipe, so a v1 Gateway and a v2
+        // host never attach to each other.
+        private const string PipePrefix = "GxMcpShared2_";
+
+        // Physical_KB_Identity components of an attach frame's "identity" object, in reporting order.
+        internal static readonly IReadOnlyList<string> IdentityComponents = new[]
+        {
+            "installationPath", "driver", "major", "workerExecutable", "profileConfigPath"
+        };
 
         private static readonly HashSet<string> HostFrameTypes = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -900,8 +912,33 @@ namespace GxMcp.Worker
                 AttachmentId = frame.Value<string>("attachmentId") ?? frame.Value<string>("attachId") ?? string.Empty,
                 Message = frame.Value<string>("message") ?? string.Empty,
                 RequestId = ReadScalarString(frame["requestId"]),
-                StopIfLast = frame["stopIfLast"]?.Type == JTokenType.Boolean && frame.Value<bool>("stopIfLast")
+                StopIfLast = frame["stopIfLast"]?.Type == JTokenType.Boolean && frame.Value<bool>("stopIfLast"),
+                Identity = frame["identity"] as JObject
             };
+        }
+
+        /// <summary>
+        /// The Physical_KB_Identity components of an attach frame's <c>identity</c> object that differ from the
+        /// host's own (normalized) components. Paths compare after path normalization, driver and major as
+        /// trimmed lowercase tokens; an absent or null component compares as empty. Empty when the frame carries
+        /// no identity object.
+        /// </summary>
+        internal static IReadOnlyList<string> DescribeIdentityMismatch(JObject requested, IDictionary<string, string> live)
+        {
+            var differing = new List<string>();
+            if (requested == null || live == null) return differing;
+            foreach (string component in IdentityComponents)
+            {
+                JToken token = requested[component];
+                string value = token == null || token.Type == JTokenType.Null ? string.Empty : token.ToString();
+                bool isPath = !string.Equals(component, "driver", StringComparison.Ordinal)
+                    && !string.Equals(component, "major", StringComparison.Ordinal);
+                string normalized = isPath ? NormalizePath(value) : NormalizeToken(value);
+                live.TryGetValue(component, out string liveValue);
+                if (!string.Equals(normalized, liveValue ?? string.Empty, StringComparison.Ordinal))
+                    differing.Add(component);
+            }
+            return differing;
         }
 
         private static string ReadScalarString(JToken token)

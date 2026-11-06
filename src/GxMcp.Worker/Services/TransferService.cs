@@ -756,7 +756,9 @@ namespace GxMcp.Worker.Services
             if (o == null) o = new ImportOptions();
 
             try { o.AutomaticBackup = false; } catch { }
+#if !GXMCP_SDK_EV3
             try { o.RollBackOnError = true; } catch { }
+#endif
             try { o.AutomaticRollbackOnCancel = true; } catch { }
             o.OutputLevel = System.Diagnostics.TraceLevel.Verbose;
             o.ShowPropertiesErrors = true;
@@ -816,10 +818,14 @@ namespace GxMcp.Worker.Services
         // falls back to a plain instance if the static isn't available.
         private static ExportOptions SilentExportOptions()
         {
+#if !GXMCP_SDK_EV3
             try { var d = ExportOptions.SilentDefault; if (d != null) return d; } catch { }
+#endif
             var o = new ExportOptions();
             try { o.IncludeReferencesDependencies = true; } catch { }
+#if !GXMCP_SDK_EV3
             try { o.ExportCurrentVersion = true; } catch { }
+#endif
             try
             {
                 var ucProp = typeof(ExportOptions).GetProperty("IncludeCustomUserControls");

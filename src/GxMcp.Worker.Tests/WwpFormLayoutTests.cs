@@ -19,6 +19,32 @@ namespace GxMcp.Worker.Tests
             "<errorViewer/><textBlock controlName='TxtTitle' caption='Title'/><variable name='FromDate' dataType='Basic' basicType='Date'/>" +
             "</table></table></WPRoot></instance>";
 
+        // Minimal Selection shape derived from WWP 11.1.38 WorkWithPlusInstance.xml (WPRoot/WPTable).
+        private const string Selection = "<instance><WPRoot Template='Selection'><table name='SelectionLayout'/></WPRoot></instance>";
+
+        [Fact]
+        public void AddTable_SelectionWithoutConventionalNames_UsesRootTable()
+        {
+            var doc = XDocument.Parse(Selection);
+            JObject plan = AddTable(doc, "children:[{type:'textBlock',controlName:'Show',caption:'Show'}]");
+            Assert.Null(plan["error"]);
+            XElement table = Table(doc, "tableOp");
+            Assert.Equal("SelectionLayout", (string)table.Parent.Attribute("name"));
+            Assert.Equal("3", (string)table.Attribute("numberOfColumns"));
+            Assert.Equal("Show", (string)table.Element("textBlock").Attribute("controlName"));
+        }
+
+        [Fact]
+        public void AddTable_SelectionRejectsExplicitRowsWithSupportedShape()
+        {
+            var doc = XDocument.Parse(Selection);
+            JObject result = AddTable(doc, "children:[{type:'row'}]");
+            Assert.Equal("InvalidWwpChildType", (string)result["code"]);
+            Assert.Contains("Selection", (string)result["error"]);
+            Assert.Contains("numberOfColumns", (string)result["error"]);
+            Assert.True(XNode.DeepEquals(XDocument.Parse(Selection), doc));
+        }
+
         private const string Transaction =
             "<instance><transaction><table name='TableMain' childrenOrderedList='2;01;TableContent-2;01;TableActions'>" +
             "<table name='TableContent' childrenOrderedList='2;28;ErrorViewer-2;01;TableAttributes'><errorViewer/>" +

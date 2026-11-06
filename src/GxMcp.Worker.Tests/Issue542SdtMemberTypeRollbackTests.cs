@@ -47,6 +47,20 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void StructureRoundTripMissingLines_IgnoresTheRenderedDetailComment()
+        {
+            // The Transaction renderer appends descriptions, formulas and [Nullable] as a
+            // trailing " // ..." comment. A Domain-typed attribute has no "(len)" to cut the
+            // comment off with, so the comment used to make a persisted line look missing.
+            string expected = "Id* : NUMERIC(4)\nQty : QtyDom\nName : VarChar(40)";
+            string persisted = "Id* : NUMERIC(4) // \"Trn Id\"\nQty : QtyDom // \"Trn Qty\"\nName : VARCHAR(40) // [Nullable]";
+
+            Assert.Empty(WriteService.StructureRoundTripMissingLines(expected, persisted));
+            Assert.Equal(new[] { "Qty : OtherDom" },
+                WriteService.StructureRoundTripMissingLines("Qty : OtherDom", persisted));
+        }
+
+        [Fact]
         public void BuildStructureRoundTripMessage_NamesUnappliedMembersAndRestoreState_WithoutRetry()
         {
             string restored = WriteService.BuildStructureRoundTripMessage(

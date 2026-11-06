@@ -1,0 +1,2868 @@
+{
+  "schemaVersion": 1,
+  "bundleId": "18.0.10.184260",
+  "criticalAssemblies": [
+    "Artech.Architecture.Common",
+    "Artech.Genexus.Common",
+    "Artech.Udm.Framework",
+    "Artech.Common.Properties",
+    "Artech.Packages.Patterns"
+  ],
+  "assemblies": [
+    {
+      "name": "Artech.Architecture.BL.Framework",
+      "relativePath": "Artech.Architecture.BL.Framework.dll",
+      "sha256": "188bf54749ecef344d852c219d784eebcafe7a0f8b078c5444f140e9a71ecc86",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Architecture.Common",
+      "relativePath": "Artech.Architecture.Common.dll",
+      "sha256": "573019a7a79720e54be949a6569c4339975ffcb2e814b75ed884c0b474808c09",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Architecture.Interfaces",
+      "relativePath": "Artech.Architecture.Interfaces.dll",
+      "sha256": "e63f4f91b7f966f7983dafc78575a38980e9386ffc0872e4d45a51d7dc63f19b",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Architecture.Language",
+      "relativePath": "Artech.Architecture.Language.dll",
+      "sha256": "b4ddc933feab6d37768ce0cb367a119f9b2826bdb4d888bdde3cb0accb244701",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Architecture.UI.Framework",
+      "relativePath": "Artech.Architecture.UI.Framework.dll",
+      "sha256": "18e8614d283563ea6314343c15d3becf638cc9d1407befc9626c8a4623a1eed9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Controls",
+      "relativePath": "Artech.Common.Controls.dll",
+      "sha256": "203c3f27f3f97caca21cea23cafd9c0446c8460015d944252650517c9473c703",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common",
+      "relativePath": "Artech.Common.dll",
+      "sha256": "438ed6f7c47fa81afc2f9969cd626db94b749c24712042d24c5ad207ad7c6b8d",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Framework",
+      "relativePath": "Artech.Common.Framework.dll",
+      "sha256": "dfcb80d861337bb30935fd0225cc1afed7ea963dcef882741b4cb19769f98bf9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Helpers",
+      "relativePath": "Artech.Common.Helpers.dll",
+      "sha256": "033cfa66d8647baebdd69ea4b1e8b744344a941fa0ba36a0d42a759694346e7e",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.IPC",
+      "relativePath": "Artech.Common.IPC.dll",
+      "sha256": "92e4a623708c0ac3931855135231ae4c33b73f0c6137d815cd75b8fd959dd070",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Language",
+      "relativePath": "Artech.Common.Language.dll",
+      "sha256": "3fbbb74121f9c82ea67db6b25d12b1425305e440e52065ed972d43820df415bf",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Language.Parser",
+      "relativePath": "Artech.Common.Language.Parser.dll",
+      "sha256": "229dae796040c03915b30c710b6998f99a4751c5245a87605e8c7d288ff3b5bf",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Language.Parser.v2",
+      "relativePath": "Artech.Common.Language.Parser.v2.dll",
+      "sha256": "bd3102a249ae22a23dfd26f557a46060fdeacb7b6515599cae3969425124da22",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Language.Resources",
+      "sha256": "44b260f1220c55d22b44d1a602ce619eb8146c537e7f45ac783b3394e25b8218",
+      "relativePath": "Artech.Common.Language.Resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Properties",
+      "relativePath": "Artech.Common.Properties.dll",
+      "sha256": "3942d4d8d70d97ac7c3582fcfe4e7d8cdd2a373d805ccc9fa8d8d8739d43143c",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.UnsafeHelpers",
+      "relativePath": "Artech.Common.UnsafeHelpers.dll",
+      "sha256": "ba3ce66ebdcacca207103d9d2576bbcce6c515acc6a3bdd52b391321686f5600",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Wizard",
+      "relativePath": "Artech.Common.Wizard.dll",
+      "sha256": "7adfa0437811f82858c46e542615b9add10e3c661e1bf03e3349d7900749666c",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.CommonI",
+      "relativePath": "Artech.CommonI.dll",
+      "sha256": "39416a35b41f6e33c4c07b8459edf46c14eb986f96d988b3f0dfdf9ff23ba612",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Comparer.Core",
+      "relativePath": "Artech.Comparer.Core.dll",
+      "sha256": "4d57cfd345b07c0606835f57cb50719548d58fbf47754fe38dd8d0b2f02e0649",
+      "assemblyVersion": "9.0.0.0",
+      "productVersion": "9.0.0.0"
+    },
+    {
+      "name": "Artech.Core.UI",
+      "relativePath": "Artech.Core.UI.dll",
+      "sha256": "30c4882754f3602801cff6a9ef1eee8d0c33558530c4d8df13bb699b4945bb81",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Debugx.Common",
+      "relativePath": "Artech.Debugx.Common.dll",
+      "sha256": "97ed4dca5df32d19a1f01d502fc3c16fa15bcb8b66a1acdfbe536a8f884a01aa",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Editors.BrowserLayout",
+      "relativePath": "Artech.Editors.BrowserLayout.dll",
+      "sha256": "30746361e76ede049cf29a946fc02ee8872199c95e2c422a9d17f668a31ca19c",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Editors.Common.Report",
+      "relativePath": "Artech.Editors.Common.Report.dll",
+      "sha256": "8c6fe85d0a8f7312deef408067c255e33b4a5d3ce1b63f6de5ad9c27ccb20be8",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.FrameworkDE",
+      "relativePath": "Artech.FrameworkDE.dll",
+      "sha256": "f2f4e5d4dbc78d611dc3adb8aaadeb9c9562f5e593b7eebc19a0ff6962787ac9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Generator.Android",
+      "relativePath": "Artech.Generator.Android.dll",
+      "sha256": "d349125e36fde09ff0f811d055909aab6363e8f26b5cfb9497886de77273e2a6",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Generator.DotNetCore",
+      "relativePath": "Artech.Generator.DotNetCore.dll",
+      "sha256": "0400703643aebc985051c8bd0444d79aac46192d2321e84a8974d74ebcaf8931",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Generator.SmartDevices",
+      "relativePath": "Artech.Generator.SmartDevices.dll",
+      "sha256": "1e2d853f640cdc56963137f117a1727ed25fb2a5222448910fe6a77055e99e7d",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Generator.Swift",
+      "relativePath": "Artech.Generator.Swift.dll",
+      "sha256": "27163fc2c38e1aaca28f4d385f5cc09b24114562a3efd6dc92b0a1bac27e2b01",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Generators",
+      "relativePath": "Artech.Generators.dll",
+      "sha256": "0824256ade59657053fa5e8025d7fe6da6d3e771d10e6c03788ad484af6123f6",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Common",
+      "relativePath": "Artech.Genexus.Common.dll",
+      "sha256": "8c2a98536ecbeb7e3b4cdf8871068ff50b61cf8a91b19f0eaf755caf1c3aa4a4",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Debugx.ObjectModel",
+      "relativePath": "Artech.Genexus.Debugx.ObjectModel.dll",
+      "sha256": "7a3e666ea9ff96cf4779829de01c5cbe0cca44cffe389e6c39e11a152e8b2023",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Debugx.SocketServer",
+      "relativePath": "Artech.Genexus.Debugx.SocketServer.dll",
+      "sha256": "dd3f83e4de0e2bc22916d165fddc7a34a7d27e65db940b258f1bb94d6fa297b9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Debugx.SpcParser",
+      "relativePath": "Artech.Genexus.Debugx.SpcParser.dll",
+      "sha256": "5cc5d4cf94458d7c5007c7cfe126343a102f898ea100d19935854544f86228b6",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Debugx.Specifier",
+      "relativePath": "Artech.Genexus.Debugx.Specifier.dll",
+      "sha256": "5b02be543848b50f8a8558a4a672075daf308641f906262af31966f81cd23ddb",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Language",
+      "relativePath": "Artech.Genexus.Language.dll",
+      "sha256": "4e1fd6692b7b7cdf8b08d74a93cad2b57fb833774eb193a7825f5fe375cb4ee5",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Resolvers.ANDROID",
+      "relativePath": "Artech.Genexus.Resolvers.ANDROID.dll",
+      "sha256": "56fe9f0fea2c03471975d8cb9854edca9ae4eae3c9029b9c65a82e36bc39af78",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Resolvers.CSHARP",
+      "relativePath": "Artech.Genexus.Resolvers.CSHARP.dll",
+      "sha256": "6a1ed6e3f7167db7d2ec70dc485f19f21f24685fd7674f67aba13d213f0f21e5",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Resolvers",
+      "relativePath": "Artech.Genexus.Resolvers.dll",
+      "sha256": "eadff0bdc0d7582ee75deae75a8f27c3f0ed3e5ee00b5f6c2e234acdc2d51253",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Resolvers.NETCORE",
+      "relativePath": "Artech.Genexus.Resolvers.NETCORE.dll",
+      "sha256": "4caae231e6e3b3e5e5f310be32b066aa17c1b0c3ff19904312aae219d6fbdd04",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Resolvers.SMARTDEVICE",
+      "relativePath": "Artech.Genexus.Resolvers.SMARTDEVICE.dll",
+      "sha256": "df24b2f175dd4ccd90e02289a6f60abc19751b6894233fe9121a646346697eb7",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.Resolvers.SWIFT",
+      "relativePath": "Artech.Genexus.Resolvers.SWIFT.dll",
+      "sha256": "7dbcd09f03aee5299c45bdbac7c5e99bbcbc246aa97afa1ca20bd615958ad390",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.UI.Common",
+      "relativePath": "Artech.Genexus.UI.Common.dll",
+      "sha256": "e3acdfe89b8c92a6caf99573d5d01bba2db450efd07ecb97abf9145c388810a3",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Genexus.UI.Resources",
+      "sha256": "b31b2993dd0d8d70bd6b77ee890587188f28077848d549c380b2881d36d67b97",
+      "relativePath": "Artech.Genexus.UI.Resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.GXplorer.Common",
+      "relativePath": "Artech.GXplorer.Common.dll",
+      "sha256": "39b81539ca7ccbef57d70a2682b44c7860b22f8f38ac3c97f2103e108d2bdd48",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.GXplorer.Specifier",
+      "relativePath": "Artech.GXplorer.Specifier.dll",
+      "sha256": "f4d091246b294fc352bbef1118db8a4579f3fbb0e03f39fdd4579f54bcc88aef",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.BL.KBConversion",
+      "relativePath": "Artech.Gxpm.BL.KBConversion.dll",
+      "sha256": "9236119b0acda22a7ba7caff7f93d312841bdfc80d2f18033ff8ee3af491bb93",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.BPDeployer.BL",
+      "relativePath": "Artech.Gxpm.BPDeployer.BL.dll",
+      "sha256": "cb141ad4f5b22207bb817b4dd30e1fa403f9a69db1b48b9012af37c92299adf2",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.Common",
+      "relativePath": "Artech.Gxpm.Common.dll",
+      "sha256": "88abbdb6025586af35078f8c0e9475a3287d1e3baa93732cd89f5fc47310f62c",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.Diagram",
+      "relativePath": "Artech.Gxpm.Diagram.dll",
+      "sha256": "3fa14cb2db66c7fb4554a2a647416d6cb13acfa0a4d6985d991f7505376889a0",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.Interop",
+      "relativePath": "Artech.Gxpm.Interop.dll",
+      "sha256": "a9e0b1deacc41d5e993320946ade4d962bc484d4f7f3a3d4e15a1ce329375723",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.Parser",
+      "relativePath": "Artech.Gxpm.Parser.dll",
+      "sha256": "c60ff48bca78099f0c3498c2f1aff5d2bb20b07933cb46b02a28a10ec23d0b67",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.Resolvers",
+      "relativePath": "Artech.Gxpm.Resolvers.dll",
+      "sha256": "f636fd659fe6a5d5ac2074bf9337228adaabdc9547fa04adb6a40013aafb7d42",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.UI.BPMNEditor",
+      "relativePath": "Artech.Gxpm.UI.BPMNEditor.dll",
+      "sha256": "d2759d06da20a55344c296c536d7539d73b0dc43eca5f8fd9c7ff24ada2fb166",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.Utils",
+      "relativePath": "Artech.Gxpm.Utils.dll",
+      "sha256": "0127cb0ad6fdbbc03f31ffb12289f6d04478fc4c25a809701221b2315c381c10",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Layers.BL",
+      "relativePath": "Artech.Layers.BL.dll",
+      "sha256": "6f1fca201fbb9bc576aa4d1d74b214ccc82ec52fc4e8c53df870241180a19d60",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Layers.Framework",
+      "relativePath": "Artech.Layers.Framework.dll",
+      "sha256": "73b7d2f79994731bb7da80e73c42f7842407fc65f9424dac31313f692d2fb5f9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Layers.UI.Automation",
+      "relativePath": "Artech.Layers.UI.Automation.dll",
+      "sha256": "86649c27230baedf0b14f953bd68f8b967653ff46c0234e888f2218540ea332b",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Library.BL",
+      "relativePath": "Artech.Library.BL.dll",
+      "sha256": "93e5bed7ef2e025a8d163d439f9755120f2124ea0f12b5c018e53ec8140d4b10",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.LibraryDeployer",
+      "relativePath": "Artech.LibraryDeployer.dll",
+      "sha256": "22992d52bb18e28103a83107dd9376ca36760750906536b3af3f0c659c972d64",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.MsBuild.Common",
+      "relativePath": "Artech.MsBuild.Common.dll",
+      "sha256": "3f77afa9026fb2c50cfe909e9809beaec8db15cdad407be64d7640d75525f842",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Indexer",
+      "relativePath": "Artech.Packages.Indexer.dll",
+      "sha256": "7fcf48a257ae417d8d169ecc67a39aa56cf156b5f7a2a95dc8c04f06b532b6c3",
+      "assemblyVersion": "1.0.2123.27398",
+      "productVersion": "1.0.2123.27398"
+    },
+    {
+      "name": "Artech.Patterns.SmartDevices.Common",
+      "relativePath": "Artech.Patterns.SmartDevices.Common.dll",
+      "sha256": "d1c0ff5e09019ba8238eca5179c26861f2f659cbe89449b5b254c74d1288db93",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.ReverseEngineering.Config",
+      "relativePath": "Artech.ReverseEngineering.Config.dll",
+      "sha256": "5c3195ee1965a4df68e4a117a6becb09a91ee7e2948333cf6d8162a1dc1a0019",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.ReverseEngineering.Data",
+      "relativePath": "Artech.ReverseEngineering.Data.dll",
+      "sha256": "d9dadd49c96fbb912e7909f3201af045fbac070dc38320bb6d9924dc49ffa913",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Specifier",
+      "relativePath": "Artech.Specifier.dll",
+      "sha256": "3e73e65f6319a5be9f3b4a9d09b7766f56cec32e9954eb61d6d70f008c2ea080",
+      "assemblyVersion": "0.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Specifier.Helper",
+      "relativePath": "Artech.Specifier.Helper.dll",
+      "sha256": "c4697b0bf5da65ce2e1b42a9ca1996e2067adfac34425d195042668aff79aba0",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Template.Base",
+      "relativePath": "Artech.Template.Base.dll",
+      "sha256": "bc20bd690490faac5f3875728646a4f427edc9f7ffbb5f85ebc3c5606911dc89",
+      "assemblyVersion": "4.6.2008.0",
+      "productVersion": "4.6.2008.0"
+    },
+    {
+      "name": "Artech.Template.Helper",
+      "relativePath": "Artech.Template.Helper.dll",
+      "sha256": "4a5cff56e21bf529150ab3f6f4458bbb99c3e9f9ca54888514b48b68ec8ca3fd",
+      "assemblyVersion": "4.6.2008.0",
+      "productVersion": "4.6.2008.0"
+    },
+    {
+      "name": "Artech.Template.Parser",
+      "relativePath": "Artech.Template.Parser.dll",
+      "sha256": "4c4bd366bcdb2ae05c7a1ba8513ddec8fb5f8d7597db0f9b4d357513bb72d576",
+      "assemblyVersion": "4.6.2008.0",
+      "productVersion": "4.6.2008.0"
+    },
+    {
+      "name": "Artech.TextEditor.RulesLanguage",
+      "relativePath": "Artech.TextEditor.RulesLanguage.dll",
+      "sha256": "26ebc81932f292db4294c2a42afd3824353493690bb7fdaad1200469848aadd6",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Architecture.Common",
+      "relativePath": "Artech.Udm.Architecture.Common.dll",
+      "sha256": "d4038abd2c03c6e3b427d19f7bc1bef38982059bb97e9fcaece31328d101d1d0",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.BL",
+      "relativePath": "Artech.Udm.BL.dll",
+      "sha256": "17b835e9568b6b5c0f21e5b53697f787174b1543d94c334ffb47175e560c7fb2",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Data",
+      "relativePath": "Artech.Udm.Data.dll",
+      "sha256": "70c6d468c40915b92a03d98a46f42c4224fd020883dbd7708bc0d5725e5eebd7",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Framework",
+      "relativePath": "Artech.Udm.Framework.dll",
+      "sha256": "a78300b68e4252d1efabb32122db9ca6cf26f6dfe4b6a6a037a3eabcf7b2e997",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Layers.BL",
+      "relativePath": "Artech.Udm.Layers.BL.dll",
+      "sha256": "5fc61a2fc924f90c6c4b199ba283faa9a326c948828cbe97f303dc4a408f0dc6",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Layers.Common",
+      "relativePath": "Artech.Udm.Layers.Common.dll",
+      "sha256": "dbbba022d31cdc5bfd2787901c906a33026849d3ca9309b92b8ba09427280602",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Layers.Data.CTree",
+      "relativePath": "Artech.Udm.Layers.Data.CTree.dll",
+      "sha256": "b8d0fa770908e831571532ee6cd8b924a9761e5c0b320a6b019d931e895650fd",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Layers.Data.CTree.Structures",
+      "relativePath": "Artech.Udm.Layers.Data.CTree.Structures.dll",
+      "sha256": "9f5ad77148a60002b27a400ecca8ee16579bf09c0add1d5006bfdbe4e6566dc9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Layers.Data.SQL",
+      "relativePath": "Artech.Udm.Layers.Data.SQL.dll",
+      "sha256": "b69f39ab8366cc2ad2912ff02c666eb4caa22ed0f5036463e42c67d7daaea8bc",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Udm.Layers",
+      "relativePath": "Artech.Udm.Layers.dll",
+      "sha256": "50d67699433892ac8b865084936132b0b2a2176ec01e6d4d3e9aabf76e217931",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.UI.Services.Specifier.Common",
+      "relativePath": "Artech.UI.Services.Specifier.Common.dll",
+      "sha256": "ee337b6af9b87cde07d200cb9da36a90c3f546dfa5b2dcf3f34c74f7dc6833c2",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.WebEditor.HtmlLanguage",
+      "relativePath": "Artech.WebEditor.HtmlLanguage.dll",
+      "sha256": "91c094688503263b1547c46a397d5568b5d4b54f3c195787e1c1d2dd064777ec",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.WebEditor.ResHtmlEditor",
+      "relativePath": "Artech.WebEditor.ResHtmlEditor.dll",
+      "sha256": "f7456447da1368c204da52ad523c3a4263658f827c1151cd3e96815a8d112530",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Wiki.Services",
+      "relativePath": "Artech.Wiki.Services.dll",
+      "sha256": "17e85f771d7b699471d77f6e356f58ca840a29e06da1ae2ac126c2f1f27a89f7",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Wiki.UI.Common",
+      "relativePath": "Artech.Wiki.UI.Common.dll",
+      "sha256": "98fbf444e108084f5e9b6389b0029b387bc64e016fe3546734a7e519a92bddef",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.Web.UI.Angular",
+      "relativePath": "GenExtensions/SmartDevices/Angular/Genexus.Web.UI.Angular.dll",
+      "sha256": "bc3b4fed509d5545ff09766b359ce4f1fc4b4cd82efc6eeec81f28bcad2413b3",
+      "assemblyVersion": "1.0.0.0",
+      "productVersion": "1.0.0.0"
+    },
+    {
+      "name": "GeneXus.Android.Requirements",
+      "relativePath": "GeneXus.Android.Requirements.dll",
+      "sha256": "3272cb8dcbd9dc152e4b2f3244bf6da31240677fe58ffb6ce64ac8d029a27fab",
+      "assemblyVersion": "0.1.10.0",
+      "productVersion": "0.1.10"
+    },
+    {
+      "name": "GeneXus.Architecture.Resolvers",
+      "relativePath": "Genexus.Architecture.Resolvers.dll",
+      "sha256": "bcdb032b079b0399ccf43aad7294a46782671cd687fa560439f36427605e129c",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Design.Grammars",
+      "relativePath": "Genexus.Design.Grammars.dll",
+      "sha256": "2c1e15dd92f126262e373fdde213f3df7a607bfa2e1b99ab9834d0a12698c8d5",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.DesignOps.DesignModel",
+      "relativePath": "GeneXus.DesignOps.DesignModel.dll",
+      "sha256": "3119ec23a86c34677d6ac7fca7ebc9d31601fe9db7f51ec69d076df98279beda",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.DesignOps.DesignToGxml",
+      "relativePath": "GeneXus.DesignOps.DesignToGxml.dll",
+      "sha256": "c53fdc13e9cc47a55f29db28c20a3add3a728a8aee9dcf80a685a82bfbcc8ac1",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.DesignOps.FigmaModel",
+      "relativePath": "GeneXus.DesignOps.FigmaModel.dll",
+      "sha256": "bc9f87d7ae58b45964fd56d52c0052dc0db304e38a5aaa9ef4244e1f3ae9767e",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.DesignOps.LayoutEngines",
+      "relativePath": "GeneXus.DesignOps.LayoutEngines.dll",
+      "sha256": "c66c418383f1c2e6c08821145c859bedc60f55b7542e44ce872651acd67ed3c4",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.DesignOps.SketchModel",
+      "relativePath": "GeneXus.DesignOps.SketchModel.dll",
+      "sha256": "99c1e8fb424d0649a5ebd53a1a10699749ec432b87e2f844f0af9457c32a3144",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Editors.ConversationalFlowsEditor",
+      "relativePath": "GeneXus.Editors.ConversationalFlowsEditor.dll",
+      "sha256": "29cf4b5f92c3936854cfc97cd537d012f71e1b3cc221e65619068c09748d78a5",
+      "assemblyVersion": "1.0.0.0",
+      "productVersion": "1.0.0.0"
+    },
+    {
+      "name": "GeneXus.Editors.DesignSystem",
+      "relativePath": "GeneXus.Editors.DesignSystem.dll",
+      "sha256": "7573a260ee92e9edceb79f8bcf32f4e4233e8e6b7d1d642efb5658e7025ec33a",
+      "assemblyVersion": "1.0.0.0",
+      "productVersion": "1.0.0.0"
+    },
+    {
+      "name": "GeneXus.Editors.WebEditors",
+      "relativePath": "GeneXus.Editors.WebEditors.dll",
+      "sha256": "9f3400e9030fce0266f132b95667f91c325be98d7b5f335b542d5a9a2dfb9788",
+      "assemblyVersion": "1.0.0.0",
+      "productVersion": "1.0.0.0"
+    },
+    {
+      "name": "GeneXus.GAM.MSBuild.Tasks",
+      "relativePath": "GeneXus.GAM.MSBuild.Tasks.dll",
+      "sha256": "cfb57ad22ad701ba1ec86dd25b8a1ad037527060b32d108008692f165ab86da9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Grammar.ServiceGroupSource",
+      "relativePath": "GeneXus.Grammar.ServiceGroupSource.dll",
+      "sha256": "7bf67f49d6c1e83dbcb06fe718d38affc553295e58f071fc2f842cdc5c1f4714",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Gxpm.MsBuild.Tasks",
+      "relativePath": "GeneXus.Gxpm.Msbuild.Tasks.dll",
+      "sha256": "d7924faeb76d3311e2ee64d5f4d366ece9d9ac147e1ec0366d80cbf54a6df5e1",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Launchpad.Common",
+      "relativePath": "GeneXus.Launchpad.Common.dll",
+      "sha256": "1737c8edd953a88293a9eb4c3b44f157d9ab8ec446eac6ef77842ee83448c327",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "20240612132925.711986f529dfba2b19346180ee743b26d0f95742"
+    },
+    {
+      "name": "Genexus.MsBuild.Tasks",
+      "relativePath": "Genexus.MsBuild.Tasks.dll",
+      "sha256": "75aa64e35a062358cb7e97ceb777419e93143ea1af321fcfc0c64dd21e1b4f09",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.MsBuild.Tasks.Patterns",
+      "relativePath": "Genexus.MsBuild.Tasks.Patterns.dll",
+      "sha256": "b30a46620bc1bfa709dcacb60331d540d3b373ba5e94c71e88c0f1cfee574536",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.MsBuild.Tasks.UI",
+      "relativePath": "Genexus.MsBuild.Tasks.UI.dll",
+      "sha256": "c80ab574a9577729f19e0ee72c730d1eb930fda4e0c28055fb77b65ae84ae144",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Server.Contracts",
+      "relativePath": "GeneXus.Server.Contracts.dll",
+      "sha256": "b8e33793c97b356ce253635c79564fe3a7d2b1079a525367649a04b657a57fab",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.Server.MsBuild.Tasks",
+      "relativePath": "Genexus.Server.MsBuild.Tasks.dll",
+      "sha256": "82de787233683e0008f4f33d485690e98aa89481639edb1e6bb473720d798b0d",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.TeamDevClient.Architecture.BL",
+      "relativePath": "GeneXus.TeamDevClient.Architecture.BL.dll",
+      "sha256": "e54a25119b49bcb921f1ad33f9881414d0e56219c1ab884474069ff14ac20580",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.TeamDevClient.Architecture.UI",
+      "relativePath": "GeneXus.TeamDevClient.Architecture.UI.dll",
+      "sha256": "37c4b9a56baee15bbc7f4f11d994f4e781aaa63ce900548efca8e480af718726",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.TextEditor.APILanguage",
+      "relativePath": "GeneXus.TextEditor.APILanguage.dll",
+      "sha256": "89ec0f24319a317456df54d62366b9db99b4a7bf2499a2c21e2c6ee7019fb1aa",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.Web.UI.Common",
+      "relativePath": "Genexus.Web.UI.Common.dll",
+      "sha256": "257af28597a6ca46764bfd465df6d6111bf680a80c4ba08813df4aeefd3199b6",
+      "assemblyVersion": "3.0.0.0",
+      "productVersion": "3.7.17+326f25a60d44918cd93df4c61b6c9e7290a23ab5"
+    },
+    {
+      "name": "Artech.Common",
+      "relativePath": "iOS/Artech.Common.dll",
+      "sha256": "438ed6f7c47fa81afc2f9969cd626db94b749c24712042d24c5ad207ad7c6b8d",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Helpers",
+      "relativePath": "iOS/Artech.Common.Helpers.dll",
+      "sha256": "033cfa66d8647baebdd69ea4b1e8b744344a941fa0ba36a0d42a759694346e7e",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.CommonI",
+      "relativePath": "iOS/Artech.CommonI.dll",
+      "sha256": "39416a35b41f6e33c4c07b8459edf46c14eb986f96d988b3f0dfdf9ff23ba612",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Helpers.resources",
+      "sha256": "6ad72ad89392801f70b8f81a614db16afa4dbc6b67be20193d72a44f1b980eeb",
+      "relativePath": "iOS/pt/Artech.Common.Helpers.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Helpers.resources",
+      "sha256": "de1c3d0cf5473de2a961556feee9a0cb302d2f6f52a298cf9d5f7c8d7d5ad1c9",
+      "relativePath": "iOS/zh-CHS/Artech.Common.Helpers.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.resources",
+      "sha256": "1c28fc10f762cf36a3e51d7ec1922a2120e6e4b5228d60ac8c913c38f79ebdd0",
+      "relativePath": "iOS/zh-CHS/Artech.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.CommonI.resources",
+      "sha256": "d3ef5e61b5d122da63ecec290af827a1153f710445b0486e235504c7ef52c7de",
+      "relativePath": "iOS/zh-CHS/Artech.CommonI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Editors.Common",
+      "relativePath": "Packages/Artech.Editors.Common.dll",
+      "sha256": "dcca7444e9b2cfcd77e26a4c8f2116ccb6fc370efcf97708438ecbba168a4b20",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Editors.Common.Web",
+      "relativePath": "Packages/Artech.Editors.Common.Web.dll",
+      "sha256": "61597403d45ac6e1ecfea8fa078183322d11ea12e228037a65c20cbbc8e1f756",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gam.Common",
+      "relativePath": "Packages/Artech.Gam.Common.dll",
+      "sha256": "3662f9c2e05af954741e29a8d897794de98ab43a71d92917d894568551ad25d1",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gam.Helpers",
+      "relativePath": "Packages/Artech.Gam.Helpers.dll",
+      "sha256": "1263593e51472c1a58b6d3b7a80cf2934b951b74c5418832650a8a0e034c6181",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gam.Interop",
+      "relativePath": "Packages/Artech.Gam.Interop.dll",
+      "sha256": "5b75ba0a6c7254ba71322a93cd38b219eb3710ee54df8b7cba009e84669dd6fd",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gam.Packager.BL",
+      "relativePath": "Packages/Artech.Gam.Packager.BL.dll",
+      "sha256": "05a669ae421e7a2d92313d5786927a24b056413e7fb21421238be40551e965e8",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gam.Packager.UI",
+      "relativePath": "Packages/Artech.Gam.Packager.UI.dll",
+      "sha256": "201c8aa8a9a39186a5b2958d8fb06d09547c12f23835caefdaa36b98ea5d5272",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.GXplorer.BL",
+      "relativePath": "Packages/Artech.GXplorer.BL.dll",
+      "sha256": "692d37b8ebfa9eabef409750ea832a9d25580d55811da3fea2de12e0c82bac8b",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.GXplorer.UI",
+      "relativePath": "Packages/Artech.GXplorer.UI.dll",
+      "sha256": "bb5e9883f9027f4e64682cf90543c406dcd3e6892142dfbb1f2a6056e096e313",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.BL",
+      "relativePath": "Packages/Artech.Gxpm.BL.dll",
+      "sha256": "355ddb6ccf067ffa58dd49f3f410a1edeb56e7464cf6a574b26ea6af13424a66",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.UI",
+      "relativePath": "Packages/Artech.Gxpm.UI.dll",
+      "sha256": "1ee2fbb03ebf0f74064a54886633c15af552c0973e0df9d116e96d32afcc243e",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Comparer.BL",
+      "relativePath": "Packages/Artech.Packages.Comparer.BL.dll",
+      "sha256": "147f4af3ddc86d58c58c069cd0c409badfdb2f740adc4f50c6e3fc84c8c3b89c",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Comparer.UI",
+      "relativePath": "Packages/Artech.Packages.Comparer.UI.dll",
+      "sha256": "f8c7c9f487e03733e29cbfef830d3c5733693a4d9323172996e4ecf7fb16d9d1",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Debugx.BL",
+      "relativePath": "Packages/Artech.Packages.Debugx.BL.dll",
+      "sha256": "49c5826dbd5c4375018d8dfd04ff0b89af9013b134806670b822dfe71c4ef068",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Debugx.UI",
+      "relativePath": "Packages/Artech.Packages.Debugx.UI.dll",
+      "sha256": "07484297c8afb1272c0ab052516645ad98c6c31421936d1600d097d9bcd9c3fe",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Diagram",
+      "relativePath": "Packages/Artech.Packages.Diagram.dll",
+      "sha256": "90d0880cb8caaae72e9faa9b67f09c32bfed4b0dcdbbf7cd6c8283cfb6fd95e2",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Editors.Images",
+      "relativePath": "Packages/Artech.Packages.Editors.Images.dll",
+      "sha256": "437dd1d4b26010f1adb54ead1e34218235775316c2187ead97ee46ccf61aa601",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Editors.Text",
+      "relativePath": "Packages/Artech.Packages.Editors.Text.dll",
+      "sha256": "212efd09a09cfbc26aaa56cda6ed798ec079c7f039b77d2547e9c570056a6841",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Editors.Web",
+      "relativePath": "Packages/Artech.Packages.Editors.Web.dll",
+      "sha256": "0177a6c1e595ac142c4fec5a9c9ad4f8b092707a953061d60a88d218e5e6460d",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.FullTextSearch",
+      "relativePath": "Packages/Artech.Packages.FullTextSearch.dll",
+      "sha256": "41397806eb33ba205c186d76da8e19605cccd471a0aaf0715ecd6b848b843114",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.GAM",
+      "relativePath": "Packages/Artech.Packages.GAM.dll",
+      "sha256": "04683929ba4912a0de38dd9792d8efc7ce002cc5b34ae528f003fe7a9effe726",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.GAM.UI",
+      "relativePath": "Packages/Artech.Packages.GAM.UI.dll",
+      "sha256": "1d18276596333ce04e0c50b9869eed993f28a60c8f9b97e833a301cdbfbcb000",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Generators",
+      "relativePath": "Packages/Artech.Packages.Generators.dll",
+      "sha256": "e629b876e43874c025f55d8b62b960dd68b2f43770563921f2aa3c79d3d085ef",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.GenexusBL",
+      "relativePath": "Packages/Artech.Packages.GenexusBL.dll",
+      "sha256": "35a776ee80ca2e838789af84375ba692eca610fa19d31cbeead4c52addf8e48a",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.GenexusCompatibility",
+      "relativePath": "Packages/Artech.Packages.GenexusCompatibility.dll",
+      "sha256": "e1c3f5e568eb121d0a51f621f49ccd9509cf24799444104472b5aae38092191b",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.GeneXusUI",
+      "relativePath": "Packages/Artech.Packages.GenexusUI.dll",
+      "sha256": "3d5aa4409f4a8093a07ab73f0e72d917dc025387a05741f64acdf447574042c5",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.KnowledgeManager",
+      "relativePath": "Packages/Artech.Packages.KnowledgeManager.dll",
+      "sha256": "f9940635ba8c4abf819dbd54a1440f270e822fcedd7a2f4a54fb40d0775653aa",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Language",
+      "relativePath": "Packages/Artech.Packages.Language.dll",
+      "sha256": "436f49eb6709289f14cea6498c2183e80cde00fdfc9a62a6a9b069a96a3cb5fd",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.ModelIni",
+      "relativePath": "Packages/Artech.Packages.ModelIni.dll",
+      "sha256": "97110dd1ca7e89eda86c016ab6fa4165cc2b17c935ce422a4bc13faaa7a3257b",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Nemo.Generator",
+      "relativePath": "Packages/Artech.Packages.Nemo.Generator.dll",
+      "sha256": "c856e1d4212c3699aaf7d4d2c6065e0ba922bf4e560bf21d1221f9f56b643dfa",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Patterns",
+      "relativePath": "Packages/Artech.Packages.Patterns.dll",
+      "sha256": "5aa5068c2c2e5d96fa1b1465a2abe8681c1124c62569266a631b6e566ebe4cf9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Patterns.UI",
+      "relativePath": "Packages/Artech.Packages.Patterns.UI.dll",
+      "sha256": "0843d47615428f3bd0e7264855ff3228781676f019aee4c3224dc27f68f0362d",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.ReportEditor",
+      "relativePath": "Packages/Artech.Packages.ReportEditor.dll",
+      "sha256": "63ecc7762063636681109765349b7632b12d18d9a832d0669dd62ef0640d1083",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.RestServiceDL.Generator",
+      "relativePath": "Packages/Artech.Packages.RestServiceDL.Generator.dll",
+      "sha256": "a3b8bdf01119f23af259a0aeccc6a9bbcccea22af3cda8717225bfb7d4467f42",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Specifier.Common",
+      "relativePath": "Packages/Artech.Packages.Specifier.Common.dll",
+      "sha256": "7a4710dd69a32eba3aaced731a4b7af40fc9d8235c11923033d746831ef51fa8",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.Specifier",
+      "relativePath": "Packages/Artech.Packages.Specifier.dll",
+      "sha256": "1f206a3e5619f5c0e4ada10461c92bac16c4471fd90c9daeab3d487bbdfa38f3",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.StructureEditors",
+      "relativePath": "Packages/Artech.Packages.StructureEditors.dll",
+      "sha256": "4e59d816430555094cdd9bbbd73374985660a75473a75f58124ebf0293bba9b7",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.TableEditor",
+      "relativePath": "Packages/Artech.Packages.TableEditor.dll",
+      "sha256": "e14d39236cf5e450f5a4b75d1d2372c2c3d85c32411b43a68bdaffbf2af3bf3e",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.TeamDevClient.BL",
+      "relativePath": "Packages/Artech.Packages.TeamDevClient.BL.dll",
+      "sha256": "8cb13101a22eff5a840fe0adcfdb0eb87cd8408b4ba6b408fdc71778116b75b2",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.TeamDevClient.UI",
+      "relativePath": "Packages/Artech.Packages.TeamDevClient.UI.dll",
+      "sha256": "6e3fa9cfdfbc20bbc7ffc981b2d81f199666983980a45b1094303e96f60ff6df",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.ThemesEditor",
+      "relativePath": "Packages/Artech.Packages.ThemesEditor.dll",
+      "sha256": "639191d390e47d8687a8389dd74dfd7c5b224305e42c5ea2b08d600d78b132c6",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Packages.WikiEngine",
+      "relativePath": "Packages/Artech.Packages.WikiEngine.dll",
+      "sha256": "861a767e95c315bc32d0ccfb64b409c9f130df35f7a99e9a2228b7486663bbed",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.Packages.BotGenerator",
+      "relativePath": "Packages/GeneXus.Packages.BotGenerator.dll",
+      "sha256": "ccfaf1dbfa51836e676d63fc0452acf85630c7566f92e0c1248af86ddc1653c9",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.Packages.BuildEvents",
+      "relativePath": "Packages/GeneXus.Packages.BuildEvents.dll",
+      "sha256": "a0d9b2355ffaae76f2f5c870059403d213701f7d8681df70166f11bafec0a118",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.Packages.BuildEvents.UI",
+      "relativePath": "Packages/GeneXus.Packages.BuildEvents.UI.dll",
+      "sha256": "2ded381a84e6f1e89c358d538071d815356ddc31d5fc68704a56ecd5ca3c5c52",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Packages.Conversational.UI",
+      "relativePath": "Packages/GeneXus.Packages.Conversational.UI.dll",
+      "sha256": "a86c7f6e6d2574cba047ed3e4dae919fac4d7155ede5602a323a34fe3576d35e",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Packages.Docker.BL",
+      "relativePath": "Packages/GeneXus.Packages.Docker.BL.dll",
+      "sha256": "d7a8b64285f841b1c90de357200c00a627ee2e2648c6e0e2e5cec88ca379730c",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Packages.Docker.UI",
+      "relativePath": "Packages/GeneXus.Packages.Docker.UI.dll",
+      "sha256": "6a4d82b6e2fb4c03fc818df9e9691e92c5c9e3779e48ac73f371d59df3aefc70",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Packages.Editors.Stencil",
+      "relativePath": "Packages/GeneXus.Packages.Editors.Stencil.dll",
+      "sha256": "829d1556d006a211abc710a7204feec27ddceaca2c3735fd1e5b2468b103bbcf",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.Packages.Launchpad.UI",
+      "relativePath": "Packages/GeneXus.Packages.Launchpad.UI.dll",
+      "sha256": "3152d3da52ad22cc4b5ea22a2457b0ae1ad258ac7576409d3394f58e8fd821ff",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "20240612132924.711986f529dfba2b19346180ee743b26d0f95742"
+    },
+    {
+      "name": "GeneXus.Packages.ModuleManager",
+      "relativePath": "Packages/GeneXus.Packages.ModuleManager.dll",
+      "sha256": "4b6679fea00459efeba885a4b3735627720eb53f794f8b88c44d1e90ff135be2",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common",
+      "relativePath": "Packages/Gxpm/Tools/BPDeployer/Net/Artech.Common.dll",
+      "sha256": "438ed6f7c47fa81afc2f9969cd626db94b749c24712042d24c5ad207ad7c6b8d",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Common.Helpers",
+      "relativePath": "Packages/Gxpm/Tools/BPDeployer/Net/Artech.Common.Helpers.dll",
+      "sha256": "033cfa66d8647baebdd69ea4b1e8b744344a941fa0ba36a0d42a759694346e7e",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.BPDeployer.BL",
+      "relativePath": "Packages/Gxpm/Tools/BPDeployer/Net/Artech.Gxpm.BPDeployer.BL.dll",
+      "sha256": "cb141ad4f5b22207bb817b4dd30e1fa403f9a69db1b48b9012af37c92299adf2",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Gxpm.Utils",
+      "relativePath": "Packages/Gxpm/Tools/BPDeployer/Net/Artech.Gxpm.Utils.dll",
+      "sha256": "0127cb0ad6fdbbc03f31ffb12289f6d04478fc4c25a809701221b2315c381c10",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.Patterns.Conversational",
+      "relativePath": "Packages/Patterns/Conversational/Genexus.Patterns.Conversational.dll",
+      "sha256": "c4feceae4c2c3715e10a994828b5c4cba46ca0e5f1b22eef40e7fb8bfcedfd96",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Genexus.Patterns.Conversational.resources",
+      "sha256": "6a8dcab0457f98bc32b3f8563490a10a401563df0d048f0327e577d15595c137",
+      "relativePath": "Packages/Patterns/Conversational/pt/Genexus.Patterns.Conversational.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Patterns.Conversational.resources",
+      "sha256": "774360b8b127c33a43a90588b3ef1f0ccf190a64c7b2ff86d4eba70b6bb9b619",
+      "relativePath": "Packages/Patterns/Conversational/zh-CHS/Genexus.Patterns.Conversational.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.Dashboard",
+      "relativePath": "Packages/Patterns/Dashboard/Artech.Patterns.Dashboard.dll",
+      "sha256": "4623bf813824ded682a11246b30accaad5b688a64d1388c751d5ce15deb57542",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Patterns.Dashboard.resources",
+      "sha256": "d0d7dc5c3252577b65dece55ac82a10ec9801dd9bbb847c34fcf0b3bf2f69374",
+      "relativePath": "Packages/Patterns/Dashboard/pt/Artech.Patterns.Dashboard.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.Dashboard.resources",
+      "sha256": "45f20d83fbbd9e002c3f9faf65ca16c3eb0fbf38dd1bd3226ca8847cbacd1d5d",
+      "relativePath": "Packages/Patterns/Dashboard/zh-CHS/Artech.Patterns.Dashboard.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.QueryDashboard",
+      "relativePath": "Packages/Patterns/QueryDashboard/Artech.Patterns.QueryDashboard.dll",
+      "sha256": "ec0d596f2aa358ee1313df33d42ab01db2b2dc435cbecb29743f678658631850",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Patterns.QueryDashboard.resources",
+      "sha256": "e3952ca55af395d797e8d989c8b0bc34ef22525b728aacd0a953c81c919809dd",
+      "relativePath": "Packages/Patterns/QueryDashboard/pt/Artech.Patterns.QueryDashboard.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.QueryDashboard.resources",
+      "sha256": "5d4898cd0545aa5cd6e8e434090b1bc0f8becaca015511d961ce20272b9b5173",
+      "relativePath": "Packages/Patterns/QueryDashboard/zh-CHS/Artech.Patterns.QueryDashboard.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.WorkWith",
+      "relativePath": "Packages/Patterns/WorkWith/Artech.Patterns.WorkWith.dll",
+      "sha256": "319865e53ebdba82073638d05d945de441bfdfc7186b308306cb69de08ac94dd",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Patterns.WorkWith.resources",
+      "sha256": "d326df1b690da93fa04d4ccffc5b2268d82a60d6fed030e2b3a319fd83be6385",
+      "relativePath": "Packages/Patterns/WorkWith/pt/Artech.Patterns.WorkWith.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.WorkWith.resources",
+      "sha256": "dc8ab2650c91bddf5f38a9d4a997ec5162cdced970d5a1fdeb646304b3a8aa17",
+      "relativePath": "Packages/Patterns/WorkWith/zh-CHS/Artech.Patterns.WorkWith.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.WorkWithDevices",
+      "relativePath": "Packages/Patterns/WorkWithDevices/Artech.Patterns.WorkWithDevices.dll",
+      "sha256": "5dcc225f85928414c9b0779ede70faf583640e96dc048b2c18d4c86c63560a32",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Patterns.WorkWithDevices.resources",
+      "sha256": "b5045941c854f5212878b09253255dfcdd5e264485408bb4835719d27e05f037",
+      "relativePath": "Packages/Patterns/WorkWithDevices/pt/Artech.Patterns.WorkWithDevices.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.WorkWithDevices.resources",
+      "sha256": "a26066fb2b05fbef2325c018682037f48e9906a6790f69ee11eadca0fbfd5ddf",
+      "relativePath": "Packages/Patterns/WorkWithDevices/zh-CHS/Artech.Patterns.WorkWithDevices.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Editors.Common.Web.resources",
+      "sha256": "321c218b118fb57a34cf912c4d089b25a0240d4965167a1ada67ddb584368724",
+      "relativePath": "Packages/pt/Artech.Editors.Common.Web.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gam.Helpers.resources",
+      "sha256": "defe70fe12393b18d6d07a6dfb0b8b412389c05c872fc5aea6f4bb00ead6da03",
+      "relativePath": "Packages/pt/Artech.Gam.Helpers.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gam.Packager.UI.resources",
+      "sha256": "7c700ccf573a26d184bd80140a4c3716069926a16c08cc23c5de00b0fd715a26",
+      "relativePath": "Packages/pt/Artech.Gam.Packager.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.GXplorer.BL.resources",
+      "sha256": "75e38edd8aff7f2631ebfe01c43b06180a2d843ad5c27c62add5098553ca4d2b",
+      "relativePath": "Packages/pt/Artech.GXplorer.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.GXplorer.UI.resources",
+      "sha256": "525c9451d84bde04a249293d29c66e04b5470e8cb0e34757a5827ed7555130ec",
+      "relativePath": "Packages/pt/Artech.GXplorer.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.BL.resources",
+      "sha256": "6a9865c90d01afb177d061b593613c8c470055ce43bbcbedaa193c98e4e9eb0c",
+      "relativePath": "Packages/pt/Artech.Gxpm.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.UI.resources",
+      "sha256": "985183f0cf081d860ac92bee721a50e29d78e3fa35a65596c75b91d6f1b27332",
+      "relativePath": "Packages/pt/Artech.Gxpm.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Comparer.BL.resources",
+      "sha256": "1a2dcf6f560dec3e27945a2c4ab3520cf63426ebfb089de97eee9d71a03e8cf6",
+      "relativePath": "Packages/pt/Artech.Packages.Comparer.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Comparer.UI.resources",
+      "sha256": "81018edb3f2363fadf60b31e1ebb8f93cee1b5e82af01ca82818cf84438ba623",
+      "relativePath": "Packages/pt/Artech.Packages.Comparer.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Debugx.UI.resources",
+      "sha256": "010fc28a8a242268a02316088a2b714c140b90ab72f9ecdb5b2892ee0d87f755",
+      "relativePath": "Packages/pt/Artech.Packages.Debugx.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Diagram.resources",
+      "sha256": "d7a323c871cdc5b019d30701d2bd53968d3b44770b957d5d2ed5408498ee98e8",
+      "relativePath": "Packages/pt/Artech.Packages.Diagram.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Editors.Images.resources",
+      "sha256": "45d08946082193baeb4ac0cae18f7fc01eaa9269e2dadb8cee32a57a64fb9c4a",
+      "relativePath": "Packages/pt/Artech.Packages.Editors.Images.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Editors.Text.resources",
+      "sha256": "87df8e5b22aa6b59294cfac1fcb9afcfba5313a6df2284068468fb483fd997c0",
+      "relativePath": "Packages/pt/Artech.Packages.Editors.Text.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Editors.Web.resources",
+      "sha256": "8e538d0d5e9b9e0d56096d685843968e12d7aba07a802d6a5c4ea46de291211e",
+      "relativePath": "Packages/pt/Artech.Packages.Editors.Web.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.FullTextSearch.resources",
+      "sha256": "2928d30ceb920a1a5bc54faf459c3be805f85c6de523481c0142fc050b6039c7",
+      "relativePath": "Packages/pt/Artech.Packages.FullTextSearch.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.GAM.resources",
+      "sha256": "505b7e95a0cf145f3e3a488d2b3ce4f20d23f98d3eef7001c3f753df75d4c851",
+      "relativePath": "Packages/pt/Artech.Packages.GAM.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.GAM.UI.resources",
+      "sha256": "db88bd06f4d2d3f0d9ba6fd8d3d29eb192b05a01ebd7a461f80a85b5f45e8de8",
+      "relativePath": "Packages/pt/Artech.Packages.GAM.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Generators.resources",
+      "sha256": "5482e770d31aaf460d2f0bf43641bbc6438574b0c0154386f7237f14c1a2f858",
+      "relativePath": "Packages/pt/Artech.Packages.Generators.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.GenexusBL.resources",
+      "sha256": "f24433db99daa21de23717ea52d66608319251f0cf33bfe98bf0c03634c80bcc",
+      "relativePath": "Packages/pt/Artech.Packages.GenexusBL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.GeneXusUI.resources",
+      "sha256": "075c65f202d8d6a60de8ec3568468462363ae122bf8ccd1f70558747bc6f9565",
+      "relativePath": "Packages/pt/Artech.Packages.GenexusUI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.KnowledgeManager.resources",
+      "sha256": "e3e598fdd10125f7b65a19fa82eed1bcbc86928217f0ee02b56a894886f3eceb",
+      "relativePath": "Packages/pt/Artech.Packages.KnowledgeManager.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Nemo.Generator.resources",
+      "sha256": "3c0d0c230d70bf8309794bf79cbff538066a5dc6ce3215f05132be17a853ddc0",
+      "relativePath": "Packages/pt/Artech.Packages.Nemo.Generator.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Patterns.resources",
+      "sha256": "c79a3688d148291562cc7884cdb3d17a0b204710bda206f1e7504940a42b78de",
+      "relativePath": "Packages/pt/Artech.Packages.Patterns.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Patterns.UI.resources",
+      "sha256": "181118cc6e0258e8c18abb3fa595496aec967e34a4922667344191fc021d2be7",
+      "relativePath": "Packages/pt/Artech.Packages.Patterns.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.ReportEditor.resources",
+      "sha256": "5e865a26d7e378fcd635ae289b0eb2830cdbecc5b0b7231feb057bcc872e0806",
+      "relativePath": "Packages/pt/Artech.Packages.ReportEditor.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.RestServiceDL.Generator.resources",
+      "sha256": "29c2906be3b49617826b61cdff12683a71e712f50cbff31f38b695d175401c3c",
+      "relativePath": "Packages/pt/Artech.Packages.RestServiceDL.Generator.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Specifier.Common.resources",
+      "sha256": "2d0b589db35b2a03d4cbfba7e7b8a5729c569729cd919e22ffc6e713bb4aae54",
+      "relativePath": "Packages/pt/Artech.Packages.Specifier.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.StructureEditors.resources",
+      "sha256": "ecee9847f3cd9eba8c36d1a94d6fe6d136256d0a6ddbb12e5ba1dd5d63edede2",
+      "relativePath": "Packages/pt/Artech.Packages.StructureEditors.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.TableEditor.resources",
+      "sha256": "e50f2fcc0a59ac6ae24c2000c35b5d5c80cb439524eb3ee893c70028fada96ed",
+      "relativePath": "Packages/pt/Artech.Packages.TableEditor.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.TeamDevClient.BL.resources",
+      "sha256": "833dbd9a79640c1663a9aea5f680227fc69cd16280883e198071ac412a1864d1",
+      "relativePath": "Packages/pt/Artech.Packages.TeamDevClient.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.TeamDevClient.UI.resources",
+      "sha256": "71f6735089a3c47b15e9c9e7683a070537f54fd20dcf1958c9ac26c348517c18",
+      "relativePath": "Packages/pt/Artech.Packages.TeamDevClient.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.ThemesEditor.resources",
+      "sha256": "1e86e2b1be3ffdbb257de6e1938aa67b424794151f0c5ee877452deeca02fc70",
+      "relativePath": "Packages/pt/Artech.Packages.ThemesEditor.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.WikiEngine.resources",
+      "sha256": "02dace9461e8cb4dec63a63d6db96f3933bcfefb2bee84732b6135afe67c10ed",
+      "relativePath": "Packages/pt/Artech.Packages.WikiEngine.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Packages.BotGenerator.resources",
+      "sha256": "38789675aebcfdf12f6b4f456ac327aada6f329917e8f50f11234eea0e577e5e",
+      "relativePath": "Packages/pt/GeneXus.Packages.BotGenerator.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Packages.BuildEvents.resources",
+      "sha256": "bb4fd78e544a92ac03ff38050a726eeebd5375461630426e379cfcc670115415",
+      "relativePath": "Packages/pt/GeneXus.Packages.BuildEvents.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Packages.BuildEvents.UI.resources",
+      "sha256": "e8e6ca25258291d651e857960c99034c4c31651389e3a47c87b512db264bd75b",
+      "relativePath": "Packages/pt/GeneXus.Packages.BuildEvents.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.Packages.Conversational.UI.resources",
+      "sha256": "dd38f5780799958ebd43a18af8a9af2e2c252c4667ceacb4e02b87cdaa55f97c",
+      "relativePath": "Packages/pt/GeneXus.Packages.Conversational.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.Packages.Docker.BL.resources",
+      "sha256": "b7863d1a788bba82a5161b91575b0fb1b6a927b911b07450373e1a8cd46e6ee5",
+      "relativePath": "Packages/pt/GeneXus.Packages.Docker.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.Packages.Docker.UI.resources",
+      "sha256": "85ba1811e6490699bb6a7f4aaa366aa1a89d5f20fa95241e51ad3f748a39af69",
+      "relativePath": "Packages/pt/GeneXus.Packages.Docker.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.Packages.ModuleManager.resources",
+      "sha256": "18f819b61882043d14871f1b5d8da24a1fae62a445c20d71d24a2ef52f46bdfd",
+      "relativePath": "Packages/pt/GeneXus.Packages.ModuleManager.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Editors.Common.Web.resources",
+      "sha256": "2cd7a03fdf4b7d4b6ebfa26ecda2bb93922c517231a670a9d0d31a7319a7aa05",
+      "relativePath": "Packages/zh-CHS/Artech.Editors.Common.Web.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gam.Helpers.resources",
+      "sha256": "b56673259dbce66304818936b7ba4c3921aa51c2aec39976de2be380ac96b174",
+      "relativePath": "Packages/zh-CHS/Artech.Gam.Helpers.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gam.Packager.UI.resources",
+      "sha256": "6063c9eddb0189e2c9abb953243a95b38c3deb6fb7bf38429dd29bb6e8a8f8de",
+      "relativePath": "Packages/zh-CHS/Artech.Gam.Packager.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.GXplorer.BL.resources",
+      "sha256": "33ef25af1b78e5198bf8265ae17e7c7b039d3e6745c25eb5a52145c79e442af5",
+      "relativePath": "Packages/zh-CHS/Artech.GXplorer.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.GXplorer.UI.resources",
+      "sha256": "e163ec8728f5f02003d3fb9549571a3f2c5c50280f43488c8ab5c6fd31991b25",
+      "relativePath": "Packages/zh-CHS/Artech.GXplorer.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.BL.resources",
+      "sha256": "5ad2ea54910f6a1659588a08a4dd66a91fe64d8f2f07a2a80c259fea7926d213",
+      "relativePath": "Packages/zh-CHS/Artech.Gxpm.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.UI.resources",
+      "sha256": "20d978aa3d020cde722d1cea7b83ba427c8b48603969e9d5382245537465f8b9",
+      "relativePath": "Packages/zh-CHS/Artech.Gxpm.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Comparer.BL.resources",
+      "sha256": "352bf18d51f2d1bfae9c838ff261b558ba6af421c7b5c3859f5acc6f403d3d45",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Comparer.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Comparer.UI.resources",
+      "sha256": "447f88c6f1dc8237db19f86536d97db042258a2d3df87b657635f33eda0eb721",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Comparer.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Debugx.UI.resources",
+      "sha256": "916c190421276fd47cfe0b5d38b7668628e3bfafb0841c3582ee7a23f22ebb73",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Debugx.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Diagram.resources",
+      "sha256": "958a2f152eb63982556b48cb17ba7ec031d6631e0304a776877316b2fa137eaf",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Diagram.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Editors.Images.resources",
+      "sha256": "828330cbe5344b77f152a46ace2c8ac34cea243db1ad5c8c7bd39f6e734af2ed",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Editors.Images.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Editors.Text.resources",
+      "sha256": "ec127e3b549b22e83e47d6f982e39144f1cf58d586080c215a45dd288f9b1474",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Editors.Text.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Editors.Web.resources",
+      "sha256": "e215f7a3c91419f9e6fb81fe1a14a83861c75f84ac4deec2a02358175ec06390",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Editors.Web.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.FullTextSearch.resources",
+      "sha256": "17710932b3a29e34d9ae0574b24e70bdb3c43f56853020d1b24d6c153c363d25",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.FullTextSearch.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.GAM.resources",
+      "sha256": "656e59ac3cd994d57ce1df0dca17f602112dc753f2254ec4de5174decdd6d0bc",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.GAM.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.GAM.UI.resources",
+      "sha256": "a0c6bb809bf738dea478a76d1b4ae92da08d984424874ec1cb9eda4b991109e3",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.GAM.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Generators.resources",
+      "sha256": "bff17252b167f799cb5b861d0b85e28c4a8381c4afc81efc89cd8a1db6d3a301",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Generators.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.GenexusBL.resources",
+      "sha256": "56868b56cbe7199ae7c7ee9b079c1a7c0dd0a7da2632467059555dacbd8ee2ce",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.GenexusBL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.GeneXusUI.resources",
+      "sha256": "afd4070b028cc0398ab95ddf6583677cb4d5c8af3deed626bba3b5e43443f44e",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.GenexusUI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.KnowledgeManager.resources",
+      "sha256": "aa684d3ee9520e8f8cfda82fc927c6b1c6fbc74f528d8516e3f03895002dd275",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.KnowledgeManager.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Nemo.Generator.resources",
+      "sha256": "b073fdfdd065be8d6d784f7bbdeb5f90e882319ef29c16c8f59ef87ecd60f159",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Nemo.Generator.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Patterns.resources",
+      "sha256": "0b52fc2619d9cf7fdfc26add9ab60f9c1b903b62428aa8e16e3e7a30b6e73a23",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Patterns.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Patterns.UI.resources",
+      "sha256": "173d5ded7f19eebd9f8f8d3f8e4db496ec5f7af70db4ad2484f7fa08b90c7fa2",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Patterns.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.ReportEditor.resources",
+      "sha256": "e93dde756a5ba5e4953eb32160de7439e70d9e789b707f1ea04e39808edd26ce",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.ReportEditor.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.RestServiceDL.Generator.resources",
+      "sha256": "8b9fa4b6a965bdc34003ec9ff50783f453025c74169c848fa11476a7615f02ba",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.RestServiceDL.Generator.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.Specifier.Common.resources",
+      "sha256": "474e7bdf2914b9f3fea3857ee044bb16016bb257e72a369fed57e1eee2e7813e",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.Specifier.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.StructureEditors.resources",
+      "sha256": "6c648c541f1e628bd221118165b9627ab11ee4ba7192bf79f8c227ca47d7f0b3",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.StructureEditors.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.TableEditor.resources",
+      "sha256": "cbdefb3ebf1d0731c5003c53a7115a549bc60028df54b774ddcef18ba0278452",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.TableEditor.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.TeamDevClient.BL.resources",
+      "sha256": "3f14e18e2f89ad62dcbd570b4d50b0077f3f5db115ba1ec579d49b5526cfd1b9",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.TeamDevClient.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.TeamDevClient.UI.resources",
+      "sha256": "fcdd0320e47a176f9c40fbb8155dbda9ecfddd1cce58e08c5591d9d68352431a",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.TeamDevClient.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.ThemesEditor.resources",
+      "sha256": "dc56fbdf3f03b9a3c1b91febed66e655c805ef2f009318b8f39c1bec0a6f9a54",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.ThemesEditor.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Packages.WikiEngine.resources",
+      "sha256": "ca9be83241bd26668e10b6ec5f91007ce25485e765a078ca7299b24a74265caf",
+      "relativePath": "Packages/zh-CHS/Artech.Packages.WikiEngine.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Packages.BotGenerator.resources",
+      "sha256": "209669a04f762c90d469cfb58881bdca6d3224988982939fff7961daab5f99e3",
+      "relativePath": "Packages/zh-CHS/GeneXus.Packages.BotGenerator.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Packages.BuildEvents.resources",
+      "sha256": "9c0e366af4b578e88c5bec77bdec3e9147d80871866e549074cd9b6ce9375919",
+      "relativePath": "Packages/zh-CHS/GeneXus.Packages.BuildEvents.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Packages.BuildEvents.UI.resources",
+      "sha256": "a4e9935c0cb6b76946cfde5c649db76a234c600dc0a947d593b4c646a5fb7e28",
+      "relativePath": "Packages/zh-CHS/GeneXus.Packages.BuildEvents.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.Packages.Conversational.UI.resources",
+      "sha256": "fb855dcf1b4fef928e3c144b1e7e185bc7d4a515f014d8e1ab92df8827854d09",
+      "relativePath": "Packages/zh-CHS/GeneXus.Packages.Conversational.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.Packages.Docker.BL.resources",
+      "sha256": "46bb79f5d1dd7c1a8591b0a1d65b602d83a268c858c7712b351d2562670ac306",
+      "relativePath": "Packages/zh-CHS/GeneXus.Packages.Docker.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.Packages.Docker.UI.resources",
+      "sha256": "badb45ddc963087448e577f2b4192aef7e05f25cf0ee71d8fca67f89ae8eeccb",
+      "relativePath": "Packages/zh-CHS/GeneXus.Packages.Docker.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.Packages.ModuleManager.resources",
+      "sha256": "84a7f2e954e24de98be8aaed0a209c5fa54a23b3b89d6d289e487d7949090f89",
+      "relativePath": "Packages/zh-CHS/GeneXus.Packages.ModuleManager.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Architecture.Common.resources",
+      "sha256": "5f9ed779453bb8314cac10e29364b902a7593c49c8f83a925de4c84762db5b68",
+      "relativePath": "pt/Artech.Architecture.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Architecture.UI.Framework.resources",
+      "sha256": "33ff25cf5a33d9a44d4bbb8236af362df0ff21111df630706878c63f09368550",
+      "relativePath": "pt/Artech.Architecture.UI.Framework.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Controls.resources",
+      "sha256": "960a3a517702607efdd2ef74c1f1b723dfe41668fe4bf1faf8ca26c44cb5985c",
+      "relativePath": "pt/Artech.Common.Controls.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Helpers.resources",
+      "sha256": "6ad72ad89392801f70b8f81a614db16afa4dbc6b67be20193d72a44f1b980eeb",
+      "relativePath": "pt/Artech.Common.Helpers.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Language.Resources.resources",
+      "sha256": "0e78eaea475490499989f41b5f22b73b48d715bbbd5aca3be213d93105e9490e",
+      "relativePath": "pt/Artech.Common.Language.Resources.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Properties.resources",
+      "sha256": "09c04c2d16bd2afa402708f99736b17c8471276be489f57a3c4874f5121f99ae",
+      "relativePath": "pt/Artech.Common.Properties.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.resources",
+      "sha256": "e9b3172eac1da33f747c34850ec7e85b05407ec2e5e77d135a6f623b81a57bc6",
+      "relativePath": "pt/Artech.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Wizard.resources",
+      "sha256": "bb5429bc4ae1d777a4b69f23f46d3e6ab2050120118f2b5deeee38a356e32804",
+      "relativePath": "pt/Artech.Common.Wizard.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.CommonI.resources",
+      "sha256": "61df1ac018786e832594aac425985b12247840b88ee23204c2f49a2972abf232",
+      "relativePath": "pt/Artech.CommonI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Core.UI.resources",
+      "sha256": "c91ae43671fd367f25ae12e16d3edc42e0b8dbed3a82cce779721fd28f31b22f",
+      "relativePath": "pt/Artech.Core.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Editors.BrowserLayout.resources",
+      "sha256": "b4c900f5c4f38676008e86d53ffb5d8b35f880d4cf137ba32dc3879f0cc3226c",
+      "relativePath": "pt/Artech.Editors.BrowserLayout.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Editors.Common.Report.resources",
+      "sha256": "630ed5de6570cfb7de9ebcacdb2b277d0f8cd77421e231d6c99b9e029dd8d5c9",
+      "relativePath": "pt/Artech.Editors.Common.Report.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.FrameworkDE.resources",
+      "sha256": "b14af8b0ca2afa75308d67f6b0563ae01c29bbdbd948de3d28872707f3b81284",
+      "relativePath": "pt/Artech.FrameworkDE.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Generator.SmartDevices.resources",
+      "sha256": "71c84da40a9d54062e7d81224d18dd9a0b3c52b21b3a84fa6e726af0e56f9096",
+      "relativePath": "pt/Artech.Generator.SmartDevices.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Generators.resources",
+      "sha256": "20f5cb40b6a4729d1d10ee65bba07b26d4ca3dac8d4b72ba0e95080bc8ad6947",
+      "relativePath": "pt/Artech.Generators.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Genexus.Common.resources",
+      "sha256": "9715e99f91d16d81e762c04b769eeed8eb3fb2dca3460e5f12c1c842cd102601",
+      "relativePath": "pt/Artech.Genexus.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Genexus.UI.Common.resources",
+      "sha256": "3367fdd7b0e0e3680fcaa0266c33b5e0cf0f85377912d3bc3de99d75ecde73ce",
+      "relativePath": "pt/Artech.Genexus.UI.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Genexus.UI.Resources.resources",
+      "sha256": "930fb8cb3906ff2b5e21701552147b36f15eaea3372516420771117f8ee9e112",
+      "relativePath": "pt/Artech.Genexus.UI.Resources.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.GXplorer.Common.resources",
+      "sha256": "17129ea21ef2addd872e3acec4319dc9500b159ac7759aaf09c992d689dd6da6",
+      "relativePath": "pt/Artech.GXplorer.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.BL.KBConversion.resources",
+      "sha256": "210202d0794a259e243cc195cda6d05bba207f3fd9231b616add4e0834c3b06e",
+      "relativePath": "pt/Artech.Gxpm.BL.KBConversion.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.BPDeployer.BL.resources",
+      "sha256": "0eb9dac63e559675135e7f090973a70034e66d7a5ba1476b973334eba6c8db2d",
+      "relativePath": "pt/Artech.Gxpm.BPDeployer.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.Common.resources",
+      "sha256": "9765c6d7d98f1492a25915523a28317d5b57c54f7ae12b40a6f6514e330b89f2",
+      "relativePath": "pt/Artech.Gxpm.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.Interop.resources",
+      "sha256": "34bf0874f5b912cba4c27a5939486aedf8bbef0fee5097234d6d0fe544ab1f3c",
+      "relativePath": "pt/Artech.Gxpm.Interop.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.Parser.resources",
+      "sha256": "98cc0f1f44d850cdfe201a22b40305f57cbc10281fb0c6997fc34166091b98fa",
+      "relativePath": "pt/Artech.Gxpm.Parser.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.UI.BPMNEditor.resources",
+      "sha256": "89126fd6493bf17ff5d3f292cc057addbac35cfcebea3bb8f08afa0b690652a7",
+      "relativePath": "pt/Artech.Gxpm.UI.BPMNEditor.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.Utils.resources",
+      "sha256": "a896e66c5936f04bd04acb7c8d098df1ade35be1caf6736e32bad7fe252de984",
+      "relativePath": "pt/Artech.Gxpm.Utils.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Layers.BL.resources",
+      "sha256": "cf37ea8f6ec74a761772b79fa98b5e8ca79002fcf4913d327ae3d8e2515bf580",
+      "relativePath": "pt/Artech.Layers.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Layers.Framework.resources",
+      "sha256": "86a7d698d3d9ac5b156e038534c611739bd174212b61069eef834fe741c3933a",
+      "relativePath": "pt/Artech.Layers.Framework.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.LibraryDeployer.resources",
+      "sha256": "127dee578530cc950c022d2852c3dd38d03b9dbc2e8b0a91a93cbdead8d37831",
+      "relativePath": "pt/Artech.LibraryDeployer.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.MsBuild.Common.resources",
+      "sha256": "8d2053a1f4d9e52c8e1e1e3950567d5c4cb908b57ae231a4d0c0b46c31d17460",
+      "relativePath": "pt/Artech.MsBuild.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.SmartDevices.Common.resources",
+      "sha256": "bd0a12124e7be3884052b2a9dfc5de656e8f9bdc9ad44502431e1de21ec96efb",
+      "relativePath": "pt/Artech.Patterns.SmartDevices.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Specifier.Helper.resources",
+      "sha256": "39d322f3bc296884e4474472d70e88bd2913728e14bad192812dde64d7562f81",
+      "relativePath": "pt/Artech.Specifier.Helper.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.TextEditor.RulesLanguage.resources",
+      "sha256": "5df312124990ba741b96e01cbe71e799313edc0a11e4a0ced0fa6c5ab3972851",
+      "relativePath": "pt/Artech.TextEditor.RulesLanguage.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Udm.Framework.resources",
+      "sha256": "ea6bb6fa600b6224e85ae379e1232d5b47db212553b5aff7e97cd8ff6d2c996e",
+      "relativePath": "pt/Artech.Udm.Framework.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Udm.Layers.Data.CTree.resources",
+      "sha256": "a95145b0cb782b763e8c6e53f787dd98d442ed475939d2edeeaf990938242603",
+      "relativePath": "pt/Artech.Udm.Layers.Data.CTree.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Udm.Layers.Data.SQL.resources",
+      "sha256": "d9b21f5b078b048606c86dec9cccba4650c7e8ee756c5c8a1340f5415b7c0a5e",
+      "relativePath": "pt/Artech.Udm.Layers.Data.SQL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Wiki.UI.Common.resources",
+      "sha256": "2a78f443b8b34e184c6f70840f1e74c71fc7a87f807b33edbf57b465433331f4",
+      "relativePath": "pt/Artech.Wiki.UI.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.MsBuild.Tasks.Patterns.resources",
+      "sha256": "02ff565c4d88a350d6efac830823b6c351368663e07aa62b186e1741ae910be3",
+      "relativePath": "pt/Genexus.MsBuild.Tasks.Patterns.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.MsBuild.Tasks.resources",
+      "sha256": "2396b86483b0299de49bdc6fe1604d08d00df35aa20e4c73e7601f38e5b602b7",
+      "relativePath": "pt/Genexus.MsBuild.Tasks.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.MsBuild.Tasks.UI.resources",
+      "sha256": "c7127d7cb928718b3df922e8627b6be8560cd53709b0241611bd8008d6898095",
+      "relativePath": "pt/Genexus.MsBuild.Tasks.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.resources",
+      "sha256": "822f595c15d791c919b19b4877017dfbaa9325fddaaa0b18ea00d79e8b898d3e",
+      "relativePath": "pt/GeneXus.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Server.MsBuild.Tasks.resources",
+      "sha256": "1db8e865ecc765058df92c74e2740e24cca23fef1ee9b6ceeec3bc5c9bc80f26",
+      "relativePath": "pt/Genexus.Server.MsBuild.Tasks.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.TeamDevClient.Architecture.BL.resources",
+      "sha256": "69a1c4505f3df0a1e3dc9ce78132aeac531d550a7a03c90c1b6415a3ded40d22",
+      "relativePath": "pt/GeneXus.TeamDevClient.Architecture.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.uc.DashboardViewer",
+      "relativePath": "UserControls/DashboardViewer/GeneXus.uc.DashboardViewer.dll",
+      "sha256": "1dfba84187ed2689c442b0723e52db5c0522f5dba3eb9e3c0aa7560e463094a1",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.uc.FileUpload",
+      "relativePath": "UserControls/FileUpload/Artech.uc.FileUpload.dll",
+      "sha256": "e656e40f0ccbb5007dde4644c78ab7e483c0bb1d014f1cb54246c69e13d7f217",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.uc.HorizontalGrid",
+      "relativePath": "UserControls/HorizontalGrid/Artech.uc.HorizontalGrid.dll",
+      "sha256": "eedefad39e3f641e06644ebc4bea621969fbce847da6b7f6e82ea816267ecc47",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.GXplorer.UserControls.QueryViewer.Conversion.resources",
+      "sha256": "e184c5fc0df41027b960ef09e6e05b8d7d0c244dd1742a9700762b631c2e3149",
+      "relativePath": "UserControls/QueryViewer/ConversionTool/pt/Artech.GXplorer.UserControls.QueryViewer.Conversion.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.GXplorer.UserControls.QueryViewer.Conversion.resources",
+      "sha256": "bd14072987d89f792bb67dab126a675684acb3bb86ea085db3438a32ec49d20a",
+      "relativePath": "UserControls/QueryViewer/ConversionTool/zh-CHS/Artech.GXplorer.UserControls.QueryViewer.Conversion.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.uc.QueryViewer",
+      "relativePath": "UserControls/QueryViewer/GeneXus.uc.QueryViewer.dll",
+      "sha256": "6930092432f266869f96383d0125fc74088870afebd77999fd90a340b6f42428",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.uc.Rating",
+      "relativePath": "UserControls/Rating/GeneXus.uc.Rating.dll",
+      "sha256": "4e59172f4c2e4880678445074e0b6b9595c6d037152aaab4ce130c384039b6a7",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.UserControls.SDCharts.PropertiesResolvers",
+      "relativePath": "UserControls/SDCharts/Artech.UserControls.SDCharts.PropertiesResolvers.dll",
+      "sha256": "1e603c0e6eee0bcf27d7170353d7b40be32c2eee4cea8c475d830d4b17e65439",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.UserControls.Chronometer.PropertiesResolvers",
+      "relativePath": "UserControls/SDChronometer/Artech.UserControls.Chronometer.PropertiesResolvers.dll",
+      "sha256": "b2630c27c1b069b1f83bedb34e0a89428b672f0bd10d38b9eff0e37b22482010",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.UserControls.SDImageGallery.PropertiesResolvers",
+      "relativePath": "UserControls/SDImageGallery/Artech.UserControls.SDImageGallery.PropertiesResolvers.dll",
+      "sha256": "bb6910526418525191e7c58691c5628e28fb7fa0e161526349d1d439039c1cfb",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.UserControls.SDImageMap.PropertiesResolvers",
+      "relativePath": "UserControls/SDImageMap/Artech.UserControls.SDImageMap.PropertiesResolvers.dll",
+      "sha256": "97d373642b2c7c678538aef846c09ca0e90b083a1839ee23198a5229a7af2fa2",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.UserControls.MagazineViewer.PropertiesResolvers",
+      "relativePath": "UserControls/SDMagazineViewer/Artech.UserControls.MagazineViewer.PropertiesResolvers.dll",
+      "sha256": "3f199eac464fdb1f73cb579eb27a2df1eab43eb8cadfb2e17a5a96e49c7b732c",
+      "assemblyVersion": "1.0.0.0",
+      "productVersion": "1.0.0.0"
+    },
+    {
+      "name": "Artech.UserControls.SDSlider.PropertiesResolvers",
+      "relativePath": "UserControls/SDSlider/Artech.UserControls.SDSlider.PropertiesResolvers.dll",
+      "sha256": "a5d0ade66ef10430707c487d123294343dc4fc84e028ff1e16e2c43dfa601e9b",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.UserControls.SDMaps.PropertiesResolvers",
+      "relativePath": "UserControls/SmartDevicesMapControl/Artech.UserControls.SDMaps.PropertiesResolvers.dll",
+      "sha256": "810cd1866f0b1180276f71379849b2f4087fcf2d2a90f9edfffd4abdf7f9ecaf",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "GeneXus.uc.Switch",
+      "relativePath": "UserControls/Switch/GeneXus.uc.Switch.dll",
+      "sha256": "b48ee43263db8f26c11f94a1cd0d5dd0d599238753aa19dd45f7f6b9b2a5fd2b",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260"
+    },
+    {
+      "name": "Artech.Architecture.Common.resources",
+      "sha256": "fb8526f2d3c3f6b1e396529ef1f25dfd082976f3aa72396928e53d79bdab5b33",
+      "relativePath": "zh-CHS/Artech.Architecture.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Architecture.UI.Framework.resources",
+      "sha256": "5cf09163be671835f9b4cd7c8ab225e45546e65a64c7732ff15c9a255883c791",
+      "relativePath": "zh-CHS/Artech.Architecture.UI.Framework.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Controls.resources",
+      "sha256": "7a9ca7aca2b405e511b5f96a1f75290b5e157716fb1dadb211c370db2133c27d",
+      "relativePath": "zh-CHS/Artech.Common.Controls.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Helpers.resources",
+      "sha256": "de1c3d0cf5473de2a961556feee9a0cb302d2f6f52a298cf9d5f7c8d7d5ad1c9",
+      "relativePath": "zh-CHS/Artech.Common.Helpers.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Language.Resources.resources",
+      "sha256": "a71f649c870976bd096cc8ebc7072448649de69711f4b08dbe8bd282c0686633",
+      "relativePath": "zh-CHS/Artech.Common.Language.Resources.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Properties.resources",
+      "sha256": "3972bd6b1751e9d512f0db8a2bf594e9ae7139c0529cc13ef0e6ff790dfcf931",
+      "relativePath": "zh-CHS/Artech.Common.Properties.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.resources",
+      "sha256": "1c28fc10f762cf36a3e51d7ec1922a2120e6e4b5228d60ac8c913c38f79ebdd0",
+      "relativePath": "zh-CHS/Artech.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Common.Wizard.resources",
+      "sha256": "39b75f9a3053e9064cea78d0137a9364b1dc03ef3b11476d12e998b006aa676e",
+      "relativePath": "zh-CHS/Artech.Common.Wizard.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.CommonI.resources",
+      "sha256": "d3ef5e61b5d122da63ecec290af827a1153f710445b0486e235504c7ef52c7de",
+      "relativePath": "zh-CHS/Artech.CommonI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Core.UI.resources",
+      "sha256": "3b679e941af3677d7123f21689428f6aeb7a17c2fd016ed508fbdc2644768f88",
+      "relativePath": "zh-CHS/Artech.Core.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Editors.BrowserLayout.resources",
+      "sha256": "830095346eb590c9670ca878232551b437761e65c93a5ab31288dc2e187b9ae8",
+      "relativePath": "zh-CHS/Artech.Editors.BrowserLayout.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Editors.Common.Report.resources",
+      "sha256": "208836910db0328cab1e6274492df27ced24da0d2f9379697029c40e76f7dd17",
+      "relativePath": "zh-CHS/Artech.Editors.Common.Report.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.FrameworkDE.resources",
+      "sha256": "77dbc995502ec54a462a910ca93b88693a1d7ee806224ac0aef6c099e1bbc130",
+      "relativePath": "zh-CHS/Artech.FrameworkDE.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Generator.SmartDevices.resources",
+      "sha256": "4ba9b38e5d28d6c2e6f5fbf897c46fab0f244d4bf5016ff818905dff996c3691",
+      "relativePath": "zh-CHS/Artech.Generator.SmartDevices.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Generators.resources",
+      "sha256": "efeb33c2c5abba0220fe7c9270e62315db1f6961f61ee5d790b9c1d2b71d8520",
+      "relativePath": "zh-CHS/Artech.Generators.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Genexus.Common.resources",
+      "sha256": "790a415c373207794c16d11b998e1b41f2f6f3fb10259fc0b01282a6352fd970",
+      "relativePath": "zh-CHS/Artech.Genexus.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Genexus.UI.Common.resources",
+      "sha256": "b71882a0d21dd232111489820fff0efa4a1438a1147a19942c1fb8c949c55dd5",
+      "relativePath": "zh-CHS/Artech.Genexus.UI.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Genexus.UI.Resources.resources",
+      "sha256": "11d5abdfb2ccb9b38df8b98c2845c683b6e6177db780bb52c9214ee0b0f88001",
+      "relativePath": "zh-CHS/Artech.Genexus.UI.Resources.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.GXplorer.Common.resources",
+      "sha256": "ec11724615baaa7af0f7b5f265b8d300b15a746822cce0485885f47046f019d6",
+      "relativePath": "zh-CHS/Artech.GXplorer.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.BL.KBConversion.resources",
+      "sha256": "eae097f73122311096e0b33f68cdcb6e479abb0cb8deafcdcfe61a30146f100c",
+      "relativePath": "zh-CHS/Artech.Gxpm.BL.KBConversion.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.BPDeployer.BL.resources",
+      "sha256": "2718da89c1627e961b58cbde12cb9118280e8a3933c6930e9fc29a64ade28204",
+      "relativePath": "zh-CHS/Artech.Gxpm.BPDeployer.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.Common.resources",
+      "sha256": "f233972c3e3774a6f8ab4cb8fb0f42eabe9cd6ad56e5199149a90767a88b40c2",
+      "relativePath": "zh-CHS/Artech.Gxpm.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.Interop.resources",
+      "sha256": "c9674a9175e3012c42f69466b35bbc1768865b07767dd791c934cee49ef4ed58",
+      "relativePath": "zh-CHS/Artech.Gxpm.Interop.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.Parser.resources",
+      "sha256": "13d42d910ecc26fd261113915d93cc19d967e9a962a8049f528071cfb63e56de",
+      "relativePath": "zh-CHS/Artech.Gxpm.Parser.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.UI.BPMNEditor.resources",
+      "sha256": "a49a6637641a82e277a058acf5c6c536d6c35660ad5baf128007acb8a614844d",
+      "relativePath": "zh-CHS/Artech.Gxpm.UI.BPMNEditor.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Gxpm.Utils.resources",
+      "sha256": "c28b1916339ce1b6789679ce1ed42889c77d5ff03279d1e0529d7010dc174492",
+      "relativePath": "zh-CHS/Artech.Gxpm.Utils.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Layers.BL.resources",
+      "sha256": "21a41e14d41e160f370a9e62a5c0a7d5848fb04c081801bbdf57892a6e3be904",
+      "relativePath": "zh-CHS/Artech.Layers.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Layers.Framework.resources",
+      "sha256": "c838db263cb079b71513bf28bb2680cb87d6b3aa198882d841772e55f3c20234",
+      "relativePath": "zh-CHS/Artech.Layers.Framework.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.LibraryDeployer.resources",
+      "sha256": "0555d54b204a04601165c454e745c299be4367a30ee1429aac341b80f4d9ea22",
+      "relativePath": "zh-CHS/Artech.LibraryDeployer.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.MsBuild.Common.resources",
+      "sha256": "21d5cbfa4f2a79a2d47bb72f6418f995b51b33ba8f6ee564c0ee1a03a107c92a",
+      "relativePath": "zh-CHS/Artech.MsBuild.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Patterns.SmartDevices.Common.resources",
+      "sha256": "c5a0f00395b011d8c375d4fedd6545bf415070bc552da70e6f56de0d5ea88250",
+      "relativePath": "zh-CHS/Artech.Patterns.SmartDevices.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Specifier.Helper.resources",
+      "sha256": "eb1835211d03feb6009662d10217e5eb953458af181d1227bdcae67a44523aec",
+      "relativePath": "zh-CHS/Artech.Specifier.Helper.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.TextEditor.RulesLanguage.resources",
+      "sha256": "82908fcea358b664416ede07bf97ad97623ed2acac4bc91e43d5dfe7823856c9",
+      "relativePath": "zh-CHS/Artech.TextEditor.RulesLanguage.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Udm.Framework.resources",
+      "sha256": "fd6c35585ac877e3dc430abb2d4efe3f42f3a9a77f7188e366b1f92188cef980",
+      "relativePath": "zh-CHS/Artech.Udm.Framework.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Udm.Layers.Data.CTree.resources",
+      "sha256": "e61377ad8077ca5d6b1652a80ba788456c669dc904b8393082ca3c813c9553e2",
+      "relativePath": "zh-CHS/Artech.Udm.Layers.Data.CTree.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Udm.Layers.Data.SQL.resources",
+      "sha256": "c1d0dd1b2b1e8a1c3bdf06637d5ac6e4860259ef03adb1df6d708a1591c25ee2",
+      "relativePath": "zh-CHS/Artech.Udm.Layers.Data.SQL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Artech.Wiki.UI.Common.resources",
+      "sha256": "1d82fa82c2409d5251bb3e8a2b873a3587b1ed3192dddabc43f9d2a97c4933a4",
+      "relativePath": "zh-CHS/Artech.Wiki.UI.Common.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.DesignOps.DesignToGxml.resources",
+      "sha256": "a8b9984f2ff3f63e0834b3f117efd4e71735759d86996932c4d3f09b2116aa90",
+      "relativePath": "zh-CHS/GeneXus.DesignOps.DesignToGxml.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.DesignOps.FigmaModel.resources",
+      "sha256": "061ad5d03ee79211d94ea985ca966739233e5d52cf3491c8ee5675aea5e29650",
+      "relativePath": "zh-CHS/GeneXus.DesignOps.FigmaModel.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.DesignOps.SketchModel.resources",
+      "sha256": "28d13bd537325c64dbba81013e6adbd2ef173c4c603fd4caddc493262c7a037b",
+      "relativePath": "zh-CHS/GeneXus.DesignOps.SketchModel.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.GAM.MSBuild.Tasks.resources",
+      "sha256": "341b6d50173f90aada923a3e384ec06dc2ad90a213500d3f873cd6658b282315",
+      "relativePath": "zh-CHS/GeneXus.GAM.MSBuild.Tasks.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.MsBuild.Tasks.Patterns.resources",
+      "sha256": "d4f2d101f076a6c4bb1e7de81d7ffedaceb9a72851ea9fd408ba25f6526c4fa0",
+      "relativePath": "zh-CHS/Genexus.MsBuild.Tasks.Patterns.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.MsBuild.Tasks.resources",
+      "sha256": "6a31b3baa3554b99236891e231c4d8d0744cced22cb074f3a2ffaa5e8d83b7a4",
+      "relativePath": "zh-CHS/Genexus.MsBuild.Tasks.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.MsBuild.Tasks.UI.resources",
+      "sha256": "1f886c4ad1cf666dbfac785a3e3af999cf799102bfc12b84ddc997b3e2e15ed7",
+      "relativePath": "zh-CHS/Genexus.MsBuild.Tasks.UI.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.resources",
+      "sha256": "940c6bd8c4fbd02ede052505ba69f062798094be6ae7fe28fc32571083901c32",
+      "relativePath": "zh-CHS/GeneXus.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "Genexus.Server.MsBuild.Tasks.resources",
+      "sha256": "9d42216581b6d0b82dc061d865cb5dca4963ded9fa8190b7e74d937074fd946c",
+      "relativePath": "zh-CHS/Genexus.Server.MsBuild.Tasks.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    },
+    {
+      "name": "GeneXus.TeamDevClient.Architecture.BL.resources",
+      "sha256": "8b50b5253dff0943b141f563147c8284fc165490fedfd3bdb394beb678a1e94f",
+      "relativePath": "zh-CHS/GeneXus.TeamDevClient.Architecture.BL.resources.dll",
+      "assemblyVersion": "11.0.0.0",
+      "productVersion": "18.0.10.184260",
+      "resourceSatellite": true
+    }
+  ],
+  "nativeVerification": {
+    "status": "verified",
+    "date": "2026-11-06",
+    "scope": "kb-without-pattern-instances",
+    "scenario": "synthetic-webpanel-in-kb-without-pattern-instances",
+    "proofEvidenceSha256": "339ae3c5978e0beaa520478b66c7f1e2cbee4bd48bc1d9d68d486e3922df5ce7",
+    "previewNoMutation": true,
+    "objectSaveVerified": true,
+    "idempotentSaveVerified": true,
+    "staleTokenRejected": true,
+    "atomicRollbackVerified": true,
+    "canonicalPartsAndOtherObjectMetadataPreserved": true,
+    "nativeWorkerTimeoutResultConsulted": true,
+    "automaticSaveRetries": 0,
+    "implicitOperations": [],
+    "syntheticObjectsRemoved": true
+  },
+  "saveApi": "EventsPart.Save;KBObject.Save(KBObjectSavePreferences)",
+  "savePreferences": {
+    "ForceSave": true,
+    "ForceSaveDefaultParts": false,
+    "SkipValidation": true,
+    "UpdateParentModels": false
+  },
+  "isolationApi": [
+    "EventsService.Events.EventsSuspended",
+    "KnowledgeBase.Events.EventsSuspended",
+    "KBObject.Flags[SkipApplyPattern]"
+  ],
+  "prohibitedApi": [
+    "Pattern.Apply",
+    "RemoveApplyOnSave",
+    "Specify",
+    "Generate",
+    "Build",
+    "Rebuild",
+    "Reorg",
+    "Deploy"
+  ],
+  "eventSubscribers": [
+    "Artech.Packages.Patterns Package.OnAfterSave via event://KnowledgeBase/AfterSaveKBObject: returns without applying when the object carries SkipApplyPattern, and otherwise acts only on the pattern virtual part items of the saved object",
+    "Artech.Genexus.Common ExternalObjectGenericTypesExtendProperties.OnObjectSaved via event://KnowledgeBase/AfterSaveKBObject: clears an in-memory cache, only for ExternalObject keys"
+  ],
+  "runtimeInspection": {
+    "assemblies": 5,
+    "eventSubscriptions": 24,
+    "reader": "scratchpad u10-audit Hooks probe of 2026-11-06: loads the five critical assemblies and lists every EventSubscription attribute by method and topic (GetCustomAttributesData; no SDK method invoked, no Knowledge Base opened); the save hooks were then decompiled with ilspycmd 11.0.0.9375",
+    "counting": "eventSubscriptions counts EventSubscription attributes per (method, topic) over the five critical assemblies: Artech.Architecture.Common 7, Artech.Genexus.Common 8, Artech.Packages.Patterns 9, Artech.Udm.Framework 0, Artech.Common.Properties 0",
+    "saveTopicSubscribers": [
+      "Artech.Packages.Patterns.Package::OnAfterSave",
+      "Artech.Genexus.Common.Parts.ExternalObject.ExternalObjectGenericTypesExtendProperties::OnObjectSaved"
+    ],
+    "partSaveOverrides": [
+      "EventsPart.AfterSaveKBObject: drops its parser engine and public-method cache",
+      "RulesPart.AfterSaveKBObject, ConditionsPart.AfterSaveKBObject: drop their parser engine",
+      "WebFormPart.BeforeSaveKBObject: normalizes theme class references of its own tags; OnBeforeSaveEntity returns at once when the object has no Structure part (a WebPanel has none)",
+      "VariablesPart.BeforeSaveKBObject: normalizes theme class references of its own variables",
+      "DocumentationPart.BeforeSaveKBObject: converts its own page content to the stored form"
+    ],
+    "workWithPlusLoaded": false,
+    "coreProtectedBodiesRequireNativeProof": true,
+    "findings": "No save hook of the critical assemblies saves, applies or builds another object when SkipApplyPattern is set and the Knowledge Base has no pattern instance; the part overrides only touch the part being saved"
+  }
+}

@@ -407,6 +407,29 @@ namespace GxMcp.Worker.Parsers
             return null;
         }
 
+        // The primitive type a Domain-typed member is created with before it is bound to
+        // the Domain. A new member needs one: AddItem takes an eDBType, and a Domain name is
+        // not an eDBType member, so without this the member was never added.
+        internal static object DomainDbType(Type eDBTypeT, object domain)
+        {
+            if (eDBTypeT == null) return null;
+            // Domain.Type hides KBObject.Type (a Guid) with `new`, so look the property up by
+            // its eDBType type: GetProperty("Type") is ambiguous on a real Domain.
+            foreach (string property in new[] { "DataType", "Type" })
+            {
+                var match = domain.GetType().GetProperties()
+                    .FirstOrDefault(p => p.Name == property && p.PropertyType == eDBTypeT && p.GetIndexParameters().Length == 0);
+                if (match == null) continue;
+                try
+                {
+                    object value = match.GetValue(domain);
+                    if (value != null) return value;
+                }
+                catch { }
+            }
+            return Enum.Parse(eDBTypeT, "VARCHAR");
+        }
+
         private static object ResolveDbType(Type eDBTypeT, string typeStr)
         {
             if (eDBTypeT == null) return null;
@@ -521,6 +544,7 @@ namespace GxMcp.Worker.Parsers
                                 try { dbType = ((dynamic)attributeMemberObj).Type; }
                                 catch { dbType = Enum.Parse(eDBTypeT, "VARCHAR"); }
                             }
+                            else if (domainMemberObj != null) dbType = DomainDbType(eDBTypeT, domainMemberObj);
                             else dbType = ResolveDbType(eDBTypeT, pNode.TypeStr);
 
                             MethodInfo addItem = nodeType.GetMethod("AddItem", new Type[] { typeof(string), eDBTypeT });
@@ -588,10 +612,7 @@ namespace GxMcp.Worker.Parsers
                         } catch { }
                         try {
                             Type eDBTypeT = targetChild.GetType().Assembly.GetType("Artech.Genexus.Common.eDBType");
-                            object dbType;
-                            try { dbType = ((dynamic)domainMemberObj).DataType; }
-                            catch { dbType = Enum.Parse(eDBTypeT, "VARCHAR"); }
-                            GxMcp.Worker.Helpers.AttributeTypeApplier.SetMemberType((object)targetChild, dbType);
+                            GxMcp.Worker.Helpers.AttributeTypeApplier.SetMemberType((object)targetChild, DomainDbType(eDBTypeT, domainMemberObj));
                         } catch { }
                         // issue #51: bind domain reference to SDT member
                         DomainPropertyApplier.ApplyDomainBasedOn((object)targetChild, domainMemberObj);

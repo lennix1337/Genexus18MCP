@@ -484,6 +484,62 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ResumeSourceCursorAfterCandidatePromotionDoesNotLoseOrRepeatHits()
+        {
+            var index = new IndexCacheService();
+            var cold = new SearchIndex.IndexEntry { Name = "ZCold", Type = "Procedure" };
+            var indexed = new SearchIndex.IndexEntry { Name = "AIndexed", Type = "Procedure", FullSource = "needle" };
+            index.LoadFromEntries(new[] { cold, indexed });
+            index.MarkIndexComplete(2);
+            var service = new SourceSearchService(index, objectService: null);
+            var criteria = new SourceSearchCriteria { Pattern = "needle", MaxResults = 1, TimeoutMs = 30000 };
+            var first = JObject.Parse(service.SearchAsJson(criteria));
+            Assert.Equal("AIndexed", first["result"]!["hits"]![0]!["objectName"]!.ToString());
+            criteria.Cursor = first["result"]!["nextCursor"]!.ToString();
+            cold.FullSource = "needle";
+            var second = JObject.Parse(service.SearchAsJson(criteria));
+            Assert.Equal("ZCold", second["result"]!["hits"]![0]!["objectName"]!.ToString());
+        }
+
+        [Fact]
+        public void MixedSearchPageFullAtDeadlineResumesSourceBeforeMetadata()
+        {
+            var index = new IndexCacheService();
+            var entries = new[]
+            {
+                new SearchIndex.IndexEntry { Name = "One", Type = "Procedure", FullSource = "needle", Description = "needle one" },
+                new SearchIndex.IndexEntry { Name = "Two", Type = "Procedure", FullSource = "needle", Description = "needle two" }
+            };
+            index.LoadFromEntries(entries);
+            index.MarkIndexComplete(entries.Length);
+            var service = new SourceSearchService(index, objectService: null);
+            int clockCalls = 0;
+            service.BudgetElapsedMillisecondsForTest = () => clockCalls++ == 0 ? 0 : 2;
+            var criteria = new SourceSearchCriteria
+            {
+                Pattern = "needle", Fields = new List<string> { "source", "description" },
+                MaxResults = 1, TimeoutMs = 1
+            };
+            var page = JObject.Parse(service.SearchAsJson(criteria));
+            string cursor = page["result"]!["nextCursor"]!.ToString();
+            Assert.True(SourceSearchService.TryParseResumeCursor(cursor, out _, out _, out bool metadata));
+            Assert.False(metadata);
+            var hits = new List<string>();
+            hits.Add(page["result"]!["hits"]![0]!["objectName"]!.ToString() + ":source");
+            service.BudgetElapsedMillisecondsForTest = () => 0;
+            for (int i = 0; i < 8 && cursor != null; i++)
+            {
+                criteria.Cursor = cursor;
+                page = JObject.Parse(service.SearchAsJson(criteria));
+                foreach (var hit in (JArray)page["result"]!["hits"]!)
+                    hits.Add(hit["objectName"]!.ToString() + ":" + (hit["field"]?.ToString() ?? "source"));
+                cursor = page["result"]!["nextCursor"]?.ToString();
+            }
+            Assert.Null(cursor);
+            Assert.Equal(new[] { "One:description", "One:source", "Two:description", "Two:source" }, hits.OrderBy(x => x));
+        }
+
+        [Fact]
         public void WordBoundaryPattern_DoesNotDropIndexedSourceHits()
         {
             var index = new IndexCacheService();
@@ -514,7 +570,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void OneCompleteSource_WithMultipleHits_IsPrioritizedBeforeSdkFallback()
+        public void OneCompleteSource_WithMultipleHits_RemainsCompleteAfterFallbackCandidate()
         {
             var index = new IndexCacheService();
             var entries = new List<SearchIndex.IndexEntry>
@@ -540,12 +596,12 @@ namespace GxMcp.Worker.Tests
 
             var result = JObject.Parse(json)["result"]!;
             Assert.Equal(2, result["count"]!.Value<int>());
-            Assert.Equal(1, result["scannedObjects"]!.Value<int>());
+            Assert.Equal(2, result["scannedObjects"]!.Value<int>());
             Assert.Null(result["unresolvedObjects"]);
         }
 
         [Fact]
-        public void CompleteSourceCandidates_FillPageBeforeSdkFallbackCandidates()
+        public void CompleteSourceCandidates_FillPageAfterFallbackCandidate()
         {
             var index = new IndexCacheService();
             var entries = new List<SearchIndex.IndexEntry>
@@ -578,9 +634,8 @@ namespace GxMcp.Worker.Tests
 
             var result = JObject.Parse(json)["result"]!;
             Assert.Equal(2, result["count"]!.Value<int>());
-            // The complete indexed candidates fill the page before the unresolved
-            // candidate can force the SDK fallback path.
-            Assert.Equal(2, result["scannedObjects"]!.Value<int>());
+            // Identity order visits the unresolved candidate before both indexed hits.
+            Assert.Equal(3, result["scannedObjects"]!.Value<int>());
             var hits = (JArray)result["hits"]!;
             Assert.Equal(2, hits.Count);
             Assert.Contains(hits, hit => hit!["objectName"]!.ToString() == "IndexedOne");

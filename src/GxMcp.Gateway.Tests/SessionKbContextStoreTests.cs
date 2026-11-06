@@ -126,6 +126,26 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void CountSessionsMatching_CountsEachLiveSessionOnceAndSkipsIdleOnes()
+        {
+            var registry = new KbUseLeaseRegistry(new TestClock());
+            var store = new SessionKbContextStore(TimeSpan.FromMilliseconds(50));
+            var lease = registry.Open("session-a", "orders", 1, "path-a", "open-a", TimeSpan.FromMinutes(1));
+            // session-a selected an alias spelling; its canonical KB id is what matches.
+            store.Set("session-a", "ORDERS-ALIAS", "orders", lease);
+            store.Set("idle", "orders");
+            Thread.Sleep(100);
+            // RefreshLease renews session-a without running the idle cleanup, so "idle" stays stored but expired.
+            Assert.True(store.RefreshLease("session-a", lease));
+            store.Set("stdio", "orders");
+            store.Set("session-b", "customer");
+
+            int count = store.CountSessionsMatching(alias => string.Equals(alias, "orders", StringComparison.OrdinalIgnoreCase));
+
+            Assert.Equal(2, count);
+        }
+
+        [Fact]
         public void StdioSession_DoesNotExpireOnIdle()
         {
             var store = new SessionKbContextStore(TimeSpan.FromMilliseconds(1));

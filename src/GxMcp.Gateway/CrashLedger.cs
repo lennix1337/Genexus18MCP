@@ -80,6 +80,7 @@ namespace GxMcp.Gateway
                 case WorkerStopReason.GatewayShutdown:
                 case WorkerStopReason.BusyReject:
                 case WorkerStopReason.ExplicitClose:
+                case WorkerStopReason.CapacityEviction:
                 case WorkerStopReason.PlannedReload:
                 case WorkerStopReason.HeapRecycle:
                 case WorkerStopReason.SdkCompatibilityRejected:

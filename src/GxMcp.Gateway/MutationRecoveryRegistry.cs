@@ -429,7 +429,9 @@ namespace GxMcp.Gateway
                 ["code"] = "PostTimeoutReadRequired",
                 ["message"] = kbLevel
                     ? "A previous KB-level import timed out or was cancelled; the affected object and part set is unknown."
-                    : "A previous write timed out or was cancelled, so its persisted state is unknown.",
+                    : $"A previous write to '{requirement.Target}'" +
+                        (string.IsNullOrWhiteSpace(requirement.TargetGuid) ? "" : $" (guid: {requirement.TargetGuid})") +
+                        $", part '{requirement.Part}', timed out or was cancelled, so its persisted state is unknown.",
                 ["hint"] = kbLevel
                     ? "Reconcile the manifest/KB state before retrying. No single object/part read can clear this fence."
                     : string.Equals(requirement.Part, "Properties", StringComparison.OrdinalIgnoreCase)
@@ -496,6 +498,14 @@ namespace GxMcp.Gateway
                     ["tool"] = "genexus_connection_recover",
                     ["args"] = recoverArgs,
                     ["why"] = "When the part is too large for genexus_read to return whole: the Worker certifies the complete SDK read (identity, hash, version) without returning it. dryRun=true inspects and reports timedOutWrite (notApplied/changed/unknown); verify the write landed or not, then repeat with dryRun=false to clear only this fence."
+                });
+                var clearArgs = (JObject)recoverArgs.DeepClone();
+                clearArgs["dryRun"] = false;
+                ((JArray)error["nextSteps"]!).Add(new JObject
+                {
+                    ["tool"] = "genexus_connection_recover",
+                    ["args"] = clearArgs,
+                    ["why"] = "Opt in to a complete certified SDK read and clear this fence in the same call. Clearing does not prove the timed-out write landed; inspect timedOutWrite and the returned version before deciding what to do."
                 });
             }
             result["error"] = error;

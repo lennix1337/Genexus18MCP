@@ -227,7 +227,7 @@ namespace GxMcp.Worker.Services
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _put = put ?? store.Put;
-            _enqueueSdkAction = enqueueSdkAction ?? GxMcp.Worker.Program.EnqueueSdkAction;
+            _enqueueSdkAction = enqueueSdkAction ?? (action => GxMcp.Worker.Program.EnqueueSdkAction(action, "source-store-backfill"));
             _runClock = runClock ?? new StopwatchBackfillClock();
             _state = LoadState();
         }
@@ -472,10 +472,17 @@ namespace GxMcp.Worker.Services
 
                     IReadOnlyList<SourceStoreBackfillPart> parts = null;
                     string objectError = null;
+                    var readWatch = Stopwatch.StartNew();
                     try { parts = reader(entry); }
                     catch (Exception ex)
                     {
                         objectError = "The SDK source-part reader failed for object '" + entry.Guid + "': " + ex.Message;
+                    }
+                    finally
+                    {
+                        if (readWatch.ElapsedMilliseconds >= 250)
+                            Logger.Info("[SOURCE-STORE-SLOW-READ] actionId=" + SdkActionTrace.CurrentId
+                                + " elapsedMs=" + readWatch.ElapsedMilliseconds);
                     }
 
                     if (objectError == null && parts == null)

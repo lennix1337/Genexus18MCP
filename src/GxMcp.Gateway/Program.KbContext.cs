@@ -90,6 +90,23 @@ namespace GxMcp.Gateway
             _sessionKbContexts.Clear(sessionId);
         }
 
+        /// <summary>
+        /// Shared-mode KB_POOL_FULL details: the live sessions whose selected alias or canonical
+        /// KB id resolves, through the pool's alias map, to the open Physical_KB_Identity
+        /// <paramref name="key"/>. A KB reached only through a per-call kb= argument is not a
+        /// session selection and is not counted.
+        /// </summary>
+        internal static int CountSessionsForPoolKey(SessionKbContextStore store, WorkerPool pool, string key)
+        {
+            if (store == null || pool == null || string.IsNullOrEmpty(key)) return 0;
+            if (!pool.AliasesByKey().TryGetValue(key, out var aliases) || aliases.Count == 0) return 0;
+            var set = new System.Collections.Generic.HashSet<string>(aliases, StringComparer.OrdinalIgnoreCase);
+            return store.CountSessionsMatching(alias => set.Contains(alias.Trim()));
+        }
+
+        internal static int CountSessionsForPoolKey(WorkerPool pool, string key) =>
+            CountSessionsForPoolKey(_sessionKbContexts, pool, key);
+
         // Test-only seam for validating the lease payload without starting a Worker.
         internal static bool TryGetSessionSnapshotForTest(string sessionId, out SessionKbContextStore.Snapshot? snapshot)
         {

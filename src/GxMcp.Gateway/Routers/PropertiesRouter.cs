@@ -104,6 +104,7 @@ namespace GxMcp.Gateway.Routers
                 properties = args?["properties"],
                 projection = args?["projection"]?.ToString(),
                 query = args?["query"]?.ToString(),
+                refresh = args?["refresh"]?.ToObject<bool?>() ?? false,
                 reconcileTimedOutWrite = args?["reconcileTimedOutWrite"]?.ToObject<bool?>() ?? false
             };
         }

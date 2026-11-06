@@ -2816,8 +2816,13 @@ namespace GxMcp.Worker.Services
                 ["Image"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Image>().Id,
                 ["Menu"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Menu>().Id,
                 ["Menubar"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Menubar>().Id,
+#if GXMCP_SDK_EV3
+                ["Stencil"] = () => ResolveOptionalDescriptorId("Stencil"),
+                ["UserControl"] = () => ResolveOptionalDescriptorId("UserControl"),
+#else
                 ["Stencil"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Stencil>().Id,
                 ["UserControl"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.UserControl>().Id,
+#endif
                 ["WorkPanel"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.WorkPanel>().Id,
                 ["Report"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Report>().Id,
                 ["API"] = () => ResolveOptionalDescriptorId("API"),
@@ -2825,7 +2830,11 @@ namespace GxMcp.Worker.Services
                 ["MiniApp"] = () => ResolveOptionalDescriptorId("MiniApp"),
                 ["SuperApp"] = () => ResolveOptionalDescriptorId("SuperApp"),
                 ["DesignSystem"] = () => ResolveOptionalDescriptorId("DesignSystem"),
+#if GXMCP_SDK_EV3
+                ["ColorPalette"] = () => ResolveOptionalDescriptorId("ColorPalette"),
+#else
                 ["ColorPalette"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.ColorPalette>().Id,
+#endif
                 ["OfflineDatabase"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.OfflineDatabase>().Id,
                 ["Group"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Group>().Id,
                 ["Language"] = () => KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Language>().Id,
@@ -3048,7 +3057,7 @@ namespace GxMcp.Worker.Services
             try
             {
                 // 1. Try ObjectNameHelper (built-in module-aware resolver)
-                var helperObj = global::Artech.Architecture.Common.Helpers.ObjectNameHelper.Get(model, name) as KBObject;
+                var helperObj = Compatibility.SdkCompat.GetByObjectNameHelper(model, name);
                 if (helperObj != null)
                 {
                     // If helper resolved to a physical Table, promote to the source-bearing Transaction if one exists with the same name
@@ -3743,7 +3752,7 @@ namespace GxMcp.Worker.Services
             // 2. Try ObjectNameHelper (resolves Transactions, Procedures, WebPanels, SDTs across modules)
             try
             {
-                var helperObj = global::Artech.Architecture.Common.Helpers.ObjectNameHelper.Get(kb.DesignModel, namePart) as KBObject;
+                var helperObj = Compatibility.SdkCompat.GetByObjectNameHelper(kb.DesignModel, namePart);
                 if (helperObj != null) return helperObj;
             }
             catch { }

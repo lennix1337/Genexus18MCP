@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -108,6 +109,17 @@ namespace GxMcp.Worker.Tests
             Assert.Null(result["error"]["reconciliationRequired"]);
             Assert.Contains("before retrying", result["error"]["hint"].ToString());
             Assert.Contains("ImportFile was not called", result["error"]["message"].ToString());
+        }
+
+        [Fact]
+        public void ImportPreflight_NeverPreparesSdkObjectsBeforeImportFile()
+        {
+            // PrepareImport constructs target objects, so a preflight failure after it could leave
+            // empty stubs in the KB while reporting that nothing was imported.
+            string source = GxMcp.TestSupport.RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "TransferService.cs");
+            Assert.DoesNotContain("PrepareImport", source);
+            Assert.Contains("fidelityPlan = CaptureImportFidelity(file);", source);
+            Assert.Contains("return BuildImportFidelityFailure(ex.Message, ImportDiagnostics(diagnostics, imported: false));", source);
         }
 
         [Fact]

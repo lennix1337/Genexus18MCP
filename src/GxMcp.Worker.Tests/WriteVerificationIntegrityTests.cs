@@ -6,6 +6,23 @@ namespace GxMcp.Worker.Tests
 {
     public class WriteVerificationIntegrityTests
     {
+        [Theory]
+        [InlineData("same", false, null, "confirmed")]
+        [InlineData("different", false, null, "not_persisted")]
+        [InlineData("partial", true, null, "unknown")]
+        [InlineData("partial", false, "readFailed", "unknown")]
+        public void TextWriteReceipt_ReportsPersistedState(string actual, bool truncated, string failure, string expected)
+        {
+            var response = new JObject { ["status"] = "ok", ["code"] = "WriteApplied" };
+            var receipt = WriteService.ApplyTextVerificationReceipt(response, "Example", "Source", "before", "same", actual, null, truncated, failure, null);
+            Assert.Equal(expected, receipt["persistedState"]?.ToString());
+            if (expected == "unknown")
+            {
+                Assert.Equal("WriteVerificationUnavailable", receipt["code"]?.ToString());
+                Assert.Equal(failure == null ? "truncation" : "readFailure", receipt["postSaveVerification"]?["reason"]?.ToString());
+            }
+        }
+
         [Fact]
         public void TruncatedRead_IsIndeterminate_NotWriteMismatch()
         {

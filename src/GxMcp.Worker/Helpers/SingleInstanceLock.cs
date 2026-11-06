@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -40,6 +41,7 @@ namespace GxMcp.Worker.Helpers
         private int _mutexOwnerThreadId;
         private FileStream _lockStream;
         private bool _disposed;
+        private bool _sharedChild;
 
         private SingleInstanceLock(string key, string lockPath)
         {
@@ -82,6 +84,7 @@ namespace GxMcp.Worker.Helpers
             string hash = Hash(key);
             string lockPath = Path.Combine(lockDir ?? Path.GetTempPath(), ".worker-" + hash.Substring(0, 16) + ".lock");
             var inst = new SingleInstanceLock(key, lockPath);
+            inst._sharedChild = IsSharedChild();
 
             // 1) Try Global\ mutex.
             try
@@ -120,7 +123,10 @@ namespace GxMcp.Worker.Helpers
                 if (File.Exists(lockPath))
                 {
                     int? existingPid = ReadPid(lockPath);
-                    if (existingPid.HasValue && IsProcessAlive(existingPid.Value))
+                    bool live = inst._sharedChild
+                        ? IsSharedChildRecordLive(lockPath, existingPid)
+                        : existingPid.HasValue && IsProcessAlive(existingPid.Value);
+                    if (live)
                     {
                         // Another live worker owns this KB.
                         if (inst._mutexHeld)
@@ -143,7 +149,7 @@ namespace GxMcp.Worker.Helpers
                 // Open with FileShare.Read so other workers can read the pid but cannot truncate it.
                 inst._lockStream = new FileStream(lockPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
                     bufferSize: 256, options: FileOptions.DeleteOnClose);
-                var payload = Encoding.UTF8.GetBytes(BuildLockPayload());
+                var payload = Encoding.UTF8.GetBytes(inst._sharedChild ? BuildSharedChildLockPayload() : BuildLockPayload());
                 inst._lockStream.Write(payload, 0, payload.Length);
                 inst._lockStream.Flush(true);
                 inst.Acquired = true;
@@ -176,6 +182,82 @@ namespace GxMcp.Worker.Helpers
             return "{\"pid\":" + Process.GetCurrentProcess().Id +
                 ",\"startedUtc\":\"" + DateTime.UtcNow.ToString("o") + "\"" +
                 ",\"exe\":\"" + (Process.GetCurrentProcess().MainModule?.FileName ?? "").Replace("\\", "\\\\") + "\"}";
+        }
+
+        private const string SharedChildVariable = "GXMCP_SHARED_CHILD";
+
+        // Read at acquisition time: a Worker_Host starts its Worker child with GXMCP_SHARED_CHILD=1.
+        private static bool IsSharedChild()
+        {
+            return string.Equals(Environment.GetEnvironmentVariable(SharedChildVariable), "1", StringComparison.Ordinal);
+        }
+
+        // Shared-child payload: the Isolated_Mode fields plus the holder's process start time, so
+        // a reused PID is not mistaken for the original holder.
+        private static string BuildSharedChildLockPayload()
+        {
+            using (var self = Process.GetCurrentProcess())
+            {
+                long startTicks = self.StartTime.ToUniversalTime().Ticks;
+                return "{\"pid\":" + self.Id +
+                    ",\"startedUtc\":\"" + DateTime.UtcNow.ToString("o") + "\"" +
+                    ",\"processStartUtcTicks\":" + startTicks.ToString(CultureInfo.InvariantCulture) +
+                    ",\"exe\":\"" + (self.MainModule?.FileName ?? "").Replace("\\", "\\\\") + "\"}";
+            }
+        }
+
+        /// <summary>
+        /// Shared-child liveness: the recorded PID is running AND that process started at the
+        /// recorded time (millisecond precision). A record without a start time (written by an
+        /// Isolated_Mode worker) falls back to PID-only liveness, and an unreadable start time of
+        /// a running PID counts as live, so uncertainty refuses instead of overwriting.
+        /// </summary>
+        private static bool IsSharedChildRecordLive(string lockPath, int? pid)
+        {
+            if (!pid.HasValue || pid.Value <= 0) return false;
+            long? recordedTicks = ReadLongField(lockPath, "processStartUtcTicks");
+            try
+            {
+                using (var p = Process.GetProcessById(pid.Value))
+                {
+                    if (p.HasExited) return false;
+                    if (!recordedTicks.HasValue) return true;
+                    long actualTicks;
+                    try { actualTicks = p.StartTime.ToUniversalTime().Ticks; }
+                    catch { return true; }
+                    return actualTicks / TimeSpan.TicksPerMillisecond == recordedTicks.Value / TimeSpan.TicksPerMillisecond;
+                }
+            }
+            catch (ArgumentException) { return false; }
+            catch (InvalidOperationException) { return false; }
+            catch { return true; }
+        }
+
+        private static long? ReadLongField(string lockPath, string field)
+        {
+            try
+            {
+                using (var fs = new FileStream(lockPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var sr = new StreamReader(fs, Encoding.UTF8))
+                {
+                    string text = sr.ReadToEnd();
+                    int idx = text.IndexOf("\"" + field + "\"", StringComparison.Ordinal);
+                    if (idx < 0) return null;
+                    int colon = text.IndexOf(':', idx);
+                    if (colon < 0) return null;
+                    var sb = new StringBuilder();
+                    for (int i = colon + 1; i < text.Length; i++)
+                    {
+                        char c = text[i];
+                        if (c >= '0' && c <= '9') sb.Append(c);
+                        else if (sb.Length > 0 || !char.IsWhiteSpace(c)) break;
+                    }
+                    long value;
+                    if (sb.Length == 0 || !long.TryParse(sb.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out value)) return null;
+                    return value;
+                }
+            }
+            catch { return null; }
         }
 
         private static int? ReadPid(string lockPath)
@@ -252,6 +334,9 @@ namespace GxMcp.Worker.Helpers
             try { _mutex?.Dispose(); } catch { }
 
             // Final belt-and-suspenders cleanup — DeleteOnClose should already have removed it.
+            // Requirement 7.10: a refused shared child never owned the file, so it must leave the
+            // holder's record in place. Isolated_Mode keeps its historical cleanup.
+            if (_sharedChild && !Acquired) return;
             try { if (File.Exists(LockPath)) File.Delete(LockPath); } catch { }
         }
     }

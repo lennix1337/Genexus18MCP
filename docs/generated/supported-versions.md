@@ -12,6 +12,7 @@ Primary SDK major: `18`
 | 16 | GeneXus 16 | `C:\Program Files (x86)\GeneXus\GeneXus16` |
 | 17 | GeneXus 17 | `C:\Program Files (x86)\GeneXus\GeneXus17Trial` |
 | 18 | GeneXus 18 | `C:\Program Files (x86)\GeneXus\GeneXus18` |
+| 10.3 | GeneXus Evolution 3 | `C:\Program Files (x86)\ARTech\GeneXus\GeneXusXEv3` |
 
 The catalog describes recognized installations; capability evidence and persistence parity are reported separately by `genexus_sdk_probe mode=capabilities`.
 
@@ -21,7 +22,6 @@ These entries are not native-SDK support; they use the driver shown below and de
 
 | Major | Display name | Driver | Default install path |
 |---|---|---|---|
-| 10.3 | GeneXus Evolution 3 | `dotnet-reflection` | `C:\Program Files (x86)\GeneXus\GeneXusXEv3` |
 | 10.2 | GeneXus Evolution 2 | `dotnet-reflection` | `C:\Program Files (x86)\GeneXus\GeneXusXEv2` |
 | 10.1 | GeneXus Evolution 1 | `dotnet-reflection` | `C:\Program Files (x86)\GeneXus\GeneXusXEv1` |
 | 15 | GeneXus 15 | `dotnet-reflection` | `C:\Program Files (x86)\GeneXus\GeneXus15` |

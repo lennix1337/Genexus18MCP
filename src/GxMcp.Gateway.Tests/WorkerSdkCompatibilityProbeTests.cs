@@ -37,20 +37,32 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
-        public void Evaluate_LegacyMajor_Ev3_ProducesLegacyCompatibleResult()
+        public void Evaluate_Evolution3_IsANativeSdkMajor()
         {
-            var result = WorkerSdkCompatibilityProbe.Evaluate("C:/GeneXusXEv3", "10.3.0.86550");
+            var result = WorkerSdkCompatibilityProbe.Evaluate("C:/GeneXusXEv3", "10.3.16.146128");
 
             Assert.True(result.IsCompatible);
             Assert.False(result.IsRejected);
             Assert.Equal("compatible", result.Status);
-            Assert.Equal("GXMCP_SDK_LEGACY_COMPATIBLE", result.Code);
+            Assert.Equal("GXMCP_SDK_COMPATIBLE", result.Code);
             Assert.Equal("10.3", result.Major);
+            Assert.Equal("native-sdk", result.Driver);
+            Assert.Equal("native-sdk", result.ToDiagnosticObject()["supportLevel"]?.ToString());
+            Assert.Equal("10.3", result.ToDiagnosticObject()["matchedMajor"]?.ToString());
+        }
+
+        [Fact]
+        public void Evaluate_LegacyMajor_Ev2_ProducesLegacyCompatibleResult()
+        {
+            var result = WorkerSdkCompatibilityProbe.Evaluate("C:/GeneXusXEv2", "10.2.0.50000");
+
+            Assert.True(result.IsCompatible);
+            Assert.Equal("GXMCP_SDK_LEGACY_COMPATIBLE", result.Code);
+            Assert.Equal("10.2", result.Major);
             Assert.Equal("dotnet-reflection", result.Driver);
-            Assert.Equal("dotnet-reflection", result.ToDiagnosticObject()["driver"]?.ToString());
             Assert.Equal("basic-legacy", result.ToDiagnosticObject()["supportLevel"]?.ToString());
             Assert.Contains("8", result.ToDiagnosticObject()["legacyMajors"]!.ToString());
-            Assert.Equal("GXMCP_SDK_LEGACY_COMPATIBLE version=10.3.0.86550 major=10.3 driver=dotnet-reflection", result.Diagnostic);
+            Assert.Equal("GXMCP_SDK_LEGACY_COMPATIBLE version=10.2.0.50000 major=10.2 driver=dotnet-reflection", result.Diagnostic);
         }
 
         [Fact]

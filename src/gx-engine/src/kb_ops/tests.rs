@@ -362,7 +362,7 @@ fn a_default_mcp_page_uses_the_sdk_defaults_and_keeps_the_full_text_token() {
     assert!(!page.explicit_full_read);
     assert_eq!(page.suggested_next_offset, Some(200));
     assert_eq!(page.suggested_next_limit, Some(200));
-    assert!(page.source.starts_with("line0\r\nline1\r\n"));
+    assert!(page.source.starts_with("line0\nline1\n"));
     assert!(page.source.ends_with(TRUNCATION_MARKER));
     assert_eq!(page.version_token, full_read.version_token.expect("token"));
 }

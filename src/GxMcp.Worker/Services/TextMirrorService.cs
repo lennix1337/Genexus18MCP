@@ -189,7 +189,7 @@ namespace GxMcp.Worker.Services
             }
 
             bool queued = false;
-            try { queued = Program.EnqueueSdkAction(() => RunQueuedCatchup()); }
+            try { queued = Program.EnqueueSdkAction(() => RunQueuedCatchup(), "text-mirror-catchup"); }
             catch (Exception ex)
             {
                 lock (_gate) { _lastError = ex.Message; _catchupQueued = false; }

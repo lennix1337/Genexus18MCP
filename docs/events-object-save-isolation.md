@@ -100,6 +100,7 @@ Only the audited bundles are eligible (`evidence.auditedBundles` lists their ids
 | `18.0.16.189550`, `18.0.16.189595` | The hashes of the assemblies listed in `EventsSaveIsolation`, each with the exact WorkWithPlus implementation when that package is loaded. | [Events canonical snapshot](events-canonical-snapshot.md). |
 | `18.0.16.189595+wwp16.2.0.8386` | The complete-bundle manifest `config/events-u16-wwp16.2-audit.json` (452 files). | A synthetic WebPanel with a persisted WorkWithPlus host in a test Knowledge Base, 2026-10-14 ([Events canonical snapshot](events-canonical-snapshot.md)). |
 | `18.0.11.54344+wwp16.1.2.8167` | The complete-bundle manifest `config/events-u11-wwp16.1-audit.json` (459 files). | A synthetic WebPanel in a Knowledge Base without pattern instances, 2026-10-28; scoped, see [Scope of a native proof](#scope-of-a-native-proof). |
+| `18.0.10.184260` (no WorkWithPlus) | The complete-bundle manifest `config/events-u10-audit.json` (372 files), selected by the hash of `Artech.Architecture.Common` because the installation has no WorkWithPlus package. | A synthetic WebPanel in a Knowledge Base without pattern instances, 2026-11-06; scoped, see [Scope of a native proof](#scope-of-a-native-proof). |
 
 An installation of another update level (for example GeneXus 18 U12), or one with
 another WorkWithPlus, is refused with `SdkBundleNotAudited` whatever the pins say,
@@ -114,7 +115,9 @@ implicit operation).
 When the WorkWithPlus package is loaded, `EventsBundleAudits` audits the bundle as a
 whole. It picks the manifest by the exact bytes of the loaded
 `DVelop.Patterns.WorkWithPlus` (nothing else selects one, and a mixture of two
-bundles matches none) and checks, in this order:
+bundles matches none). An installation without WorkWithPlus is audited the same way
+when a manifest was made without it: the exact bytes of `Artech.Architecture.Common`
+select that manifest. Then it checks, in this order:
 
 1. the copy of the manifest distributed beside the Worker is byte-identical to the
    one embedded in the Worker (editing the distributed copy authorizes nothing; a
@@ -144,7 +147,7 @@ is recorded. A Worker hard reload copies the manifests beside the swapped Worker
 
 `nativeVerification.scope` states the condition on the Knowledge Base under which a
 proof holds. The U16 manifest has none: its proof covers a WebPanel with a persisted
-WorkWithPlus host. The U11 manifest declares `kb-without-pattern-instances`: its
+WorkWithPlus host. The U11 and U10 manifests declare `kb-without-pattern-instances`: each
 proof is for a Knowledge Base with no pattern instance at all (WorkWithPlus or any
 other pattern), where the save hooks of the pattern packages have nothing to apply.
 The SDK loads the WorkWithPlus package of every installation that has it, whether or
@@ -169,6 +172,17 @@ passed) is [`evidence/events-u11-wwp16.1-native-proof.json`](evidence/events-u11
 its SHA-256 is the manifest's `proofEvidenceSha256`. Not covered: a persisted
 WorkWithPlus host, a Knowledge Base that has pattern instances (refused, and covered
 by unit tests only), other object types and parts, and other update levels.
+
+The U10 proof (`EventsBundleNativeProofLiveTests`, GeneXus 18 U10 without
+WorkWithPlus) ran the same checks on a synthetic WebPanel in a disposable Knowledge
+Base without pattern instances: 27 checks, none failed, among them the asynchronous
+save whose result is consulted through `genexus_lifecycle`, the preservation of the
+Rules and Variables parts after the save, the restart and the queue, and the refusal
+of a second WebPanel while the bundle was pending. Its sanitized result is
+[`evidence/events-u10-native-proof.json`](evidence/events-u10-native-proof.json); its
+SHA-256 is the U10 manifest's `proofEvidenceSha256`. It does not cover a Knowledge Base
+with pattern instances (refused), other object types and parts, or an installation
+with WorkWithPlus, which selects no U10 manifest.
 
 ## Applied versus pending configuration
 

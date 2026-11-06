@@ -149,11 +149,16 @@ setting at its default.
 | `Server.SharedHost.ColdStartConcurrency` | `GXMCP_SHARED_COLD_START_CONCURRENCY` | 1 | 1-4 concurrent cold starts | `shared-host` |
 | `Server.SharedHost.AttachReadyTimeoutSeconds` | `GXMCP_SHARED_ATTACH_READY_TIMEOUT_S` | 120 | 10-600 s | `shared-host` |
 
-- In this release only `QueueWaitMs`, `QueueDepth` and `SessionQueueCap` change
-  behavior: they bound the Worker host's request queue. `MaxWorkers`,
-  `MemoryFloorMB`, `ColdStartConcurrency` and `AttachReadyTimeoutSeconds` are
-  validated at load with the ranges above but are not applied yet; they are
-  reserved for the Worker admission and attach-readiness work that follows.
+- `QueueWaitMs`, `QueueDepth` and `SessionQueueCap` bound the Worker host's
+  request queue. `MaxWorkers`, `MemoryFloorMB` and `ColdStartConcurrency` are
+  the admission limits every Worker host on the machine checks before it starts
+  a Worker: cold starts in progress first (extra starts are held in arrival
+  order), then the machine-wide Worker count (an idle host's Worker is stopped
+  to make room, otherwise `KB_POOL_FULL` with `worker-limit`), then the free
+  physical memory (`KB_POOL_FULL` with `low-memory`). `AttachReadyTimeoutSeconds`
+  is how long a Gateway waits for a host to become ready and how long a held
+  start may wait before it fails with `WORKER_STARTUP_FAILED`
+  (`cold-start-wait-expired`).
 - `GXMCP_BUSY_REJECT_MS` is ignored in shared-host mode: an SDK operation that
   arrives while the Worker is busy is queued under the settings above instead of
   being rejected early. The Worker host starts its Worker with the variable set to 0.
@@ -267,6 +272,9 @@ See [Human-in-the-loop elicitation](elicitation.md).
 | `GXMCP_LIVE_MAJORS` | Comma-, semicolon-, or whitespace-separated catalog majors for the live matrix used by `scripts/release-preflight.ps1` and CI. When set, the matrix validates only these majors; the standalone matrix command validates every catalog major when no `-Majors` flag is supplied. | unset (single-major preflight; all catalog majors for standalone matrix) |
 | `GXMCP_LIVE_GX_PATH_MAP` | Semicolon-separated `major=absolute-path` overrides for SDK installations used by the live matrix, for example `17=C:\Program Files (x86)\GeneXus\GeneXus17Trial;18=C:\Program Files (x86)\GeneXus\GeneXus18`. | unset (catalog default paths) |
 | `GXMCP_TEAMDEV_PENDING_NAME` | Name of a pre-seeded object with an IDE-created Team Development pending change for the opt-in Gateway regression test. | unset (IDE-origin regression skipped) |
+| `GXMCP_EVENTS_NATIVE_PROOF_OUT` | Test-only. File that receives the sanitized result (check name and pass/fail) of the Events bundle native proof (`EventsBundleNativeProofLiveTests`); the proof runs only when it is set, on a disposable KB with both write pins set. | unset (proof skipped) |
+| `GXMCP_EVENTS_PROOF_OBJECT` | Test-only. The manifest's synthetic WebPanel the Events native proof may save. | unset |
+| `GXMCP_EVENTS_PROOF_OTHER_OBJECT` | Test-only. A second object the Events native proof must be refused to save. | unset |
 | `GXMCP_REQUIRE_LIVE_BUILD_ALL` | Set to `1` to require the native Build All evidence gate during release preflight. Missing fixtures or an unavailable GeneXus cloud `User` fail the required gate. | off |
 
 ## Source-store backfill

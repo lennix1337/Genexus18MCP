@@ -116,6 +116,23 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void SuccessivePagesPreserveExactOriginalLineEndings()
+        {
+            const string content = "first\r\nsecond\nthird\rfourth\r\n";
+            var full = ReadPagination.ApplyDefault(content, null, 0, "mcp");
+            var collected = new StringBuilder();
+            int offset = 0;
+            ReadPage page;
+            do
+            {
+                page = ReadPagination.ApplyDefault(content, offset, 2, "mcp");
+                collected.Append(page.Content);
+                offset = page.SuggestedNextOffset ?? page.TotalLines;
+            } while (page.Truncated);
+            Assert.Equal(full.Content, collected.ToString());
+        }
+
+        [Fact]
         public void SmallContent_NoPagination()
         {
             var content = MakeContent(40, approxBytesPerLine: 40);

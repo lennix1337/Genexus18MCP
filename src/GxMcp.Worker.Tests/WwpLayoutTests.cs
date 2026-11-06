@@ -199,6 +199,16 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void Projection_RejectsDuplicateNamesAcrossNewControls()
+        {
+            var check = WwpActionService.VerifyLayoutProjection("<Form/>",
+                "<Form><gxTable ControlName='Fields'/><gxEdit ControlName='fields' AttId='var:7'/></Form>",
+                JArray.Parse("[{type:'table',name:'Fields'},{type:'variable',name:'Application'}]"),
+                new Dictionary<string, string> { ["Application"] = "var:7" });
+            Assert.False(check["confirmed"].Value<bool>());
+        }
+
+        [Fact]
         public void Projection_RejectsChangedPreexistingControl()
         {
             var check = WwpActionService.VerifyLayoutProjection("<Form><gxEdit ControlName='Old' AttId='var:1'/></Form>",

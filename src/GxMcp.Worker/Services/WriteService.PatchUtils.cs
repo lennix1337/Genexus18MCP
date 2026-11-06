@@ -450,6 +450,9 @@ namespace GxMcp.Worker.Services
                 response["saveContract"] = "transactional-object-save";
             }
             response["persistedStateKnown"] = known;
+            response["persistedState"] = dryRun || !applied || !known
+                ? "unknown"
+                : verification.Matches ? "confirmed" : "not_persisted";
             response["verified"] = !dryRun && known && verification.Matches;
             response["persistedVerified"] = response["verified"];
             // A visual write can be physically committed even when the requested

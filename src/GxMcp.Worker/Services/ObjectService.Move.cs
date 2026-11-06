@@ -200,7 +200,7 @@ namespace GxMcp.Worker.Services
         // a normal save refuses to put anything in it, but EntityManager.UpdateParent would not notice.
         private static bool IsImported(KBObject obj)
         {
-            try { return obj != null && !IsRootModule(obj) && obj.IsInterface; } catch { return false; }
+            try { return obj != null && !IsRootModule(obj) && Compatibility.SdkCompat.IsModuleInterface(obj); } catch { return false; }
         }
 
         /// <summary>The path of <paramref name="container"/> when it or an enclosing module is imported, else null.</summary>
@@ -582,6 +582,7 @@ namespace GxMcp.Worker.Services
 
                     tx.Commit();
                     committed = true;
+                    PropertyService.InvalidatePropertyCache(current);
                 }
                 catch (Exception ex)
                 {

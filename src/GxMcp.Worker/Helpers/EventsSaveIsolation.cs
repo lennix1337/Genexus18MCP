@@ -162,7 +162,9 @@ namespace GxMcp.Worker.Helpers
                 return EventsBundleAudits.MatchComplete(hashes);
             if (Matches(AuditedAssemblies, hashes)) return "18.0.16.189550";
             if (Matches(UpdatedU16Assemblies, hashes)) return "18.0.16.189595";
-            return null;
+            // A bundle audited as a whole without WorkWithPlus: its core hash is a trigger, so Evaluate asks for this match only
+            // after that complete audit verified the installation and every loaded SDK assembly.
+            return hashes != null && !hashes.ContainsKey(EventsBundleAudit.TriggerAssembly) ? EventsBundleAudits.MatchComplete(hashes) : null;
         }
 
         private static bool Matches(Dictionary<string, string> expected, IDictionary<string, string> actual)

@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -55,6 +57,40 @@ namespace GxMcp.Gateway
         private static readonly string RegistryRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "GxMcp", "worker-ownership");
+
+        /// <summary>The on-disk ownership registry root, %LOCALAPPDATA%\GxMcp\worker-ownership.</summary>
+        internal static string DefaultRoot => RegistryRoot;
+
+        /// <summary>
+        /// Read-only scan for the ownership records of one KB, for any Worker executable.
+        /// Parses every "*.json" file directly under the root and keeps the records whose
+        /// normalized KB path equals the normalized <paramref name="kbPath"/>. Unparseable
+        /// files are skipped and a missing root gives an empty list. It never creates,
+        /// modifies or deletes a file, and takes no lock or mutex.
+        /// </summary>
+        internal static IReadOnlyList<WorkerOwnershipRecord> ScanByKbPath(string kbPath, string? registryRoot = null)
+        {
+            string root = registryRoot ?? RegistryRoot;
+            string target = SharedWorkerIdentity.NormalizePath(kbPath);
+            var matches = new List<WorkerOwnershipRecord>();
+            if (target.Length == 0 || !Directory.Exists(root)) return matches;
+
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(root, "*.json", SearchOption.TopDirectoryOnly).ToList(); }
+            catch (IOException) { return matches; }
+            catch (UnauthorizedAccessException) { return matches; }
+
+            foreach (string file in files)
+            {
+                // Guard against pattern quirks: temp files ("*.json.tmp-*") are never records.
+                if (!file.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) continue;
+                WorkerOwnershipRecord? record = Read(file);
+                if (record == null) continue;
+                if (string.Equals(SharedWorkerIdentity.NormalizePath(record.KbPath), target, StringComparison.Ordinal))
+                    matches.Add(record);
+            }
+            return matches;
+        }
 
         internal static WorkerOwnershipLease Acquire(string workerExecutable, string kbPath)
         {
