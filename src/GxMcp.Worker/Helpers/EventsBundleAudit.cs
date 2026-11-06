@@ -16,8 +16,11 @@ namespace GxMcp.Worker.Helpers
     // whole: every installed assembly of the manifest must match its hash and every loaded SDK assembly must be in it.
     internal sealed class EventsBundleAudit
     {
-        // The assembly whose exact bytes decide which manifest, if any, applies to the loaded bundle.
+        // The assembly whose exact bytes decide which manifest, if any, applies to a bundle that includes WorkWithPlus.
         internal const string TriggerAssembly = "DVelop.Patterns.WorkWithPlus";
+
+        // A bundle audited without WorkWithPlus is selected by the exact bytes of the SDK core instead.
+        internal const string CoreAssembly = "Artech.Architecture.Common";
 
         // The one scope a native verification may declare: its proof holds only for a Knowledge Base that has no pattern
         // instance (WorkWithPlus or any other pattern), so the save hooks of the pattern packages have nothing to apply.
@@ -58,6 +61,12 @@ namespace GxMcp.Worker.Helpers
 
         // A copy: callers add and compare entries without touching the audit input.
         internal Dictionary<string, string> CriticalHashes => new Dictionary<string, string>(_criticalHashes);
+
+        internal bool IncludesWorkWithPlus => _criticalHashes.ContainsKey(TriggerAssembly);
+
+        // The assembly, and its audited hash, that select this manifest.
+        internal string Trigger => IncludesWorkWithPlus ? TriggerAssembly : CoreAssembly;
+        internal string TriggerHash => _criticalHashes[Trigger];
 
         internal static bool MaySaveTarget(JObject verification, string name)
             => (string)verification?["status"] == "verified"
@@ -183,23 +192,30 @@ namespace GxMcp.Worker.Helpers
     {
         internal static readonly EventsBundleAudit U16 = EventsBundleAudit.FromEmbedded("events-u16-wwp16.2-audit.json");
         internal static readonly EventsBundleAudit U11 = EventsBundleAudit.FromEmbedded("events-u11-wwp16.1-audit.json");
+        internal static readonly EventsBundleAudit U10 = EventsBundleAudit.FromEmbedded("events-u10-audit.json");
 
-        internal static IReadOnlyList<EventsBundleAudit> All { get; } = new[] { U16, U11 };
+        internal static IReadOnlyList<EventsBundleAudit> All { get; } = new[] { U16, U11, U10 };
 
-        // The WorkWithPlus hashes that make the complete-bundle audit mandatory.
+        // The hashes that make the complete-bundle audit mandatory: the WorkWithPlus of a bundle that includes it, the SDK
+        // core of one audited without it.
         internal static IReadOnlyCollection<string> TriggerHashes
-            => All.Select(a => a.CriticalHashes[EventsBundleAudit.TriggerAssembly]).ToArray();
+            => All.Select(a => a.TriggerHash).ToArray();
 
         internal static IReadOnlyCollection<string> CriticalNames
             => All.SelectMany(a => a.CriticalHashes.Keys).Distinct(StringComparer.Ordinal).ToArray();
 
-        // Picks the manifest by the exact bytes of the loaded WorkWithPlus; nothing else selects it.
+        // Picks the manifest by the exact bytes of the loaded WorkWithPlus; without WorkWithPlus, by the exact bytes of the SDK
+        // core among the bundles audited without it. A loaded WorkWithPlus never selects a bundle audited without it.
         internal static JObject Verify(string objectName, IDictionary<string, string> hashes, Func<int> countPatternInstances = null)
         {
             string wwp = null;
-            hashes?.TryGetValue(EventsBundleAudit.TriggerAssembly, out wwp);
-            var audit = All.FirstOrDefault(a => string.Equals(a.CriticalHashes[EventsBundleAudit.TriggerAssembly], wwp, StringComparison.Ordinal))
-                ?? throw new InvalidOperationException("No complete bundle audit covers the loaded WorkWithPlus.");
+            bool wwpLoaded = hashes != null && hashes.TryGetValue(EventsBundleAudit.TriggerAssembly, out wwp);
+            var audit = wwpLoaded
+                ? All.FirstOrDefault(a => a.IncludesWorkWithPlus && string.Equals(a.TriggerHash, wwp, StringComparison.Ordinal))
+                    ?? throw new InvalidOperationException("No complete bundle audit covers the loaded WorkWithPlus.")
+                : All.FirstOrDefault(a => !a.IncludesWorkWithPlus && hashes != null
+                        && hashes.TryGetValue(a.Trigger, out string core) && string.Equals(a.TriggerHash, core, StringComparison.Ordinal))
+                    ?? throw new InvalidOperationException("No complete bundle audit covers the loaded SDK without WorkWithPlus.");
             return audit.Verify(objectName, hashes, countPatternInstances: countPatternInstances);
         }
 

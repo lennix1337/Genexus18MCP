@@ -36,6 +36,8 @@
     <None Include="..\..\config\events-u16-wwp16.2-audit.json" Link="events-u16-wwp16.2-audit.json" TargetPath="events-u16-wwp16.2-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
     <EmbeddedResource Include="..\..\config\events-u11-wwp16.1-audit.json" LogicalName="events-u11-wwp16.1-audit.json" />
     <None Include="..\..\config\events-u11-wwp16.1-audit.json" Link="events-u11-wwp16.1-audit.json" TargetPath="events-u11-wwp16.1-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
+    <EmbeddedResource Include="..\..\config\events-u10-audit.json" LogicalName="events-u10-audit.json" />
+    <None Include="..\..\config\events-u10-audit.json" Link="events-u10-audit.json" TargetPath="events-u10-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
   </ItemGroup>
 
   <PropertyGroup Condition="Exists('$(GX_PATH)\GeneXus.SecurityScanner.Common.dll')">

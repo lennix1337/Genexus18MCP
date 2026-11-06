@@ -26,6 +26,10 @@ namespace GxMcp.Worker.Tests
             "DVelop.Extensions.UserControls", "DVelop.Extensions.WWPPackages"
         };
 
+        // A bundle audited without WorkWithPlus has the five SDK assemblies only.
+        private static IEnumerable<string> ExpectedCriticalOf(EventsBundleAudit audit)
+            => audit.IncludesWorkWithPlus ? ExpectedCritical : ExpectedCritical.Where(name => name.StartsWith("Artech.", StringComparison.Ordinal));
+
         private static readonly Regex Sha256Hex = new Regex("^[0-9a-f]{64}$", RegexOptions.Compiled);
 
         private readonly string _dir = Path.Combine(Path.GetTempPath(), "gxmcp-bundle-audit-" + Guid.NewGuid().ToString("N"));
@@ -255,7 +259,7 @@ namespace GxMcp.Worker.Tests
             var report = audit.Verify(name, hashes, installedRoot, baseDirectory, new Assembly[0], () => 0);
 
             Assert.Equal(audit.BundleId, report["bundleId"].ToString());
-            Assert.True(report["installedAssembliesVerified"].Value<int>() > 400);
+            Assert.True(report["installedAssembliesVerified"].Value<int>() > 300);
             Assert.Equal(audit.CriticalHashes, hashes);
             _output.WriteLine("VERIFIED: manifest " + audit.BundleId + " matches " + report["installedAssembliesVerified"] + " installed files of " + installedRoot);
         }
@@ -393,6 +397,7 @@ namespace GxMcp.Worker.Tests
         public void TheU11Manifest_IsScopedToKnowledgeBasesWithoutPatternInstances_AndTheU16ManifestIsNot()
         {
             Assert.Equal(EventsBundleAudit.ScopeKbWithoutPatternInstances, (string)EventsBundleAudits.U11.NativeVerification["scope"]);
+            Assert.Equal(EventsBundleAudit.ScopeKbWithoutPatternInstances, (string)EventsBundleAudits.U10.NativeVerification["scope"]);
             Assert.Null(EventsBundleAudits.U16.NativeVerification["scope"]);
             foreach (var audit in EventsBundleAudits.All)
                 Assert.Contains(EventsBundleAudit.ScopeOf(audit.NativeVerification), new[] { null, EventsBundleAudit.ScopeKbWithoutPatternInstances });
@@ -435,16 +440,16 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void TheEmbeddedManifests_AreWellFormedAndDoNotOverlap()
         {
-            Assert.Equal(2, EventsBundleAudits.All.Count);
+            Assert.Equal(3, EventsBundleAudits.All.Count);
             Assert.Equal(EventsBundleAudits.All.Count, EventsBundleAudits.All.Select(a => a.BundleId).Distinct().Count());
             Assert.Equal(EventsBundleAudits.All.Count, EventsBundleAudits.All.Select(a => a.ManifestName).Distinct().Count());
             foreach (var audit in EventsBundleAudits.All)
             {
-                Assert.Matches(@"^18\.0\.\d+\.\d+\+wwp\d+(\.\d+)+$", audit.BundleId);
-                Assert.Equal(ExpectedCritical.OrderBy(n => n, StringComparer.Ordinal), audit.CriticalHashes.Keys.OrderBy(n => n, StringComparer.Ordinal));
+                Assert.Matches(audit.IncludesWorkWithPlus ? @"^18\.0\.\d+\.\d+\+wwp\d+(\.\d+)+$" : @"^18\.0\.\d+\.\d+$", audit.BundleId);
+                Assert.Equal(ExpectedCriticalOf(audit).OrderBy(n => n, StringComparer.Ordinal), audit.CriticalHashes.Keys.OrderBy(n => n, StringComparer.Ordinal));
                 Assert.All(audit.CriticalHashes.Values, hash => Assert.Matches(Sha256Hex, hash));
             }
-            var trigger = EventsBundleAudits.All.Select(a => a.CriticalHashes[EventsBundleAudit.TriggerAssembly]).ToArray();
+            var trigger = EventsBundleAudits.All.Select(a => a.CriticalHashes[a.Trigger]).ToArray();
             Assert.Equal(trigger.Length, trigger.Distinct().Count());
             // No critical assembly hash belongs to two audited bundles: a hash identifies one bundle.
             var allCritical = EventsBundleAudits.All.SelectMany(a => a.CriticalHashes.Values).ToArray();
@@ -471,7 +476,7 @@ namespace GxMcp.Worker.Tests
                     Assert.DoesNotContain("\\", relative);
                     Assert.EndsWith(".dll", relative, StringComparison.OrdinalIgnoreCase);
                 }
-                foreach (string critical in ExpectedCritical)
+                foreach (string critical in ExpectedCriticalOf(audit))
                     Assert.Single(entries, e => (string)e["name"] == critical);
             }
         }
@@ -548,6 +553,46 @@ namespace GxMcp.Worker.Tests
                 changed[name] = new string('0', 64);
                 Assert.Null(EventsSaveIsolation.MatchAuditedBuild(changed));
                 var missing = new Dictionary<string, string>(u11);
+                missing.Remove(name);
+                Assert.Null(EventsSaveIsolation.MatchAuditedBuild(missing));
+            }
+        }
+
+        [Fact]
+        public void WithoutWorkWithPlus_TheRegistryChoosesTheBundleByTheExactCoreBytes_AndALoadedWorkWithPlusNeverSelectsIt()
+        {
+            var u10 = EventsBundleAudits.U10.CriticalHashes;
+            Assert.False(EventsBundleAudits.U10.IncludesWorkWithPlus);
+            Assert.Equal(EventsBundleAudit.CoreAssembly, EventsBundleAudits.U10.Trigger);
+            Assert.Contains(u10[EventsBundleAudit.CoreAssembly], EventsBundleAudits.TriggerHashes);
+
+            // Selected by its core, the bundle is then verified as a whole: a pending proof refuses a business object.
+            if ((string)EventsBundleAudits.U10.NativeVerification["status"] == "pending")
+            {
+                var pending = Assert.Throws<InvalidOperationException>(() => EventsBundleAudits.Verify("RecordsBusinessObject", new Dictionary<string, string>(u10)));
+                Assert.Contains(EventsBundleAudits.U10.BundleId + " bundle native verification is pending", pending.Message);
+            }
+
+            var withWwp = new Dictionary<string, string>(u10) { [EventsBundleAudit.TriggerAssembly] = new string('e', 64) };
+            var ex = Assert.Throws<InvalidOperationException>(() => EventsBundleAudits.Verify("McpU10AuditProbe01", withWwp));
+            Assert.Contains("covers the loaded WorkWithPlus", ex.Message);
+            Assert.Null(EventsSaveIsolation.MatchAuditedBuild(withWwp));
+
+            var otherCore = new Dictionary<string, string>(u10) { [EventsBundleAudit.CoreAssembly] = new string('0', 64) };
+            ex = Assert.Throws<InvalidOperationException>(() => EventsBundleAudits.Verify("McpU10AuditProbe01", otherCore));
+            Assert.Contains("covers the loaded SDK without WorkWithPlus", ex.Message);
+        }
+
+        [Fact]
+        public void TheCompleteMatch_RecognizesTheBundleWithoutWorkWithPlus_OnlyWithEveryCriticalHash()
+        {
+            var u10 = EventsBundleAudits.U10.CriticalHashes;
+            Assert.Equal(EventsBundleAudits.U10.BundleId, EventsSaveIsolation.MatchAuditedBuild(new Dictionary<string, string>(u10)));
+            foreach (string name in u10.Keys)
+            {
+                var changed = new Dictionary<string, string>(u10) { [name] = new string('0', 64) };
+                Assert.Null(EventsSaveIsolation.MatchAuditedBuild(changed));
+                var missing = new Dictionary<string, string>(u10);
                 missing.Remove(name);
                 Assert.Null(EventsSaveIsolation.MatchAuditedBuild(missing));
             }

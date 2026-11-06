@@ -103,6 +103,11 @@
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-build-warning-baseline.ps1", "-GxPath", "C:/Program Files (x86)/GeneXus/GeneXus18"],
       "timeoutMs": 600000
     },
+    "events-audit-regression": {
+      "description": "Events save bundle audit registry, manifests and isolation evaluation; offline, no KB",
+      "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--filter", "FullyQualifiedName~EventsBundleAudit|FullyQualifiedName~EventsIsolation|FullyQualifiedName~EventsSaveIsolation", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 300000
+    },
     "worker-unit": {
       "description": "Worker non-process tests; live SDK/KB evidence remains a separate lane",
       "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--filter", "Category!=ProcessSmoke", "--logger", "console;verbosity=minimal"],
