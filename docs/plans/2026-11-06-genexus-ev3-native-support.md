@@ -76,20 +76,28 @@ FileVersion `10.3.16.15056`. SDK assembly version `10.1.0.0`
   primitive type, so a persisted `Attr : Domain` write failed its own
   round-trip check.
 
-Open gaps, all fail closed today (the tool reports `WriteNotPersisted`):
+Second pass, both fixed on both SDKs and verified live on `KBTesteEv3`
+(`persistedVerified`, re-read and a fresh SDK session agree):
 
-1. Transaction Structure: an attribute added in the same save is persisted (a
-   fresh SDK session reads it) but the in-session re-read does not see it yet.
-2. SDT Structure: a member typed by a Domain is not applied; the write is
-   rolled back and verified.
+1. Transaction Structure reported `WriteNotPersisted` for a persisted
+   Domain-typed attribute: the round-trip comparison kept the rendered
+   `// "Description"` comment as part of the type, and a Domain type has no
+   `(len)` that cut it off. The comparison now drops the comment.
+2. SDT Structure never added a new member typed by a Domain: `AddItem` needs an
+   `eDBType` and a Domain name is not one. The member is now created with the
+   Domain's primitive type and then bound to the Domain (`Domain.Type` hides
+   `KBObject.Type`, so it is looked up by its type, not by name).
+
+Open gap:
+
 3. WorkWithPlus 11.138: not exercised yet.
 
 ## Order of work
 
 1. Compile the Worker for Ev3: done.
 2. Start the Ev3 Worker against `KBTesteEv3`, list and read: done.
-3. Live write tests per object type: Procedure, Domain, WebPanel, DataProvider
-   done; Transaction and SDT gaps above.
+3. Live write tests per object type: Procedure, Domain, Transaction, SDT,
+   WebPanel, DataProvider: done.
 4. WorkWithPlus 11.138.
 5. Move `10.3` to `supportedMajors` with a fingerprint manifest, docs and
    release notes, once 3 and 4 pass.
