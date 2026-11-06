@@ -759,14 +759,41 @@ namespace GxMcp.Gateway
                             continue;
                         if (_pendingRequests.TryRemove(kvp.Key, out var pending))
                         {
-                            _operationTracker.MarkFailedByRequest(kvp.Key, "Cancelled by client");
+                            string tool = pending.ToolName;
+                            JObject? arguments = null;
+                            if (pending.OperationId != null
+                                && _operationTracker.TryGetContext(pending.OperationId, out var trackedTool, out var trackedArguments))
+                            {
+                                tool = trackedTool ?? tool;
+                                arguments = trackedArguments;
+                            }
+                            bool mutationOutcomeUnknown = OperationClassifier.Describe(tool, arguments).Kind
+                                != OperationClassifier.OperationKind.ReadOnly
+                                && !OperationClassifier.IsEffectFreeDryRunPreview(tool, arguments);
+                            var error = new JObject { ["code"] = -32800, ["message"] = "Request cancelled by client" };
+                            if (mutationOutcomeUnknown)
+                            {
+                                // Cancelling the wait neither retracts a queued command nor rolls back the SDK.
+                                // Keep the keyed mutation fenced until the caller reconciles its real outcome.
+                                MarkMutationOutcomeUnknown(error);
+                                error["mutationOutcomeUnknown"] = true;
+                                error["hint"] = "The Worker may still complete the write. Inspect its operation result and read the target before authorizing another attempt.";
+                                if (pending.OperationId != null)
+                                {
+                                    error["operationId"] = pending.OperationId;
+                                    _operationTracker.MarkCancellationRequested(pending.OperationId,
+                                        "Client stopped waiting; the mutation outcome is not yet confirmed.");
+                                }
+                            }
+                            else
+                                _operationTracker.MarkFailedByRequest(kvp.Key, "Cancelled by client");
                             // Same envelope shape as the worker-crash abort path: resolve the
                             // awaiter with a JSON-RPC error instead of letting it run to timeout.
                             var errorJson = JsonConvert.SerializeObject(new
                             {
                                 jsonrpc = "2.0",
                                 id = kvp.Key,
-                                error = new { code = -32800, message = "Request cancelled by client" }
+                                error
                             });
                             pending.CompletionSource.TrySetResult(errorJson);
                             aborted++;

@@ -1977,6 +1977,9 @@ namespace GxMcp.Gateway
                 // saved, what the forced re-read proved, and whether rollback landed.
                 "saved", "verified", "persisted", "persistedState", "persistedVerified", "requestedHash",
                 "retryable", "reconciliationRequired", "verifiedByReadback", "implicitLifecycleOperations",
+                // Cancellation stops the client's wait, not the SDK write. The cache needs this
+                // explicit marker to preserve its durable fence; the caller needs the operation to inspect.
+                "mutationOutcomeUnknown", "operationId", "commitState", "rereadConfirmed",
                 "persistedHash", "normalizedRequestedHash", "normalizedPersistedHash",
                 "persistedMatchCount", "oldContentPresent", "verification", "rollback",
                 "rolledBack", "versionToken", "persistedVerifyError", "mismatchKind", "replacementPresent",

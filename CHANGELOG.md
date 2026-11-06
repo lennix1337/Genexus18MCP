@@ -4,6 +4,8 @@
 
 ### Internal
 
+- Source-search resume tests control the cooperative budget and count completed census reads without CPU waits; the release-status fixture selects one PowerShell executable when several are on PATH.
+- Checkpoint growth tests keep the same workload with a linear simulation; process timeout tests synchronize with the real child instead of fixed sleeps, and Blame fixtures no longer depend on TEMP being outside Git.
 - Worker diagnostics correlate queued SDK commands with bounded background STA action begin/end events and slow source-store reads, without logging object names or source content.
 - SDK CI builds the current package before process smoke and reuses that exact package for live tests, so a clean runner cannot certify missing or stale publish artifacts. Offline preflight clears live KB/configuration inputs temporarily and restores them before the mandatory live lane.
 
@@ -19,6 +21,9 @@
 
 ### Fixed
 
+- Client cancellation preserves the durable idempotency fence for a dispatched mutation whose outcome is unknown, including compact error responses and late Worker replies. Journal inspection reloads peer changes under its lease and reports contention instead of stale absence.
+- Legacy transactional bulk edits refuse targets without a complete recovery snapshot and report failed or unconfirmed rollback accurately. Malformed, pending, or contradictory write receipts require reconciliation instead of being counted as completed recovery.
+- Coverage collection validates its output directory before recursive cleanup; external output directories require an explicit allowed parent, and checkout roots, source directories, and symbolic links are refused.
 - Shared-host launch refusals now retain their catalog details in `genexus_kb` error results and stdio JSON-RPC errors. https://github.com/lennix1337/Genexus18MCP/issues/914
 - **`genexus_search_source` resumes its source-store coverage census** without repeating completed freshness checks. The versioned cursor carries partial coverage; older cursors are refused. `progress` is cumulative across coverage, source and metadata, while `nextOffset` remains phase-local; use the opaque `nextCursor` across phases. Oversized timeouts are capped and the effective budget is reported. https://github.com/lennix1337/Genexus18MCP/issues/882
 - SDK and native page projections retain the original line endings, so their unmarked page contents can be concatenated without losing or changing newline bytes. The read response still embeds truncation markers and needs further work for end-to-end reconstruction. https://github.com/lennix1337/Genexus18MCP/issues/881

@@ -160,6 +160,68 @@ namespace GxMcp.Gateway.Tests
             finally { TryDelete(root); }
         }
 
+        [Fact]
+        public void InspectReloadsPeerStartedCompletedAndRemovedRecords()
+        {
+            WithJournal("inspect-peer", out string root, out string path);
+            try
+            {
+                var writer = new MutationOperationJournal(path);
+                var reader = new MutationOperationJournal(path);
+                Assert.Equal(MutationOperationJournal.BeginResult.Started, writer.Begin(Kb, Tool, "key", "hash"));
+                Assert.Equal("started", reader.Inspect(Kb, Tool, "key")["status"]?.ToString());
+                writer.Complete(Kb, Tool, "key", "hash");
+                Assert.Equal("completed", reader.Inspect(Kb, Tool, "key")["status"]?.ToString());
+                writer.Fail(Kb, Tool, "key", "hash");
+                Assert.Equal("not_found", reader.Inspect(Kb, Tool, "key")["status"]?.ToString());
+            }
+            finally { TryDelete(root); }
+        }
+
+        [Fact]
+        public void InspectFailsClosedIfPeerCorruptsTheJournalAfterConstruction()
+        {
+            WithJournal("inspect-corrupt", out string root, out string path);
+            try
+            {
+                var journal = new MutationOperationJournal(path);
+                File.WriteAllText(path, "not-json");
+                var result = journal.Inspect(Kb, Tool, "key");
+                Assert.False(result["journalHealthy"]!.Value<bool>());
+                Assert.Equal("operation_journal_unavailable", result["code"]?.ToString());
+                Assert.True(result["recoveryRequired"]!.Value<bool>());
+                Assert.Equal("not-json", File.ReadAllText(path));
+            }
+            finally { TryDelete(root); }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ContentionAfterConstructionIsVisibleAndInspectRecovers(bool attemptBegin)
+        {
+            WithJournal("inspect-held", out string root, out string path);
+            try
+            {
+                var journal = new MutationOperationJournal(path, new ImmediateExpiringClock());
+                using (new FileStream(path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                {
+                    if (attemptBegin)
+                    {
+                        Assert.Equal(MutationOperationJournal.BeginResult.JournalUnavailable, journal.Begin(Kb, Tool, "key", "hash"));
+                        Assert.False(journal.IsHealthy);
+                    }
+                    var result = journal.Inspect(Kb, Tool, "key");
+                    Assert.False(result["journalHealthy"]!.Value<bool>());
+                    Assert.Equal("operation_journal_unavailable", result["code"]?.ToString());
+                }
+                var recovered = journal.Inspect(Kb, Tool, "key");
+                Assert.True(recovered["journalHealthy"]!.Value<bool>());
+                Assert.Equal("not_found", recovered["status"]?.ToString());
+            }
+            finally { TryDelete(root); }
+        }
+
         private static JObject ReadEntry(string path, string key)
         {
             JObject document = JObject.Parse(File.ReadAllText(path));
