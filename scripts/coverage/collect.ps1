@@ -124,6 +124,22 @@ if ($LASTEXITCODE -ne 0) {
 }
 $previousTestHostExe = $env:GXMCP_SHAREDHOST_TESTHOST_EXE
 $env:GXMCP_SHAREDHOST_TESTHOST_EXE = Join-Path $repoRoot "src\GxMcp.SharedHost.TestHost\bin\Debug\GxMcp.SharedHost.TestHost.exe"
+
+# The first .NET Framework (net48 x86) process on a fresh hosted runner pays a one-time cold
+# start (process smoke tests took 10-20s in CI; the host exits in <0.1s locally) that lands on whichever process smoke
+# test starts the host first and breaks its 10s budget. Pay it here and print both starts.
+# A rejected script key makes the host exit at once with code 2.
+$previousScript = $env:GXMCP_TESTHOST_SCRIPT
+$env:GXMCP_TESTHOST_SCRIPT = '{"warmUp":1}'
+try {
+    foreach ($label in 'cold', 'warm') {
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $null | & $env:GXMCP_SHAREDHOST_TESTHOST_EXE 2>&1 | Out-Null
+        Write-Host ("Shared-host test host $label start: {0} ms (exit $LASTEXITCODE)" -f $clock.ElapsedMilliseconds)
+    }
+} finally {
+    $env:GXMCP_TESTHOST_SCRIPT = $previousScript
+}
 try {
     Invoke-CoverageTest `
         -ProjectPath (Join-Path $repoRoot "src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj") `

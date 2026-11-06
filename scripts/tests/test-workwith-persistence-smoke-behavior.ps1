@@ -27,9 +27,10 @@ $serverErr = Join-Path $work 'server.err'
 $server = Start-Process -FilePath $python.Source -ArgumentList @($serverScript) -RedirectStandardOutput $serverOut `
     -RedirectStandardError $serverErr -WindowStyle Hidden -PassThru
 try {
-    # A cold Python start on a hosted Windows runner can take longer than 10s.
+    # run-release-script-tests.ps1 warms Python before the parallel run, so 10s is ample;
+    # a miss reports whether the server died and what it wrote to stderr.
     $port = $null
-    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while ($null -eq $port -and -not $server.HasExited -and [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 100
         $announced = if (Test-Path -LiteralPath $serverOut) { Get-Content -LiteralPath $serverOut -Raw } else { $null }
@@ -39,7 +40,7 @@ try {
         }
     }
     if ($null -eq $port) {
-        $state = if ($server.HasExited) { "exited with code $($server.ExitCode)" } else { 'still running after 45s' }
+        $state = if ($server.HasExited) { "exited with code $($server.ExitCode)" } else { 'still running after 10s' }
         $stderr = if (Test-Path -LiteralPath $serverErr) { (Get-Content -LiteralPath $serverErr -Raw) } else { '' }
         Assert-That $false "the fake MCP server did not report its port (process $state). stderr: $stderr"
     }
