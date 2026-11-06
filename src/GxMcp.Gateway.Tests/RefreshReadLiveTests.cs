@@ -40,7 +40,7 @@ namespace GxMcp.Gateway.Tests
                 uncertain = false;
                 var declared = (edit["autoCreatedVariables"] ?? edit["result"]?["autoCreatedVariables"]) as JArray;
                 Assert.NotNull(declared);
-                Assert.Contains(declared!, item => string.Equals(item["name"]?.ToString(), "McpUndeclared", StringComparison.OrdinalIgnoreCase));
+                Assert.Contains(declared!, item => string.Equals(item["name"]?.ToString(), "&McpUndeclared", StringComparison.OrdinalIgnoreCase));
                 var variables = await Call("genexus_read", new JObject
                 {
                     ["name"] = name, ["type"] = "Procedure", ["part"] = "Variables", ["limit"] = 0, ["refresh"] = true
@@ -53,6 +53,20 @@ namespace GxMcp.Gateway.Tests
                 if (created && !uncertain) await Delete(name);
                 if (uncertain) Console.Error.WriteLine("Uncertain mutation; reconcile owned fixture before cleanup: " + name);
             }
+        }
+
+        [LiveKbFact]
+        public Task LargeSourceSingularAndPluralReadsPreserveEveryPage()
+        {
+            AssertSyntheticFixture();
+            return LargePartReadLiveAssertions.Verify(Call, "Procedure", "Source");
+        }
+
+        [LiveKbFact]
+        public Task LargeEventsSingularAndPluralReadsPreserveEveryPage()
+        {
+            AssertSyntheticFixture();
+            return LargePartReadLiveAssertions.Verify(Call, "WebPanel", "Events");
         }
 
         [LiveKbFact]
