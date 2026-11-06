@@ -584,6 +584,14 @@ namespace GxMcp.Gateway
                     record.WorkerPid, record.WorkerStartTimeUtcTicks, context.RecoveringGatewayPid, StaleReason.OrphanedWorker));
             }
 
+            // The removal names why the record was stale: its orphaned Worker was stopped, its Worker PID now names
+            // another process (running with a different recorded start time), or the owner is gone and so is its Worker.
+            StaleReason removalReason = stopped
+                ? StaleReason.OrphanedWorker
+                : workerProbe.Status == ProcessProbeStatus.Running && record.WorkerStartTimeUtcTicks > 0 && !sameWorker
+                    ? StaleReason.StartTimeMismatch
+                    : StaleReason.OwnerNotRunning;
+
             if (!IsSafeRecordKey(key))
                 throw SharedWorkerRecoveryFailure.Exception(key, registry, SharedWorkerRecoveryFailure.RemoveFailed, null,
                     "the ownership record key is not a file name");
@@ -600,7 +608,7 @@ namespace GxMcp.Gateway
 
             context.Log(SharedWorkerRegistry.FormatRecoveryLogEntry(
                 SharedWorkerRegistry.RecoveryActionRemovedRecord, registry, key,
-                record.WorkerPid, record.WorkerStartTimeUtcTicks, context.RecoveringGatewayPid, StaleReason.OrphanedWorker));
+                record.WorkerPid, record.WorkerStartTimeUtcTicks, context.RecoveringGatewayPid, removalReason));
         }
 
         private enum OwnerState
