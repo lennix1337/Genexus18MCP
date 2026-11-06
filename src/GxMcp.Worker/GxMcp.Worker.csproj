@@ -19,6 +19,7 @@
 
   <PropertyGroup>
     <GX_PATH Condition="'$(GX_PATH)' == ''">C:\Program Files (x86)\GeneXus\GeneXus18</GX_PATH>
+    <GxMcpSdkManifest Condition="'$(GxMcpSdkManifest)' == '' and '$(GxMcpSdkProfile)' == 'evolution3'">$(MSBuildProjectDirectory)\..\..\config\sdk-compatibility.ev3.json</GxMcpSdkManifest>
     <GxMcpSdkManifest Condition="'$(GxMcpSdkManifest)' == ''">$(MSBuildProjectDirectory)\..\..\config\sdk-compatibility.json</GxMcpSdkManifest>
   </PropertyGroup>
 
