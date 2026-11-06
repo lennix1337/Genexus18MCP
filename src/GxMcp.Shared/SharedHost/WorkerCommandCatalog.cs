@@ -183,6 +183,8 @@ namespace GxMcp.Common.SharedHost
             W("structure", "SetAttributeProperties"),
             W("structure", "SetLevelProperties"),
             W("structure", "SetDomainProperties"),
+            R("structure", "GetSdtItemProperty"),
+            W("structure", "SetSdtItemProperty"),
             W("structure", "UpdateGroupStructure"),
             R("structure", "GetVisualStructure"),
             W("structure", "UpdateVisualStructure"),
