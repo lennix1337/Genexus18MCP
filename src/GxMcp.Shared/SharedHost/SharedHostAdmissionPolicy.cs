@@ -99,8 +99,8 @@ namespace GxMcp.Common.SharedHost
 
     // The Admission_Guard decision, pure (Requirements 5 and 6). Check order:
     //   0. Server.MaxOpenKbs result from the Gateway (see below);
-    //   1. machine-wide Worker count against MaxWorkers, with eviction when the limit is reached;
-    //   2. cold-start concurrency, with a FIFO hold by heldSinceUtc, then ordinal key;
+    //   1. cold-start concurrency, with a FIFO hold by heldSinceUtc, then ordinal key (Requirement 6 criterion 4);
+    //   2. machine-wide Worker count against MaxWorkers, with eviction when the limit is reached;
     //   3. Memory_Floor last.
     // The caller re-runs Decide for a released held start, so every limit is re-applied at release (Requirement 6
     // criterion 5).
@@ -139,15 +139,19 @@ namespace GxMcp.Common.SharedHost
                 if (string.Equals(host.State, StartingState, StringComparison.Ordinal)) coldStarts++;
             }
 
+            // Requirement 6 criterion 4: a start requested while the Cold_Starts in progress fill the concurrency is
+            // held, whatever the Worker count. A Cold_Start owner is never evictable, so deciding the Worker limit
+            // first would refuse a start that could pass once that Cold_Start ends; criterion 5 re-applies the Worker
+            // limit and the Memory_Floor when the hold is released.
+            if (coldStarts >= input.ColdStartConcurrency)
+            {
+                return AdmissionDecision.Hold(HoldPosition(hosts, input.SelfKey, self));
+            }
+
             if (counted.Count >= input.MaxWorkers)
             {
                 var victim = ChooseVictim(counted);
                 return victim != null ? AdmissionDecision.Evict(victim.Key) : RefuseWorkerLimit(input.MaxWorkers, counted);
-            }
-
-            if (coldStarts >= input.ColdStartConcurrency)
-            {
-                return AdmissionDecision.Hold(HoldPosition(hosts, input.SelfKey, self));
             }
 
             if (input.AvailableMb.HasValue && input.AvailableMb.Value < input.MemoryFloorMb)

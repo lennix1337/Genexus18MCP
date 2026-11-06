@@ -206,10 +206,25 @@ namespace GxMcp.Gateway.Tests.SharedHost
 
         private static bool IsColdStart(AdmissionHostView h) => h.Liveness == RecordLiveness.Live && h.State == "starting";
 
-        // Independent restatement of the contract: machine-wide count with eviction, then cold-start concurrency with
-        // a FIFO hold, then the Memory_Floor last.
+        // Independent restatement of the contract: cold-start concurrency with a FIFO hold (Requirement 6 criterion 4:
+        // whatever the Worker count), then the machine-wide count with eviction, then the Memory_Floor last.
         private static ExpectedDecision ReferenceDecide(AdmissionInput input)
         {
+            var coldStarts = input.Hosts.Count(IsColdStart);
+            if (coldStarts >= input.ColdStartConcurrency)
+            {
+                var self = input.Hosts.Single(h => h.Key == input.SelfKey);
+                var selfHeldSince = self.State == "held" && self.HeldSinceUtc.HasValue ? self.HeldSinceUtc.Value : DateTime.MaxValue;
+                var ahead = input.Hosts.Count(h =>
+                    h.Key != input.SelfKey
+                    && h.Liveness == RecordLiveness.Live
+                    && h.State == "held"
+                    && h.HeldSinceUtc.HasValue
+                    && (h.HeldSinceUtc.Value < selfHeldSince
+                        || (h.HeldSinceUtc.Value == selfHeldSince && string.CompareOrdinal(h.Key, input.SelfKey) < 0)));
+                return new ExpectedDecision { Kind = AdmissionDecisionKind.Hold, Position = ahead + 1 };
+            }
+
             var counted = input.Hosts.Where(IsCountedWorker).ToList();
             if (counted.Count >= input.MaxWorkers)
             {
@@ -227,21 +242,6 @@ namespace GxMcp.Gateway.Tests.SharedHost
                     if (victim == null || IsOlder(h, victim)) victim = h;
                 }
                 return new ExpectedDecision { Kind = AdmissionDecisionKind.Evict, VictimKey = victim!.Key };
-            }
-
-            var coldStarts = input.Hosts.Count(IsColdStart);
-            if (coldStarts >= input.ColdStartConcurrency)
-            {
-                var self = input.Hosts.Single(h => h.Key == input.SelfKey);
-                var selfHeldSince = self.State == "held" && self.HeldSinceUtc.HasValue ? self.HeldSinceUtc.Value : DateTime.MaxValue;
-                var ahead = input.Hosts.Count(h =>
-                    h.Key != input.SelfKey
-                    && h.Liveness == RecordLiveness.Live
-                    && h.State == "held"
-                    && h.HeldSinceUtc.HasValue
-                    && (h.HeldSinceUtc.Value < selfHeldSince
-                        || (h.HeldSinceUtc.Value == selfHeldSince && string.CompareOrdinal(h.Key, input.SelfKey) < 0)));
-                return new ExpectedDecision { Kind = AdmissionDecisionKind.Hold, Position = ahead + 1 };
             }
 
             if (input.AvailableMb.HasValue && input.AvailableMb.Value < input.MemoryFloorMb)
@@ -293,6 +293,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
 
                 case AdmissionDecisionKind.Evict:
                     Assert.True(counted.Count >= input.MaxWorkers, "Evict below the Worker maximum");
+                    Assert.True(coldStarts < input.ColdStartConcurrency, "Evict while the Cold_Starts fill the concurrency");
                     var victim = evictable.SingleOrDefault(h => h.Key == d.VictimKey);
                     Assert.True(victim != null, "Victim '" + d.VictimKey + "' is not a live evictable Worker");
                     var zero = evictable.Where(h => h.Attachments == 0).ToList();
@@ -304,7 +305,8 @@ namespace GxMcp.Gateway.Tests.SharedHost
                     break;
 
                 case AdmissionDecisionKind.Hold:
-                    Assert.True(counted.Count < input.MaxWorkers, "Hold at the Worker maximum");
+                    // Requirement 6 criterion 4 holds at the concurrency whatever the Worker count; criterion 5
+                    // re-applies the Worker limit when the hold is released.
                     Assert.True(coldStarts >= input.ColdStartConcurrency, "Hold below cold-start concurrency");
                     Assert.True(d.Position.HasValue && d.Position.Value >= 1, "Hold without a 1-based position");
                     Assert.Null(d.VictimKey);
@@ -317,6 +319,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
                     if (d.Reason == "worker-limit")
                     {
                         Assert.True(counted.Count >= input.MaxWorkers, "worker-limit below the Worker maximum");
+                        Assert.True(coldStarts < input.ColdStartConcurrency, "worker-limit while the Cold_Starts fill the concurrency");
                         Assert.Empty(evictable);
                         Assert.Equal(input.MaxWorkers, (int)d.Details!["maxWorkers"]!);
                         var openKbs = ((JArray)d.Details["openKbs"]!).Cast<JObject>().ToList();

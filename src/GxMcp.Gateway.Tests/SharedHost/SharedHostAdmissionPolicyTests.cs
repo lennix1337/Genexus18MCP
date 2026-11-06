@@ -137,6 +137,21 @@ namespace GxMcp.Gateway.Tests.SharedHost
         }
 
         [Fact]
+        public void Decide_AtColdStartConcurrency_HoldsEvenWhenTheWorkerLimitIsReached()
+        {
+            // Requirement 6 criteria 4 and 5: the only counted Worker is a Cold_Start (never evictable); the start is
+            // held, and the Worker limit is applied again when the hold is released.
+            var input = Input(
+                hosts: new[] { Self(), Starting("kb-a") },
+                maxWorkers: 1, coldStartConcurrency: 1);
+
+            var decision = SharedHostAdmissionPolicy.Decide(input);
+
+            Assert.Equal(AdmissionDecisionKind.Hold, decision.Kind);
+            Assert.Equal(1, decision.Position);
+        }
+
+        [Fact]
         public void Decide_AtColdStartConcurrency_HoldsWithOneBasedFifoPosition()
         {
             // One Cold_Start in progress fills concurrency 1; two starts are already held ahead of self.
