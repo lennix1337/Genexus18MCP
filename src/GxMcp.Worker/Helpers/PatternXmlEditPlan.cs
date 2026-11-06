@@ -225,8 +225,9 @@ namespace GxMcp.Worker.Helpers
             + " container, several leaf removals, an empty table removed, a leaf moved between containers, siblings"
             + " reordered by identity inside a table, actionGroup, tabs or tab, and a <prompt>"
             + " added to or removed from an <attribute>; it still refuses identity and"
-            + " childrenOrderedList edits, container-valued or nested additions, more than one"
-            + " addition per container, and a reorder next to a sibling without an identity"
+            + " childrenOrderedList edits, container-valued or nested additions except a"
+            + " specification-validated Selection table subtree, more than one addition per"
+            + " container, and a reorder next to a sibling without an identity"
             + " attribute.";
 
         /// <summary>
@@ -292,6 +293,51 @@ namespace GxMcp.Worker.Helpers
                 // A specification that cannot be read is "not declared": the static list stays in force.
                 return null;
             }
+        }
+
+        private string SelectionTableViolation(XElement container, XElement table)
+        {
+            const string prefix = "Selection template table insertion refused: ";
+            const string shape = " Supported shape: a named table with numberOfColumns and specification-declared controls or nested tables; explicit row/cell elements are not supported.";
+            if (_spec == null) return prefix + "the installed pattern specification is unavailable." + shape;
+            string type = _spec.RootType();
+            foreach (XElement element in container.AncestorsAndSelf().Reverse().Skip(1))
+            {
+                if (string.IsNullOrEmpty(type)) break;
+                type = _spec.ChildType(type, element.Name.LocalName);
+            }
+            string problem = SelectionSubtreeViolation(table, type);
+            return problem == null ? null : prefix + problem + shape;
+        }
+
+        private string SelectionSubtreeViolation(XElement element, string parentType)
+        {
+            string kind = element.Name.LocalName;
+            if (element.Name.Namespace != XNamespace.None
+                || !(kind == "table" || kind == "textBlock" || kind == "variable" || kind == "attribute" || kind == "userAction"))
+                return "child <" + kind + "> is outside the supported table/control shape.";
+            if (kind != "table" && element.HasElements)
+                return "control <" + kind + "> must be a leaf.";
+            string type = string.IsNullOrEmpty(parentType) ? null : _spec.ChildType(parentType, kind);
+            if (string.IsNullOrEmpty(type)) return "child <" + element.Name.LocalName + "> is not declared by the pattern specification.";
+            var attributes = _spec.AttributeNames(type);
+            if (attributes == null) return "attributes of <" + element.Name.LocalName + "> are unavailable.";
+            foreach (XAttribute attribute in element.Attributes())
+                if (attribute.IsNamespaceDeclaration || attribute.Name.Namespace != XNamespace.None
+                    || StructuralLayoutRules.IsSdkOwnedAttribute(attribute.Name.LocalName)
+                    || !attributes.Contains(attribute.Name.LocalName))
+                    return "attribute '" + attribute.Name + "' on <" + element.Name.LocalName + "> is not authorable.";
+            string identityAttribute = kind == "textBlock" ? "controlName" : kind == "attribute" ? "attribute" : "name";
+            if (string.IsNullOrWhiteSpace((string)element.Attribute(identityAttribute)))
+                return "<" + kind + "> requires " + identityAttribute + ".";
+            if (element.Nodes().Any(n => !(n is XElement) && !(n is XText text && string.IsNullOrWhiteSpace(text.Value))))
+                return "non-element content in <" + element.Name.LocalName + "> is not supported.";
+            foreach (XElement child in element.Elements())
+            {
+                string problem = SelectionSubtreeViolation(child, type);
+                if (problem != null) return problem;
+            }
+            return null;
         }
 
         /// <summary>
@@ -379,6 +425,17 @@ namespace GxMcp.Worker.Helpers
                 }
 
                 string kind = inserted.Name.LocalName;
+                if (kind == "table" && container != null && container.Name.LocalName == "table"
+                    && container.Ancestors().Any(e => e.Name.LocalName == "WPRoot" && (string)e.Attribute("Template") == "Selection"))
+                {
+                    string violation = SelectionTableViolation(container, inserted);
+                    if (violation != null)
+                        Reject("PatternStructureChangeUnsupported", violation);
+                    else
+                        Changes.Add(new JObject { ["path"] = path, ["operation"] = "Insert", ["element"] = "table",
+                            ["identity"] = (string)inserted.Attribute("name"), ["index"] = firstDiff, ["ordering"] = OrderingNote });
+                    return true;
+                }
                 if (!StructuralLayoutRules.IsPermittedKind(kind)) return false;
                 if (inserted.HasElements) return false;
 

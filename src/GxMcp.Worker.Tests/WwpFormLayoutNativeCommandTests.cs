@@ -52,6 +52,21 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void NativeAddTable_SelectionRootTableWithoutConventionalName()
+        {
+            const string xml = "<instance><WPRoot Template='Selection'><table name='SelectionLayout'/></WPRoot></instance>";
+            var part = new Part();
+            Element root = Child(part.RootElement, "WPRoot", ("Template", "Selection"));
+            Element main = Child(root, "table", ("name", "SelectionLayout"));
+            JObject args = JObject.Parse("{tableName:'Rows',numberOfColumns:2,children:[{type:'textBlock',controlName:'Label'}]}");
+            JObject plan = WwpActionService.PlanAddTableXml(XDocument.Parse(xml), args);
+            Assert.Null(plan["error"]);
+            JObject result = WwpActionService.ApplyNativeAddTable(part, args, plan);
+            Assert.Null(result["error"]);
+            Assert.Equal("Rows", main.Children.Items.Single().Attributes.GetPropertyValueString("name"));
+        }
+
+        [Fact]
         public void NativeAddTable_CreatesTheTableInsideTheUpdateWithChildrenPlacementAndOrdering()
         {
             Part part = Form(out Element content, out Element attributes);
