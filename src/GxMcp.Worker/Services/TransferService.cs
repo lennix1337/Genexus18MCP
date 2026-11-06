@@ -258,7 +258,7 @@ namespace GxMcp.Worker.Services
             string guid = native != null ? native.Guid.ToString("D") : ReadExportProperty(raw, "Guid", "ObjectGuid", "Id");
             string baseOperation = ReadExportProperty(raw, "BaseOperation", "Operation");
             string status = ReadExportProperty(raw, "Status", "State");
-            string typeDescriptor = ReadExportProperty(raw, "TypeDescriptor");
+            string typeDescriptor = native?.TypeDescriptor?.Name;
             bool identityAvailable = !string.IsNullOrWhiteSpace(name) || !string.IsNullOrWhiteSpace(guid);
             return new JObject
             {

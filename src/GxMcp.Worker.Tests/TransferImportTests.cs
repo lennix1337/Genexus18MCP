@@ -16,6 +16,20 @@ namespace GxMcp.Worker.Tests
             public string Guid { get; set; }
             public string BaseOperation { get; set; }
             public string Status { get; set; }
+            public int DescriptorReads { get; private set; }
+            public int ObjectReads { get; private set; }
+            public object TypeDescriptor { get { DescriptorReads++; throw new InvalidOperationException(); } }
+            public object Object { get { ObjectReads++; throw new InvalidOperationException(); } }
+        }
+
+        [Fact]
+        public void DescribeExportItem_DoesNotEvaluateMutatingSdkGetters()
+        {
+            var item = new FakeExportItem { ObjectName = "Sample" };
+            var result = TransferService.DescribeExportItem(item);
+            Assert.Equal("Sample", result["name"]?.ToString());
+            Assert.Equal(0, item.ObjectReads);
+            Assert.Equal(0, item.DescriptorReads);
         }
 
         [Fact]
