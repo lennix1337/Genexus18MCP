@@ -127,7 +127,12 @@ namespace GxMcp.Gateway.Tests
         /// Starts a broker for <paramref name="kbDir"/> with the production command line
         /// (SharedWorkerHostLauncher.BuildHostArguments) plus --registry-dir, and waits for its record.
         /// </summary>
-        internal async Task<SharedHostBroker> StartBrokerAsync(string kbDir, SharedHostHarnessSettings? settings = null)
+        /// <remarks>
+        /// By default the wait ends at the first record that names a Worker and a pipe. <paramref name="until"/>
+        /// replaces that condition, for a broker that never starts a Worker (an admission refusal).
+        /// </remarks>
+        internal async Task<SharedHostBroker> StartBrokerAsync(
+            string kbDir, SharedHostHarnessSettings? settings = null, Func<SharedHostRecord, bool>? until = null)
         {
             settings ??= new SharedHostHarnessSettings();
             var identity = IdentityFor(kbDir);
@@ -157,10 +162,32 @@ namespace GxMcp.Gateway.Tests
             _ = process.StandardOutput.ReadToEndAsync();
             Log("broker started pid=" + tracked.Pid + " kb=" + Path.GetFileName(kbDir));
 
-            SharedHostRecord record = await SharedHostQueueProcessSmokeTests.WaitForRecordAsync(
-                SharedWorkerRegistry.GetRecordPathV2(identity.KbKey, RegistryDir), process, stderr);
+            string recordPath = SharedWorkerRegistry.GetRecordPathV2(identity.KbKey, RegistryDir);
+            SharedHostRecord record = until == null
+                ? await SharedHostQueueProcessSmokeTests.WaitForRecordAsync(recordPath, process, stderr)
+                : await WaitForBrokerRecordAsync(recordPath, process, stderr, until);
             TrackRecordProcesses(record);
             return new SharedHostBroker(process, tracked, identity, kbDir, stderr);
+        }
+
+        private static async Task<SharedHostRecord> WaitForBrokerRecordAsync(
+            string path, Process broker, StringBuilder stderr, Func<SharedHostRecord, bool> until)
+        {
+            var clock = Stopwatch.StartNew();
+            SharedHostRecord? last = null;
+            while (clock.ElapsedMilliseconds < DefaultTimeoutMs)
+            {
+                if (broker.HasExited)
+                {
+                    string tail;
+                    lock (stderr) tail = stderr.ToString();
+                    throw new InvalidOperationException("the broker exited with " + broker.ExitCode + ":\n" + tail);
+                }
+                last = RecordReadResult.ReadFile(path).Record;
+                if (last != null && until(last)) return last;
+                await Task.Delay(25);
+            }
+            throw new TimeoutException("the broker record at " + path + " never matched; last: " + (last == null ? "none" : last.ToJson()));
         }
 
         // ---- Gateway clients ----
@@ -365,6 +392,24 @@ namespace GxMcp.Gateway.Tests
 
         /// <summary>Tracked processes that still run with their recorded start time.</summary>
         internal IReadOnlyList<TrackedProcess> RemainingProcesses() => TrackedProcesses().Where(IsRunning).ToList();
+
+        /// <summary>
+        /// Every running process on the machine whose image is the TestHost (brokers and fake Workers), as PID plus
+        /// start time. Observation only: nothing is ever stopped by this list.
+        /// </summary>
+        internal IReadOnlyList<(int Pid, long StartTimeUtcTicks)> TestHostProcesses()
+        {
+            var found = new List<(int, long)>();
+            foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(TestHostPath)))
+            {
+                using (process)
+                {
+                    long? ticks = StartTimeOf(process.Id);
+                    if (ticks.HasValue && HasTestHostImage(process.Id)) found.Add((process.Id, ticks.Value));
+                }
+            }
+            return found.OrderBy(p => p.Item1).ToList();
+        }
 
         /// <summary>Record files (registry v2 and ownership) still present under the harness root.</summary>
         internal IReadOnlyList<string> RemainingRecordFiles() =>

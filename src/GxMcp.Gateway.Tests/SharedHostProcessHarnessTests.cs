@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using GxMcp.Common.SharedHost;
 using Newtonsoft.Json.Linq;
 using Xunit;
 using Xunit.Abstractions;
@@ -339,11 +340,119 @@ namespace GxMcp.Gateway.Tests
                 .ToList();
             foreach (string line in recovery) _output.WriteLine("recovery log: " + line);
             Assert.Contains(recovery, t => t.Contains("action=removed-record registry=SharedWorkerRegistry", StringComparison.Ordinal)
-                && t.Contains(" pid=" + oldHostPid + " ", StringComparison.Ordinal));
+                && t.Contains(" pid=" + oldHostPid + " ", StringComparison.Ordinal)
+                && t.EndsWith(" reason=owner-not-running", StringComparison.Ordinal));
+            // The sentinel's PID runs with another start time, so the record names another process; nothing was stopped.
             Assert.Contains(recovery, t => t.Contains("action=removed-record registry=WorkerOwnershipRegistry", StringComparison.Ordinal)
-                && t.Contains(" pid=" + sentinel.Pid + " ", StringComparison.Ordinal));
+                && t.Contains(" pid=" + sentinel.Pid + " ", StringComparison.Ordinal)
+                && t.EndsWith(" reason=start-time-mismatch", StringComparison.Ordinal));
             Assert.DoesNotContain(recovery, t => t.Contains("action=stopped-process", StringComparison.Ordinal));
         });
+
+        // Requirement 13 criterion 7: the highest allowed Memory_Floor, and the margin below it that the measured
+        // Available_Physical_Memory must keep for the floor to stay above the broker's own later reading.
+        private const int MaxMemoryFloorMb = 8192;
+        private const int MemoryMarginMb = 1024;
+        private const long InjectedLowMemoryMb = 1000;
+
+        // Requirement 13 criterion 7 and 6.2: with the Memory_Floor above Available_Physical_Memory, a Worker start
+        // is refused with KB_POOL_FULL low-memory carrying the measured value and the floor, and no Worker process
+        // starts. A running KB with its own Worker (floor 256) makes "unchanged" meaningful. Two refusals:
+        // - the Gateway pre-check, before any broker process starts (the client elects for a KB with no broker);
+        // - the broker's authoritative admission, for a broker the harness starts directly with the same floor: it
+        //   writes a "refused" record and starts no child, and the Gateway open returns that typed refusal.
+        // Both read the real machine value. When it is above 8192 - 1024 MB the floor cannot be set above it, so the
+        // pre-check reading is replaced by an injected value instead; the broker has no such seam, and its part is
+        // then reported as not exercised.
+        [Fact]
+        public Task Worker_start_below_the_memory_floor_is_refused_and_starts_no_worker() => RunAsync(async harness =>
+        {
+            Assert.True(MachineMemory.TryGetAvailablePhysicalMb(out long measuredMb, out string? memoryError),
+                "available physical memory is unreadable: " + memoryError);
+            bool injected = measuredMb > MaxMemoryFloorMb - MemoryMarginMb;
+            _output.WriteLine("available physical memory " + measuredMb + " MB; floor " + MaxMemoryFloorMb + " MB; "
+                + (injected ? "pre-check reading injected (" + InjectedLowMemoryMb + " MB), broker path not exercised" : "real readings"));
+
+            // The running KB, with the lowest floor so its own start is never refused.
+            string running = harness.CreateKbDirectory();
+            var runningClient = await harness.StartClientAsync();
+            var runningOpen = await runningClient.OpenOrThrowAsync(running);
+            int runningWorker = (int)runningOpen["workerPid"]!;
+            long runningWorkerTicks = (long)runningOpen["workerStartTimeUtcTicks"]!;
+            Assert.True(runningWorker > 0 && runningWorkerTicks > 0, runningOpen.ToString());
+            var before = harness.TestHostProcesses();
+            Assert.Contains(before, p => p.Pid == runningWorker);
+
+            var lowSettings = new SharedHostHarnessSettings { MemoryFloorMb = MaxMemoryFloorMb };
+            var low = await harness.StartClientAsync(new SharedHostClientOptions
+            {
+                Settings = lowSettings,
+                InjectedAvailableMemoryMb = injected ? InjectedLowMemoryMb : (long?)null
+            });
+
+            // Pre-check: no broker exists for this KB, so the client would elect and start one.
+            string precheckKb = harness.CreateKbDirectory();
+            var precheck = await low.OpenAsync(precheckKb);
+            _output.WriteLine("pre-check refusal: " + precheck.ToString(Newtonsoft.Json.Formatting.None));
+            long precheckMb = AssertLowMemoryRefusal(precheck);
+            if (injected) Assert.Equal(InjectedLowMemoryMb, precheckMb);
+            Assert.Null(harness.ReadRecord(precheckKb));
+            Assert.DoesNotContain(low.Events, e => (string?)e["event"] == "host-started");
+
+            var brokers = new List<int>();
+            if (!injected)
+            {
+                // Broker: its own admission reads the machine value and refuses the start without a child.
+                string brokerKb = harness.CreateKbDirectory();
+                var broker = await harness.StartBrokerAsync(brokerKb, lowSettings,
+                    r => r.State == SharedHostRecordState.Refused || r.WorkerPid > 0);
+                brokers.Add(broker.Pid);
+                var record = harness.ReadRecord(brokerKb)!;
+                _output.WriteLine("broker record: " + record.ToJson());
+                Assert.Equal(SharedHostRecordState.Refused, record.State);
+                Assert.Equal(0, record.WorkerPid);
+                Assert.NotNull(record.Refusal);
+                Assert.Equal("KB_POOL_FULL", record.Refusal!.Code);
+                Assert.Equal("low-memory", record.Refusal.Reason);
+                Assert.Equal((long?)MaxMemoryFloorMb, record.Refusal.FloorMb);
+                Assert.True(record.Refusal.AvailableMb > 0 && record.Refusal.AvailableMb < MaxMemoryFloorMb,
+                    "broker reading " + record.Refusal.AvailableMb);
+
+                var attach = await low.OpenAsync(brokerKb);
+                _output.WriteLine("broker refusal: " + attach.ToString(Newtonsoft.Json.Formatting.None));
+                Assert.Equal(record.Refusal.AvailableMb, AssertLowMemoryRefusal(attach));
+                Assert.Equal(SharedHostRecordState.Refused, harness.ReadRecord(brokerKb)!.State);
+                Assert.Equal(0, harness.ReadRecord(brokerKb)!.WorkerPid);
+            }
+
+            // No Worker started on the machine: the TestHost processes are the earlier ones plus the refusing broker.
+            var after = harness.TestHostProcesses();
+            _output.WriteLine("TestHost processes before [" + string.Join(", ", before.Select(p => p.Pid)) + "] after ["
+                + string.Join(", ", after.Select(p => p.Pid)) + "] refusing brokers [" + string.Join(", ", brokers) + "]");
+            Assert.Equal(before, after.Where(p => !brokers.Contains(p.Pid)).ToList());
+            Assert.True(harness.IsSameProcess(runningWorker, runningWorkerTicks), "the running KB's Worker changed");
+            var probe = await runningClient.CallAsync(running, SharedHostGatewayClient.ProbeFrame(1, 0, "after-refusal"));
+            AssertOwnResponse(probe, 1, "after-refusal", (string)runningOpen["attachId"]!, runningWorker);
+        });
+
+        // The typed refusal of Requirement 6 criterion 2 in an open reply; returns the measured value.
+        private static long AssertLowMemoryRefusal(JObject reply)
+        {
+            Assert.False((bool?)reply["ok"] ?? true, reply.ToString());
+            Assert.Equal("KB_POOL_FULL", (string?)reply["code"]);
+            Assert.Equal("low-memory", (string?)reply["reason"]);
+            var error = reply["error"] as JObject;
+            Assert.NotNull(error);
+            Assert.Equal("KB_POOL_FULL", (string?)error!["code"]);
+            Assert.Equal("low-memory", (string?)error["reason"]);
+            Assert.False((bool)error["retryable"]!);
+            Assert.Equal("not-delivered", (string?)error["dispatchState"]);
+            Assert.Equal(MaxMemoryFloorMb, (long)error["floorMb"]!);
+            long availableMb = (long)error["availableMb"]!;
+            Assert.True(availableMb > 0 && availableMb < MaxMemoryFloorMb, "measured " + availableMb);
+            Assert.False(string.IsNullOrWhiteSpace((string?)error["hint"]), error.ToString());
+            return availableMb;
+        }
 
         private static void AssertOwnResponse(JObject response, int id, string method, string attachId, int workerPid)
         {
