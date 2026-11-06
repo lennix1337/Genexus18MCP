@@ -3646,11 +3646,11 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Properties API. get can reconcile a timed-out property write by a fresh typed read. set supports dryRun, expectedVersion, post-save verification and rollback; move is transactional and… Full guidance: genexus://kb/tool-help/genexus_properties",
+      "description": "Properties API. get supports fresh reads and timeout reconciliation; set supports dryRun, expectedVersion, verification and rollback; move is transactional. Full guidance: genexus://kb/tool-help/genexus_properties",
       "inputSchema": {
         "properties": {
           "action": {
-            "description": "Object-property operation to read or…",
+            "description": "Read, set or move object properties.",
             "enum": [
               "get",
               "set",
@@ -3738,6 +3738,10 @@
           },
           "reconcileTimedOutWrite": {
             "description": "get: fresh typed read; clear timeout…",
+            "type": "boolean"
+          },
+          "refresh": {
+            "description": "get: fresh read.",
             "type": "boolean"
           },
           "rollbackOnFailure": {

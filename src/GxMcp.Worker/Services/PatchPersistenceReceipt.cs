@@ -220,6 +220,7 @@ namespace GxMcp.Worker.Services
             payload["_internalStatus"] = "Success";
             payload["code"] = "Applied";
             payload["message"] = "Patch persisted and was confirmed by post-save re-read.";
+            payload["persistedState"] = "confirmed";
             AttachOutcome(payload, saved, verified: true);
         }
 
@@ -259,6 +260,7 @@ namespace GxMcp.Worker.Services
             // is present; it may be null for an unknown save completion (#547).
             if (payload["sdkSaveCompleted"] == null || payload["sdkSaveCompleted"].Type == JTokenType.Null)
                 payload["sdkSaveCompleted"] = saved;
+            payload["persistedState"] = "not_persisted";
             AttachOutcome(payload, saved, verified: false);
         }
 
@@ -338,6 +340,7 @@ namespace GxMcp.Worker.Services
                 content["reRead"] = JValue.CreateNull();
             }
             AttachOutcome(payload, saved: false, verified: false);
+            payload["persistedState"] = "unknown";
             payload["saveAttempted"] = saveAttempted;
         }
 
@@ -396,11 +399,17 @@ namespace GxMcp.Worker.Services
             rollback["error"] = rolledBack ? JValue.CreateNull() : (JToken)(rollbackError ?? "Rollback could not be verified.");
             payload["rollback"] = rollback;
             payload["rolledBack"] = rolledBack;
+            MarkRollbackTextOutcomeUnknown(payload);
             if (unappliedMembers != null) payload["unappliedMembers"] = unappliedMembers;
             if (!rolledBack) return;
             payload["stateRestored"] = true;
             payload["commitState"] = "RolledBack";
             payload["persistenceState"] = "Restored";
+        }
+
+        internal static void MarkRollbackTextOutcomeUnknown(JObject payload)
+        {
+            payload["persistedState"] = "unknown";
         }
 
         internal static void AttachOutcome(JObject payload, bool saved, bool verified)

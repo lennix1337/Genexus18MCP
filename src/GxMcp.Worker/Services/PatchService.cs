@@ -1152,6 +1152,7 @@ namespace GxMcp.Worker.Services
                                     autoInjectVariables: false,
                                     baseVersion: rollbackBaseVersion);
                                 JObject rollbackPayload = ParseWriteResult(rollbackResult);
+                                PatchPersistenceReceipt.MarkRollbackTextOutcomeUnknown(writePayload);
                                 // WriteService's legacy verifier may call a durable rollback
                                 // WriteNotPersisted solely because it applies a different text
                                 // equivalence rule. In both cases the SDK save completed, so always

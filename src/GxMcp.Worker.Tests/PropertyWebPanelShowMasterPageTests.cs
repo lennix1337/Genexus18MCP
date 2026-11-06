@@ -223,6 +223,21 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void RefreshReadsFreshPropertyRatherThanCachedValue()
+        {
+            var panel = new FakeWebPanel().Lists("DataType", "VARCHAR");
+            var before = JObject.Parse(panel.GetProperties("SynthPanel"));
+            panel.ChangeValue("DataType", "DATE");
+            var cached = JObject.Parse(panel.GetProperties("SynthPanel"));
+            var refreshed = JObject.Parse(panel.GetProperties("SynthPanel", refresh: true));
+
+            Assert.Contains("VARCHAR", before.ToString());
+            Assert.Contains("VARCHAR", cached.ToString());
+            Assert.Contains("DATE", refreshed.ToString());
+            Assert.Equal(1, panel.FreshReads);
+        }
+
+        [Fact]
         public void TheReconciliationSerializerAnswersTheOfficialNameOnlyOnAWebPanel()
         {
             var panel = new FakeWebPanel().Lists(SdkKey, false);
@@ -298,7 +313,14 @@ namespace GxMcp.Worker.Tests
 
             protected internal override KBObject FindTarget(string target, string typeFilter) => Target;
 
-            protected internal override KBObject FindFreshTarget(KBObject obj) => obj;
+            internal int FreshReads { get; private set; }
+            internal void ChangeValue(string name, object value) => Find(name).Value = value;
+
+            protected internal override KBObject FindFreshTarget(KBObject obj)
+            {
+                FreshReads++;
+                return obj;
+            }
 
             protected internal override Guid TargetTypeOf(KBObject obj) => Guid.Empty;
 

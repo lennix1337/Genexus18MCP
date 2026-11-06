@@ -787,6 +787,8 @@ namespace GxMcp.Worker.Services
             meta["indexed_pct"] = pct;
             meta["progress_token"] = "genexus-mcp-bulk-index";
             var state = _indexCacheService.GetState();
+            if (string.Equals(state?.Status, "Cold", StringComparison.OrdinalIgnoreCase))
+                meta["indexState"] = "cold";
             bool recoverable = state?.Recoverable == true
                 || (string.Equals(state?.Status, "Cold", StringComparison.OrdinalIgnoreCase)
                     && string.Equals(state?.OperationState, "Idle", StringComparison.OrdinalIgnoreCase));
@@ -796,7 +798,9 @@ namespace GxMcp.Worker.Services
             meta["recoverable"] = recoverable;
             meta["retry_hint"] = recoverable
                 ? "The index worker is stalled or unavailable. Recover with genexus_lifecycle action=index force=true, then retry query."
-                : "Indexing in background. Re-run query for more results; read/edit/build/list tools work without the index.";
+                : "Indexing in background. Wait with genexus_lifecycle action=status wait=30 freshness=current, then re-run query; an empty snapshot does not establish that the object does not exist.";
+            if (recoverable)
+                meta["retry_hint"] += " Check progress with genexus_lifecycle action=status wait=30 freshness=current; an empty snapshot does not establish that the object does not exist.";
             responseObj["_meta"] = meta;
         }
 
