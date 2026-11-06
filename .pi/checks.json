@@ -33,6 +33,11 @@
       "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-build", "--filter", "FullyQualifiedName~RefreshReadLiveTests.AutoDeclaredVariableIsReportedAndIndependentlyReloaded|FullyQualifiedName~RefreshReadLiveTests.SameSdkObjectCanBeIndependentlyReloadedByNameAndGuid|FullyQualifiedName~RefreshReadLiveTests.LargeSourceSingularAndPluralReadsPreserveEveryPage", "--logger", "console;verbosity=minimal"],
       "timeoutMs": 600000
     },
+    "live-import-no-stubs": {
+      "description": "Disposable-KB acceptance: a refused XPZ import leaves no Procedure stub; requires the verified fixture and isolated configuration from scripts/test-live.ps1, serialized with other KB sessions",
+      "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-build", "--filter", "FullyQualifiedName~TransferImportLiveTests.RefusedImportDoesNotCreateProcedureStub", "--logger", "console;verbosity=minimal"],
+      "timeoutMs": 600000
+    },
     "live-events-read-parity": {
       "description": "Separate Events parity acceptance; requires audited Events object-save SDK bundle, destination pins and the same serialized disposable-KB manifest as live-reliable-reads. A refused save is unavailable, never a successful read acceptance.",
       "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--no-build", "--filter", "FullyQualifiedName~RefreshReadLiveTests.LargeEventsSingularAndPluralReadsPreserveEveryPage", "--logger", "console;verbosity=minimal"],
