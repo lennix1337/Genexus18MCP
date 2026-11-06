@@ -80,7 +80,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void Search_UsesIndexedFullSourceAndSkipsUnrelatedObjects()
+        public void Search_UsesIndexedFullSourceInStableCandidateOrder()
         {
             var entries = new List<SearchIndex.IndexEntry>
             {
@@ -107,7 +107,7 @@ namespace GxMcp.Worker.Tests
             var obj = JObject.Parse(svc.SearchAsJson(new SourceSearchCriteria { Pattern = "IndexedToken" }));
 
             Assert.Equal("SourceSearchCompleted", obj["code"]?.ToString());
-            Assert.Equal(1, obj["result"]?["scannedObjects"]?.ToObject<int>());
+            Assert.Equal(2, obj["result"]?["scannedObjects"]?.ToObject<int>());
             Assert.Equal("HasToken", obj["result"]?["hits"]?[0]?["objectName"]?.ToString());
         }
 

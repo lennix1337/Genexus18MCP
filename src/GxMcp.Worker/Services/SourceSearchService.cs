@@ -295,6 +295,8 @@ namespace GxMcp.Worker.Services
         private static string BuildQueryFingerprint(SourceSearchCriteria criteria)
         {
             var builder = new StringBuilder();
+            // Numeric cursors produced by the old mutable ranking are incompatible.
+            AppendFingerprintPart(builder, "candidateOrder", "identity-v1");
             AppendFingerprintPart(builder, "callee", criteria?.Callee);
             AppendFingerprintPart(builder, "pattern", criteria?.Pattern);
             AppendFingerprintPart(builder, "caseSensitive",
@@ -770,27 +772,11 @@ namespace GxMcp.Worker.Services
                     return execution;
                 }
 
-                // Pre-filter by literal tokens against the index so we skip FindObject for
-                // entries that demonstrably reference none of them.
                 var literals = ExtractLiteralTokens(c.Pattern, c.Callee);
 
-                // FullSource only proves absence for the primary-source aliases.
-                // Explicit or mixed parts must reach their own readers.
+                // Candidate membership and order must not depend on mutable source
+                // caches: a cursor is an ordinal in this identity-ordered set.
                 bool indexedSourceScope = scanScope.Count > 0 && IsIndexedSourceScope(scanScope);
-                if (indexedSourceScope && literals.Count > 0)
-                {
-                    // Test fixtures may load only Objects; production disk indexes
-                    // build this derived posting map during hydration. Asking for the
-                    // map here keeps both paths correct without changing the fixture's
-                    // other secondary-index semantics.
-                    var tokenIndexSw = System.Diagnostics.Stopwatch.StartNew();
-                    try { _index.EnsureSourceTokenIndex(); }
-                    finally
-                    {
-                        tokenIndexSw.Stop();
-                        Logger.Info($"[SEARCH-SOURCE-PHASE] tokenIndexMs={tokenIndexSw.ElapsedMilliseconds} indexed={_index.GetIndex()?.SourceTokenIndex != null}");
-                    }
-                }
 
                 // Issue #27 item 4: an explicit objectName scope restricts the scan to
                 // those exact objects (bypassing both the base type whitelist and the
@@ -880,35 +866,12 @@ namespace GxMcp.Worker.Services
                         : new[] { "Procedure", "DataProvider", "WebPanel", "Transaction" };
 
                     query = index.FindByTypes(targetTypes);
-
-                    if (indexedSourceScope && literals.Count > 0 && index.SourceTokenIndex != null)
-                    {
-                        var indexedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        foreach (string literal in literals)
-                        {
-                            if (!index.SourceTokenIndex.TryGetValue(literal, out var keys) || keys == null) continue;
-                            lock (keys)
-                            {
-                                foreach (string key in keys) indexedKeys.Add(key);
-                            }
-                        }
-                        // Entries without FullSource predate this index (or could not
-                        // be read) and must stay in the conservative SDK fallback.
-                        query = query.Where(e => e.FullSource == null || indexedKeys.Contains(GetEntryStorageKey(e)));
-                    }
                 }
                 var entries = query
                     .Where(e => string.IsNullOrEmpty(c.TypeFilter) || string.Equals(e.Type, c.TypeFilter, StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(e => GetEntryStorageKey(e), StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(e => e.Guid ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                     .ToList();
-                // When complete source postings exist, visit them before the
-                // conservative SDK fallback candidates. This preserves completeness
-                // (the fallback tail is still scanned when the page is not full) while
-                // avoiding needless STA/COM reads whenever indexed sources can fill it.
-                if (indexedSourceScope && literals.Count > 0 && index.SourceTokenIndex != null
-                    && objectNameSet == null && !hasIdentityScope)
-                {
-                    entries = PrioritizeCompleteSourceCandidates(entries, c.MaxResults);
-                }
                 Logger.Info($"[SEARCH-SOURCE-PHASE] candidateFilterMs={searchSw.ElapsedMilliseconds} candidates={entries.Count} literals={literals.Count} partial={partialIndex}");
 
                 // issue #36.7 — an objectName scope that resolved to zero entries must say so
@@ -964,50 +927,6 @@ namespace GxMcp.Worker.Services
                 bool sourcePageStoppedInsideEntry = false;
                 int sourceNextEntry = -1;
                 int sourceNextSkip = 0;
-
-                // Probe the persistent store off-STA before the conservative
-                // per-entry walk. The probe only reorders a bounded candidate
-                // page; completeness and continuation still come from the same
-                // indexed cursor, so a store miss cannot hide an SDK fallback.
-                if (indexedSourceScope && literals.Count > 0 && timeoutMs > 0
-                    && startIndex == 0 && !resumeMetadata && !ct.IsCancellationRequested)
-                {
-                    try
-                    {
-                        var storedProbeEntries = entries
-                            .Where(e => !string.IsNullOrWhiteSpace(e.Guid)
-                                && SourceStoreService.Instance.IsStoredAndFresh(e, scanScope))
-                            .Take(200)
-                            .ToList();
-                        storeProbeExecuted = 1;
-                        storeProbeCandidates = storedProbeEntries.Count;
-                        var probeHits = SourceStoreService.Instance.SearchStore(
-                            storedProbeEntries, c, rx, ct);
-                        storeProbeHits = probeHits?.Count ?? 0;
-                        if (storeProbeHits > 0)
-                        {
-                            var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                            foreach (var hit in probeHits.OfType<JObject>())
-                            {
-                                string guid = hit["guid"]?.ToString();
-                                if (!string.IsNullOrWhiteSpace(guid) && !rank.ContainsKey(guid))
-                                    rank[guid] = rank.Count;
-                            }
-                            if (rank.Count > 0)
-                            {
-                                entries = entries
-                                    .OrderBy(e => rank.TryGetValue(e.Guid ?? string.Empty, out int position) ? 0 : 1)
-                                    .ThenBy(e => rank.TryGetValue(e.Guid ?? string.Empty, out int position) ? position : int.MaxValue)
-                                    .ToList();
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException) { }
-                    catch (Exception ex)
-                    {
-                        Logger.Debug("[SEARCH-SOURCE-PHASE] store probe unavailable: " + ex.Message);
-                    }
-                }
 
                 var extraFields = c.Fields != null
                     ? c.Fields.Where(field => !string.IsNullOrWhiteSpace(field)
@@ -1331,6 +1250,8 @@ namespace GxMcp.Worker.Services
                     metadataEntries = index.Objects.Values
                         .Where(e => MatchesSearchObjectScope(e, c, objectNameSet))
                         .Where(e => string.IsNullOrEmpty(c.TypeFilter) || string.Equals(e.Type, c.TypeFilter, StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(e => GetEntryStorageKey(e), StringComparer.OrdinalIgnoreCase)
+                        .ThenBy(e => e.Guid ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                         .ToList();
                     int metadataStart = resumeMetadata
                         ? Math.Max(0, resumeEntry)
@@ -1839,21 +1760,6 @@ namespace GxMcp.Worker.Services
                 }
             }
             return false;
-        }
-
-        internal static List<Models.SearchIndex.IndexEntry> PrioritizeCompleteSourceCandidates(
-            IEnumerable<Models.SearchIndex.IndexEntry> candidates, int maxResults)
-        {
-            var ordered = candidates?.ToList()
-                ?? new List<Models.SearchIndex.IndexEntry>();
-            if (maxResults <= 0) return ordered;
-
-            int completeCount = ordered.Count(e => e != null && e.FullSource != null);
-            if (completeCount == 0) return ordered;
-
-            return ordered
-                .OrderByDescending(e => e != null && e.FullSource != null)
-                .ToList();
         }
 
         private static bool IsIndexedSourceScope(List<string> scope)
