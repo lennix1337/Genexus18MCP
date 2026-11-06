@@ -516,7 +516,7 @@ namespace GxMcp.Worker.Tests
 
                 var child = Assert.Single(h.Launcher.Started);
                 Assert.InRange(child.StartedAtMs - diedAtMs, 0, 5000);
-                Assert.Empty(h.Signals.Sent.Where(s => s.Name.StartsWith(EvictPrefix, StringComparison.Ordinal)));
+                Assert.DoesNotContain(h.Signals.Sent, s => s.Name.StartsWith(EvictPrefix, StringComparison.Ordinal));
             }
         }
 
