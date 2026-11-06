@@ -682,7 +682,9 @@ namespace GxMcp.Gateway
         }
 
         internal static bool IsRefreshRead(string toolName, JObject? args)
-            => string.Equals(toolName, "genexus_read", StringComparison.OrdinalIgnoreCase)
+            => (string.Equals(toolName, "genexus_read", StringComparison.OrdinalIgnoreCase)
+                || (string.Equals(toolName, "genexus_properties", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(args?["action"]?.ToString(), "get", StringComparison.OrdinalIgnoreCase)))
                 && args?["refresh"]?.Type == JTokenType.Boolean && args["refresh"]!.Value<bool>();
 
         /// <summary>
