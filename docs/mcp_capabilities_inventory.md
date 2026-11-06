@@ -92,7 +92,7 @@ The table below is the machine-checkable action contract for every umbrella tool
 | `genexus_refactor` | — | `RenameAttribute`, `RenameVariable`, `RenameObject`, `ExtractProcedure`, `ExtractSubroutine`, `WWPSetCondition` |
 | `genexus_gam` | `status` | `define_api`, `deploy` |
 | `genexus_properties` | `get` | `set`, `move` |
-| `genexus_structure` | `get_visual`, `get_indexes`, `get_logic`, `check_subtypes` | `update_visual`, `create_index`, `drop_index`, `set_attribute`, `set_level`, `set_domain`, `update_group`, `move_attribute`, `remove_attribute` |
+| `genexus_structure` | `get_visual`, `get_indexes`, `get_logic`, `check_subtypes`, `get_item_property` | `update_visual`, `create_index`, `drop_index`, `set_attribute`, `set_level`, `set_domain`, `update_group`, `move_attribute`, `remove_attribute`, `set_item_property` |
 | `genexus_authoring` | — | `add_external_method`, `add_external_property`, `add_menu_option`, `add_condition` |
 | `genexus_layout` | `get_tree`, `find_controls`, `inspect_surface`, `get_preview`, `scan_mutators`, `list_controls`, `design_system` | `set_property`, `set_properties`, `rename_printblock`, `add_printblock`, `delete_printblock`, `add_report_control`, `move_report_control`, `remove_report_control` |
 | `genexus_doc` | `health` | `wiki`, `visualize` |

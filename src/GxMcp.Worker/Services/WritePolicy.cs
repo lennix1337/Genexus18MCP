@@ -195,6 +195,37 @@ namespace GxMcp.Worker.Services
             return hits;
         }
 
+        // Issue #889: a Source save declares every undeclared &variable on its own, and an
+        // unresolved one lands as VarChar(100). The response names them, so the later
+        // "Varchar=Date" build error is traceable to the variable the save created.
+        public static void AddAutoCreatedVariables(JObject result, IReadOnlyList<GxMcp.Worker.Helpers.VariableInjector.InjectedVariable> created)
+        {
+            if (result == null || created == null || created.Count == 0) return;
+
+            var arr = new JArray();
+            foreach (var v in created)
+            {
+                arr.Add(new JObject
+                {
+                    ["name"] = "&" + v.Name,
+                    ["type"] = v.Type,
+                    ["length"] = v.Length,
+                    ["decimals"] = v.Decimals
+                });
+            }
+
+            result["autoCreatedVariables"] = arr;
+            var warnings = result["warnings"] as JArray;
+            if (warnings == null) { warnings = new JArray(); result["warnings"] = warnings; }
+            string message = "The save declared " + created.Count + " undeclared variable(s) with an inferred type ("
+                + string.Join(", ", created.Select(v => "&" + v.Name)) + "). Check autoCreatedVariables; "
+                + "declare the right type with genexus_add_variable (or pass autoDeclareVariables=false) if one is wrong.";
+            if (warnings.Count > 0 && warnings[0] is JObject)
+                warnings.Add(new JObject { ["code"] = "AutoCreatedVariables", ["message"] = message });
+            else
+                warnings.Add(message);
+        }
+
         public static string BuildUndeclaredVariableHint(IReadOnlyList<string> undeclaredVars)
         {
             if (undeclaredVars == null || undeclaredVars.Count == 0) return null;

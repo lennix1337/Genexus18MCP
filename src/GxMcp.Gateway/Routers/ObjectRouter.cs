@@ -185,6 +185,11 @@ namespace GxMcp.Gateway.Routers
                             refresh = args?["refresh"]?.ToObject<bool?>() ?? false,
                             target = target,
                             parts = (JArray)partsTok!,
+                            // Each part is paged with the same window; without these the
+                            // worker capped every part at the MCP default and the
+                            // advertised offset/limit were silently dropped (#881).
+                            offset = args?["offset"]?.ToObject<int?>(),
+                            limit = args?["limit"]?.ToObject<int?>(),
                             type = args?["type"]?.ToString(),
                             guid = args?["guid"]?.ToString(),
                             entityKey = args?["entityKey"]?.ToString(),

@@ -632,7 +632,7 @@ namespace GxMcp.Gateway
                 else if (refName == "genexus_history")
                     values = new[] { "list", "get_source", "save", "restore" };
                 else if (refName == "genexus_structure")
-                    values = new[] { "get_visual", "update_visual", "get_indexes", "get_logic", "move_attribute" };
+                    values = new[] { "get_visual", "update_visual", "get_indexes", "get_logic", "move_attribute", "get_item_property", "set_item_property" };
                 else if (refName == "genexus_refactor")
                     values = new[] { "RenameAttribute", "RenameVariable", "RenameObject", "ExtractProcedure" };
                 else if (refName == "prompts/get")
@@ -2035,6 +2035,12 @@ namespace GxMcp.Gateway
                 // Optimistic-concurrency retry contract: a refused token is only useful if the
                 // caller can see the token that is current.
                 "currentVersion", "expectedVersion",
+                // genexus_structure get_item_property / set_item_property: the version a write started from, why the saved
+                // member did not match the request, the values an enumeration accepts and the spellings close to a mistyped
+                // property. Without them a refusal only says "InvalidPropertyValue" or "SdtItemPropertyNotPersisted".
+                "beforeVersion", "mismatchDetail", "allowedValues", "suggestions",
+                // What the KB holds after a rollback that could not be confirmed, against what it held before the request.
+                "storedChanges", "storedChangesTotal", "otherPartsChanged",
                 // genexus_wwp add_layout: the stage a failure stopped at and the verification checks it failed.
                 // Small on purpose; the full verification receipts stay in verbose_errors.
                 "nativeOperation", "failureStage", "failedChecks",

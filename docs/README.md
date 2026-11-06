@@ -39,6 +39,7 @@ also read [`AGENTS.md`](../AGENTS.md).
 - [Native Data View authoring](genexus_data_view.md) — `genexus_data_view`.
 - [Typed Transaction records](transaction-records.md) — `genexus_db` record actions.
 - [Moving a Transaction attribute](transaction_move_attribute.md) — `genexus_structure action=move_attribute`.
+- [Reading and writing one SDT member property](sdt_member_properties.md) — `genexus_structure action=get_item_property|set_item_property`.
 - [Removing a Transaction attribute](transaction_remove_attribute.md) — `genexus_edit mode=ops`.
 - [Moving objects safely](object_move.md) — `genexus_properties action=move`.
 
