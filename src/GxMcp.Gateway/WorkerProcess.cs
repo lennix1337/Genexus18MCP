@@ -231,7 +231,7 @@ namespace GxMcp.Gateway
         public bool SharedConnectionIsConnected => IsSharedHostMode && _sharedConnection?.IsConnected == true;
         public string? SharedIdentityKey => IsSharedHostMode ? _sharedIdentity?.Key : null;
         public string? SharedPipeName => IsSharedHostMode && _sharedIdentity != null
-            ? SharedWorkerRegistry.PipeName(_sharedIdentity)
+            ? SharedWorkerRegistry.PipeNameV2(_sharedIdentity)
             : null;
         public string? SharedConnectionError => IsSharedHostMode ? _sharedConnection?.LastError : null;
         public string? SharedWorkerExecutable => IsSharedHostMode ? _sharedIdentity?.WorkerExecutable : null;
@@ -1077,7 +1077,9 @@ namespace GxMcp.Gateway
                 _sharedConnection = connection;
                 _stateMachine.TransitionTo(WorkerLifecycleState.SdkInitializing);
                 WireSharedConnectionEvents(connection);
-                if (connection.AttachInfo?.SdkReady == true && _sdkReady.TrySetResult(true))
+                // The v2 Connect sequence returns only after the readiness wait, and readiness can be observed
+                // through the registry record rather than the attach acknowledgement.
+                if (connection.IsSdkReady && _sdkReady.TrySetResult(true))
                     _stateMachine.TransitionTo(WorkerLifecycleState.Ready);
                 _lastPid = connection.WorkerPid ?? 0;
                 SpawnedAtUtc = DateTime.UtcNow;

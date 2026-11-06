@@ -69,9 +69,18 @@ namespace GxMcp.Worker
         public int IdleTimeoutMs { get; private set; }
         public int AttachTimeoutMs { get; private set; }
 
+        /// <summary>Registry v2 key of the KB directory (decision A3): <c>SharedHostKbKey.Compute(--kb)</c>.</summary>
+        public string KbKey { get; private set; }
+
         /// <summary>
-        /// Directory of the registry record. Empty means the production location
-        /// (<c>%LOCALAPPDATA%\GxMcp\shared-workers</c>). Only process tests set it: on .NET
+        /// The launching Gateway's profile config path (optional <c>--profile-config</c>), the fifth
+        /// Physical_KB_Identity component (decision D6). Empty when the Gateway did not pass it.
+        /// </summary>
+        public string ProfileConfigPath { get; private set; }
+
+        /// <summary>
+        /// Directory of the registry v2 record. Empty means the production location
+        /// (<c>%LOCALAPPDATA%\GxMcp\shared-workers\v2</c>). Only process tests set it: on .NET
         /// Framework the known-folder lookup ignores an overridden LOCALAPPDATA variable.
         /// </summary>
         public string RegistryDirectory { get; private set; }
@@ -132,6 +141,8 @@ namespace GxMcp.Worker
                 Major = major,
                 IdleTimeoutMs = ParsePositive(values, "idle-ms", 120000),
                 AttachTimeoutMs = ParsePositive(values, "attach-timeout-ms", 30000),
+                KbKey = SharedHostKbKey.Compute(kb),
+                ProfileConfigPath = Get(values, "profile-config"),
                 RegistryDirectory = registryDirectory ?? string.Empty,
                 Settings = ParseSettings(values)
             };
@@ -183,7 +194,16 @@ namespace GxMcp.Worker
         // SHARED_WORKER_BACKPRESSURE instead of blocking the caller.
         internal const int ChildInboxCapacity = 256;
 
+        /// <summary>Exit code of <see cref="Run"/> when another host already holds the host-lifetime mutex.</summary>
+        internal const int HostMutexHeldExitCode = 3;
+
+        /// <summary>Host-lifetime mutex prefix (decision A3); the kbKey completes the name.</summary>
+        internal const string HostMutexPrefix = @"Local\GxMcp.SharedWorker.v2.Host.";
+
         private const int SupervisorTickMs = 5000;
+
+        // How long a replacement waits for the operating system to report the previous child's exit.
+        private const int ChildExitConfirmMs = 5000;
         private const int RespawnBackoffMs = 250;
         private const int IdleRecordDebounceMs = 1000;
         private const int RespawnWindowMs = 60000;
@@ -196,10 +216,16 @@ namespace GxMcp.Worker
         private readonly SharedHostScheduler _scheduler;
         private readonly ISharedHostClock _clock;
         private readonly ISharedHostChildLauncher _childLauncher;
-        private readonly ISharedHostRegistryWriter _registryWriter;
+        private readonly ISharedHostRecordWriter _recordWriter;
+        private readonly ISharedHostMutexFactory _mutexFactory;
+        private readonly IProcessProbe _gatewayProbe;
         private readonly bool _runBackgroundThreads;
         private readonly ISharedHostTimer _expiryTimer;
         private readonly ISharedHostTimer _idleRecordTimer;
+        private readonly ISharedHostTimer _supervisorTimer;
+
+        // Gateway process identity from each Attachment's attach frame, keyed by connection id.
+        private readonly Dictionary<string, GatewayProcess> _gateways = new Dictionary<string, GatewayProcess>(StringComparer.Ordinal);
         private readonly CancellationTokenSource _stop = new CancellationTokenSource();
         private readonly object _hostLock = new object();
         private readonly BlockingCollection<ChildInboxItem> _childInbox = new BlockingCollection<ChildInboxItem>(ChildInboxCapacity);
@@ -221,8 +247,12 @@ namespace GxMcp.Worker
         private Thread _acceptThread;
         private string _lastChildError = string.Empty;
         private string _lastChildFailureDiagnostic = string.Empty;
-        private DateTime _lastDetachUtc = DateTime.UtcNow;
-        private long _lastBackgroundActivityTicks = DateTime.UtcNow.Ticks;
+        // Idle start (ISharedHostClock milliseconds): the last detachment, or Start when nothing detached yet.
+        private long _lastDetachMs;
+
+        // Last child background-activity notification (ISharedHostClock milliseconds); long.MinValue is none.
+        private long _lastBackgroundActivityMs = long.MinValue;
+        private IDisposable _hostMutex;
         private long _generation = 1;
         private long _sequence;
         private long? _expiryArmedAtMs;
@@ -239,7 +269,7 @@ namespace GxMcp.Worker
         private long _brokerGeneration = 1;
         private int _recycleElected;
         private bool _sdkReady;
-        private SharedWorkerHostRegistryRecord _record;
+        private SharedHostRecord _record;
         private int _disposed;
 
         // Issue #362. The child's SDK-lane snapshot, captured by the broker from the child
@@ -373,11 +403,18 @@ namespace GxMcp.Worker
                 options?.Settings ?? DefaultSettings(),
                 SharedHostSystemClock.Instance,
                 new SharedHostProcessLauncher(),
-                new SharedHostFileRegistryWriter(ResolveRecordPath(options)),
+                new SharedHostFileRecordWriter(ResolveRecordPathV2(options)),
+                new SharedHostNamedMutexFactory(),
+                new ProcessIdentity(),
                 runBackgroundThreads: true)
         {
         }
 
+        /// <summary>
+        /// The task 3.5 test constructor. Each v2 record write is projected onto
+        /// <paramref name="registryWriter"/> as a v1 record; the host-lifetime mutex is always granted and
+        /// every Gateway is reported running with its recorded start time.
+        /// </summary>
         internal SharedWorkerHostRuntime(
             SharedWorkerHostOptions options,
             SharedHostSettingsResult settings,
@@ -385,12 +422,40 @@ namespace GxMcp.Worker
             ISharedHostChildLauncher childLauncher,
             ISharedHostRegistryWriter registryWriter,
             bool runBackgroundThreads)
+            : this(
+                options,
+                settings,
+                clock,
+                childLauncher,
+                new RegistryWriterProjection(registryWriter ?? throw new ArgumentNullException(nameof(registryWriter))),
+                GrantingMutexFactory.Instance,
+                null,
+                runBackgroundThreads)
+        {
+        }
+
+        /// <summary>
+        /// The ownership constructor (task 4.12). No constructor acquires a mutex or writes a record;
+        /// <see cref="Start"/> does. A null <paramref name="gatewayProbe"/> reports every Gateway as running
+        /// with the start time of its attach frame.
+        /// </summary>
+        internal SharedWorkerHostRuntime(
+            SharedWorkerHostOptions options,
+            SharedHostSettingsResult settings,
+            ISharedHostClock clock,
+            ISharedHostChildLauncher childLauncher,
+            ISharedHostRecordWriter recordWriter,
+            ISharedHostMutexFactory mutexFactory,
+            IProcessProbe gatewayProbe,
+            bool runBackgroundThreads)
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             _childLauncher = childLauncher ?? throw new ArgumentNullException(nameof(childLauncher));
-            _registryWriter = registryWriter ?? throw new ArgumentNullException(nameof(registryWriter));
+            _recordWriter = recordWriter ?? throw new ArgumentNullException(nameof(recordWriter));
+            _mutexFactory = mutexFactory ?? throw new ArgumentNullException(nameof(mutexFactory));
+            _gatewayProbe = gatewayProbe;
             _runBackgroundThreads = runBackgroundThreads;
             _limits = new SchedulerLimits(settings.QueueDepth, settings.SessionQueueCap, settings.QueueWaitMs);
             _scheduler = new SharedHostScheduler(_limits, () => _clock.NowMs);
@@ -398,6 +463,8 @@ namespace GxMcp.Worker
             _scheduler.SetWorkerAvailable(false, WaitReason.WorkerStarting);
             _expiryTimer = _clock.CreateTimer(OnExpiryTimer);
             _idleRecordTimer = _clock.CreateTimer(OnIdleRecordTimer);
+            _supervisorTimer = _clock.CreateTimer(OnSupervisorTick);
+            _lastDetachMs = _clock.NowMs;
             using (var self = Process.GetCurrentProcess())
             {
                 _hostPid = self.Id;
@@ -408,40 +475,112 @@ namespace GxMcp.Worker
         private static SharedHostSettingsResult DefaultSettings()
             => SharedHostSettingsResolver.Resolve(null, false, string.Empty, _ => null);
 
-        private static string ResolveRecordPath(SharedWorkerHostOptions options)
+        /// <summary>
+        /// The registry v2 record path (decision A4): <c>&lt;kbKey&gt;.json</c> under <c>--registry-dir</c> when set,
+        /// else under <c>%LOCALAPPDATA%\GxMcp\shared-workers\v2</c>.
+        /// </summary>
+        internal static string ResolveRecordPathV2(SharedWorkerHostOptions options)
         {
             if (options == null) throw new ArgumentNullException(nameof(options));
             string directory = string.IsNullOrWhiteSpace(options.RegistryDirectory)
-                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GxMcp", "shared-workers")
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GxMcp", "shared-workers", "v2")
                 : options.RegistryDirectory;
-            return Path.Combine(directory, options.IdentityKey + ".json");
+            return Path.Combine(directory, options.KbKey + ".json");
         }
+
+        /// <summary>True once Dispose ran, the host stopped fail-closed, or the supervisor tick reaped an idle host.</summary>
+        internal bool IsStopRequested => _stop.IsCancellationRequested;
 
         // ---- Lifecycle ----
 
         /// <summary>
-        /// Starts the first child and writes the record (state "starting"). With background
-        /// threads it also starts the child readers, the child inbox writer and the accept loop.
+        /// Design "Startup": (1) take the host-lifetime mutex, or return false with no other effect;
+        /// (2) write the record with state "admitting" before the child exists; (3) with background threads,
+        /// start the child inbox writer and the pipe accept loop; (4) start the child (record state
+        /// "starting"); (5) arm the supervisor tick.
         /// </summary>
-        internal void Start()
+        internal bool Start()
         {
+            IDisposable mutex = _mutexFactory.TryAcquire(HostMutexPrefix + _options.KbKey);
+            if (mutex == null)
+            {
+                HostLog("another shared Worker host owns this KB (host-lifetime mutex held); exiting.");
+                return false;
+            }
+            lock (_hostLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    try { mutex.Dispose(); } catch { }
+                    return false;
+                }
+                _hostMutex = mutex;
+                _lastDetachMs = _clock.NowMs;
+                _record = NewAdmittingRecord();
+                WriteRecordLocked();
+            }
+            if (_runBackgroundThreads)
+            {
+                _childInboxWriter = new Thread(ChildInboxWriterLoop) { IsBackground = true, Name = "SharedWorkerChildWriter" };
+                _childInboxWriter.Start();
+                StartPipeAcceptLoop();
+            }
             lock (_hostLock)
             {
                 StartChildLocked();
+                _supervisorTimer.Change(_clock.NowMs + SupervisorTickMs);
             }
-            if (!_runBackgroundThreads) return;
-            _childInboxWriter = new Thread(ChildInboxWriterLoop) { IsBackground = true, Name = "SharedWorkerChildWriter" };
-            _childInboxWriter.Start();
-            StartPipeAcceptLoop();
+            return true;
+        }
+
+        private SharedHostRecord NewAdmittingRecord()
+        {
+            string profile = Normalize(_options.ProfileConfigPath);
+            return new SharedHostRecord
+            {
+                Schema = SharedHostRecord.CurrentSchema,
+                KbKey = _options.KbKey,
+                Identity = new SharedHostRecordIdentity
+                {
+                    Key = _options.IdentityKey,
+                    KbPath = SharedHostKbKey.NormalizeKbPath(_options.KbPath),
+                    WorkerExecutable = Normalize(_options.WorkerExecutable),
+                    InstallationPath = Normalize(_options.InstallationPath),
+                    Driver = NormalizeToken(_options.Driver),
+                    Major = NormalizeToken(_options.Major),
+                    ProfileConfigPath = profile.Length == 0 ? null : profile
+                },
+                HostPid = _hostPid,
+                HostStartTimeUtcTicks = _hostStartTimeUtcTicks,
+                WorkerPid = 0,
+                WorkerStartTimeUtcTicks = 0,
+                PipeName = _options.PipeName,
+                Generation = (int)_generation,
+                State = SharedHostRecordState.Admitting
+            };
+        }
+
+        // The host's own normalized Physical_KB_Identity components, keyed like an attach frame's "identity".
+        private Dictionary<string, string> LiveIdentityComponents()
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["installationPath"] = Normalize(_options.InstallationPath),
+                ["driver"] = NormalizeToken(_options.Driver),
+                ["major"] = NormalizeToken(_options.Major),
+                ["workerExecutable"] = Normalize(_options.WorkerExecutable),
+                ["profileConfigPath"] = Normalize(_options.ProfileConfigPath)
+            };
         }
 
         /// <summary>
-        /// The supervisor: waits on the child exit handle and the stop handle, with a
-        /// <see cref="SupervisorTickMs"/> timeout for the idle check. No polling loop.
+        /// The supervisor: waits on the child exit handle and the stop handle. Idle reaping and Gateway
+        /// liveness run on the supervisor tick, which ends this loop through <see cref="IsStopRequested"/>.
+        /// Returns <see cref="HostMutexHeldExitCode"/> at once when another host owns the KB.
         /// </summary>
         internal int Run()
         {
-            Start();
+            if (!Start()) return HostMutexHeldExitCode;
             WaitHandle stopHandle = _stop.Token.WaitHandle;
             while (!_stop.IsCancellationRequested)
             {
@@ -461,20 +600,88 @@ namespace GxMcp.Worker
                     if (Volatile.Read(ref _fatal) != 0) break;
                     continue;
                 }
-                if (IsIdleExpired()) break;
             }
             return 0;
         }
 
+        // ---- Supervisor tick (design "Detach and pipe EOF", "Idle reaping"; Requirement 7 criterion 5) ----
+
+        /// <summary>
+        /// Every <see cref="SupervisorTickMs"/>: detach each Attachment whose Gateway PID is gone or now
+        /// belongs to a process with another start time, then apply the idle rule. A Gateway that dies just
+        /// after a tick is detached by the next one, within 10 seconds.
+        /// </summary>
+        private void OnSupervisorTick()
+        {
+            if (Volatile.Read(ref _disposed) != 0 || _stop.IsCancellationRequested) return;
+
+            List<KeyValuePair<ISharedHostAttachment, GatewayProcess>> watched;
+            lock (_hostLock)
+            {
+                watched = new List<KeyValuePair<ISharedHostAttachment, GatewayProcess>>();
+                foreach (var attachment in _attachments.Values)
+                {
+                    if (_gateways.TryGetValue(attachment.ConnectionId, out GatewayProcess gateway))
+                        watched.Add(new KeyValuePair<ISharedHostAttachment, GatewayProcess>(attachment, gateway));
+                }
+            }
+
+            // The probe reads process state; it runs outside the host lock.
+            foreach (var entry in watched)
+            {
+                if (!IsGatewayGone(entry.Value)) continue;
+                HostLog("Gateway pid " + entry.Value.Pid.ToString(CultureInfo.InvariantCulture)
+                    + " is no longer running; detaching its Attachment.");
+                Detach(entry.Key);
+                try { entry.Key.Stop(); } catch { }
+            }
+
+            if (IsIdleExpired())
+            {
+                HostLog("idle timeout of " + _options.IdleTimeoutMs.ToString(CultureInfo.InvariantCulture)
+                    + " ms elapsed since the last detachment; stopping.");
+                try { _stop.Cancel(); } catch (ObjectDisposedException) { }
+                return;
+            }
+
+            if (Volatile.Read(ref _disposed) == 0) _supervisorTimer.Change(_clock.NowMs + SupervisorTickMs);
+        }
+
+        // NotRunning, or Running with another start time (PID reuse), is a dead Gateway. An unreadable start
+        // time keeps the Attachment (fail closed, Requirement 7 criterion 8).
+        private bool IsGatewayGone(GatewayProcess gateway)
+        {
+            if (_gatewayProbe == null) return false;
+            ProcessProbeResult probe;
+            try { probe = _gatewayProbe.Probe(gateway.Pid); }
+            catch (Exception ex)
+            {
+                HostLog("Gateway liveness probe failed: " + ex.Message);
+                return false;
+            }
+            switch (probe.Status)
+            {
+                case ProcessProbeStatus.NotRunning:
+                    return true;
+                case ProcessProbeStatus.Running:
+                    return !SharedHostRecordClassifier.SameMillisecond(gateway.StartTimeUtcTicks, probe.StartTimeUtcTicks);
+                default:
+                    return false;
+            }
+        }
+
+        // No Attachment, no queued or running request, no background activity, and at least --idle-ms since
+        // the last detachment, all measured with ISharedHostClock.
         private bool IsIdleExpired()
         {
+            long now = _clock.NowMs;
             lock (_hostLock)
             {
                 if (!_attachments.IsEmpty || _queued.Count > 0 || !_scheduler.Snapshot().IsIdle) return false;
+                if (now - _lastDetachMs < _options.IdleTimeoutMs) return false;
             }
-            DateTime lastBackgroundActivity = new DateTime(Interlocked.Read(ref _lastBackgroundActivityTicks), DateTimeKind.Utc);
-            return (DateTime.UtcNow - _lastDetachUtc).TotalMilliseconds >= _options.IdleTimeoutMs
-                && (DateTime.UtcNow - lastBackgroundActivity).TotalMilliseconds >= _options.IdleTimeoutMs;
+            long lastBackground = Interlocked.Read(ref _lastBackgroundActivityMs);
+            return lastBackground == long.MinValue || now - lastBackground >= _options.IdleTimeoutMs;
         }
 
         private ProcessStartInfo BuildChildStartInfo()
@@ -520,26 +727,11 @@ namespace GxMcp.Worker
             Interlocked.Increment(ref _brokerGeneration);
             Volatile.Write(ref _recycleElected, 0);
             _sdkReady = false;
-            _record = new SharedWorkerHostRegistryRecord
-            {
-                Identity = new SharedWorkerHostIdentity
-                {
-                    WorkerExecutable = Normalize(_options.WorkerExecutable),
-                    KbPath = Normalize(_options.KbPath),
-                    InstallationPath = Normalize(_options.InstallationPath),
-                    Driver = (_options.Driver ?? string.Empty).Trim().ToLowerInvariant(),
-                    Major = (_options.Major ?? string.Empty).Trim().ToLowerInvariant(),
-                    Key = _options.IdentityKey
-                },
-                HostPid = _hostPid,
-                HostStartTimeUtcTicks = _hostStartTimeUtcTicks,
-                WorkerPid = child.Pid,
-                WorkerStartTimeUtcTicks = child.StartTimeUtcTicks,
-                PipeName = _options.PipeName,
-                Generation = _generation,
-                UpdatedUtc = DateTime.UtcNow,
-                State = "starting"
-            };
+            if (_record == null) _record = NewAdmittingRecord();
+            _record.WorkerPid = child.Pid;
+            _record.WorkerStartTimeUtcTicks = child.StartTimeUtcTicks;
+            _record.Generation = (int)_generation;
+            _record.State = SharedHostRecordState.Starting;
             WriteRecordLocked();
 
             if (!_runBackgroundThreads) return;
@@ -592,7 +784,17 @@ namespace GxMcp.Worker
         {
             error = string.Empty;
             if (attachment == null) { error = "attachment is null"; return false; }
-            if (!SharedWorkerHostProtocol.TryValidateAttach(request, _options.IdentityKey, out error)) return false;
+            if (!SharedWorkerHostProtocol.TryValidateAttach(request, _options.IdentityKey, out error))
+            {
+                // Protocol v2: name each Physical_KB_Identity component of the attach frame that differs.
+                if (request?.Identity != null
+                    && string.Equals(error, "shared Worker identity mismatch", StringComparison.Ordinal))
+                {
+                    IReadOnlyList<string> differing = SharedWorkerHostProtocol.DescribeIdentityMismatch(request.Identity, LiveIdentityComponents());
+                    if (differing.Count > 0) error += " (differing components: " + string.Join(", ", differing) + ")";
+                }
+                return false;
+            }
             JObject ack;
             lock (_hostLock)
             {
@@ -602,7 +804,8 @@ namespace GxMcp.Worker
                     error = "could not register attachment";
                     return false;
                 }
-                _lastDetachUtc = DateTime.UtcNow;
+                // Liveness of this Attachment is its Gateway's PID and start time (Requirement 7 criterion 5).
+                _gateways[attachment.ConnectionId] = new GatewayProcess(request.GatewayPid, request.GatewayStartTimeUtcTicks);
                 ack = new JObject
                 {
                     ["attachId"] = attachment.AttachmentId,
@@ -631,7 +834,10 @@ namespace GxMcp.Worker
             var outbox = new Outbox();
             lock (_hostLock)
             {
-                _attachments.TryRemove(attachment.ConnectionId, out _);
+                // Idempotent: the supervisor tick and the transport both detach a dead Gateway's
+                // Attachment, and only the first detachment starts the idle timer.
+                if (!_attachments.TryRemove(attachment.ConnectionId, out _)) return;
+                _gateways.Remove(attachment.ConnectionId);
                 string attachmentId = attachment.AttachmentId;
                 if (!string.IsNullOrEmpty(attachmentId))
                 {
@@ -639,7 +845,7 @@ namespace GxMcp.Worker
                         _queued.Remove(removed.ChildRequestId);
                     RemoveRoutesForAttachment(attachmentId);
                 }
-                _lastDetachUtc = DateTime.UtcNow;
+                _lastDetachMs = _clock.NowMs;
                 RescheduleExpiryLocked(outbox);
             }
             Flush(outbox);
@@ -980,7 +1186,7 @@ namespace GxMcp.Worker
                 if (string.Equals(method, "notifications/worker/build_active", StringComparison.Ordinal)
                     || string.Equals(method, "notifications/worker/index_active", StringComparison.Ordinal))
                 {
-                    Interlocked.Exchange(ref _lastBackgroundActivityTicks, DateTime.UtcNow.Ticks);
+                    Interlocked.Exchange(ref _lastBackgroundActivityMs, _clock.NowMs);
                 }
 
                 if (frame["id"] != null && frame["id"].Type != JTokenType.Null && string.IsNullOrEmpty(method))
@@ -1221,6 +1427,9 @@ namespace GxMcp.Worker
                 RescheduleExpiryLocked(outbox);
             }
             Flush(outbox);
+            // A replacement starts only after the operating system reports this child as exited, so
+            // two SDK children never overlap on one KB. Checked before Dispose, which drops the handle.
+            bool exited = !replace || ConfirmChildExited(child);
             try { child.Dispose(); } catch { }
             if (!replace) return;
 
@@ -1230,18 +1439,44 @@ namespace GxMcp.Worker
             lock (_hostLock)
             {
                 if (Volatile.Read(ref _disposed) != 0) return;
-                try
+                if (!exited)
                 {
-                    StartChildLocked();
-                    QueueWorkerRestartedLocked(failureDiagnostic, outbox);
+                    FailClosedLocked("Shared Worker child pid " + child.Pid.ToString(CultureInfo.InvariantCulture)
+                        + " did not exit; no replacement was started and the host stopped fail-closed.", outbox);
                 }
-                catch (Exception ex)
+                else
                 {
-                    FailClosedLocked("Shared Worker child respawn failed after " + failureDiagnostic + ": " + ex.Message, outbox);
+                    try
+                    {
+                        StartChildLocked();
+                        QueueWorkerRestartedLocked(failureDiagnostic, outbox);
+                    }
+                    catch (Exception ex)
+                    {
+                        FailClosedLocked("Shared Worker child respawn failed after " + failureDiagnostic + ": " + ex.Message, outbox);
+                    }
                 }
                 RescheduleExpiryLocked(outbox);
             }
             Flush(outbox);
+        }
+
+        // True once the operating system reports the child as exited. A child whose exit was signalled but
+        // is not yet reported gets ChildExitConfirmMs, then one Kill and another ChildExitConfirmMs.
+        private static bool ConfirmChildExited(ISharedHostChild child)
+        {
+            if (HasChildExited(child)) return true;
+            try { child.ExitedHandle.WaitOne(ChildExitConfirmMs); } catch { }
+            if (HasChildExited(child)) return true;
+            try { child.Kill(); } catch { }
+            try { child.ExitedHandle.WaitOne(ChildExitConfirmMs); } catch { }
+            return HasChildExited(child);
+        }
+
+        private static bool HasChildExited(ISharedHostChild child)
+        {
+            try { return child.HasExited; }
+            catch { return false; }
         }
 
         private void FailDeliveredRequestsLocked(Outbox outbox)
@@ -1683,7 +1918,7 @@ namespace GxMcp.Worker
             _record.UpdatedUtc = DateTime.UtcNow;
             try
             {
-                _registryWriter.Write(_record);
+                _recordWriter.Write(_record);
                 _recordWritten = true;
             }
             catch (Exception ex) { HostLog("registry record write failed: " + ex.Message); }
@@ -1695,6 +1930,7 @@ namespace GxMcp.Worker
             _stop.Cancel();
             try { _expiryTimer.Dispose(); } catch { }
             try { _idleRecordTimer.Dispose(); } catch { }
+            try { _supervisorTimer.Dispose(); } catch { }
             foreach (var attachment in _attachments.Values)
             {
                 try { attachment.Stop(); } catch { }
@@ -1702,19 +1938,28 @@ namespace GxMcp.Worker
             try { _childInbox.CompleteAdding(); } catch { }
             ISharedHostChild child;
             bool deleteRecord;
+            IDisposable hostMutex;
             lock (_hostLock)
             {
                 child = _child;
                 deleteRecord = _recordWritten;
+                hostMutex = _hostMutex;
+                _hostMutex = null;
             }
             if (child != null)
             {
                 try { if (!child.HasExited) child.Kill(); } catch { }
                 try { child.Dispose(); } catch { }
             }
+            // Only the record this runtime wrote, and before the mutex is released: a host that acquires
+            // the mutex next must never lose its own record to this one.
             if (deleteRecord)
             {
-                try { _registryWriter.Delete(); } catch { }
+                try { _recordWriter.Delete(); } catch { }
+            }
+            if (hostMutex != null)
+            {
+                try { hostMutex.Dispose(); } catch { }
             }
         }
 
@@ -1744,7 +1989,72 @@ namespace GxMcp.Worker
             try { return Path.GetFullPath(value).TrimEnd('\\', '/').ToLowerInvariant(); }
             catch { return (value ?? string.Empty).Trim().TrimEnd('\\', '/').ToLowerInvariant(); }
         }
+        private static string NormalizeToken(string value) => (value ?? string.Empty).Trim().ToLowerInvariant();
+
         private static void HostLog(string message) { try { Console.Error.WriteLine("[SharedWorkerHost] " + message); } catch { } }
+
+        // ---- Ownership seams of the task 3.5 constructor ----
+
+        private readonly struct GatewayProcess
+        {
+            internal GatewayProcess(int pid, long startTimeUtcTicks)
+            {
+                Pid = pid;
+                StartTimeUtcTicks = startTimeUtcTicks;
+            }
+
+            internal int Pid { get; }
+            internal long StartTimeUtcTicks { get; }
+        }
+
+        // Projects each registry v2 write onto a v1 ISharedHostRegistryWriter (same state, PIDs, start times,
+        // pipe name and generation), so the PR A tests keep observing the record they were written against.
+        private sealed class RegistryWriterProjection : ISharedHostRecordWriter
+        {
+            private readonly ISharedHostRegistryWriter _inner;
+
+            internal RegistryWriterProjection(ISharedHostRegistryWriter inner) { _inner = inner; }
+
+            public void Write(SharedHostRecord record)
+            {
+                if (record == null) throw new ArgumentNullException(nameof(record));
+                _inner.Write(new SharedWorkerHostRegistryRecord
+                {
+                    Identity = new SharedWorkerHostIdentity
+                    {
+                        WorkerExecutable = record.Identity.WorkerExecutable,
+                        KbPath = record.Identity.KbPath,
+                        InstallationPath = record.Identity.InstallationPath,
+                        Driver = record.Identity.Driver,
+                        Major = record.Identity.Major,
+                        Key = record.Identity.Key
+                    },
+                    HostPid = record.HostPid,
+                    HostStartTimeUtcTicks = record.HostStartTimeUtcTicks,
+                    WorkerPid = record.WorkerPid,
+                    WorkerStartTimeUtcTicks = record.WorkerStartTimeUtcTicks,
+                    PipeName = record.PipeName,
+                    Generation = record.Generation,
+                    UpdatedUtc = record.UpdatedUtc,
+                    State = record.State
+                });
+            }
+
+            public void Delete() => _inner.Delete();
+        }
+
+        // Always grants: the task 3.5 tests run many runtimes for one KB in one process.
+        private sealed class GrantingMutexFactory : ISharedHostMutexFactory
+        {
+            internal static readonly GrantingMutexFactory Instance = new GrantingMutexFactory();
+
+            public IDisposable TryAcquire(string name) => new Granted();
+
+            private sealed class Granted : IDisposable
+            {
+                public void Dispose() { }
+            }
+        }
 
         // ---- Runtime records ----
 
