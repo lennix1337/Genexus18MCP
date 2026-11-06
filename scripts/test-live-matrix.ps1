@@ -19,7 +19,9 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'scripts\gx-version-catalog.ps1')
 $gxCatalog = Get-GxVersionCatalog -Root $root
-$catalogEntries = @($gxCatalog.supportedMajors)
+# The matrix runs one published Worker against every major of the GeneXus 16+ SDK line.
+# GeneXus X Evolution 3 (10.3) runs its own Worker build (publish\worker-ev3).
+$catalogEntries = @($gxCatalog.supportedMajors | Where-Object { [string]$_.major -notlike '10.*' })
 $knownMajors = @($catalogEntries | ForEach-Object { [string]$_.major })
 $catalogSource = if ($gxCatalog.PSObject.Properties['source']) { [string]$gxCatalog.source } else { 'config/gx-versions.json' }
 
@@ -68,7 +70,7 @@ function Get-MatrixSelection {
         [Parameter(Mandatory = $true)][hashtable]$PathMap
     )
 
-    $known = @($Catalog.supportedMajors | ForEach-Object { [string]$_.major })
+    $known = @($Catalog.supportedMajors | Where-Object { [string]$_.major -notlike '10.*' } | ForEach-Object { [string]$_.major })
     # An omitted -Majors arrives as $null, and @($null).Count is 1, not 0. Testing
     # the raw parameter for emptiness therefore never selected every catalog major
     # when the flag was simply not passed. Filter first so both $null and @() mean

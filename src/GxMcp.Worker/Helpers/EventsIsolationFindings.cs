@@ -297,7 +297,8 @@ namespace GxMcp.Worker.Helpers
                 EventsIsolationFinding bundleFinding = null;
                 bool complete = missing.Count == 0 && ambiguous.Count == 0;
                 var triggers = probe.CompleteBundleTriggerHashes;
-                if (complete && triggers != null && hashes.TryGetValue(probe.OptionalAssembly, out string optionalHash) && triggers.Contains(optionalHash))
+                // A trigger is the WorkWithPlus of a bundle audited with it, or the SDK core of one audited without it.
+                if (complete && triggers != null && hashes.Values.Any(triggers.Contains))
                 {
                     try { result.BundleAudit = probe.VerifyCompleteBundle(hashes); }
                     catch (EventsBundleScopeException ex) { bundleFinding = BundleScopeNotCovered(ex.Message); }

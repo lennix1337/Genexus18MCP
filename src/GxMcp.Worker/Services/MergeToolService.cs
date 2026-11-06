@@ -208,11 +208,11 @@ namespace GxMcp.Worker.Services
 
             if (cmp != null)
             {
-                try { leftEqualsRight = cmp.AreEqualInContent(left, right, CompareObjectOptions.Default); } catch { }
+                try { leftEqualsRight = Compatibility.SdkCompat.AreEqualInContent(cmp, left, right); } catch { }
                 if (threeWay)
                 {
-                    try { baseEqualsLeft = cmp.AreEqualInContent(baseObj, left, CompareObjectOptions.Default); } catch { }
-                    try { baseEqualsRight = cmp.AreEqualInContent(baseObj, right, CompareObjectOptions.Default); } catch { }
+                    try { baseEqualsLeft = Compatibility.SdkCompat.AreEqualInContent(cmp, baseObj, left); } catch { }
+                    try { baseEqualsRight = Compatibility.SdkCompat.AreEqualInContent(cmp, baseObj, right); } catch { }
                 }
             }
 

@@ -132,9 +132,9 @@ Before creating or proposing any new script for build, installation, upgrade, or
 
 ## Basic legacy GeneXus support
 
-Not native SDK support. In addition to the primary native SDK majors (GX 16, 17, 18), the server supports every legacy version declared in `legacyMajors` via driver-specific degradation:
+Not native SDK support. In addition to the native SDK majors (GX 16, 17, 18 and Evolution 3), the server supports every legacy version declared in `legacyMajors` via driver-specific degradation:
 
-- GeneXus Evolution 1 (10.1), Evolution 2 (10.2), Evolution 3 (10.3), and GeneXus 15 via `dotnet-reflection` (using `DynamicSdkBridge` and `OptionalSdkInvoker` for module-less vs `QualifiedName` and API differences).
+- GeneXus Evolution 1 (10.1), Evolution 2 (10.2), and GeneXus 15 via `dotnet-reflection` (using `DynamicSdkBridge` and `OptionalSdkInvoker` for module-less vs `QualifiedName` and API differences).
 - GeneXus 8.0 and 9.0 via `com-gxpublic` (`ComGxPublicDriver` connecting to classic Win32 `GXPublic.GXPublic` COM automation on an STA thread for `.gxi` KBs).
 - Modern tools unsupported in earlier versions return structured degradation envelopes (`UNSUPPORTED_IN_GENEXUS_VERSION`).
 

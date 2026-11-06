@@ -26,9 +26,12 @@ $serverOut = Join-Path $work 'server.out'
 $serverErr = Join-Path $work 'server.err'
 $server = Start-Process -FilePath $python.Source -ArgumentList @($serverScript) -RedirectStandardOutput $serverOut `
     -RedirectStandardError $serverErr -WindowStyle Hidden -PassThru
+$null = $server.Handle  # keeps ExitCode readable after the process exits
 try {
+    # The server announces its port in ~0.15s; a miss reports whether it died or hung, and its stderr.
     $port = $null
-    for ($i = 0; $i -lt 100 -and $null -eq $port; $i++) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ($null -eq $port -and -not $server.HasExited -and [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 100
         $announced = if (Test-Path -LiteralPath $serverOut) { Get-Content -LiteralPath $serverOut -Raw } else { $null }
         if ($announced) {
@@ -36,7 +39,11 @@ try {
             if ($match.Success) { $port = [int]$match.Groups[1].Value }
         }
     }
-    Assert-That ($null -ne $port) 'the fake MCP server did not report its port.'
+    if ($null -eq $port) {
+        $state = if ($server.HasExited) { "exited with code $($server.ExitCode)" } else { 'still running after 10s' }
+        $stderr = if (Test-Path -LiteralPath $serverErr) { (Get-Content -LiteralPath $serverErr -Raw) } else { '' }
+        Assert-That $false "the fake MCP server did not report its port (process $state). stderr: $stderr"
+    }
     $base = "http://127.0.0.1:$port"
 
     function Set-Scenario([string]$Scenario, [string]$Existing = '') {

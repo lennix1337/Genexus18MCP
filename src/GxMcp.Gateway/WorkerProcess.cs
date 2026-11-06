@@ -314,6 +314,32 @@ namespace GxMcp.Gateway
             };
         }
 
+        internal const string Evolution3WorkerDirectory = "worker-ev3";
+
+        /// <summary>
+        /// GeneXus X Evolution 3 ships SDK assemblies 10.1.0.0, which the GeneXus 16-18 Worker
+        /// cannot bind to, so Evolution 3 KBs run a Worker compiled against that SDK
+        /// (GxMcpSdkProfile=evolution3) published in the sibling worker-ev3 folder. Returns null
+        /// with a diagnostic when that Worker is missing, rather than starting one that cannot
+        /// load the SDK.
+        /// </summary>
+        internal static string? SelectSdkProfileWorker(string workerPath, string? major, out string? diagnostic)
+        {
+            diagnostic = null;
+            if (!string.Equals(major?.Trim(), "10.3", StringComparison.Ordinal))
+                return workerPath;
+
+            string workerDir = Path.GetDirectoryName(workerPath) ?? string.Empty;
+            string publishDir = Path.GetDirectoryName(workerDir) ?? workerDir;
+            string candidate = Path.Combine(publishDir, Evolution3WorkerDirectory, Path.GetFileName(workerPath));
+            if (File.Exists(candidate))
+                return candidate;
+
+            diagnostic = "GXMCP_EV3_WORKER_MISSING major=10.3 expected=" + candidate
+                + ". GeneXus X Evolution 3 needs the Worker built with -p:GxMcpSdkProfile=evolution3.";
+            return null;
+        }
+
         public WorkerProcess(Configuration config, KbHandle kb)
         {
             _config = config;
@@ -1149,6 +1175,14 @@ namespace GxMcp.Gateway
                     ObserveStartupDiagnostic(mismatch);
                     throw new InvalidOperationException(mismatch);
                 }
+
+                string? profileWorker = SelectSdkProfileWorker(workerPath, workerMajor, out string? profileDiagnostic);
+                if (profileWorker == null)
+                {
+                    ObserveStartupDiagnostic(profileDiagnostic!);
+                    throw new InvalidOperationException(profileDiagnostic);
+                }
+                workerPath = profileWorker;
 
                 string? legacyProvider = null;
                 if (string.Equals(workerDriver, "com-gxpublic", StringComparison.OrdinalIgnoreCase)

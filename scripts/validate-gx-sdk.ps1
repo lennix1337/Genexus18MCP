@@ -37,16 +37,30 @@ if (-not $catalogPath) {
 }
 try { $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json }
 catch { Fail "GXMCP_SDK_CATALOG_INVALID catalog=$catalogPath" }
-$supportedMajors = @($catalog.supportedMajors | ForEach-Object {
-    $major = 0
-    if ([int]::TryParse(([string]$_.major -split '\.')[0], [ref]$major) -and $major -gt 0) { $major }
-} | Sort-Object -Unique)
+# GeneXus X Evolution 1-3 report their major as "10.<n>"; GeneXus 15 onwards as a number.
+function Get-SdkMajor([string]$version) {
+    $parts = ([string]$version).Trim() -split '\.'
+    $first = 0
+    if (-not [int]::TryParse($parts[0], [ref]$first) -or $first -le 0) { return $null }
+    if ($first -ne 10) { return [string]$first }
+    $minor = 0
+    if ($parts.Count -lt 2 -or -not [int]::TryParse($parts[1], [ref]$minor) -or $minor -lt 1 -or $minor -gt 3) { return $null }
+    return "10.$minor"
+}
+# GeneXus 16-18 share one SDK binary line; an Evolution 3 SDK (assemblies 10.1.0.0) only
+# loads in a Worker built against it.
+function Get-SdkBinaryLine([string]$major) {
+    if ($major -like '10.*') { return $major }
+    return 'modern'
+}
+$supportedMajors = @($catalog.supportedMajors | ForEach-Object { Get-SdkMajor ([string]$_.major) } |
+    Where-Object { $_ } | Sort-Object -Unique { [double]$_ })
 if ($supportedMajors.Count -eq 0) {
     Fail "GXMCP_SDK_CATALOG_INVALID catalog=$catalogPath"
 }
 
-$expectedMajor = 0
-if (-not [int]::TryParse(([string]$spec.supportedVersion -split '\.')[0], [ref]$expectedMajor) -or $expectedMajor -le 0) {
+$expectedMajor = Get-SdkMajor ([string]$spec.supportedVersion)
+if (-not $expectedMajor) {
     Fail "GXMCP_SDK_MANIFEST_INVALID manifest=$Manifest error=supportedVersion"
 }
 $anchor = Join-Path $GxPath $spec.anchor
@@ -54,9 +68,9 @@ if (-not (Test-Path -LiteralPath $anchor -PathType Leaf)) {
     Fail "GXMCP_SDK_ANCHOR_MISSING path=$($spec.anchor)"
 }
 $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($anchor).ProductVersion
-$actualMajor = 0
-$supportedMajor = [int]::TryParse(([string]$actualVersion -split '\.')[0], [ref]$actualMajor) -and
-    $actualMajor -gt 0 -and $supportedMajors -contains $actualMajor
+$actualMajor = Get-SdkMajor ([string]$actualVersion)
+$supportedMajor = $actualMajor -and $supportedMajors -contains $actualMajor -and
+    (Get-SdkBinaryLine $actualMajor) -eq (Get-SdkBinaryLine $expectedMajor)
 $exactVersion = $actualVersion -eq $spec.supportedVersion
 if (-not $supportedMajor) {
     Fail "GXMCP_SDK_VERSION_MISMATCH expectedVersion=$($spec.supportedVersion) actualVersion=$actualVersion supportedMajors=$($supportedMajors -join ',')"

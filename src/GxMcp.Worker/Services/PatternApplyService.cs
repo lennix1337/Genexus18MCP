@@ -1486,6 +1486,18 @@ namespace GxMcp.Worker.Services
                         }
                         patternResult["recommendation"] = BuildAttachRecommendation(attach, parentTypeName, targetName);
 
+                        // The pattern's own validation explains an engine no-op better than any
+                        // attach stage: it is why nothing was generated in the first place.
+                        var patternErrors = PatternInstanceValidation.Collect(obj, patternDefinition);
+                        if (patternErrors.Count > 0)
+                        {
+                            patternResult["patternValidationErrors"] = new JArray(patternErrors);
+                            patternResult["failureStage"] = "patternValidation";
+                            patternResult["failureCode"] = PatternValidationFailedCode;
+                            patternResult["noOpReason"] = BuildPatternValidationReason(patternKey, targetName, patternErrors);
+                            patternResult["recommendation"] = BuildPatternValidationRecommendation(patternErrors);
+                        }
+
                         if (string.Equals(Environment.GetEnvironmentVariable("GX_MCP_SDK_PROBE"), "1", StringComparison.Ordinal))
                         {
                             try
@@ -2711,6 +2723,21 @@ namespace GxMcp.Worker.Services
         /// The failure sentence of a direct attach: the stage that failed, its error and,
         /// when the package reported them, the package's own validation messages.
         /// </summary>
+        internal const string PatternValidationFailedCode = "PatternValidationFailed";
+
+        internal static string BuildPatternValidationReason(string patternKey, string targetName, IReadOnlyList<string> errors) =>
+            "The " + patternKey + " pattern refused the instance for '" + targetName + "' before generating anything: " +
+            string.Join(" ", errors);
+
+        /// <summary>
+        /// A pattern's own validation names a step only the pattern can take (WorkWithPlus
+        /// asks for its Startup Wizard once per KB). Another template or a retry changes
+        /// nothing, so the instruction repeats the pattern's words and says so.
+        /// </summary>
+        internal static string BuildPatternValidationRecommendation(IReadOnlyList<string> errors) =>
+            "Do what the pattern asks (" + string.Join(" ", errors) + ") in the GeneXus IDE for this KB, then run mode=diagnose and apply again. " +
+            "A different template or a retry will not help until then; the pattern generated nothing in this call.";
+
         internal static string BuildAttachNoOpReason(WwpAttachResult attach, string parentTypeName)
         {
             string reason = "Engine ApplyPattern void overload no-op'd on a " + parentTypeName +
@@ -3829,6 +3856,24 @@ namespace GxMcp.Worker.Services
                         findings.Add(Finding("attachPreflightFailed", "critical",
                             "The WorkWithPlus direct-attach preflight threw before it could complete: " + ex.GetType().Name + ": " + ex.Message,
                             "Check the worker log for the full trace, then rerun mode=diagnose."));
+                    }
+                }
+
+                // ── 9b. the pattern's own validation of a first apply ───────────
+                object validatedDefinition = null;
+                if (existingInstance == null && typeGateReject == null)
+                    try { validatedDefinition = _engine.GetPatternDefinition(pattern.Id); } catch { }
+                if (validatedDefinition != null)
+                {
+                    var patternErrors = PatternInstanceValidation.Collect(obj, validatedDefinition);
+                    if (patternErrors.Count > 0)
+                    {
+                        var refused = Finding("patternValidation", "critical",
+                            BuildPatternValidationReason(patternKey, objectName, patternErrors),
+                            BuildPatternValidationRecommendation(patternErrors));
+                        refused["stage"] = "patternValidation";
+                        refused["patternValidationErrors"] = new JArray(patternErrors);
+                        findings.Add(refused);
                     }
                 }
 

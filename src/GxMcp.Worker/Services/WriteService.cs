@@ -86,7 +86,9 @@ namespace GxMcp.Worker.Services
             try
             {
                 var now = DateTime.UtcNow;
+#if !GXMCP_SDK_EV3
                 try { obj.LastUpdate = now; } catch { }
+#endif
                 try { obj.SaveModelEntityDate(301, 0, now); metadataStampPersisted = true; } catch { }
                 try { obj.SaveModelEntityDate(300, 0, now); metadataStampPersisted = true; } catch { }
                 try { obj.SaveVersionIndependentDate(310, 0, now); metadataStampPersisted = true; } catch { }
@@ -443,6 +445,10 @@ namespace GxMcp.Worker.Services
             if (colon < 0) return line;
             string name = line.Substring(0, colon).Trim();
             string rest = line.Substring(colon + 1).Trim();
+            // The renderer's detail comment (" // \"Description\" [Nullable]") is not part of
+            // the declaration; a Domain-typed line has no "(len)" that would cut it off below.
+            int comment = rest.IndexOf("//", StringComparison.Ordinal);
+            if (comment >= 0) rest = rest.Substring(0, comment).Trim();
             int paren = rest.IndexOf('(');
             if (paren >= 0) rest = rest.Substring(0, paren).Trim();
             return name + " : " + rest;
