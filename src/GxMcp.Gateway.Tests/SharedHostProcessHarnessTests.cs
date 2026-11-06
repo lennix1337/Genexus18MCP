@@ -103,6 +103,69 @@ namespace GxMcp.Gateway.Tests
             AssertExactlyOneResponse(b.Frames(kb).Skip(framesB).ToList(), sharedId, "probe-b", b.Name);
         });
 
+        // SharedWorkerConnection sends a heartbeat every 10 s, so Requirement 13 criterion 4 allows 20 s for the
+        // broker to report one Attachment. The broker detaches on pipe EOF or a detach frame at once, and the
+        // supervisor tick (5 s) detaches a dead Gateway's Attachment within 10 s as a backstop, so a passing run
+        // stays well inside the 10 s per-test budget; the 20 s bound is only the requirement's ceiling.
+        private const int HeartbeatIntervalMs = 10_000;
+
+        // Requirement 13 criterion 4 and 2.6: when one of two Gateways attached to one Worker_Host goes away, the
+        // remaining Gateway keeps working on the same Worker and the broker counts one Attachment within 2
+        // heartbeat intervals. Two departures, each with the same survivor: a graceful close (detach frame), then
+        // a forcibly terminated Gateway process (pipe EOF, supervisor dead-Gateway check as the backstop). The
+        // survivor has a request in flight while the other Gateway leaves, and that request must still complete.
+        [Fact]
+        public Task Remaining_gateway_keeps_the_worker_when_the_other_gateway_closes_or_dies() => RunAsync(async harness =>
+        {
+            string kb = harness.CreateKbDirectory();
+            var clients = await harness.StartClientsAsync(3);
+            var survivor = clients[0];
+            var closing = clients[1];
+            var killed = clients[2];
+
+            var opens = await Task.WhenAll(survivor.OpenOrThrowAsync(kb), closing.OpenOrThrowAsync(kb));
+            var openSurvivor = opens[0];
+            string survivorAttach = (string)openSurvivor["attachId"]!;
+            int workerPid = (int)openSurvivor["workerPid"]!;
+            long workerTicks = (long)openSurvivor["workerStartTimeUtcTicks"]!;
+            Assert.True(workerPid > 0 && workerTicks > 0, openSurvivor.ToString());
+            Assert.Equal(workerPid, (int)opens[1]["workerPid"]!);
+            await survivor.WaitForStatusAsync(kb, s => (int?)s["attachments"] == 2, "two attachments");
+
+            int nextId = 1;
+            async Task Depart(string how, Func<Task> leave)
+            {
+                // A request of the survivor is in flight while the other Gateway leaves (Requirement 2.6).
+                int inFlightId = nextId++;
+                var inFlight = survivor.CallAsync(kb, SharedHostGatewayClient.ProbeFrame(inFlightId, 300, "in-flight-" + how));
+                var clock = Stopwatch.StartNew();
+                await leave();
+                var status = await survivor.WaitForStatusAsync(kb, s => (int?)s["attachments"] == 1,
+                    "one attachment after the " + how, 2 * HeartbeatIntervalMs);
+                long detachMs = clock.ElapsedMilliseconds;
+                _output.WriteLine(how + ": one attachment after " + detachMs + " ms; status "
+                    + status.ToString(Newtonsoft.Json.Formatting.None));
+                Assert.True(detachMs <= 2 * HeartbeatIntervalMs, how + " took " + detachMs + " ms");
+                Assert.Equal(workerPid, (int)status["workerPid"]!);
+
+                AssertOwnResponse(await inFlight, inFlightId, "in-flight-" + how, survivorAttach, workerPid);
+                int afterId = nextId++;
+                var after = await survivor.CallAsync(kb, SharedHostGatewayClient.ProbeFrame(afterId, 0, "after-" + how));
+                AssertOwnResponse(after, afterId, "after-" + how, survivorAttach, workerPid);
+
+                // The same Worker process: PID plus start time, in the record too.
+                Assert.True(harness.IsSameProcess(workerPid, workerTicks), "the Worker changed after the " + how);
+                Assert.Equal(workerPid, harness.ReadRecord(kb)!.WorkerPid);
+                Assert.DoesNotContain(survivor.Events, e => (string?)e["event"] == "disconnected");
+            }
+
+            await Depart("graceful close", () => closing.CloseAsync(kb));
+
+            await killed.OpenOrThrowAsync(kb);
+            await survivor.WaitForStatusAsync(kb, s => (int?)s["attachments"] == 2, "two attachments again");
+            await Depart("client kill", () => { harness.KillClient(killed); return Task.CompletedTask; });
+        });
+
         private static void AssertOwnResponse(JObject response, int id, string method, string attachId, int workerPid)
         {
             Assert.Null(response["error"]);
