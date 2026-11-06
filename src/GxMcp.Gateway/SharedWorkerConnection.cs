@@ -22,6 +22,21 @@ namespace GxMcp.Gateway
         public bool SdkReady { get; init; }
     }
 
+    /// <summary>One <c>admission</c> frame from the host Admission_Guard (protocol v2).</summary>
+    internal sealed class SharedWorkerAdmissionUpdate
+    {
+        /// <summary>"held", "starting", "refused" or "evicting".</summary>
+        public string State { get; init; } = string.Empty;
+
+        /// <summary>1-based FIFO position, set for "held".</summary>
+        public int? Position { get; init; }
+
+        public long? ElapsedMs { get; init; }
+
+        /// <summary>The refusal object (code, reason, measured values), set for "refused".</summary>
+        public JObject? Refusal { get; init; }
+    }
+
     /// <summary>
     /// One Gateway-side connection to a shared Worker host. The host protocol is
     /// deliberately separate from JSON-RPC: only the attach/heartbeat/detach
@@ -110,6 +125,18 @@ namespace GxMcp.Gateway
         /// rather than assumed.
         /// </summary>
         internal event Action<JObject>? SupervisionReceived;
+
+        /// <summary>The latest <c>admission</c> frame from the host, or null when none arrived.</summary>
+        internal SharedWorkerAdmissionUpdate? LastAdmission
+        {
+            get => Volatile.Read(ref _lastAdmission);
+            private set => Volatile.Write(ref _lastAdmission, value);
+        }
+
+        private SharedWorkerAdmissionUpdate? _lastAdmission;
+
+        /// <summary>Raised for each <c>admission</c> frame after <see cref="LastAdmission"/> is updated.</summary>
+        internal event Action<SharedWorkerAdmissionUpdate>? AdmissionReceived;
 
         internal void Connect(int timeoutMs)
         {
@@ -331,22 +358,19 @@ namespace GxMcp.Gateway
         internal static bool IsControlFrame(JObject frame, string name)
             => frame != null && string.Equals(frame["gxmcp"]?.ToString(), name, StringComparison.Ordinal);
 
-        public void Dispose()
+        public void Dispose() => Dispose(stopIfLast: false);
+
+        /// <summary>
+        /// Writes the detach frame and closes the attachment. <paramref name="stopIfLast"/> asks the host to stop
+        /// its Worker when this was its last Attachment (a Server.MaxOpenKbs eviction). A host that predates the
+        /// flag ignores the extra property. Idempotent: only the first call writes a detach frame.
+        /// </summary>
+        internal void Dispose(bool stopIfLast)
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             try
             {
-                WriteLineAsync(new JObject
-                {
-                    ["gxmcp"] = "detach",
-                    ["type"] = "detach",
-                    ["version"] = ProtocolVersion,
-                    ["protocolVersion"] = ProtocolVersion,
-                    ["key"] = _identity.Key,
-                    ["identityKey"] = _identity.Key,
-                    ["attachId"] = AttachId ?? string.Empty,
-                    ["attachmentId"] = AttachId ?? string.Empty
-                }, 500).GetAwaiter().GetResult();
+                WriteLineAsync(BuildDetachFrame(_identity, AttachId, stopIfLast), 500).GetAwaiter().GetResult();
             }
             catch { }
             try { _cts.Cancel(); } catch { }
@@ -356,6 +380,39 @@ namespace GxMcp.Gateway
             try { _pipe?.Dispose(); } catch { }
             try { _writeGate.Dispose(); } catch { }
             SignalDisconnected(null);
+        }
+
+        internal static JObject BuildDetachFrame(SharedWorkerIdentity identity, string? attachId, bool stopIfLast)
+        {
+            return new JObject
+            {
+                ["gxmcp"] = "detach",
+                ["type"] = "detach",
+                ["version"] = ProtocolVersion,
+                ["protocolVersion"] = ProtocolVersion,
+                ["key"] = identity.Key,
+                ["identityKey"] = identity.Key,
+                ["attachId"] = attachId ?? string.Empty,
+                ["attachmentId"] = attachId ?? string.Empty,
+                ["stopIfLast"] = stopIfLast
+            };
+        }
+
+        /// <summary>
+        /// Reads an <c>admission</c> frame (protocol v2). Absent or mistyped members become null rather than
+        /// failing: the frame is advisory host control, so a partial one must not disconnect the attachment.
+        /// </summary>
+        internal static SharedWorkerAdmissionUpdate ParseAdmission(JObject frame)
+        {
+            JToken? position = frame["position"];
+            JToken? elapsed = frame["elapsedMs"];
+            return new SharedWorkerAdmissionUpdate
+            {
+                State = frame["state"]?.Type == JTokenType.String ? (string)frame["state"]! : string.Empty,
+                Position = position?.Type == JTokenType.Integer ? position.Value<int>() : (int?)null,
+                ElapsedMs = elapsed?.Type == JTokenType.Integer ? elapsed.Value<long>() : (long?)null,
+                Refusal = frame["refusal"] as JObject
+            };
         }
 
         private async Task ReadLoopAsync()
@@ -415,6 +472,15 @@ namespace GxMcp.Gateway
                     }
                     if (frame != null && IsControlFrame(frame, "heartbeat"))
                         continue;
+                    if (frame != null && IsControlFrame(frame, "admission"))
+                    {
+                        // RFC #854: the host Admission_Guard reports held/starting/refused/evicting here.
+                        // Host control, never a Worker line, and never a reason to disconnect.
+                        var admission = ParseAdmission(frame);
+                        LastAdmission = admission;
+                        try { AdmissionReceived?.Invoke(admission); } catch { }
+                        continue;
+                    }
                     if (frame != null && IsControlFrame(frame, "host_error"))
                         throw new InvalidOperationException(frame["message"]?.ToString() ?? "Shared Worker host error.");
                     if (frame != null && IsControlFrame(frame, "status_ack"))

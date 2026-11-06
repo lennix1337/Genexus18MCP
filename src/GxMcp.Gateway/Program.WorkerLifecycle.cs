@@ -76,6 +76,7 @@ namespace GxMcp.Gateway
                     stopReason == WorkerStopReason.GatewayShutdown ||
                     stopReason == WorkerStopReason.BusyReject ||
                     stopReason == WorkerStopReason.ExplicitClose ||
+                    stopReason == WorkerStopReason.CapacityEviction ||
                     stopReason == WorkerStopReason.PlannedReload ||
                     stopReason == WorkerStopReason.SdkCompatibilityRejected)
                 {
