@@ -109,7 +109,21 @@ namespace GxMcp.Worker.Helpers
             int endIndex = start + linesReturned;
             bool truncated = endIndex < totalLines;
 
-            var pageContent = string.Join(Environment.NewLine, pageLines);
+            int startPosition = 0;
+            for (int line = 0; line < start && startPosition < content.Length; line++)
+            {
+                while (startPosition < content.Length && content[startPosition] != '\r' && content[startPosition] != '\n') startPosition++;
+                if (startPosition < content.Length && content[startPosition++] == '\r'
+                    && startPosition < content.Length && content[startPosition] == '\n') startPosition++;
+            }
+            int endPosition = startPosition;
+            for (int line = 0; line < linesReturned && endPosition < content.Length; line++)
+            {
+                while (endPosition < content.Length && content[endPosition] != '\r' && content[endPosition] != '\n') endPosition++;
+                if (endPosition < content.Length && content[endPosition++] == '\r'
+                    && endPosition < content.Length && content[endPosition] == '\n') endPosition++;
+            }
+            var pageContent = content.Substring(startPosition, endPosition - startPosition);
 
             return new ReadPage
             {
