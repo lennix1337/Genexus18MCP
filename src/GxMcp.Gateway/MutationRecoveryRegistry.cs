@@ -429,7 +429,9 @@ namespace GxMcp.Gateway
                 ["code"] = "PostTimeoutReadRequired",
                 ["message"] = kbLevel
                     ? "A previous KB-level import timed out or was cancelled; the affected object and part set is unknown."
-                    : "A previous write timed out or was cancelled, so its persisted state is unknown.",
+                    : $"A previous write to '{requirement.Target}'" +
+                        (string.IsNullOrWhiteSpace(requirement.TargetGuid) ? "" : $" (guid: {requirement.TargetGuid})") +
+                        $", part '{requirement.Part}', timed out or was cancelled, so its persisted state is unknown.",
                 ["hint"] = kbLevel
                     ? "Reconcile the manifest/KB state before retrying. No single object/part read can clear this fence."
                     : string.Equals(requirement.Part, "Properties", StringComparison.OrdinalIgnoreCase)

@@ -20,6 +20,10 @@
 
 ### Fixed
 
+- **Source-search continuations remain stable as source caches warm**: candidates are ordered by identity rather than mutable source availability. Previously issued cursors are rejected; start a new search. This may visit more candidates before filling a page. Mixed-field searches also retain their source cursor when a full page reaches its deadline. https://github.com/lennix1337/Genexus18MCP/issues/882
+- **Post-timeout recovery diagnostics** identify the affected object, part and recorded GUID in the refusal message; reconciliation requirements are unchanged. https://github.com/lennix1337/Genexus18MCP/issues/887
+- **WWP layout projection rejects duplicate control names**: `add_layout` now refuses a projected WebForm containing case-insensitive duplicate control names rather than confirming two newly generated controls with the same name. This is a safety fix, not full support for Selection containers. https://github.com/lennix1337/Genexus18MCP/issues/890
+- **Shared-host recovery cannot wait behind a blocked stdin write**: terminate the child before closing its input stream, so a child that stops reading cannot block its own restart. A process regression reproduces the blocked pipe without a KB or GeneXus SDK operation.
 - **Multi-class `themeClass` with dashed utility classes no longer rolls the save back** (#880): the layout verifier treats names such as `u-w-14` as symbolic theme classes, so their `<guid>-<int>` re-read is accepted instead of failing as `PatternProjectionFailed`. Unit-tested on synthetic values only; not run on a real WWP KB.
 ### Internal
 

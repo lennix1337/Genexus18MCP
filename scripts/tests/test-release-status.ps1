@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$path = Join-Path $env:TEMP ('gxmcp-release-status-test-' + [guid]::NewGuid().ToString('N') + '.json')
 $artifactRoot = Join-Path $env:TEMP ('gxmcp-release-status-artifacts-' + [guid]::NewGuid().ToString('N'))
+$path = Join-Path $artifactRoot 'status.json'
 New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 foreach ($name in @('publish.zip', 'publish.zip.sha256', 'nexus-ide-3.0.1.vsix')) {
     Set-Content -LiteralPath (Join-Path $artifactRoot $name) -Value $name -NoNewline -Encoding ascii
@@ -20,6 +20,9 @@ function Write-TestStatus([string]$State) {
     } | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding utf8
 }
 try {
+    if ([IO.Path]::GetDirectoryName($path) -ne $artifactRoot) {
+        throw 'Synthetic status must stay inside its isolated fixture directory, outside the live release watcher.'
+    }
     Write-TestStatus 'succeeded'
     $assetEvidence = @(
         foreach ($assetName in @('publish.zip', 'publish.zip.sha256', 'nexus-ide-3.0.1.vsix')) {
@@ -77,10 +80,32 @@ try {
     if ($LASTEXITCODE -ne 1) { throw 'A completed release without publication evidence must still fail.' }
     Write-TestStatus 'running'
     # A release process that died without recording a result must not read as running forever.
-    $deadProcess = Start-Process -FilePath pwsh -ArgumentList @('-NoProfile', '-Command', 'exit 0') -PassThru -WindowStyle Hidden
-    $deadProcess.WaitForExit()
+    # A hidden console can inherit invalid output handles in a headless runner.
+    # Redirect every stream so the fixture does not depend on the caller's console.
+    $startInfo = [Diagnostics.ProcessStartInfo]::new((Get-Command pwsh -CommandType Application).Source)
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @('-NoProfile', '-NonInteractive', '-Command', 'exit 0')) {
+        $startInfo.ArgumentList.Add($argument)
+    }
+    $deadProcess = [Diagnostics.Process]::Start($startInfo)
+    try {
+        $deadProcess.StandardInput.Close()
+        if (-not $deadProcess.WaitForExit(10000)) {
+            $deadProcess.Kill($true)
+            throw 'Disposable headless PowerShell failed to exit within 10 seconds.'
+        }
+        if ($deadProcess.ExitCode -ne 0) {
+            throw "Disposable headless PowerShell crashed: exit=$($deadProcess.ExitCode); $($deadProcess.StandardError.ReadToEnd())"
+        }
+        $deadPid = $deadProcess.Id
+    }
+    finally { $deadProcess.Dispose() }
     $interrupted = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    $interrupted.pid = $deadProcess.Id
+    $interrupted.pid = $deadPid
     $interrupted.updatedAtUtc = [DateTime]::UtcNow.AddMinutes(-5).ToString('o')
     $interrupted | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8
     $output = @(& pwsh -NoProfile -File (Join-Path $root 'scripts\release-status.ps1') -Path $path -RepositoryRoot $artifactRoot)

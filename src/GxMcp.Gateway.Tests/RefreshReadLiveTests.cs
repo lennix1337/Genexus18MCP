@@ -18,6 +18,58 @@ namespace GxMcp.Gateway.Tests
         public Task DisposeAsync() => Task.CompletedTask;
 
         [LiveKbFact]
+        public async Task AutoDeclaredVariableIsReportedAndIndependentlyReloaded()
+        {
+            AssertSyntheticFixture();
+            string name = "Mcp889" + Guid.NewGuid().ToString("N").Substring(0, 10);
+            bool created = false;
+            bool uncertain = false;
+            try
+            {
+                uncertain = true;
+                await Call("genexus_create", new JObject { ["action"] = "object", ["name"] = name, ["type"] = "Procedure" });
+                created = true;
+                uncertain = false;
+                uncertain = true;
+                var edit = await Call("genexus_edit", new JObject
+                {
+                    ["name"] = name, ["type"] = "Procedure", ["part"] = "Source", ["mode"] = "full",
+                    ["content"] = "&McpUndeclared = 100", ["autoDeclareVariables"] = true,
+                    ["requireObjectSave"] = true
+                });
+                uncertain = false;
+                var declared = (edit["autoCreatedVariables"] ?? edit["result"]?["autoCreatedVariables"]) as JArray;
+                Assert.NotNull(declared);
+                Assert.Contains(declared!, item => string.Equals(item["name"]?.ToString(), "&McpUndeclared", StringComparison.OrdinalIgnoreCase));
+                var variables = await Call("genexus_read", new JObject
+                {
+                    ["name"] = name, ["type"] = "Procedure", ["part"] = "Variables", ["limit"] = 0, ["refresh"] = true
+                });
+                Assert.Contains("McpUndeclared", variables.ToString(), StringComparison.OrdinalIgnoreCase);
+                Assert.Equal("sdk-refresh", (variables["readFreshness"] ?? variables["result"]?["readFreshness"])?["origin"]?.ToString());
+            }
+            finally
+            {
+                if (created && !uncertain) await Delete(name);
+                if (uncertain) Console.Error.WriteLine("Uncertain mutation; reconcile owned fixture before cleanup: " + name);
+            }
+        }
+
+        [LiveKbFact]
+        public Task LargeSourceSingularAndPluralReadsPreserveEveryPage()
+        {
+            AssertSyntheticFixture();
+            return LargePartReadLiveAssertions.Verify(Call, "Procedure", "Source");
+        }
+
+        [LiveKbFact]
+        public Task LargeEventsSingularAndPluralReadsPreserveEveryPage()
+        {
+            AssertSyntheticFixture();
+            return LargePartReadLiveAssertions.Verify(Call, "WebPanel", "Events");
+        }
+
+        [LiveKbFact]
         public async Task SameSdkObjectCanBeIndependentlyReloadedByNameAndGuid()
         {
             AssertSyntheticFixture();

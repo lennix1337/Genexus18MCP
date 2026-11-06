@@ -3,15 +3,28 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace GxMcp.Gateway.Tests
 {
     [Trait("Category", "ProcessSmoke")]
     public class LiveGatewayHarnessCleanupTests
     {
+        private readonly ITestOutputHelper _output;
+
+        public LiveGatewayHarnessCleanupTests(ITestOutputHelper output) => _output = output;
+
         [Fact]
         public async Task TimeoutCleanup_stops_owned_child_without_touching_unrelated_process()
         {
+            var elapsed = Stopwatch.StartNew();
+            long previous = 0;
+            void Phase(string name)
+            {
+                long now = elapsed.ElapsedMilliseconds;
+                _output.WriteLine("{0}: {1}ms (total {2}ms)", name, now - previous, now);
+                previous = now;
+            }
             // Same-image peers catch name-wide kills. Node avoids PowerShell cold-start time.
             // A detached console keeps parent-only termination from masking a missing tree kill.
             using var unrelated = Process.Start(new ProcessStartInfo
@@ -21,6 +34,7 @@ namespace GxMcp.Gateway.Tests
                 UseShellExecute = false,
                 CreateNoWindow = true
             })!;
+            Phase("start unrelated");
             var parent = new Process
             {
                 StartInfo = new ProcessStartInfo
@@ -44,13 +58,18 @@ namespace GxMcp.Gateway.Tests
             try
             {
                 parent.Start();
+                Phase("start parent");
                 var childId = await parent.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
+                Phase("spawn child");
                 child = Process.GetProcessById(int.Parse(childId!));
                 Assert.False(child.HasExited, "The owned child exited before cleanup.");
                 // The stub ignores stdin, so the graceful-exit wait would only add 2s of waiting.
                 Assert.True(LiveGatewayHarness.StopOwnedProcess(parent, gracefulExitMs: 0));
+                Phase("stop owned tree");
                 Assert.True(child.WaitForExit(5000), "The owned child outlived timeout cleanup.");
+                Phase("wait for child");
                 Assert.False(unrelated.HasExited);
+                Phase("check unrelated");
             }
             finally
             {
@@ -63,6 +82,7 @@ namespace GxMcp.Gateway.Tests
                     child.Dispose();
                 }
                 if (!unrelated.HasExited) unrelated.Kill();
+                Phase("final cleanup");
             }
         }
 

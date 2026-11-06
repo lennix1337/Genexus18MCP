@@ -1033,7 +1033,7 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
-        public void Two_overlapping_calls_run_one_after_the_other_and_the_original_value_survives_both()
+        public async System.Threading.Tasks.Task Two_overlapping_calls_run_one_after_the_other_and_the_original_value_survives_both()
         {
             var sw = new FakeSwitch { Value = true };
             var inside = new System.Threading.ManualResetEventSlim(false);
@@ -1045,10 +1045,19 @@ namespace GxMcp.Worker.Tests
             var second = System.Threading.Tasks.Task.Run(() => SpecifyOnlyGenerationSwitch.RunWithSwitchOff(
                 sw.Get, sw.Set, () => { }, out string f2));
 
-            Assert.False(second.Wait(300)); // the second is waiting for the first, not running over it
-            release.Set();
-            Assert.True(first.Wait(5000));
-            Assert.True(second.Wait(5000));
+            try
+            {
+                Assert.NotSame(second, await System.Threading.Tasks.Task.WhenAny(
+                    second, System.Threading.Tasks.Task.Delay(300)));
+            }
+            finally
+            {
+                release.Set();
+            }
+            var both = System.Threading.Tasks.Task.WhenAll(first, second);
+            Assert.Same(both, await System.Threading.Tasks.Task.WhenAny(
+                both, System.Threading.Tasks.Task.Delay(5000)));
+            await both;
 
             Assert.True(sw.Value);
             Assert.Equal(new[] { false, true, false, true }, sw.Writes);
