@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using System.Threading;
 using System.Collections.Generic;
 using System.Linq;
+using GxMcp.Common.SharedHost;
 
 namespace GxMcp.Gateway
 {
@@ -33,6 +34,16 @@ namespace GxMcp.Gateway
 
         [JsonProperty("Engine")]
         public EngineConfig? Engine { get; set; }
+
+        /// <summary>
+        /// Effective Server.SharedHost settings (file, environment and defaults), resolved by
+        /// <see cref="SharedHostSettingsResolver"/>. ParseConfig sets it for every document it
+        /// returns and rejects the document when the result is invalid, so after a successful
+        /// load it is always valid. Never serialized: it is derived state, not a config member.
+        /// </summary>
+        [JsonIgnore]
+        internal SharedHostSettingsResult EffectiveSharedHost { get; set; } =
+            SharedHostSettingsResolver.Resolve(null, strictDocument: false, string.Empty, _ => null);
 
         public static string? CurrentConfigPath { get; private set; }
         public static string ResolvedFrom { get; internal set; } = "launcher";
@@ -64,6 +75,11 @@ namespace GxMcp.Gateway
         // GXMCP_ENGINE_BACKEND, GXMCP_ENGINE_FALLBACK, GXMCP_ENGINE_EXE,
         // GXMCP_ENGINE_TIMEOUT_SECONDS (the strict document's Engine section is the
         // only authority for the experimental engine backend).
+        // Server.SharedHost settings (allowed with strict and legacy documents, validated by
+        // SharedHostSettingsResolver; strict rejects a value that differs from the file):
+        // GXMCP_SHARED_QUEUE_WAIT_MS, GXMCP_SHARED_QUEUE_DEPTH, GXMCP_SHARED_SESSION_QUEUE_CAP,
+        // GXMCP_SHARED_MAX_WORKERS, GXMCP_SHARED_MEMORY_FLOOR_MB,
+        // GXMCP_SHARED_COLD_START_CONCURRENCY, GXMCP_SHARED_ATTACH_READY_TIMEOUT_S.
         // Bootstrap selector (allowed): GX_CONFIG_PATH.
         // Secret (allowed): GXMCP_HTTP_TOKEN, GXMCP_AI_COMPLETE_KEY, GXMCP_GAM_PASS.
         // Diagnostic/operational (allowed): GXMCP_VERBOSE_LOGS, GXMCP_LOG_DIR, GXMCP_STATE_DIR,
@@ -153,6 +169,10 @@ namespace GxMcp.Gateway
                         || document.Property("GatewayMode") != null;
                     if (strictDocument)
                         ValidateStrictDocument(document, path);
+                    // Resolved from the raw JSON before deserialization so a rejected value is
+                    // reported with its name, value and range (not as a generic deserialization
+                    // error) and the document is refused before any Worker or Worker_Host starts.
+                    SharedHostSettingsResult sharedHost = ResolveSharedHostSettings(document, strictDocument, path);
                     // Tolerant parse (E6): a single invalid scalar (e.g. "HttpPort": "abc")
                     // must not take the whole gateway down. Log the offending member and
                     // keep every member that did deserialize.
@@ -179,8 +199,11 @@ namespace GxMcp.Gateway
                     if (config == null)
                     {
                         Program.Log("[Gateway] WARNING: config.json could not be deserialized into any usable state — using defaults.");
-                        return new Configuration();
+                        var fallback = new Configuration { EffectiveSharedHost = sharedHost };
+                        LogSharedHostSettingsNotInEffect(fallback);
+                        return fallback;
                     }
+                    config.EffectiveSharedHost = sharedHost;
 
                     if (config.Environment != null)
                     {
@@ -270,6 +293,7 @@ namespace GxMcp.Gateway
                         }
                     }
 
+                    LogSharedHostSettingsNotInEffect(config);
                     return config;
                 }
                 catch (IOException)
@@ -310,8 +334,10 @@ namespace GxMcp.Gateway
                 "HttpPort", "McpStdio", "BindAddress", "AllowedOrigins", "SessionIdleTimeoutMinutes",
                 "WorkerIdleTimeoutMinutes", "WedgedCommandTimeoutMinutes", "WorkerHeapRecycleMB",
                 "ArtifactOutputDirectory", "IdempotencyTtlMinutes", "IdempotencyCacheSize", "BuildSyncThresholdSeconds", "MaxOpenKbs",
-                "ToolProfile", "EmitStructuredContent", "TerseResponses", "WorkerSharingMode", "SourceStoreMaxMB", "SourceStoreBackfill"
+                "ToolProfile", "EmitStructuredContent", "TerseResponses", "WorkerSharingMode", "SourceStoreMaxMB", "SourceStoreBackfill",
+                "SharedHost"
             }, StringComparer.Ordinal), "Server", path);
+            ValidateStrictSharedHostSection(server["SharedHost"], path);
             if (server["HttpPort"]?.Type != JTokenType.Integer || server["McpStdio"]?.Type != JTokenType.Boolean)
                 throw new InvalidDataException("Strict config requires typed Server.HttpPort and Server.McpStdio.");
             int port = server.Value<int>("HttpPort");
@@ -373,6 +399,80 @@ namespace GxMcp.Gateway
             if (timeoutSeconds != null
                 && (timeoutSeconds.Type != JTokenType.Integer || engine.Value<int>("TimeoutSeconds") <= 0))
                 throw new InvalidDataException("Strict config Engine.TimeoutSeconds must be a positive integer when present.");
+        }
+
+        // Server.SharedHost members: the seven settings plus "$comment", a reserved array of
+        // strings that documents them in config.shared-host.sample.json. The resolver reads only
+        // the seven setting keys, so "$comment" never becomes a setting.
+        private const string SharedHostCommentMember = "$comment";
+        private static readonly string[] SharedHostSettingKeys =
+        {
+            SharedHostSettingsResolver.QueueWaitMsKey,
+            SharedHostSettingsResolver.QueueDepthKey,
+            SharedHostSettingsResolver.SessionQueueCapKey,
+            SharedHostSettingsResolver.MaxWorkersKey,
+            SharedHostSettingsResolver.MemoryFloorMbKey,
+            SharedHostSettingsResolver.ColdStartConcurrencyKey,
+            SharedHostSettingsResolver.AttachReadyTimeoutSecondsKey,
+        };
+
+        private static void ValidateStrictSharedHostSection(JToken? token, string path)
+        {
+            if (token == null || token.Type == JTokenType.Null) return;
+            var section = token as JObject
+                ?? throw new InvalidDataException($"Strict config {SharedHostSettingsResolver.SectionPath} must be an object in '{path}'.");
+
+            RejectUnknown(section, new HashSet<string>(SharedHostSettingKeys.Append(SharedHostCommentMember), StringComparer.Ordinal),
+                SharedHostSettingsResolver.SectionPath, path);
+
+            JToken? comment = section[SharedHostCommentMember];
+            if (comment != null && (!(comment is JArray lines) || lines.Any(line => line.Type != JTokenType.String)))
+                throw new InvalidDataException($"Strict config {SharedHostSettingsResolver.SectionPath}.{SharedHostCommentMember} must be an array of strings in '{path}'.");
+        }
+
+        // Runs the shared resolver on the raw Server.SharedHost object for strict and legacy
+        // documents alike. The GatewayMode it sees is the one Program derives after load
+        // (GatewayMode ?? Server.TransportMode). Every resolver error is reported in one message.
+        private static SharedHostSettingsResult ResolveSharedHostSettings(JObject document, bool strictDocument, string path)
+        {
+            var server = document["Server"] as JObject;
+            JToken? token = server?["SharedHost"];
+            JObject? section = null;
+            if (token != null && token.Type != JTokenType.Null)
+            {
+                section = token as JObject
+                    ?? throw new InvalidDataException($"{SharedHostSettingsResolver.SectionPath} must be a JSON object in config '{path}'.");
+            }
+
+            string gatewayMode = StringValue(document["GatewayMode"]) ?? StringValue(server?["TransportMode"]) ?? string.Empty;
+            SharedHostSettingsResult result = SharedHostSettingsResolver.Resolve(
+                section, strictDocument, gatewayMode, global::System.Environment.GetEnvironmentVariable);
+            if (!result.IsValid)
+                throw new InvalidDataException($"Invalid {SharedHostSettingsResolver.SectionPath} settings in config '{path}': {string.Join(" ", result.Errors)}");
+            return result;
+        }
+
+        private static string? StringValue(JToken? token) =>
+            token != null && token.Type == JTokenType.String ? token.Value<string>() : null;
+
+        // Isolated_Mode keeps its behavior; an explicitly set New_Setting only earns one log entry
+        // naming it (config key or environment variable) as not in effect. Defaults and the legacy
+        // GXMCP_BUSY_WAIT_MS fallback are not New_Settings set by the user, so they are not named.
+        private static void LogSharedHostSettingsNotInEffect(Configuration config)
+        {
+            string sharingMode = config.Server?.WorkerSharingMode ?? "isolated";
+            if (string.Equals(sharingMode.Trim(), "shared-host", StringComparison.OrdinalIgnoreCase)) return;
+
+            var named = new List<string>();
+            foreach (string key in SharedHostSettingKeys)
+            {
+                if (!config.EffectiveSharedHost.Sources.TryGetValue(key, out string? source)) continue;
+                if (source.StartsWith("config:", StringComparison.Ordinal)) named.Add(source.Substring("config:".Length));
+                else if (source.StartsWith("env:", StringComparison.Ordinal)) named.Add(source.Substring("env:".Length));
+            }
+            if (named.Count == 0) return;
+
+            Program.Log($"[Gateway] {string.Join(", ", named)} not in effect in Isolated_Mode (WorkerSharingMode={sharingMode.Trim()}); these settings apply only with WorkerSharingMode=shared-host.");
         }
 
         private static void ValidateStrictKbCatalog(JToken? token, string path)
@@ -674,6 +774,45 @@ namespace GxMcp.Gateway
         public int SourceStoreMaxMB { get; set; } = 512;
         /// <summary>Source-store background population: auto (default) or off.</summary>
         public string SourceStoreBackfill { get; set; } = "auto";
+        /// <summary>
+        /// Optional shared-host tuning (RFC #854). Null when the document has no
+        /// Server.SharedHost object; never written back as null. Holds the file values only:
+        /// the effective values are <see cref="Configuration.EffectiveSharedHost"/>.
+        /// </summary>
+        [JsonProperty("SharedHost", NullValueHandling = NullValueHandling.Ignore)]
+        public SharedHostConfig? SharedHost { get; set; }
+    }
+
+    /// <summary>
+    /// File values of Server.SharedHost, one per key; a property is null when the key is
+    /// absent. Validation, environment overrides and defaults live in
+    /// <see cref="SharedHostSettingsResolver"/>, which runs on the raw JSON before binding.
+    /// Missing members are ignored so the reserved "$comment" member binds in strict documents;
+    /// the strict allow-list in Configuration.ValidateStrictSharedHostSection rejects any other.
+    /// </summary>
+    [JsonObject(MissingMemberHandling = MissingMemberHandling.Ignore)]
+    public class SharedHostConfig
+    {
+        [JsonProperty("QueueWaitMs", NullValueHandling = NullValueHandling.Ignore)]
+        public int? QueueWaitMs { get; set; }
+
+        [JsonProperty("QueueDepth", NullValueHandling = NullValueHandling.Ignore)]
+        public int? QueueDepth { get; set; }
+
+        [JsonProperty("SessionQueueCap", NullValueHandling = NullValueHandling.Ignore)]
+        public int? SessionQueueCap { get; set; }
+
+        [JsonProperty("MaxWorkers", NullValueHandling = NullValueHandling.Ignore)]
+        public int? MaxWorkers { get; set; }
+
+        [JsonProperty("MemoryFloorMB", NullValueHandling = NullValueHandling.Ignore)]
+        public int? MemoryFloorMB { get; set; }
+
+        [JsonProperty("ColdStartConcurrency", NullValueHandling = NullValueHandling.Ignore)]
+        public int? ColdStartConcurrency { get; set; }
+
+        [JsonProperty("AttachReadyTimeoutSeconds", NullValueHandling = NullValueHandling.Ignore)]
+        public int? AttachReadyTimeoutSeconds { get; set; }
     }
 
     public class LoggingConfig

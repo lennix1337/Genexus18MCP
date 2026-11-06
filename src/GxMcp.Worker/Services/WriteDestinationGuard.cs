@@ -7,13 +7,9 @@ using Newtonsoft.Json.Linq;
 namespace GxMcp.Worker.Services
 {
     // Profile-owned pins survive Worker/Gateway restarts. They never activate a version.
-    internal static class WriteDestinationGuard
+    internal static partial class WriteDestinationGuard
     {
-        internal const string PathVariable = "GXMCP_EXPECTED_KB_PATH";
-        internal const string VersionVariable = "GXMCP_EXPECTED_KB_VERSION";
         internal const string PinsMissingCode = "WriteDestinationPinsMissing";
-        internal static bool IsConfigured => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(PathVariable))
-            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(VersionVariable));
 
         internal static string CheckOpen(string actualPath) => Check(
             Environment.GetEnvironmentVariable(PathVariable), Environment.GetEnvironmentVariable(VersionVariable),
@@ -49,27 +45,6 @@ namespace GxMcp.Worker.Services
                 && args?["autoUpdate"]?.Type == JTokenType.Boolean && !(bool)args["autoUpdate"]) return null;
             return McpResponse.Err(code: "WriteDestinationActivationRejected", message: "Activation must target the pinned version with explicit autoUpdate=false.",
                 hint: "List versions and use the configured targetVersion. No activation was performed.");
-        }
-
-        internal static bool IsObservation(string method, string action, JObject args)
-        {
-            switch ((method ?? "").ToLowerInvariant())
-            {
-                case "ping": return true;
-                case "health": return action == "GetReport";
-                case "doctor": return true; // Handler only reads: files, loaded assemblies and WorkWithPlus template objects.
-                case "build": return action == "Status" || action == "Result";
-                case "control": return action == "Cancel";
-                case "read": return action == "ExtractFullObject" || action == "ExtractSource" || action == "ExtractParts" || action == "CertifyRecovery" || action == "GetVariables" || action == "GetAttribute";
-                case "search": return action == "Query" || action == "SearchSource";
-                case "list": return action == "Objects";
-                case "object": return action == "Read" || action == "ReadLogs";
-                case "kbversion": return action == "ActiveModel"
-                    || string.Equals(args?["action"]?.ToString() ?? "list", "list", StringComparison.OrdinalIgnoreCase);
-                // Open has its own pre-SDK path fence in KbService.OpenKB.
-                case "kb": return action == "Open" || action == "GetIndexStatus" || action == "GetIndexState" || action == "GetNameTypeMap" || action == "ListEnvironments" || action == "GetActiveEnvironment";
-                default: return false;
-            }
         }
 
         // The single decision behind every destination refusal. With neither pin set the ordinary guard is

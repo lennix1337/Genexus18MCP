@@ -87,6 +87,7 @@
         "config/*",
         "config.sample.json",
         "config.neutral.sample.json",
+        "config.shared-host.sample.json",
         "server.json",
         "build.ps1",
         "install.ps1",

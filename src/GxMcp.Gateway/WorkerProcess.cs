@@ -7,6 +7,7 @@ using System.Management;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using GxMcp.Common.SharedHost;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -1480,6 +1481,58 @@ namespace GxMcp.Gateway
         /// written to the Worker, so the Worker cannot have executed it.
         /// </summary>
         internal bool IsCommandUndelivered(string id) => _undeliveredCommandIds.ContainsKey(id);
+
+        /// <summary>
+        /// RFC #854: the Gateway-side wait for a pending request. Isolated_Mode returns
+        /// <paramref name="baseTimeoutMs"/> unchanged. In Shared_Host_Mode the broker may
+        /// hold an SDK_Operation in its Request_Queue for up to the effective queue wait
+        /// before it starts it, and it guarantees a terminal outcome within that wait, so
+        /// the timeout of an SDK_Operation is extended by
+        /// <see cref="Configuration.EffectiveSharedHost"/>'s queue wait, saturating at
+        /// <see cref="int.MaxValue"/>. A non-SDK command and a base timeout of zero or
+        /// less (no timeout) are unchanged.
+        /// </summary>
+        internal int ResolvePendingTimeoutMs(int baseTimeoutMs, bool isSdkOperation)
+        {
+            if (!IsSharedHostMode || !isSdkOperation || baseTimeoutMs <= 0) return baseTimeoutMs;
+            long queueWaitMs = Math.Max(0, _config.EffectiveSharedHost?.QueueWaitMs ?? 0);
+            long extended = baseTimeoutMs + queueWaitMs;
+            return extended >= int.MaxValue ? int.MaxValue : (int)extended;
+        }
+
+        /// <summary>
+        /// RFC #854, Requirement 12 criterion 4: the JSON-RPC error for a request written to
+        /// the shared-host pipe and unanswered when the host disconnected. The Gateway cannot
+        /// know whether the broker had released the request to the child, so every request
+        /// written to the pipe counts as delivered. <c>data</c> is the catalog row for
+        /// <c>SHARED_WORKER_RESTARTED</c>, so <c>retryable</c> follows the command's
+        /// Operation_Class (unknown commands are Write, never retryable), plus
+        /// <c>reconcileRequired</c> for a command that may have changed the KB. The message
+        /// keeps the "crashed/exited" marker that the retry-safe read path recognises.
+        /// </summary>
+        internal static JObject BuildSharedHostDisconnectError(string kbAlias, string? method, string? action, int queueWaitMs)
+        {
+            JObject data = ConcurrencyErrorCatalog.Build(
+                ConcurrencyErrorCatalog.SharedWorkerRestarted,
+                null,
+                new ConcurrencyErrorFields
+                {
+                    DispatchState = ConcurrencyDispatchState.DeliveredUnanswered,
+                    OperationClass = WorkerCommandCatalog.Classify(method, action),
+                    QueueWaitMs = queueWaitMs
+                });
+            bool retryable = data.Value<bool?>("retryable") == true;
+            data["reconcileRequired"] = !retryable;
+            string message = retryable
+                ? $"Shared Worker host for KB '{kbAlias}' crashed/exited after the command was written to it and before it answered. The command is a read and may be retried."
+                : $"Shared Worker host for KB '{kbAlias}' crashed/exited after the command was written to it and before it answered; it may have executed. Read the target back before retrying.";
+            return new JObject
+            {
+                ["code"] = -32603,
+                ["message"] = message,
+                ["data"] = data
+            };
+        }
 
         /// <summary>Completes once this Worker's exit has been reported to subscribers.</summary>
         internal Task ExitNotifiedTask => _exitNotifiedSignal.Task;

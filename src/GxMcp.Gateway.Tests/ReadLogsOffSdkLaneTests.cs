@@ -21,10 +21,14 @@ namespace GxMcp.Gateway.Tests
         private static string Dispatcher() => GxMcp.TestSupport.RepoSource.WithoutComments(
             "src", "GxMcp.Worker", "Services", "CommandDispatcher.cs");
 
+        // Issue #854 moved the lane whitelist into CommandLaneClassifier; these two tests pin its source location, while CommandLaneClassifierEquivalenceTests pins the behavior.
+        private static string Classifier() => GxMcp.TestSupport.RepoSource.WithoutComments(
+            "src", "GxMcp.Worker", "Services", "CommandLaneClassifier.cs");
+
         [Fact]
         public void ReadLogs_Is_Whitelisted_For_The_Parallel_Dispatch_Path()
         {
-            string source = Dispatcher();
+            string source = Classifier();
 
             int whitelist = source.IndexOf(
                 "method == \"object\" && action == \"ReadLogs\"", StringComparison.Ordinal);
@@ -33,11 +37,20 @@ namespace GxMcp.Gateway.Tests
 
             // And the entry is inside IsThreadSafe, which is the method that decides the
             // lane. A match elsewhere in the file would not move it.
-            int isThreadSafe = source.IndexOf("public bool IsThreadSafe(JObject request)", StringComparison.Ordinal);
-            int nextMethod = source.IndexOf("public string Dispatch(", StringComparison.Ordinal);
-            Assert.True(isThreadSafe > 0 && nextMethod > isThreadSafe);
-            Assert.True(whitelist > isThreadSafe && whitelist < nextMethod,
+            int isThreadSafe = source.IndexOf("internal static bool IsThreadSafe(JObject request)", StringComparison.Ordinal);
+            int methodEnd = isThreadSafe < 0 ? -1 : source.IndexOf("\n        }", isThreadSafe, StringComparison.Ordinal);
+            Assert.True(isThreadSafe > 0 && methodEnd > isThreadSafe);
+            Assert.True(whitelist > isThreadSafe && whitelist < methodEnd,
                 "the ReadLogs whitelist entry is outside IsThreadSafe");
+
+            // The dispatcher entry point the Worker loop calls must reach that method.
+            string dispatcher = Dispatcher();
+            int dispatcherIsThreadSafe = dispatcher.IndexOf("public bool IsThreadSafe(JObject request)", StringComparison.Ordinal);
+            int nextMethod = dispatcher.IndexOf("public string Dispatch(", StringComparison.Ordinal);
+            Assert.True(dispatcherIsThreadSafe > 0 && nextMethod > dispatcherIsThreadSafe);
+            Assert.True(dispatcher.Substring(dispatcherIsThreadSafe, nextMethod - dispatcherIsThreadSafe)
+                    .Contains("=> CommandLaneClassifier.IsThreadSafe(request);"),
+                "CommandDispatcher.IsThreadSafe does not delegate to CommandLaneClassifier");
         }
 
         [Fact]
@@ -46,9 +59,17 @@ namespace GxMcp.Gateway.Tests
             // Without this the gateway's second probe queues behind the blockage it
             // exists to detect, and the SDK dimension would read "unknown" forever - which
             // is a different way of not knowing anything.
-            string source = Dispatcher();
+            string source = Classifier();
 
-            Assert.Contains("method == \"system\" && action == \"GetSdkBusyStatus\"", source, StringComparison.Ordinal);
+            int whitelist = source.IndexOf(
+                "method == \"system\" && action == \"GetSdkBusyStatus\"", StringComparison.Ordinal);
+            Assert.True(whitelist >= 0,
+                "GetSdkBusyStatus is not whitelisted, so the SDK-lane probe queues behind the blockage");
+            int isThreadSafe = source.IndexOf("internal static bool IsThreadSafe(JObject request)", StringComparison.Ordinal);
+            int methodEnd = isThreadSafe < 0 ? -1 : source.IndexOf("\n        }", isThreadSafe, StringComparison.Ordinal);
+            Assert.True(isThreadSafe > 0 && methodEnd > isThreadSafe);
+            Assert.True(whitelist > isThreadSafe && whitelist < methodEnd,
+                "the GetSdkBusyStatus whitelist entry is outside IsThreadSafe");
         }
 
         [Fact]

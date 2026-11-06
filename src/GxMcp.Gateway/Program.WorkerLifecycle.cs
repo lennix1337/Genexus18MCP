@@ -43,8 +43,16 @@ namespace GxMcp.Gateway
                             aborted++;
                             continue;
                         }
-                        var exitError = BuildWorkerExitError(kb.Alias, stopReason,
-                            delivered: pending.Worker == null || !pending.Worker.IsCommandUndelivered(id));
+                        bool delivered = pending.Worker == null || !pending.Worker.IsCommandUndelivered(id);
+                        // RFC #854: a shared Worker reports a host disconnect as an exit with
+                        // no stop reason (planned shared stops carry their reason). A request
+                        // written to that pipe gets SHARED_WORKER_RESTARTED with retryable from
+                        // its Operation_Class. Isolated Workers and undelivered requests keep
+                        // the Issue #692 error, so an undelivered command is still re-sent.
+                        var exitError = delivered && stopReason == WorkerStopReason.None && pending.Worker?.IsSharedWorker == true
+                            ? WorkerProcess.BuildSharedHostDisconnectError(kb.Alias, pending.WorkerMethod, pending.WorkerAction,
+                                config.EffectiveSharedHost.QueueWaitMs)
+                            : BuildWorkerExitError(kb.Alias, stopReason, delivered);
                         _operationTracker.MarkFailedByRequest(id, exitError["message"]!.ToString());
                         var errorJson = new JObject
                         {
@@ -875,6 +883,8 @@ namespace GxMcp.Gateway
                     CreatedAtUtc = DateTime.UtcNow,
                     WorkerAlias = worker.Kb?.NormalizedAlias,
                     Worker = worker,
+                    WorkerMethod = workerRequest["method"]?.ToString(),
+                    WorkerAction = workerRequest["action"]?.ToString(),
                     McpRequestId = mcpRequestId,
                     McpRequestIdToken = mcpRequestIdToken?.DeepClone(),
                     McpSessionId = mcpSessionId ?? "stdio",
@@ -979,9 +989,18 @@ namespace GxMcp.Gateway
                 bool lifecycleStatusWait = string.Equals(toolName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase)
                     && string.Equals(toolArgs?["action"]?.ToString(), "status", StringComparison.OrdinalIgnoreCase)
                     && ((toolArgs?["wait"]?.ToObject<int?>() ?? toolArgs?["wait_seconds"]?.ToObject<int?>() ?? 0) > 0);
-                int effectiveTimeoutMs = timeoutMs;
+                // RFC #854: in shared-host mode the broker may queue the request for up to
+                // the effective queue wait before it starts. Isolated_Mode gets timeoutMs
+                // back unchanged. The Gateway treats every command as a possible
+                // SDK_Operation: the broker's lane choice (CommandLaneClassifier) lives in
+                // the Worker, which the Gateway cannot link, and it reads Worker-only write
+                // fence pins, so a Gateway copy could disagree. A bypass command extended by
+                // mistake only waits longer on a failure; a queued SDK_Operation that was
+                // not extended would time out while the broker still owes it an answer.
+                int pendingTimeoutMs = worker.ResolvePendingTimeoutMs(timeoutMs, isSdkOperation: true);
+                int effectiveTimeoutMs = pendingTimeoutMs;
                 if (noClientProgressToken && !string.IsNullOrWhiteSpace(operationId) && !lifecycleStatusWait)
-                    effectiveTimeoutMs = ResolveNoProgressTimeoutMs(timeoutMs);
+                    effectiveTimeoutMs = ResolveNoProgressTimeoutMs(pendingTimeoutMs);
                 bool workerCompleted = await McpRouter.AwaitWithHeartbeat(
                     pending.CompletionSource.Task, effectiveTimeoutMs, progressToken, heartbeat, toolName,
                     cancellationToken: cancellationToken);

@@ -1,0 +1,254 @@
+using System;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+using Xunit;
+
+namespace GxMcp.Gateway.Tests.SharedHost
+{
+    // Real-process smoke for the broker queue (RFC #854, task 3.11). It starts
+    // GxMcp.SharedHost.TestHost as the broker (--shared-host) with its own executable as the
+    // Worker, so the child is the scripted fake, and attaches two SharedWorkerConnection
+    // clients. A second session's SDK request must queue in the broker behind the first and be
+    // answered when the first completes, instead of WorkerBusy.
+    //
+    // The registry record goes to a temporary --registry-dir: on .NET Framework the broker's
+    // LocalApplicationData lookup ignores an overridden LOCALAPPDATA variable, so the option is
+    // the only way to keep this test out of the real %LOCALAPPDATA%\GxMcp registry.
+    //
+    // The smoke starts two .NET Framework processes. Run in parallel with the rest of the
+    // assembly on a hosted runner it once took 14s instead of about 2.5s, so its collection runs
+    // on its own, after the parallel ones, to keep process start-up out of CPU contention.
+    [Trait("Category", "ProcessSmoke")]
+    [Collection("SharedHostQueueProcessSmokeSerial")]
+    public sealed class SharedHostQueueProcessSmokeTests
+    {
+        private const int TimeoutMs = 20_000;
+        private const int FirstDurationMs = 1500;
+
+        [Fact]
+        public async Task A_Second_Sessions_Sdk_Request_Queues_Behind_The_First_And_Is_Answered()
+        {
+            if (!OperatingSystem.IsWindows()) return;
+            string? exe = LocateTestHost();
+            if (exe == null) return; // Build artifact gate; GXMCP_SHAREDHOST_TESTHOST_EXE makes it strict.
+
+            string root = Path.Combine(Path.GetTempPath(), "gxmcp-queue-smoke-" + Guid.NewGuid().ToString("N"));
+            string registryDir = Path.Combine(root, "registry");
+            string kbPath = Path.Combine(root, "KbSmoke");
+            string installation = Path.Combine(root, "install");
+            Directory.CreateDirectory(kbPath);
+            Directory.CreateDirectory(installation);
+
+            var identity = SharedWorkerIdentity.Create(exe, kbPath, installation, "sdk", "18");
+            string realRecord = SharedWorkerRegistry.GetRecordPath(identity);
+            var stderr = new StringBuilder();
+            Process? broker = null;
+            SharedWorkerConnection? a = null;
+            SharedWorkerConnection? b = null;
+            try
+            {
+                broker = StartBroker(exe, identity, kbPath, installation, registryDir, stderr);
+                string recordPath = Path.Combine(registryDir, identity.Key + ".json");
+                SharedWorkerRecord record = await WaitForRecordAsync(recordPath, broker, stderr);
+                Assert.False(File.Exists(realRecord), "the smoke wrote the real registry record " + realRecord);
+
+                var toA = new ConcurrentQueue<JObject>();
+                var toB = new ConcurrentQueue<JObject>();
+                a = Connect(identity, record, "smoke-a", toA);
+                b = Connect(identity, record, "smoke-b", toB);
+                Assert.Equal(a.HostPid, b.HostPid);
+                Assert.Equal(a.WorkerPid, b.WorkerPid);
+                Assert.NotEqual(a.AttachId, b.AttachId);
+
+                await WaitForStatusAsync(a, s => (string?)s["childState"] == "ready", "a ready child");
+
+                // Both sessions use id 1: the broker keeps them apart.
+                await a.SendAsync(Probe(FirstDurationMs), CancellationToken.None);
+                JObject runningStatus = await WaitForStatusAsync(a, s => s["running"] is JObject, "a running request");
+                Assert.Equal(a.AttachId, (string?)runningStatus["running"]!["ownerAttachId"]);
+
+                await b.SendAsync(Probe(50), CancellationToken.None);
+                JObject queuedStatus = await WaitForStatusAsync(b, s => ((JArray)s["queue"]!).Count == 1, "a queued request");
+                var entry = (JObject)((JArray)queuedStatus["queue"]!)[0];
+                Assert.Equal(b.AttachId, (string?)entry["ownerAttachId"]);
+                Assert.Equal("sta-busy", (string?)entry["waitReason"]);
+                Assert.Equal(a.AttachId, (string?)queuedStatus["running"]!["ownerAttachId"]);
+
+                JObject first = await WaitForResponseAsync(toA, broker, stderr);
+                JObject second = await WaitForResponseAsync(toB, broker, stderr);
+
+                foreach (var response in new[] { first, second })
+                {
+                    Assert.Equal(1, (int)response["id"]!);
+                    Assert.Null(response["error"]);
+                    Assert.NotEqual("WorkerBusy", (string?)response["result"]?["code"]);
+                    Assert.True(response["result"]?["fake"]?.Value<bool>() == true, response.ToString());
+                }
+                Assert.Equal(a.AttachId, (string?)first["result"]!["attachmentId"]);
+                Assert.Equal(b.AttachId, (string?)second["result"]!["attachmentId"]);
+                // One SDK lane: the second ran after the first, on the same child.
+                Assert.True((int)second["result"]!["sequence"]! > (int)first["result"]!["sequence"]!);
+                Assert.Equal((int)first["result"]!["pid"]!, (int)second["result"]!["pid"]!);
+
+                // The broker measured the wait, and SharedWorkerConnection moved it to _meta.sharedHost.
+                long firstWait = (long)first["result"]!["_meta"]!["sharedHost"]!["queueWaitMs"]!;
+                long secondWait = (long)second["result"]!["_meta"]!["sharedHost"]!["queueWaitMs"]!;
+                Assert.Equal(0L, firstWait);
+                Assert.True(secondWait >= 1000, "the second request waited only " + secondWait + " ms");
+                Assert.Null(second[SharedWorkerConnection.SharedMetadataKey]);
+            }
+            catch (Exception ex) when (!(ex is Xunit.Sdk.XunitException))
+            {
+                throw new InvalidOperationException("smoke failed; broker stderr:\n" + Tail(stderr), ex);
+            }
+            finally
+            {
+                a?.Dispose();
+                b?.Dispose();
+                if (broker != null)
+                {
+                    try { if (!broker.HasExited) broker.Kill(entireProcessTree: true); } catch { }
+                    try { broker.WaitForExit(5000); } catch { }
+                    broker.Dispose();
+                }
+                for (int i = 0; i < 10 && Directory.Exists(root); i++)
+                {
+                    try { Directory.Delete(root, recursive: true); }
+                    catch (IOException) { await Task.Delay(200); }
+                    catch (UnauthorizedAccessException) { await Task.Delay(200); }
+                }
+            }
+        }
+
+        private static JObject Probe(int durationMs) => new JObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "probe",
+            ["params"] = new JObject { ["fakeDurationMs"] = durationMs }
+        };
+
+        private static Process StartBroker(string exe, SharedWorkerIdentity identity, string kbPath, string installation, string registryDir, StringBuilder stderr)
+        {
+            var start = new ProcessStartInfo
+            {
+                FileName = exe,
+                Arguments = "--shared-host"
+                    + " --identity-key \"" + identity.Key + "\""
+                    + " --pipe-name \"" + SharedWorkerRegistry.PipeName(identity) + "\""
+                    + " --worker-executable \"" + exe + "\""
+                    + " --kb \"" + kbPath + "\""
+                    + " --installation \"" + installation + "\""
+                    + " --driver sdk --major 18"
+                    + " --idle-ms 60000"
+                    + " --queue-wait-ms 30000 --queue-depth 8 --session-queue-cap 4"
+                    + " --registry-dir \"" + registryDir + "\"",
+                WorkingDirectory = Path.GetDirectoryName(exe)!,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            // The broker passes its environment to the child, which reads the script from it.
+            start.Environment["GXMCP_TESTHOST_SCRIPT"] = "{\"readyDelayMs\":100}";
+            var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start " + exe);
+            process.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (stderr) stderr.AppendLine(e.Data); };
+            process.BeginErrorReadLine();
+            _ = process.StandardOutput.ReadToEndAsync();
+            return process;
+        }
+
+        private static async Task<SharedWorkerRecord> WaitForRecordAsync(string path, Process broker, StringBuilder stderr)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(TimeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (broker.HasExited)
+                    throw new InvalidOperationException("the broker exited with " + broker.ExitCode + ":\n" + Tail(stderr));
+                SharedWorkerRecord? record = SharedWorkerRegistry.ReadRecord(path);
+                if (record != null && record.WorkerPid > 0 && !string.IsNullOrEmpty(record.PipeName)) return record;
+                await Task.Delay(50);
+            }
+            throw new TimeoutException("no registry record at " + path + ":\n" + Tail(stderr));
+        }
+
+        private static SharedWorkerConnection Connect(SharedWorkerIdentity identity, SharedWorkerRecord record, string clientId, ConcurrentQueue<JObject> sink)
+        {
+            var connection = new SharedWorkerConnection(identity, record, clientId);
+            connection.LineReceived += line =>
+            {
+                var frame = JObject.Parse(line);
+                if (frame["id"] != null && frame["method"] == null) sink.Enqueue(frame);
+            };
+            connection.Connect(TimeoutMs);
+            return connection;
+        }
+
+        private static async Task<JObject> WaitForStatusAsync(SharedWorkerConnection connection, Func<JObject, bool> match, string what)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(TimeoutMs);
+            JObject? last = null;
+            while (DateTime.UtcNow < deadline)
+            {
+                last = await connection.RequestStatusAsync(2000);
+                if (last != null && match(last)) return last;
+                await Task.Delay(25);
+            }
+            throw new TimeoutException("status never showed " + what + "; last: " + last);
+        }
+
+        private static async Task<JObject> WaitForResponseAsync(ConcurrentQueue<JObject> sink, Process broker, StringBuilder stderr)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(TimeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (sink.TryDequeue(out JObject? frame)) return frame;
+                if (broker.HasExited) throw new InvalidOperationException("the broker exited:\n" + Tail(stderr));
+                await Task.Delay(20);
+            }
+            throw new TimeoutException("no response within " + TimeoutMs + " ms:\n" + Tail(stderr));
+        }
+
+        private static string Tail(StringBuilder stderr)
+        {
+            lock (stderr)
+            {
+                string text = stderr.ToString();
+                return text.Length <= 4000 ? text : text.Substring(text.Length - 4000);
+            }
+        }
+
+        // Same rule as SharedHostTestHostSmokeTests: the variable wins, then bin\Debug or bin\Release.
+        private static string? LocateTestHost()
+        {
+            string? configured = Environment.GetEnvironmentVariable(SharedHostTestHostSmokeTests.ExecutableVariable);
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                if (!Path.IsPathRooted(configured) || !File.Exists(configured))
+                    throw new InvalidOperationException(
+                        SharedHostTestHostSmokeTests.ExecutableVariable + " must point to an existing absolute executable: " + configured);
+                return Path.GetFullPath(configured);
+            }
+
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Genexus18MCP.sln")))
+                directory = directory.Parent;
+            if (directory == null) return null;
+            return new[] { "Debug", "Release" }
+                .Select(c => Path.Combine(directory.FullName, "src", "GxMcp.SharedHost.TestHost", "bin", c, "GxMcp.SharedHost.TestHost.exe"))
+                .FirstOrDefault(File.Exists);
+        }
+    }
+
+    [CollectionDefinition("SharedHostQueueProcessSmokeSerial", DisableParallelization = true)]
+    public sealed class SharedHostQueueProcessSmokeSerialCollection { }
+}

@@ -115,11 +115,24 @@ function Get-BaseOutputPath {
 
 $resolvedGxPath = Resolve-GxSdkPath
 
-Invoke-CoverageTest `
-    -ProjectPath (Join-Path $repoRoot "src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj") `
-    -Label "gateway" `
-    -BaseOutputPath (Get-BaseOutputPath -Label "gateway") `
-    -SettingsPath (Join-Path $PSScriptRoot "gateway.runsettings")
+# The shared-host process smoke tests start this SDK-free test host. Build it so they
+# run here instead of returning early, and point them at exactly this build.
+$testHostProject = Join-Path $repoRoot "src\GxMcp.SharedHost.TestHost\GxMcp.SharedHost.TestHost.csproj"
+& dotnet build $testHostProject -c Debug -v minimal --nologo
+if ($LASTEXITCODE -ne 0) {
+    throw "GxMcp.SharedHost.TestHost build failed."
+}
+$previousTestHostExe = $env:GXMCP_SHAREDHOST_TESTHOST_EXE
+$env:GXMCP_SHAREDHOST_TESTHOST_EXE = Join-Path $repoRoot "src\GxMcp.SharedHost.TestHost\bin\Debug\GxMcp.SharedHost.TestHost.exe"
+try {
+    Invoke-CoverageTest `
+        -ProjectPath (Join-Path $repoRoot "src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj") `
+        -Label "gateway" `
+        -BaseOutputPath (Get-BaseOutputPath -Label "gateway") `
+        -SettingsPath (Join-Path $PSScriptRoot "gateway.runsettings")
+} finally {
+    $env:GXMCP_SHAREDHOST_TESTHOST_EXE = $previousTestHostExe
+}
 
 $previousGxPath = $env:GX_PATH
 if ($resolvedGxPath) {

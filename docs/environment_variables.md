@@ -125,6 +125,49 @@ The GeneXus model is single-threaded: only one SDK operation runs at a time on t
 
 Temporary Worker diagnostics use `%LOCALAPPDATA%\GenexusMCP\tmp\<operational-key-hash>`. Preview configuration/baselines use the state root; build output and rotated Worker logs use the log root. `GXMCP_BUILD_LOG_RETAIN_COUNT` still controls retention there.
 
+## Shared-host queue and admission settings (`Server.SharedHost`)
+
+**Operator-facing, opt-in.** These settings apply only when
+`Server.WorkerSharingMode="shared-host"` (which requires
+`GatewayMode=stdio-isolated`). Each one can be set in the `Server.SharedHost`
+object of `config.json` or by its environment variable; the environment
+variable wins over the file. Every explicit value must be an integer inside its
+range, otherwise the configuration is rejected at load with an error naming the
+setting, the value and the range. In `isolated` mode an allowed value is
+accepted, has no effect, and is named once in the Gateway log as not in effect.
+With `GatewayMode=http-shared`, setting any of them is a load error.
+`config.shared-host.sample.json` is a ready-to-copy document that lists every
+setting at its default.
+
+| Config key | Environment variable | Default | Allowed range | Takes effect in |
+|------------|----------------------|---------|---------------|-----------------|
+| `Server.SharedHost.QueueWaitMs` | `GXMCP_SHARED_QUEUE_WAIT_MS` | 30000, or GXMCP_BUSY_WAIT_MS when it is an integer from 1000 to 600000 | 1000-600000 ms | `shared-host` |
+| `Server.SharedHost.QueueDepth` | `GXMCP_SHARED_QUEUE_DEPTH` | 8 | 1-64 requests | `shared-host` |
+| `Server.SharedHost.SessionQueueCap` | `GXMCP_SHARED_SESSION_QUEUE_CAP` | lower of 4 and the effective queue depth | 1 to the effective queue depth, in requests | `shared-host` |
+| `Server.SharedHost.MaxWorkers` | `GXMCP_SHARED_MAX_WORKERS` | 4 | 1-16 Workers | `shared-host` |
+| `Server.SharedHost.MemoryFloorMB` | `GXMCP_SHARED_MEMORY_FLOOR_MB` | 1024 | 256-8192 MB | `shared-host` |
+| `Server.SharedHost.ColdStartConcurrency` | `GXMCP_SHARED_COLD_START_CONCURRENCY` | 1 | 1-4 concurrent cold starts | `shared-host` |
+| `Server.SharedHost.AttachReadyTimeoutSeconds` | `GXMCP_SHARED_ATTACH_READY_TIMEOUT_S` | 120 | 10-600 s | `shared-host` |
+
+- In this release only `QueueWaitMs`, `QueueDepth` and `SessionQueueCap` change
+  behavior: they bound the Worker host's request queue. `MaxWorkers`,
+  `MemoryFloorMB`, `ColdStartConcurrency` and `AttachReadyTimeoutSeconds` are
+  validated at load with the ranges above but are not applied yet; they are
+  reserved for the Worker admission and attach-readiness work that follows.
+- `GXMCP_BUSY_REJECT_MS` is ignored in shared-host mode: an SDK operation that
+  arrives while the Worker is busy is queued under the settings above instead of
+  being rejected early. The Worker host starts its Worker with the variable set to 0.
+- `GXMCP_BUSY_WAIT_MS` is the legacy source for the queue wait. When neither
+  `GXMCP_SHARED_QUEUE_WAIT_MS` nor `Server.SharedHost.QueueWaitMs` is set, its
+  value is used if it is an integer from 1000 to 600000; otherwise the queue wait
+  is 30000 ms. In `isolated` mode both busy variables keep the meaning described
+  under STA scheduler busy handling above.
+- `config.shared-host.sample.json` sets `QueueWaitMs` explicitly, so a copy of it
+  disables the `GXMCP_BUSY_WAIT_MS` fallback. Remove the `QueueWaitMs` key from
+  the copy to keep using `GXMCP_BUSY_WAIT_MS`.
+- The `$comment` array in `Server.SharedHost` of the sample is documentation
+  only; the loader reads just the seven keys above.
+
 ## AI-completion proxy (`genexus_ai_complete`)
 
 | Variable | Purpose | Default |
@@ -389,6 +432,9 @@ enable experimental write paths or skip discovery guards.
 | `GXMCP_NATIVE_CANDIDATE_EXE` | Built `gx-engine.exe` the direct native-vs-SDK environment comparison runs. | unset (test throws) |
 | `GXMCP_NATIVE_INSPECT_NAMES` | Comma-separated Procedure names whose SDK minimal inspections are captured as the oracle. | empty (nothing captured) |
 | `GXMCP_UPDATE_GOLDEN` | Set to `1` to overwrite the discovery golden fixture with the current `tools/list` response instead of asserting against it. Never set in CI. | unset |
+| `GXMCP_PBT_SEED` | 32-bit integer seed reported by a failing `SeededInterleavingRunner` property test (Gateway.Tests `SharedHost`). When set, each property runs only that one case again, with the same generated values and events. Test-only; no runtime effect. A non-integer value fails the test. | unset (fresh seeds each run) |
+| `GXMCP_SHAREDHOST_TESTHOST_EXE` | Absolute path to the test-only `GxMcp.SharedHost.TestHost.exe` the shared-host process smoke tests start. Must exist when set, or the tests fail fast. `scripts/coverage/collect.ps1` builds the project and sets it. | discovered under `src\GxMcp.SharedHost.TestHost\bin`; tests return early when absent |
+| `GXMCP_TESTHOST_SCRIPT` | JSON script (or `@<path>` to a JSON file) for the `GxMcp.SharedHost.TestHost` fake child: ready delay, scripted request durations, held working set. Format in `src/GxMcp.SharedHost.TestHost/README.md`. Read only by that test binary; no runtime effect. | unset (fake child defaults) |
 | `GXMCP_GXWIRE_TIMEOUT_SECONDS` | Wall-clock budget, in seconds, for one `gxwire.exe` invocation. Overrides both defaults: 30 for query actions and 900 for `action=index`. Unparsable or non-positive values fall back to those defaults rather than failing the call. | unset (per-action defaults) |
 | `GX_MCP_SDK_PROBE` | Set to `1` to run the full SDK surface probe on every pattern apply. It walks every loaded SDK assembly and writes a multi-megabyte dump; it used to run unconditionally and cost 5–15 s per apply. `genexus_sdk_probe` remains the explicit way to get a dump. | off |
 | `GX_MCP_SDK_PROBE_DIR` | Output directory for that dump. An installed package under `node_modules` never receives generated diagnostics in its own tree. | `<repo>\docs\sdk-probe`, else the Worker temp root |

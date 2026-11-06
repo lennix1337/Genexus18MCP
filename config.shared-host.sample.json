@@ -1,0 +1,35 @@
+{
+  "ConfigSchemaVersion": 2,
+  "GatewayMode": "stdio-isolated",
+  "GeneXus": {
+    "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
+    "WorkerExecutable": "C:\\path\\to\\GxMcp.Worker.exe"
+  },
+  "Server": {
+    "HttpPort": 0,
+    "McpStdio": true,
+    "BindAddress": "127.0.0.1",
+    "WorkerSharingMode": "shared-host",
+    "SharedHost": {
+      "$comment": [
+        "Server.SharedHost.QueueWaitMs | GXMCP_SHARED_QUEUE_WAIT_MS | 30000, or GXMCP_BUSY_WAIT_MS when it is an integer from 1000 to 600000 | 1000-600000 ms | shared-host",
+        "Server.SharedHost.QueueDepth | GXMCP_SHARED_QUEUE_DEPTH | 8 | 1-64 requests | shared-host",
+        "Server.SharedHost.SessionQueueCap | GXMCP_SHARED_SESSION_QUEUE_CAP | lower of 4 and the effective queue depth | 1 to the effective queue depth, in requests | shared-host",
+        "Server.SharedHost.MaxWorkers | GXMCP_SHARED_MAX_WORKERS | 4 | 1-16 Workers | shared-host",
+        "Server.SharedHost.MemoryFloorMB | GXMCP_SHARED_MEMORY_FLOOR_MB | 1024 | 256-8192 MB | shared-host",
+        "Server.SharedHost.ColdStartConcurrency | GXMCP_SHARED_COLD_START_CONCURRENCY | 1 | 1-4 concurrent cold starts | shared-host",
+        "Server.SharedHost.AttachReadyTimeoutSeconds | GXMCP_SHARED_ATTACH_READY_TIMEOUT_S | 120 | 10-600 s | shared-host"
+      ],
+      "QueueWaitMs": 30000,
+      "QueueDepth": 8,
+      "SessionQueueCap": 4,
+      "MaxWorkers": 4,
+      "MemoryFloorMB": 1024,
+      "ColdStartConcurrency": 1,
+      "AttachReadyTimeoutSeconds": 120
+    }
+  },
+  "Environment": {
+    "ResolutionPolicy": "strict"
+  }
+}
