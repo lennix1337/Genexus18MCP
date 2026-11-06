@@ -2207,7 +2207,7 @@ namespace GxMcp.Worker.Services
             return WrapWithPersistedState(raw, target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
         }
 
-        private string ModifyVariableInternal(string target, string varName, string newTypeName, string basedOn,
+        protected internal virtual string ModifyVariableInternal(string target, string varName, string newTypeName, string basedOn,
             int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null,
             int? dimensions = null, JArray dimensionSizes = null, string description = null)
         {

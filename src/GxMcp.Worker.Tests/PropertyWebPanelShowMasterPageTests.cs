@@ -223,6 +223,46 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ModifyVariable_ThenGetWithoutRefresh_ReadsNewType()
+        {
+            var panel = new FakeWebPanel().Lists("DataType", "VARCHAR");
+            var writer = new FakeVariableWriter(panel);
+            var before = JObject.Parse(panel.GetProperties("SynthPanel"));
+            Assert.Equal("VARCHAR", before["result"]?["properties"]?[0]?["value"]?.ToString());
+
+            writer.ModifyVariable("SynthPanel", "DateVariable", "DATE");
+            var after = JObject.Parse(panel.GetProperties("SynthPanel"));
+
+            Assert.Equal("DATE", after["result"]?["properties"]?[0]?["value"]?.ToString());
+            Assert.Equal(1, panel.FreshReads);
+        }
+
+        [Fact]
+        public void EditWriteStamp_ThenGetWithoutRefresh_ReadsNewValue()
+        {
+            var panel = new FakeWebPanel().Lists("Description", "before");
+            Assert.Equal("before", JObject.Parse(panel.GetProperties("EditedPanel"))["result"]?["properties"]?[0]?["value"]?.ToString());
+            panel.PersistChange("Description", "after");
+
+            WriteService.StampPerTargetWrite("EditedPanel");
+
+            Assert.Equal("after", JObject.Parse(panel.GetProperties("EditedPanel"))["result"]?["properties"]?[0]?["value"]?.ToString());
+        }
+
+        private sealed class FakeVariableWriter : WriteService
+        {
+            private readonly FakeWebPanel _panel;
+            internal FakeVariableWriter(FakeWebPanel panel) : base(null) { _panel = panel; }
+            protected internal override string ModifyVariableInternal(string target, string varName, string newTypeName, string basedOn,
+                int? length = null, int? decimals = null, bool? collection = null, string basedOnAttribute = null,
+                int? dimensions = null, JArray dimensionSizes = null, string description = null)
+            {
+                _panel.PersistChange("DataType", newTypeName);
+                return "{\"status\":\"ok\",\"code\":\"VariableModified\"}";
+            }
+        }
+
+        [Fact]
         public void RefreshReadsFreshPropertyRatherThanCachedValue()
         {
             var panel = new FakeWebPanel().Lists("DataType", "VARCHAR");
@@ -314,11 +354,15 @@ namespace GxMcp.Worker.Tests
             protected internal override KBObject FindTarget(string target, string typeFilter) => Target;
 
             internal int FreshReads { get; private set; }
+            private string _persistedName;
+            private object _persistedValue;
             internal void ChangeValue(string name, object value) => Find(name).Value = value;
+            internal void PersistChange(string name, object value) { _persistedName = name; _persistedValue = value; }
 
             protected internal override KBObject FindFreshTarget(KBObject obj)
             {
                 FreshReads++;
+                if (_persistedName != null) ChangeValue(_persistedName, _persistedValue);
                 return obj;
             }
 
