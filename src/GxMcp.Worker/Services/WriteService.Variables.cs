@@ -278,6 +278,20 @@ namespace GxMcp.Worker.Services
             catch { /* best-effort */ }
         }
 
+        // Issue #886: add never changes the type of a variable that is already declared.
+        // WriteNoChange alone does not say so, and a caller read it as "type already right".
+        internal static JObject BuildVariableBatchResult(int added, int existed, int failed, JArray outcomes)
+        {
+            var result = new JObject
+            {
+                ["counts"] = new JObject { ["added"] = added, ["existed"] = existed, ["failed"] = failed },
+                ["outcomes"] = outcomes
+            };
+            if (existed > 0)
+                result["hint"] = "Variables already declared were left as they are (itemStatus=Exists): adding never changes their type. Use genexus_modify_variable to change it.";
+            return result;
+        }
+
         private string DeleteVariableInternal(string target, string varName)
         {
             try
@@ -879,11 +893,7 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Ok(
                     target: target,
                     code: added > 0 ? "VariableAdded" : "WriteNoChange",
-                    result: new JObject
-                    {
-                        ["counts"] = new JObject { ["added"] = added, ["existed"] = existed, ["failed"] = failed },
-                        ["outcomes"] = outcomes
-                    });
+                    result: BuildVariableBatchResult(added, existed, failed, outcomes));
             }
             catch (Exception ex)
             {
@@ -2791,7 +2801,7 @@ namespace GxMcp.Worker.Services
                     return McpResponse.Ok(
                         target: target,
                         code: "VariableRenamed",
-                        result: resultPayload);
+                        result: MarkRetypeConfirmed(resultPayload));
                 }
                 catch (Exception ex)
                 {
@@ -2892,6 +2902,18 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        /// <summary>
+        /// Issue #886: the success code of a type change is "VariableRenamed" (kept for existing
+        /// clients), which reads as a rename. The payload says outright that the variable was
+        /// retyped and that the new type was read back from the persisted object.
+        /// </summary>
+        internal static JObject MarkRetypeConfirmed(JObject payload)
+        {
+            payload["retyped"] = true;
+            payload["persistedState"] = "confirmed";
+            return payload;
+        }
+
         private string RetypePrimitiveVariableInPlace(string target, string varName,
             global::Artech.Architecture.Common.Objects.KBObject obj,
             global::Artech.Genexus.Common.Variable existing,
@@ -2924,13 +2946,13 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Ok(
                     target: target,
                     code: "VariableRenamed",
-                    result: new JObject
+                    result: MarkRetypeConfirmed(new JObject
                     {
                         ["requestedType"] = canonicalType,
                         ["persistedType"] = persistedDesc,
                         ["inPlace"] = true,
                         ["details"] = $"Variable '&{varName}' retyped to '{persistedDesc}' in place; control bindings kept."
-                    });
+                    }));
             }
             catch (Exception ex)
             {

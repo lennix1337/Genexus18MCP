@@ -456,9 +456,11 @@ namespace GxMcp.Worker.Helpers
                 @"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}-\d+$",
                 System.Text.RegularExpressions.RegexOptions.Compiled);
 
-        // Symbolic class form: a bare theme-class name (letters/digits, no dash).
+        // Symbolic class form: a theme-class name (letters, digits, underscore and dashes, as in the
+        // design-system utility classes "u-w-14"). The <guid>-<int> form also matches this shape, so
+        // callers must rule that form out first.
         private static readonly System.Text.RegularExpressions.Regex SymbolicClassRx =
-            new System.Text.RegularExpressions.Regex(@"^[A-Za-z][A-Za-z0-9_]*$",
+            new System.Text.RegularExpressions.Regex(@"^[A-Za-z][A-Za-z0-9_-]*$",
                 System.Text.RegularExpressions.RegexOptions.Compiled);
 
         // A class attribute holds a space-separated list of classes (e.g. themeClass="A B C").
@@ -487,10 +489,10 @@ namespace GxMcp.Worker.Helpers
             for (int i = 0; i < leftClasses.Length; i++)
             {
                 if (string.Equals(leftClasses[i], rightClasses[i], StringComparison.OrdinalIgnoreCase)) continue;
-                bool leftSym = SymbolicClassRx.IsMatch(leftClasses[i]);
-                bool rightSym = SymbolicClassRx.IsMatch(rightClasses[i]);
                 bool leftGuid = GuidSuffixedClassRx.IsMatch(leftClasses[i]);
                 bool rightGuid = GuidSuffixedClassRx.IsMatch(rightClasses[i]);
+                bool leftSym = !leftGuid && SymbolicClassRx.IsMatch(leftClasses[i]);
+                bool rightSym = !rightGuid && SymbolicClassRx.IsMatch(rightClasses[i]);
                 if (!((leftSym && rightGuid) || (leftGuid && rightSym))) return false;
                 anyResolved = true;
             }

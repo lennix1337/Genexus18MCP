@@ -87,5 +87,27 @@ namespace GxMcp.Worker.Tests
             Assert.False(Equivalent("caption", "Title " + Ds + "-4", Ds + "-3 Body"));
             Assert.False(Equivalent("caption", "Attribute", Ds + "-4"));
         }
+
+        // Issue #880: design-system utility classes ("u-w-14", "u-border-gray-80") carry dashes. They are
+        // symbolic names like any other, and the reread resolves them to <guid>-<int> the same way.
+        [Fact]
+        public void DashedUtilityClassNamesAgainstTheirResolvedFormAreEquivalent()
+        {
+            Assert.True(Equivalent("themeClass",
+                "u-w-14 u-border u-border-gray-80",
+                Ds + "-1 " + Ds + "-2 " + Ds + "-3"));
+        }
+
+        [Fact]
+        public void ADashedNameAgainstADifferentDashedNameIsADifference()
+        {
+            Assert.False(Equivalent("themeClass", "u-w-14 u-border", "u-w-16 " + Ds + "-2"));
+        }
+
+        [Fact]
+        public void AResolvedFormIsNeverTakenForASymbolicName()
+        {
+            Assert.False(Equivalent("themeClass", Ds + "-1", "bbbbbbbb-1111-4222-8333-cccccccccccc-2"));
+        }
     }
 }
