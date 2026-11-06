@@ -2863,7 +2863,8 @@ namespace GxMcp.Worker.Services
                     batchPropertyName,
                     batchPropertyNames,
                     args["projection"]?.ToString(),
-                    args["query"]?.ToString());
+                    args["query"]?.ToString(),
+                    args["refresh"]?.ToObject<bool?>() ?? false);
             }
 
             // The parameters of a Dynamic Combo Box / Dynamic List Box are a typed parameter list,
@@ -3004,7 +3005,8 @@ namespace GxMcp.Worker.Services
                 propNames,
                 projection,
                 query,
-                args?["reconcileTimedOutWrite"]?.ToObject<bool?>() ?? false);
+                args?["reconcileTimedOutWrite"]?.ToObject<bool?>() ?? false,
+                args?["refresh"]?.ToObject<bool?>() ?? false);
         }
 
         private string Handle_Asset(JObject request, string method, string action, string target, string payload, JObject args)

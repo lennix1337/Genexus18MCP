@@ -138,26 +138,30 @@ namespace GxMcp.Worker.Services
             IEnumerable<string> propertyNames = null,
             string projection = null,
             string query = null,
-            bool reconcileTimedOutWrite = false)
+            bool reconcileTimedOutWrite = false,
+            bool refresh = false)
         {
             try
             {
                 var obj = FindTarget(target, typeFilter);
                 if (obj == null) return Models.McpResponse.Err(code: "ObjectNotFound", message: "Object not found.", hint: "Check the target name and that the KB is open.", nextSteps: new JArray(Models.McpResponse.NextStep("genexus_list_objects", null, "Lists available objects to verify the target name.")), target: target);
 
-                if (reconcileTimedOutWrite)
+                if (reconcileTimedOutWrite || refresh)
                 {
+                    if (refresh) InvalidatePropertyCache(obj);
                     obj = FindFreshTarget(obj);
                     if (obj == null)
                         return FreshReadUnavailableEnvelope(target,
-                            "The persisted object could not be read independently, so no pending timeout recovery fence was cleared"
-                            + " (this read cannot tell whether the Gateway holds one; genexus_connection_recover action=journal_status lists them).",
+                            refresh && !reconcileTimedOutWrite
+                                ? "The persisted object could not be read independently."
+                                : "The persisted object could not be read independently, so no pending timeout recovery fence was cleared"
+                                  + " (this read cannot tell whether the Gateway holds one; genexus_connection_recover action=journal_status lists them).",
                             _objectService.GetLastResolutionDiagnostic());
                 }
 
                 string ck = TargetKey(obj, controlName);
                 JObject fullPropsResult = null;
-                if (!reconcileTimedOutWrite) lock (_propertyCacheLock)
+                if (!reconcileTimedOutWrite && !refresh) lock (_propertyCacheLock)
                 {
                     if (_propertyCache.TryGetValue(ck, out var hit) && hit.expiresAt > DateTime.UtcNow)
                         fullPropsResult = (JObject)hit.propsResult.DeepClone();
@@ -226,7 +230,7 @@ namespace GxMcp.Worker.Services
                                 ["type"] = "System.Boolean", ["readOnly"] = false
                             });
                     }
-                    if (!reconcileTimedOutWrite) lock (_propertyCacheLock)
+                    if (!reconcileTimedOutWrite && !refresh) lock (_propertyCacheLock)
                     {
                         _propertyCache[ck] = (DateTime.UtcNow.AddSeconds(PropertyCacheTtlSeconds), (JObject)fullPropsResult.DeepClone());
                     }
@@ -282,7 +286,8 @@ namespace GxMcp.Worker.Services
             string propertyName = null,
             IEnumerable<string> propertyNames = null,
             string projection = null,
-            string query = null)
+            string query = null,
+            bool refresh = false)
         {
             return ShapeGetPropertiesBatchResult(
                 targets,
@@ -293,7 +298,8 @@ namespace GxMcp.Worker.Services
                     propertyName,
                     propertyNames,
                     projection,
-                    query));
+                    query,
+                    refresh: refresh));
         }
 
         internal static string ShapeGetPropertiesBatchResult(

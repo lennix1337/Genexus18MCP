@@ -1,3 +1,5 @@
+using System.Reflection;
+using GxMcp.Worker.Models;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -9,7 +11,10 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void Search_ColdIndex_ExplainsEmptySnapshotAndHowToWait()
         {
-            var service = new SearchService(new IndexCacheService());
+            var index = new IndexCacheService();
+            typeof(IndexCacheService).GetField("_index", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(index, new SearchIndex());
+            var service = new SearchService(index);
             var response = JObject.Parse(service.Search("missing object"));
 
             Assert.Equal("cold", response["_meta"]?["indexState"]?.ToString());
