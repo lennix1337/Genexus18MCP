@@ -2076,13 +2076,15 @@ namespace GxMcp.Gateway
                 var value = ResolveErrorField(error, k);
                 if (value != null) trimmed[k] = value;
             }
-            if (string.Equals(code?.ToString(), "WorkerBusy", StringComparison.Ordinal)
+            if (ConcurrencyErrorNormalizer.IsTableCode(code?.ToString())
                 && ResolveErrorField(error, "dispatchState") != null)
             {
-                // RFC #854: the shared-host broker's Busy_Envelope. Its hint says to retry after retryAfterMs, so the wait,
-                // the delivery state, the KB identity and the queue state must survive the terse shape. The Isolated_Mode
-                // WorkerBusy carries no dispatchState and keeps its existing terse shape.
-                foreach (string key in new[] { "retryAfterMs", "dispatchState", "kbIdentityKey", "kbPath",
+                // RFC #854 (Requirement 12.2, 12.6): a shared-mode Concurrency_Error_Table error, such as the broker's
+                // Busy_Envelope or a normalized Worker write conflict. Its hint names the next action, so the wait, the
+                // delivery state, the lock holder and expiry, the KB identity and the queue state must survive the terse
+                // shape. Isolated_Mode errors carry no dispatchState and keep their existing terse shape.
+                foreach (string key in new[] { "retryAfterMs", "dispatchState", "lockHolder", "lockExpiresAt",
+                    "kbIdentityKey", "kbPath",
                     "runningOperation", "runningElapsedMs", "queuePosition", "queueDepth", "sessionQueueCap" })
                 {
                     JToken? value = ResolveErrorField(error, key);

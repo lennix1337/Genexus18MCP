@@ -138,6 +138,23 @@ namespace GxMcp.Worker.Helpers
                 if (string.Equals(holderOwnerId, ownerId, StringComparison.Ordinal))
                     return null; // same owner — no conflict
 
+                if (force && IsSharedChild())
+                {
+                    // Shared mode: one Worker serves several Gateways, so the override is
+                    // recorded as an audit entry (Requirement 9.7) instead of the isolated warning.
+                    var audit = new JObject
+                    {
+                        ["event"] = "forceOverride",
+                        ["overridingOwner"] = ownerId,
+                        ["previousHolder"] = holderOwnerId,
+                        ["target"] = target,
+                        ["part"] = part,
+                        ["atUtc"] = DateTime.UtcNow.ToString("o")
+                    };
+                    Logger.Warn("[WritePipeline] force-override audit " + audit.ToString(Newtonsoft.Json.Formatting.None));
+                    return null;
+                }
+
                 if (force)
                 {
                     Logger.Warn($"[WritePipeline] force=true: bypassing advisory lock on '{target}/{part}' held by '{holderOwnerId}'.");
@@ -207,6 +224,14 @@ namespace GxMcp.Worker.Helpers
         public static void NoteWrite(string target)
         {
             WriteService.NotePerTargetWrite(target);
+        }
+
+        private const string SharedChildVariable = "GXMCP_SHARED_CHILD";
+
+        // Read per call: a Worker_Host starts its Worker child with GXMCP_SHARED_CHILD=1.
+        internal static bool IsSharedChild()
+        {
+            return string.Equals(Environment.GetEnvironmentVariable(SharedChildVariable), "1", StringComparison.Ordinal);
         }
 
         // --- private helpers ---------------------------------------------------
