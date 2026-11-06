@@ -955,6 +955,8 @@ namespace GxMcp.Gateway
                     {
                         workerErrorObjNoTimeout["correlationId"] = correlationId;
                     }
+                    // RFC #854 Requirement 12: shared mode only; an isolated Worker returns the same object.
+                    workerResponse = worker.NormalizeConcurrencyError(workerResponse, workerRequest);
                     var transformSwNoTimeout = System.Diagnostics.Stopwatch.StartNew();
                     var transformedNoTimeout = onSuccess(workerResponse);
                     transformSwNoTimeout.Stop();
@@ -1032,6 +1034,8 @@ namespace GxMcp.Gateway
                     {
                         workerErrorObj["correlationId"] = correlationId;
                     }
+                    // RFC #854 Requirement 12: shared mode only; an isolated Worker returns the same object.
+                    workerResponse = worker.NormalizeConcurrencyError(workerResponse, workerRequest);
                     var transformSw = System.Diagnostics.Stopwatch.StartNew();
                     var transformed = onSuccess(workerResponse);
                     transformSw.Stop();

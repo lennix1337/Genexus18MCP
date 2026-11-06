@@ -229,6 +229,15 @@ namespace GxMcp.Gateway
         public string? AttachmentId => IsSharedHostMode ? _sharedConnection?.AttachId : null;
         public long? WorkerGeneration => IsSharedHostMode ? _sharedConnection?.Generation : null;
         public bool IsSharedWorker => IsSharedHostMode;
+
+        /// <summary>
+        /// RFC #854: a shared-mode Worker or broker response with its Concurrency_Error_Table error normalized
+        /// (<see cref="ConcurrencyErrorNormalizer"/>). An isolated Worker returns <paramref name="response"/> itself.
+        /// </summary>
+        internal JObject NormalizeConcurrencyError(JObject response, JObject? request)
+            => IsSharedHostMode
+                ? ConcurrencyErrorNormalizer.Normalize(response, request, _config, () => DateTime.UtcNow)
+                : response;
         public bool SharedConnectionIsConnected => IsSharedHostMode && _sharedConnection?.IsConnected == true;
         public string? SharedIdentityKey => IsSharedHostMode ? _sharedIdentity?.Key : null;
         public string? SharedPipeName => IsSharedHostMode && _sharedIdentity != null
