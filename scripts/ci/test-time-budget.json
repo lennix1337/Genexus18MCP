@@ -4,7 +4,9 @@
   "dotnetTestSeconds": 10,
   "releaseScriptSeconds": 120,
   "exceptions": {
-    "dotnet": {},
+    "dotnet": {
+      "GxMcp.Gateway.Tests.SharedHostProcessHarnessTests.Long_operation_on_one_kb_does_not_delay_probes_to_another_kb": "Requirement 13 criterion 5 requires an SDK_Operation of at least 5,000 ms in real broker and Worker processes, with probes to the second KB sent while it runs, so the operation cannot be shortened or clock-injected. Two broker cold starts and cleanup add about 2 s idle and 7 s under full CPU load (12.7 s measured)."
+    },
     "releaseScripts": {}
   }
 }

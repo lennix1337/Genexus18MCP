@@ -166,6 +166,95 @@ namespace GxMcp.Gateway.Tests
             await Depart("client kill", () => { harness.KillClient(killed); return Task.CompletedTask; });
         });
 
+        // Requirement 13 criterion 5: the length of the operation on the first KB and the latency allowance.
+        private const int LongOperationMs = 5_000;
+        private const int ProbeAllowanceMs = 500;
+        private const int BaselineProbeCount = 5;
+        private const int MinimumBusyProbeCount = 10;
+
+        // Requirement 13 criterion 5, 1.1, 1.3 and 1.4: one Gateway with two KBs has one Worker_Host and one
+        // Worker per KB, so an SDK_Operation of 5,000 ms on the first KB does not delay SDK_Operations on the
+        // second. Every probe sent to the second KB while the first KB's operation runs completes within 500 ms
+        // of the median of 5 baseline probes on the idle second KB. Latency is measured in this process around
+        // each client call, so the client IPC cost is in the baseline and in the probes alike.
+        [Fact]
+        public Task Long_operation_on_one_kb_does_not_delay_probes_to_another_kb() => RunAsync(async harness =>
+        {
+            string kb1 = harness.CreateKbDirectory();
+            string kb2 = harness.CreateKbDirectory();
+            var client = await harness.StartClientAsync();
+
+            var opens = await Task.WhenAll(client.OpenOrThrowAsync(kb1), client.OpenOrThrowAsync(kb2));
+            var open1 = opens[0];
+            var open2 = opens[1];
+            _output.WriteLine("open kb1: " + open1.ToString(Newtonsoft.Json.Formatting.None));
+            _output.WriteLine("open kb2: " + open2.ToString(Newtonsoft.Json.Formatting.None));
+
+            // Requirement 1.1: a Worker_Host and a Worker per KB.
+            int host1 = (int)open1["hostPid"]!;
+            int host2 = (int)open2["hostPid"]!;
+            int worker1 = (int)open1["workerPid"]!;
+            int worker2 = (int)open2["workerPid"]!;
+            Assert.True(host1 > 0 && host2 > 0 && worker1 > 0 && worker2 > 0, open1 + " " + open2);
+            Assert.NotEqual(host1, host2);
+            Assert.NotEqual(worker1, worker2);
+            Assert.Equal(2, harness.ReadRecords().Count);
+            string attach1 = (string)open1["attachId"]!;
+            string attach2 = (string)open2["attachId"]!;
+
+            int nextId = 1;
+            async Task<long> Probe(string kb, string method, string attachId, int workerPid)
+            {
+                int id = nextId++;
+                var clock = Stopwatch.StartNew();
+                var response = await client.CallAsync(kb, SharedHostGatewayClient.ProbeFrame(id, 0, method));
+                long ms = clock.ElapsedMilliseconds;
+                AssertOwnResponse(response, id, method, attachId, workerPid);
+                return ms;
+            }
+
+            // One unmeasured call per KB, so first-call costs are not in the baseline.
+            await Probe(kb1, "warm-up-1", attach1, worker1);
+            await Probe(kb2, "warm-up-2", attach2, worker2);
+
+            var baseline = new List<long>();
+            for (int i = 0; i < BaselineProbeCount; i++) baseline.Add(await Probe(kb2, "baseline", attach2, worker2));
+            long median = baseline.OrderBy(ms => ms).ElementAt(BaselineProbeCount / 2);
+            long bound = median + ProbeAllowanceMs;
+            _output.WriteLine("baseline ms: " + string.Join(", ", baseline) + "; median " + median + "; bound " + bound);
+
+            // The long operation runs on the first KB's Worker before the first busy probe is sent.
+            int longId = nextId++;
+            var operationClock = Stopwatch.StartNew();
+            var operation = client.CallAsync(kb1, SharedHostGatewayClient.ProbeFrame(longId, LongOperationMs, "long-operation"),
+                SharedHostProcessHarness.DefaultTimeoutMs);
+            var running = await client.WaitForStatusAsync(kb1, s => s["running"] is JObject, "the long operation running");
+            Assert.Equal(attach1, (string?)running["running"]!["ownerAttachId"]);
+
+            // Probes spread over the operation; every one must finish while the operation is still running.
+            var busy = new List<long>();
+            while (operationClock.ElapsedMilliseconds < LongOperationMs - 600 || busy.Count < MinimumBusyProbeCount)
+            {
+                long ms = await Probe(kb2, "busy-probe", attach2, worker2);
+                Assert.False(operation.IsCompleted,
+                    "busy probe " + (busy.Count + 1) + " took " + ms + " ms (bound " + bound + " ms) and finished after the long operation ("
+                    + operationClock.ElapsedMilliseconds + " ms)");
+                busy.Add(ms);
+                await Task.Delay(250);
+            }
+            _output.WriteLine("busy-probe ms (" + busy.Count + "): " + string.Join(", ", busy) + "; max " + busy.Max());
+
+            Assert.True(busy.Count >= MinimumBusyProbeCount, busy.Count + " busy probes");
+            Assert.True(busy.All(ms => ms <= bound),
+                "busy probes over " + bound + " ms (baseline median " + median + " + " + ProbeAllowanceMs + "): "
+                + string.Join(", ", busy.Where(ms => ms > bound)));
+
+            // The first KB's operation completes on its own Worker, after its scripted duration.
+            AssertOwnResponse(await operation, longId, "long-operation", attach1, worker1);
+            _output.WriteLine("long operation ms: " + operationClock.ElapsedMilliseconds);
+            Assert.True(operationClock.ElapsedMilliseconds >= LongOperationMs, operationClock.ElapsedMilliseconds + " ms");
+        });
+
         private static void AssertOwnResponse(JObject response, int id, string method, string attachId, int workerPid)
         {
             Assert.Null(response["error"]);

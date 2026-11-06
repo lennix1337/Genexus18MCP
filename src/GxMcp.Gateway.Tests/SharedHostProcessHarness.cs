@@ -52,7 +52,8 @@ namespace GxMcp.Gateway.Tests
     //
     // Tests that use the harness carry [Trait("Category", "ProcessSmoke")] and the
     // SharedHostQueueProcessSmokeSerial collection, and stay within the 10 s per-test budget of
-    // scripts/ci/test-time-budget.json (there is no separate ProcessSmoke budget).
+    // scripts/ci/test-time-budget.json (there is no separate ProcessSmoke budget). The one listed
+    // exception is the two-KB latency check, whose required 5,000 ms operation leaves no margin.
     internal sealed class SharedHostProcessHarness : IDisposable
     {
         internal const string Driver = "sdk";
