@@ -21,7 +21,12 @@ namespace GxMcp.Gateway.Tests.SharedHost
     // The registry record goes to a temporary --registry-dir: on .NET Framework the broker's
     // LocalApplicationData lookup ignores an overridden LOCALAPPDATA variable, so the option is
     // the only way to keep this test out of the real %LOCALAPPDATA%\GxMcp registry.
+    //
+    // The smoke starts two .NET Framework processes. Run in parallel with the rest of the
+    // assembly on a hosted runner it once took 14s instead of about 2.5s, so its collection runs
+    // on its own, after the parallel ones, to keep process start-up out of CPU contention.
     [Trait("Category", "ProcessSmoke")]
+    [Collection("SharedHostQueueProcessSmokeSerial")]
     public sealed class SharedHostQueueProcessSmokeTests
     {
         private const int TimeoutMs = 20_000;
@@ -247,4 +252,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
                 .FirstOrDefault(File.Exists);
         }
     }
+
+    [CollectionDefinition("SharedHostQueueProcessSmokeSerial", DisableParallelization = true)]
+    public sealed class SharedHostQueueProcessSmokeSerialCollection { }
 }

@@ -25,10 +25,21 @@ namespace GxMcp.Worker.Helpers
             return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
         }
 
-        public static void InjectVariables(KBObject obj, string code, Models.SearchIndex index = null)
+        /// <summary>A variable the injector declared on its own, reported so the caller can surface it.</summary>
+        public sealed class InjectedVariable
         {
+            public string Name { get; set; }
+            public string Type { get; set; }
+            public int Length { get; set; }
+            public int Decimals { get; set; }
+        }
+
+        /// <summary>Declares every undeclared &amp;variable of <paramref name="code"/> and returns the ones it created (issue #889).</summary>
+        public static IReadOnlyList<InjectedVariable> InjectVariables(KBObject obj, string code, Models.SearchIndex index = null)
+        {
+            var injected = new List<InjectedVariable>();
             var variablesPart = GxMcp.Worker.Structure.PartAccessor.GetVariablesPart(obj) ?? obj.Parts.Get<VariablesPart>();
-            if (variablesPart == null) return;
+            if (variablesPart == null) return injected;
 
             // Scan for &-tokens on source with string literals and comments blanked out, so an
             // ampersand that is DATA rather than a variable — a URL query ("...&status=paid"),
@@ -91,6 +102,13 @@ namespace GxMcp.Worker.Helpers
                         variablesPart.Variables.Add(v);
                         existingVars.Add(varName);
                         injectedAny = true;
+                        injected.Add(new InjectedVariable
+                        {
+                            Name = varName,
+                            Type = v.Type.ToString(),
+                            Length = (int)v.Length,
+                            Decimals = (int)v.Decimals
+                        });
                         Logger.Info($"Injected variable: {varName} into {obj.Name}");
                     }
                 }
@@ -108,6 +126,8 @@ namespace GxMcp.Worker.Helpers
                         + variablesPart.GetType().Name + "; the save may not see the change.");
                 }
             }
+
+            return injected;
         }
 
         // Blank out string-literal contents and comments in GeneXus source, preserving length and

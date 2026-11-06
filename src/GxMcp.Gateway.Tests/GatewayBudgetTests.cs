@@ -153,6 +153,32 @@ namespace GxMcp.Gateway.Tests
             Assert.True(obj.ToString(Newtonsoft.Json.Formatting.None).Length <= 80000);
         }
 
+        // Issue #888: an oversized result list was cut to a fixed 5 rows whatever the caller's limit,
+        // costing dozens of calls to page a listing the budget could mostly hold.
+        [Fact]
+        public void TruncateResponseIfNeeded_KeepsAsManyResultRowsAsTheBudgetHolds()
+        {
+            var results = new JArray();
+            for (int i = 0; i < 1200; i++)
+            {
+                results.Add(new JObject { ["name"] = $"Panel{i:D4}", ["type"] = "WebPanel", ["description"] = new string('X', 40) });
+            }
+            var payload = new JObject { ["count"] = 1200, ["total"] = 1200, ["returned"] = 1200, ["results"] = results };
+
+            var method = typeof(Program).GetMethod("TruncateResponseIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+            var obj = Assert.IsType<JObject>(method!.Invoke(null, new object?[] { payload, "genexus_query" }));
+
+            int kept = ((JArray)obj["results"]!).Count;
+            Assert.True(kept > 200, $"kept only {kept} rows");
+            Assert.True(kept < 1200);
+            Assert.True(obj.ToString(Newtonsoft.Json.Formatting.None).Length <= 80000);
+            Assert.Equal(kept, obj["returned"]!.Value<int>());
+            Assert.Equal(kept, obj["returnedCount"]!.Value<int>());
+            Assert.Equal(1200, obj["originalCount"]!.Value<int>());
+            Assert.True(obj["hasMore"]!.Value<bool>());
+            Assert.True(obj["isTruncated"]!.Value<bool>());
+        }
+
         [Fact]
         public void TruncateResponseIfNeeded_ShouldDropDerivedReadMetadataBeforeTruncatingSource()
         {

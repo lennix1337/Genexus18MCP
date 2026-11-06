@@ -260,7 +260,10 @@ namespace GxMcp.Gateway.Tests
             // (`targetGuid`, which names the object by GUID instead of the overloaded `target`, and
             // `expectedVersion`, the optimistic-concurrency check the operation is asked to make) plus one
             // sentence in the tool summary. Measured ~40041 tokens; ~59 headroom.
-            Assert.True(approxTokens < 40100, $"tool_definitions.json is ~{approxTokens} tokens; budget 40100.");
+            // genexus_structure get_item_property/set_item_property (typed read and write of one SDT member property):
+            // 40100 -> 40400 for the two action values, the `itemPath`/`property`/`value` inputs, the sentence in the
+            // tool description and one example. Measured ~40367 tokens; ~33 headroom.
+            Assert.True(approxTokens < 40400, $"tool_definitions.json is ~{approxTokens} tokens; budget 40400.");
         }
 
         [Theory]
@@ -327,12 +330,17 @@ namespace GxMcp.Gateway.Tests
         // profile that carries the tool (+197 bytes each): all 103500 -> 103700 (measured 103642), core 27000 -> 27100
         // (measured 27070), authoring 71900 -> 72050 (measured 72013), devops 52850 -> 53050 (measured 52988),
         // ui 50600 -> 50800 (measured 50742).
-        [InlineData("all", 103700)]
+        // genexus_structure get_item_property/set_item_property adds the two action values and the `itemPath`,
+        // `property` and `value` inputs (names, types and one example survive the 40-character profile
+        // descriptions; +307 bytes in each profile that carries the tool): all 103700 -> 104000 (measured 103949),
+        // authoring 72050 -> 72350 (measured 72320), ui 50800 -> 51100 (measured 51049); core, standard and devops
+        // do not carry the tool, and db stays within its budget.
+        [InlineData("all", 104000)]
         [InlineData("core", 27100)]
         [InlineData("standard", 61000)]
-        [InlineData("authoring", 72050)]
+        [InlineData("authoring", 72350)]
         [InlineData("devops", 53050)]
-        [InlineData("ui", 50800)]
+        [InlineData("ui", 51100)]
         [InlineData("db", 40000)]
         public void PublishedToolProfileStaysWithinItsByteBudget(string profile, int maxBytes)
         {
