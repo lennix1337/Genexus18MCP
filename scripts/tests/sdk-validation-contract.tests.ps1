@@ -98,7 +98,7 @@ try {
     Copy-Item -LiteralPath $scriptPath -Destination $probeScript
     $probeHost = Join-Path $outputRoot 'invoke-clean-sdk-lane.ps1'
     @'
-param($ScriptPath, $Sdk, $Kb, $Fixture, $OutputRoot, $BuildExit)
+param($ScriptPath, $Sdk, $Kb, $Fixture, $OutputRoot, $BuildExit, $PreflightExit)
 function dotnet {
     if ($args[0] -ne 'build' -or $args[1] -notlike '*GxMcp.Worker.Tests.csproj' -or
         $args -notcontains 'Release' -or $args -notcontains "-p:GX_PATH=$Sdk") {
@@ -111,24 +111,36 @@ function pwsh {
     $scriptName = [IO.Path]::GetFileName([string]$args[2])
     Add-Content (Join-Path $OutputRoot 'calls.txt') $scriptName
     $global:LASTEXITCODE = 0
-    if ($scriptName -eq 'test-live.ps1' -and
-        -not (Get-Content (Join-Path $OutputRoot 'calls.txt')).Contains('worker-build')) {
-        $global:LASTEXITCODE = 9
+    if ($scriptName -eq 'release-preflight.ps1') {
+        if ($env:GXMCP_TEST_KB -or $env:GXMCP_TEST_FIXTURE -or $env:GX_CONFIG_PATH) {
+            throw 'Offline preflight inherited live KB/configuration before the live harness prepared it.'
+        }
+        $global:LASTEXITCODE = [int]$PreflightExit
+    }
+    if ($scriptName -eq 'test-live.ps1') {
+        if (-not (Get-Content (Join-Path $OutputRoot 'calls.txt')).Contains('worker-build')) {
+            throw 'Live lane ran before its Worker test assembly was built.'
+        }
+        if ($env:GXMCP_TEST_KB -ne $Kb -or $env:GXMCP_TEST_FIXTURE -ne $Fixture -or -not $env:GX_CONFIG_PATH) {
+            throw 'Live fixture/configuration was not restored after offline preflight.'
+        }
     }
 }
 & $ScriptPath -GxPath $Sdk -KbPath $Kb -FixtureManifest $Fixture -OutputRoot $OutputRoot
 exit $LASTEXITCODE
 '@ | Set-Content -LiteralPath $probeHost -Encoding utf8
-    foreach ($buildExit in @(0, 7)) {
-        $probeOutput = Join-Path $outputRoot "probe-$buildExit"
-        & pwsh -NoProfile -File $probeHost $probeScript $sdk $kb $manifest $probeOutput $buildExit
-        $expectedExit = if ($buildExit -eq 0) { 0 } else { 1 }
+    foreach ($case in @(@(0, 0), @(7, 0), @(0, 8))) {
+        $buildExit, $preflightExit = $case
+        $probeOutput = Join-Path $outputRoot "probe-$buildExit-$preflightExit"
+        & pwsh -NoProfile -File $probeHost $probeScript $sdk $kb $manifest $probeOutput $buildExit $preflightExit
+        $expectedExit = if ($buildExit -eq 0 -and $preflightExit -eq 0) { 0 } else { 1 }
         if ($LASTEXITCODE -ne $expectedExit) { throw "Clean-checkout SDK lane expected exit $expectedExit, got $LASTEXITCODE." }
         $probeStatus = Get-Content (Join-Path $probeOutput 'status.json') -Raw | ConvertFrom-Json
-        $expectedState = if ($buildExit -eq 0) { 'pass' } else { 'fail' }
+        $expectedState = if ($expectedExit -eq 0) { 'pass' } else { 'fail' }
         if ($probeStatus.state -ne $expectedState) { throw "Clean-checkout SDK lane expected $expectedState." }
         $calls = @(Get-Content (Join-Path $probeOutput 'calls.txt'))
-        if ($buildExit -ne 0 -and $calls -contains 'test-live.ps1') { throw 'Failed test compilation must block the live lane.' }
+        if ($expectedExit -ne 0 -and $calls -contains 'test-live.ps1') { throw 'Failed compilation or offline preflight must block the live lane.' }
+        if ($expectedExit -eq 0 -and $calls -notcontains 'test-live.ps1') { throw 'Offline preflight must not replace the mandatory live lane.' }
     }
 }
 finally {

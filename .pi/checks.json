@@ -68,6 +68,11 @@
       "argv": ["dotnet", "test", "src/GxMcp.Worker.Tests/GxMcp.Worker.Tests.csproj", "-c", "Release", "--filter", "FullyQualifiedName~Two_overlapping_calls_run_one_after_the_other_and_the_original_value_survives_both", "--logger", "console;verbosity=minimal"],
       "timeoutMs": 120000
     },
+    "sdk-lane-contract": {
+      "description": "SDK pass/skip/fail, offline preflight environment isolation and mandatory live validation; disposable mocks, no KB writes",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/tests/sdk-validation-contract.tests.ps1"],
+      "timeoutMs": 120000
+    },
     "sdk-warning-baseline": {
       "description": "Release warning baseline with the installed licensed SDK; no KB writes",
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-build-warning-baseline.ps1", "-GxPath", "C:/Program Files (x86)/GeneXus/GeneXus18"],
