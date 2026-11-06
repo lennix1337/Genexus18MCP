@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -436,6 +437,240 @@ namespace GxMcp.Worker
                 if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
                 _release.Set();
                 _owner.Join(ThreadJoinMs);
+            }
+        }
+    }
+
+    // ---- Admission seams (task 5.5; contract pinned in the header of SharedWorkerHostAdmissionTests.cs) ----
+
+    /// <summary>One Available_Physical_Memory reading per call.</summary>
+    internal interface ISharedHostMemoryReader
+    {
+        /// <summary>False with a non-empty <paramref name="error"/> when the reading fails.</summary>
+        bool TryReadAvailableMb(out long availableMb, out string error);
+    }
+
+    /// <summary>Every registry v2 record file, each read with <see cref="RecordReadResult.ReadFile"/>, in any order.</summary>
+    internal interface ISharedHostRegistryEnumerator
+    {
+        IReadOnlyList<RecordReadResult> ReadAll();
+    }
+
+    /// <summary>Named auto-reset events of the admission protocol (<c>Local\...</c>).</summary>
+    internal interface ISharedHostSignalHub
+    {
+        /// <summary>Sets the event; never blocks.</summary>
+        void Signal(string name);
+
+        /// <summary>Runs <paramref name="onSignal"/> once per signal until the returned handle is disposed.</summary>
+        IDisposable Subscribe(string name, Action onSignal);
+    }
+
+    /// <summary>The I/O seams of <see cref="SharedWorkerHostAdmission"/>.</summary>
+    internal sealed class SharedHostAdmissionSeams
+    {
+        internal ISharedHostRegistryEnumerator Registry { get; set; }
+
+        /// <summary>Liveness of other hosts' records.</summary>
+        internal IProcessProbe HostProbe { get; set; }
+
+        internal ISharedHostMemoryReader Memory { get; set; }
+        internal ISharedHostSignalHub Signals { get; set; }
+
+        /// <summary>One call is one warning log entry.</summary>
+        internal Action<string> Warn { get; set; }
+
+        /// <summary>The registry directory of the v2 record, the process probe, GlobalMemoryStatusEx and named events.</summary>
+        internal static SharedHostAdmissionSeams Production(SharedWorkerHostOptions options)
+        {
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            return new SharedHostAdmissionSeams
+            {
+                Registry = new SharedHostFileRegistryEnumerator(Path.GetDirectoryName(SharedWorkerHostRuntime.ResolveRecordPathV2(options))),
+                HostProbe = new ProcessIdentity(),
+                Memory = new SharedHostMachineMemoryReader(),
+                Signals = new SharedHostNamedEventHub(),
+                Warn = message => { try { Console.Error.WriteLine("[SharedWorkerHost] " + message); } catch { } }
+            };
+        }
+
+        /// <summary>
+        /// Empty registry, unlimited memory, a hub that never signals and a no-op warning. A fresh instance per
+        /// read, so a caller that changes a property cannot affect another runtime.
+        /// </summary>
+        internal static SharedHostAdmissionSeams Unrestricted => new SharedHostAdmissionSeams
+        {
+            Registry = EmptyRegistry.Instance,
+            HostProbe = NotRunningProbe.Instance,
+            Memory = UnlimitedMemory.Instance,
+            Signals = SilentSignalHub.Instance,
+            Warn = _ => { }
+        };
+
+        private sealed class EmptyRegistry : ISharedHostRegistryEnumerator
+        {
+            internal static readonly EmptyRegistry Instance = new EmptyRegistry();
+            public IReadOnlyList<RecordReadResult> ReadAll() => Array.Empty<RecordReadResult>();
+        }
+
+        // Never consulted: the empty registry yields no record to probe.
+        private sealed class NotRunningProbe : IProcessProbe
+        {
+            internal static readonly NotRunningProbe Instance = new NotRunningProbe();
+            public ProcessProbeResult Probe(int pid) => ProcessProbeResult.NotRunning;
+        }
+
+        private sealed class UnlimitedMemory : ISharedHostMemoryReader
+        {
+            internal static readonly UnlimitedMemory Instance = new UnlimitedMemory();
+
+            public bool TryReadAvailableMb(out long availableMb, out string error)
+            {
+                availableMb = int.MaxValue;
+                error = null;
+                return true;
+            }
+        }
+
+        private sealed class SilentSignalHub : ISharedHostSignalHub
+        {
+            internal static readonly SilentSignalHub Instance = new SilentSignalHub();
+            public void Signal(string name) { }
+            public IDisposable Subscribe(string name, Action onSignal) => NoSubscription.Instance;
+
+            private sealed class NoSubscription : IDisposable
+            {
+                internal static readonly NoSubscription Instance = new NoSubscription();
+                public void Dispose() { }
+            }
+        }
+    }
+
+    /// <summary>Wraps <see cref="MachineMemory.TryGetAvailablePhysicalMb"/>.</summary>
+    internal sealed class SharedHostMachineMemoryReader : ISharedHostMemoryReader
+    {
+        public bool TryReadAvailableMb(out long availableMb, out string error)
+        {
+            try
+            {
+                if (MachineMemory.TryGetAvailablePhysicalMb(out availableMb, out error)) return true;
+                if (string.IsNullOrEmpty(error)) error = "Available physical memory could not be read.";
+                return false;
+            }
+            catch (Exception ex)
+            {
+                availableMb = 0;
+                error = "Available physical memory could not be read: " + ex.GetType().Name + ": " + ex.Message;
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The <c>*.json</c> files of the registry v2 directory. A missing directory is an empty registry; any other
+    /// enumeration failure propagates, so admission never decides on a registry it could not list.
+    /// </summary>
+    internal sealed class SharedHostFileRegistryEnumerator : ISharedHostRegistryEnumerator
+    {
+        private readonly string _directory;
+
+        internal SharedHostFileRegistryEnumerator(string directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory)) throw new ArgumentException("A registry directory is required.", nameof(directory));
+            _directory = directory;
+        }
+
+        internal string RegistryDirectory => _directory;
+
+        public IReadOnlyList<RecordReadResult> ReadAll()
+        {
+            string[] files;
+            try { files = Directory.GetFiles(_directory, "*.json", SearchOption.TopDirectoryOnly); }
+            catch (DirectoryNotFoundException) { return Array.Empty<RecordReadResult>(); }
+
+            var reads = new List<RecordReadResult>(files.Length);
+            foreach (string file in files)
+            {
+                // Temporary files of an in-progress write end in ".tmp-<pid>-<guid>"; only completed records count.
+                if (!file.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) continue;
+                reads.Add(RecordReadResult.ReadFile(file));
+            }
+            return reads;
+        }
+    }
+
+    /// <summary>
+    /// Named auto-reset <see cref="EventWaitHandle"/>s. A subscription waits through
+    /// <see cref="ThreadPool.RegisterWaitForSingleObject(WaitHandle, WaitOrTimerCallback, object, int, bool)"/>, so
+    /// its callback runs on a thread-pool thread.
+    /// </summary>
+    internal sealed class SharedHostNamedEventHub : ISharedHostSignalHub
+    {
+        public void Signal(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("An event name is required.", nameof(name));
+            try
+            {
+                // Created when no subscriber exists yet; the signal is then lost with the last handle, and the
+                // held host's HeldPollMs timer covers it.
+                using (var handle = new EventWaitHandle(false, EventResetMode.AutoReset, name))
+                    handle.Set();
+            }
+            catch (UnauthorizedAccessException) { }
+            catch (IOException) { }
+            catch (WaitHandleCannotBeOpenedException) { }
+        }
+
+        public IDisposable Subscribe(string name, Action onSignal)
+        {
+            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("An event name is required.", nameof(name));
+            if (onSignal == null) throw new ArgumentNullException(nameof(onSignal));
+            return new Subscription(new EventWaitHandle(false, EventResetMode.AutoReset, name), onSignal);
+        }
+
+        private sealed class Subscription : IDisposable
+        {
+            private readonly object _gate = new object();
+            private readonly EventWaitHandle _handle;
+            private readonly Action _onSignal;
+            private readonly RegisteredWaitHandle _registration;
+            private bool _disposed;
+
+            internal Subscription(EventWaitHandle handle, Action onSignal)
+            {
+                _handle = handle;
+                _onSignal = onSignal;
+                try
+                {
+                    _registration = ThreadPool.RegisterWaitForSingleObject(handle, OnSignaled, null, Timeout.Infinite, executeOnlyOnce: false);
+                }
+                catch
+                {
+                    handle.Dispose();
+                    throw;
+                }
+            }
+
+            private void OnSignaled(object state, bool timedOut)
+            {
+                lock (_gate) { if (_disposed) return; }
+                // A thread-pool callback must not let an exception escape: it would end the process.
+                try { _onSignal(); }
+                catch (Exception ex)
+                {
+                    try { Console.Error.WriteLine("[SharedWorkerHost] signal callback failed: " + ex.Message); } catch { }
+                }
+            }
+
+            public void Dispose()
+            {
+                lock (_gate)
+                {
+                    if (_disposed) return;
+                    _disposed = true;
+                }
+                try { _registration.Unregister(null); } catch { }
+                try { _handle.Dispose(); } catch { }
             }
         }
     }
