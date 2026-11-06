@@ -712,11 +712,14 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_lifecycle")]
         public void Diagnostics_tool_schemas_stay_equal_to_the_contract_golden_fixture(string toolName)
         {
-            var definitions = JArray.Parse(RepoSource.Read("src", "GxMcp.Gateway", "tool_definitions.json"));
+            // The golden fixture is the published tools/list response (compacted descriptions, no examples), so the
+            // live schema is read from the same tools/list call, not from the raw tool_definitions.json.
+            var listed = McpRouter.Handle(new JObject { ["jsonrpc"] = "2.0", ["id"] = "1", ["method"] = "tools/list" });
+            var live = (JArray)(listed as JToken ?? JToken.FromObject(listed!))["tools"]!;
             var golden = (JArray)JObject.Parse(RepoSource.Read(
                 "src", "GxMcp.Gateway.Tests", "Fixtures", "Contract", "Discovery", "tools-list.response.json"))["tools"]!;
 
-            var definition = definitions.Single(t => (string?)t["name"] == toolName);
+            var definition = live.Single(t => (string?)t["name"] == toolName);
             var fixture = golden.Single(t => (string?)t["name"] == toolName);
 
             Assert.True(JToken.DeepEquals(fixture["inputSchema"], definition["inputSchema"]),
@@ -812,8 +815,9 @@ namespace GxMcp.Gateway.Tests
         private static DateTime ReadUtc(JToken token)
         {
             if (token.Type == JTokenType.Date) return ((DateTime)token).ToUniversalTime();
-            return DateTime.Parse((string)token!, CultureInfo.InvariantCulture,
-                DateTimeStyles.RoundtripKind | DateTimeStyles.AdjustToUniversal);
+            // RoundtripKind cannot be combined with AdjustToUniversal; the "o" string carries its own kind.
+            return DateTime.Parse((string)token!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                .ToUniversalTime();
         }
 
         private static SharedHostDiagnosticsRecord Rec(

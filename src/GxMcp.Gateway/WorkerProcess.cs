@@ -238,6 +238,19 @@ namespace GxMcp.Gateway
             => IsSharedHostMode
                 ? ConcurrencyErrorNormalizer.Normalize(response, request, _config, () => DateTime.UtcNow)
                 : response;
+
+        /// <summary>
+        /// RFC #854 diagnostics: the host's status_ack through the "status" control frame of the attachment, never
+        /// through the command queue. Null when this is not a connected shared Worker or no answer arrives in time.
+        /// </summary>
+        internal Task<JObject?> RequestSharedStatusAsync(int timeoutMs, CancellationToken cancellationToken)
+        {
+            var connection = IsSharedHostMode ? _sharedConnection : null;
+            return connection == null
+                ? Task.FromResult<JObject?>(null)
+                : connection.RequestStatusAsync(timeoutMs, cancellationToken);
+        }
+
         public bool SharedConnectionIsConnected => IsSharedHostMode && _sharedConnection?.IsConnected == true;
         public string? SharedIdentityKey => IsSharedHostMode ? _sharedIdentity?.Key : null;
         public string? SharedPipeName => IsSharedHostMode && _sharedIdentity != null

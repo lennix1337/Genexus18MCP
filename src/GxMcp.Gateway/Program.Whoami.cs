@@ -1081,8 +1081,56 @@ namespace GxMcp.Gateway
         internal static Task<JObject> BuildWhoamiPayloadAsync(bool verbose)
             => BuildWhoamiPayloadAsync(verbose, null);
 
+        // RFC #854: the shared-host diagnostics block. Tests replace the builder; production uses one instance per
+        // Gateway, created on first use from the active configuration.
+        internal static Func<SharedHostDiagnostics>? SharedHostDiagnosticsFactoryForTest { get; set; }
+
+        private static readonly object _sharedHostDiagnosticsLock = new object();
+        private static SharedHostDiagnostics? _sharedHostDiagnostics;
+
+        /// <summary>
+        /// The "sharedHost" block of genexus_whoami, genexus_doctor and genexus_lifecycle action=status, or null
+        /// outside Shared_Host_Mode (the factory is then not called, so Isolated_Mode output is unchanged).
+        /// </summary>
+        internal static async Task<JObject?> BuildSharedHostBlockAsync(CancellationToken cancellationToken = default)
+        {
+            var config = _activeConfig ?? ActiveConfig;
+            if (!SharedHostDiagnostics.IsSharedHostMode(config)) return null;
+
+            SharedHostDiagnostics diagnostics;
+            var factory = SharedHostDiagnosticsFactoryForTest;
+            if (factory != null)
+            {
+                diagnostics = factory();
+            }
+            else
+            {
+                lock (_sharedHostDiagnosticsLock)
+                {
+                    _sharedHostDiagnostics ??= SharedHostDiagnostics.CreateDefault(config!, () => _workerPool);
+                    diagnostics = _sharedHostDiagnostics;
+                }
+            }
+
+            try
+            {
+                return await diagnostics.BuildAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log("[Gateway] shared_host_diagnostics_failed error=" + ex.GetType().Name + ": " + ex.Message);
+                return null;
+            }
+        }
+
         internal static async Task<JObject> BuildWhoamiPayloadAsync(bool verbose, string? sessionId)
         {
+            // Started first so the host status queries overlap the Worker round-trips below.
+            Task<JObject?> sharedHostTask = BuildSharedHostBlockAsync();
             string? whoamiAlias = ResolveWhoamiIndexAlias(sessionId);
             // Skip the worker round-trip when our cached snapshot is recent enough.
             // whoami is the most-called first-turn tool — a stale-by-a-few-seconds
@@ -1149,6 +1197,8 @@ namespace GxMcp.Gateway
                 }
                 payload["workerHealth"] = BuildHonestWorkerHealth(payload);
             }
+            JObject? sharedHost = await sharedHostTask.ConfigureAwait(false);
+            if (sharedHost != null) payload["sharedHost"] = sharedHost;
             return payload;
         }
 
@@ -1344,7 +1394,8 @@ namespace GxMcp.Gateway
             return health;
         }
 
-        internal static JObject BuildGatewayDoctorEnvelope(string? sessionId = null, JObject? wwpTemplates = null)
+        internal static JObject BuildGatewayDoctorEnvelope(
+            string? sessionId = null, JObject? wwpTemplates = null, JObject? sharedHost = null)
         {
             var whoami = BuildWhoamiPayload(false, sessionId);
             var geneXus = whoami["geneXus"] is JObject gx
@@ -1396,6 +1447,15 @@ namespace GxMcp.Gateway
             if (brokenTemplates > 0)
                 warnings.Add(brokenTemplates + " WorkWithPlus template(s) have an empty type or a malformed template XML, which breaks the WorkWithPlus editor (see wwpTemplates).");
 
+            // Shared_Host_Mode only: each host-settings mismatch warning of the sharedHost block.
+            if (sharedHost?["warnings"] is JArray sharedHostWarnings)
+            {
+                foreach (var warning in sharedHostWarnings)
+                {
+                    if (warning.Type == JTokenType.String) warnings.Add(warning.ToString());
+                }
+            }
+
             var index = whoami["index"] as JObject;
             var metrics = _operationTracker.BuildMetricsSummary();
             metrics["source"] = "gateway";
@@ -1427,6 +1487,7 @@ namespace GxMcp.Gateway
                 ["warnings"] = warnings,
                 ["hint"] = warnings.Count > 0 ? warnings[0] : JValue.CreateNull()
             };
+            if (sharedHost != null) result["sharedHost"] = sharedHost;
 
             return new JObject
             {

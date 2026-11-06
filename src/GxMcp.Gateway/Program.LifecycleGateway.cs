@@ -430,7 +430,8 @@ namespace GxMcp.Gateway
             JObject workerPayload,
             JObject? args,
             int waitSeconds,
-            string until)
+            string until,
+            JObject? sharedHost = null)
         {
             JObject result = (JObject)workerPayload.DeepClone();
             if (LifecycleResponseShaper.ShouldCompact(args))
@@ -477,6 +478,8 @@ namespace GxMcp.Gateway
                 if (property.Name == "status" || property.Name == "operationId") continue;
                 envelope[property.Name] = property.Value?.DeepClone();
             }
+            // Shared_Host_Mode only (RFC #854): the caller passes null in Isolated_Mode, keeping the field set.
+            if (sharedHost != null) envelope["sharedHost"] = sharedHost;
             return envelope;
         }
 
@@ -934,7 +937,8 @@ namespace GxMcp.Gateway
                                     }
 
                                     JObject liveEnvelope = BuildWorkerLifecycleStatusEnvelope(
-                                        probe, liveWorkerStatus, args, waitSeconds, until);
+                                        probe, liveWorkerStatus, args, waitSeconds, until,
+                                        await BuildSharedHostBlockAsync());
                                     bool liveError = false;
                                     if (liveEnvelope["result"] is JObject liveResult
                                         && (liveResult["Status"] ?? liveResult["status"])?.ToString() is string liveStatus

@@ -1058,7 +1058,8 @@ namespace GxMcp.Gateway
             {
                 string? doctorSessionId = sessionContextEnabled ? sessionId : null;
                 JObject wwpTemplates = await ProbeDoctorWwpTemplatesAsync(doctorSessionId);
-                JObject doctor = BuildGatewayDoctorEnvelope(doctorSessionId, wwpTemplates);
+                JObject doctor = BuildGatewayDoctorEnvelope(
+                    doctorSessionId, wwpTemplates, await BuildSharedHostBlockAsync());
                 return BuildToolResultContent(doctor, false, tName, tArgs);
             }
 

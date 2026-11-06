@@ -277,6 +277,22 @@ namespace GxMcp.Gateway
             return map;
         }
 
+        /// <summary>
+        /// Shared mode: every identity key with a Worker attachment, for the sharedHost diagnostics pool view.
+        /// Empty in Isolated_Mode.
+        /// </summary>
+        internal IReadOnlyList<(string Key, WorkerProcess Worker)> SharedWorkers()
+        {
+            if (!IsSharedMode) return Array.Empty<(string, WorkerProcess)>();
+            var workers = new List<(string Key, WorkerProcess Worker)>();
+            foreach (var e in _entries.Values)
+            {
+                var worker = e.Worker;
+                if (worker != null) workers.Add((e.Key, worker));
+            }
+            return workers;
+        }
+
         private static IReadOnlyList<string> SortedAliases(Entry e) =>
             e.Aliases.Keys.OrderBy(a => a, StringComparer.Ordinal).ToArray();
 
