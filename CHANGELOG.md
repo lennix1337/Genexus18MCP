@@ -47,7 +47,7 @@
 
 ### Fixed
 
-- **Transfer import preflight avoids SDK preparation**: raw XPZ metadata and the initialized descriptor registry replace object construction before import, preventing empty stubs during preflight. https://github.com/lennix1337/Genexus18MCP/issues/886
+- **Transfer import preflight avoids SDK preparation**: raw XPZ metadata and the initialized descriptor registry replace object construction before import, so a failed preflight no longer leaves empty stubs in the KB and reports `persistedState: "unchanged"`. The XPZ is read one object at a time, so packages above 8 MB (such as `Startup/Web/DefaultStyle.xpz`), packages with only delete actions, and objects that share a name under different identities are accepted. https://github.com/lennix1337/Genexus18MCP/issues/886
 - **Transfer previews avoid an SDK item descriptor getter**: exported-item metadata no longer evaluates `TypeDescriptor`, whose SDK implementation can construct an object while projecting import data. https://github.com/lennix1337/Genexus18MCP/issues/886
 - **Source-search continuations remain stable as source caches warm**: candidates are ordered by identity rather than mutable source availability. Previously issued cursors are rejected; start a new search. This may visit more candidates before filling a page. Mixed-field searches also retain their source cursor when a full page reaches its deadline. https://github.com/lennix1337/Genexus18MCP/issues/882
 - **Post-timeout recovery diagnostics** identify the affected object, part and recorded GUID in the refusal message; reconciliation requirements are unchanged. https://github.com/lennix1337/Genexus18MCP/issues/887

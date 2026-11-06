@@ -14,12 +14,12 @@ namespace GxMcp.Worker.Tests
         private static readonly Guid PanelType = new Guid("11111111-1111-1111-1111-111111111111");
         private const string WebFormPart = "d24a58ad-57ba-41b7-9e6e-eaca3543c778";
 
-        private static string Package(string objects)
+        private static string RawPackage(string xml)
         {
             string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".xpz");
             using (var archive = ZipFile.Open(path, ZipArchiveMode.Create))
             using (var writer = new StreamWriter(archive.CreateEntry("export.xml").Open()))
-                writer.Write("<ExportFile><Objects>" + objects + "</Objects></ExportFile>");
+                writer.Write(xml);
             return path;
         }
 
@@ -30,38 +30,64 @@ namespace GxMcp.Worker.Tests
             return null;
         }
 
-        [Fact]
-        public void CaptureImportFidelity_TwoProceduresRequireNoSdkPreparation()
+        private static readonly string Form = $"<Part type='{WebFormPart}'><Source><![CDATA[<GxMultiForm />]]></Source></Part>";
+
+        // Each shape comes from a real package: GAM_Web-Administration.xpz (a Folder and a WebPanel
+        // share a name), Carmine.xpz (theme classes share a name, not a guid), GAM_Lib_Delete.xpz
+        // (actions only) and Finance.xpz (a WebForm part with Properties only).
+        public static TheoryData<string, string, int> AcceptedPackages => new TheoryData<string, string, int>
         {
-            var path = Package($"<Object name='A' type='{ProcedureType}'/><Object name='B' type='{ProcedureType}'/>");
-            try
+            { "two procedures", Objects($"<Object name='A' type='{ProcedureType}'/><Object name='B' type='{ProcedureType}'/>"), 0 },
+            { "unknown type without WebForm", Objects($"<Object name='A' type='{Guid.NewGuid()}'/>"), 0 },
+            { "same name, different types", Objects($"<Object name='Dashboard' type='{ProcedureType}'/><Object name='Dashboard' type='{PanelType}'>{Form}</Object>"), 1 },
+            { "same name, different guids", Objects($"<Object guid='{Guid.NewGuid()}' name='Text' type='{ProcedureType}'/><Object guid='{Guid.NewGuid()}' name='Text' type='{ProcedureType}'/>"), 0 },
+            { "actions only", "<ExportFile><KMW /><Source /><Actions><Action type='delete' /></Actions></ExportFile>", 0 },
+            { "WebForm without source", Objects($"<Object name='Panel' type='{PanelType}'/><Object name='Quote' type='{PanelType}'><Part type='{WebFormPart}'><Properties /></Part></Object>"), 0 },
+        };
+
+        public static TheoryData<string, string> RejectedPackages
+        {
+            get
             {
-                var plan = TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => throw new Exception("unexpected snapshot"));
-                Assert.Empty(plan.Items);
+                var guid = Guid.NewGuid();
+                return new TheoryData<string, string>
+                {
+                    { "WebForm source that is not a form", Objects($"<Object name='A' type='{ProcedureType}'/><Object name='Panel' type='{PanelType}'><Part type='{WebFormPart}'><Source>not a form</Source></Part></Object>") },
+                    { "WebForm of an unknown type", Objects($"<Object name='A' type='{Guid.NewGuid()}'>{Form}</Object>") },
+                    { "same name twice under one type", Objects($"<Object name='A' type='{ProcedureType}'/><Object name='A' type='{ProcedureType}'/>") },
+                    { "same guid twice", Objects($"<Object guid='{guid}' name='A' type='{ProcedureType}'/><Object guid='{guid}' name='B' type='{ProcedureType}'/>") },
+                    { "two WebForms for one name", Objects($"<Object guid='{Guid.NewGuid()}' name='Panel' type='{PanelType}'>{Form}</Object><Object guid='{Guid.NewGuid()}' name='Panel' type='{PanelType}'>{Form}</Object>") },
+                };
             }
+        }
+
+        private static string Objects(string objects) => "<ExportFile><Objects>" + objects + "</Objects></ExportFile>";
+
+        private static TransferService.ImportFidelityPlan Capture(string xml)
+        {
+            string path = RawPackage(xml);
+            try { return TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => null); }
             finally { File.Delete(path); }
         }
 
-        [Fact]
-        public void CaptureImportFidelity_RejectsMalformedMixedPackageBeforeSnapshots()
+        [Theory]
+        [MemberData(nameof(AcceptedPackages))]
+        public void CaptureImportFidelity_AcceptsRealPackageShapes(string shape, string xml, int webForms)
         {
-            var path = Package($"<Object name='A' type='{ProcedureType}'/><Object name='Panel' type='{PanelType}'><Part type='{WebFormPart}'/></Object>");
-            try { Assert.Throws<InvalidDataException>(() => TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => throw new Exception("unexpected snapshot"))); }
-            finally { File.Delete(path); }
+            Assert.True(Capture(xml).Items.Count == webForms, shape);
         }
 
-        [Fact]
-        public void CaptureImportFidelity_RejectsUnknownType()
+        [Theory]
+        [MemberData(nameof(RejectedPackages))]
+        public void CaptureImportFidelity_RejectsAmbiguousPackages(string shape, string xml)
         {
-            var path = Package($"<Object name='A' type='{Guid.NewGuid()}'/>");
-            try { Assert.Throws<InvalidDataException>(() => TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => null)); }
-            finally { File.Delete(path); }
+            Assert.True(Assert.Throws<InvalidDataException>(() => Capture(xml)) != null, shape);
         }
 
         [Fact]
         public void CaptureImportFidelity_PreservesRawBaselineAndExistingSnapshot()
         {
-            var path = Package($"<Object name='Panel' type='{PanelType}'><Part type='{WebFormPart}'><Source><![CDATA[<GxMultiForm><BODY /></GxMultiForm>]]></Source></Part></Object>");
+            var path = RawPackage(Objects($"<Object name='Panel' type='{PanelType}'><Part type='{WebFormPart}'><Source><![CDATA[<GxMultiForm><BODY /></GxMultiForm>]]></Source></Part></Object>"));
             try
             {
                 var plan = TransferService.CaptureImportFidelity(path, ResolveRawType, (name, type) => Tuple.Create("before"));

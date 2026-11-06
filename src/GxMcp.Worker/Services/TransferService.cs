@@ -428,8 +428,8 @@ namespace GxMcp.Worker.Services
             return CaptureImportFidelity(file, type =>
             {
                 var descriptor = KBObjectDescriptor.Get(type);
-                return descriptor == null || descriptor.Parts == null || descriptor.Parts.Count == 0
-                    ? null : Tuple.Create(descriptor.Name, descriptor.Parts.Contains(WebFormPartId));
+                return descriptor == null ? null
+                    : Tuple.Create(descriptor.Name, descriptor.Parts != null && descriptor.Parts.Contains(WebFormPartId));
             }, (name, type) =>
             {
                 var existing = _objects?.FindObjectFresh(name, type);
@@ -457,54 +457,98 @@ namespace GxMcp.Worker.Services
         {
             var forms = new List<ImportWebFormSnapshot>();
             var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            int xmlEntries = 0, objectCount = 0;
-            long totalBytes = 0;
+            var formIdentities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int xmlEntries = 0;
             using (var archive = ZipFile.OpenRead(file))
             foreach (var entry in archive.Entries.Where(e => e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)))
             {
-                if (++xmlEntries > 2048 || entry.Length > 8L * 1024 * 1024 || (totalBytes += entry.Length) > 64L * 1024 * 1024)
-                    throw new InvalidDataException("The XPZ XML payload exceeds the safe fidelity-inspection limit.");
-                XDocument document;
+                if (++xmlEntries > 2048)
+                    throw new InvalidDataException("The XPZ contains too many XML entries for safe fidelity inspection.");
+                // Objects are read one at a time: a single Theme in Startup/Web/DefaultStyle.xpz exceeds 20 MB.
                 using (var stream = entry.Open())
                 using (var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersFromEntities = 0 }))
-                    document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
-                if (!string.Equals(document.Root?.Name.LocalName, "ExportFile", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("The XPZ contains an unrecognized XML document.");
-                var containers = document.Root.Elements().Where(e => e.Name.LocalName == "Objects").ToList();
-                if (containers.Count != 1) throw new InvalidDataException("The XPZ object list is ambiguous or missing.");
-                foreach (var obj in containers[0].Elements())
                 {
-                    if (obj.Name.LocalName != "Object") throw new InvalidDataException("Unrecognized XPZ object metadata.");
-                    objectCount++;
-                    string name = (string)obj.Attribute("name");
-                    if (string.IsNullOrWhiteSpace(name) || !Guid.TryParse((string)obj.Attribute("type"), out var type) || type == Guid.Empty
-                        || !identities.Add(name))
-                        throw new InvalidDataException("The XPZ contains an invalid or duplicate object identity.");
-                    var descriptor = resolve(type);
-                    if (descriptor == null || string.IsNullOrWhiteSpace(descriptor.Item1))
-                        throw new InvalidDataException("The XPZ contains an unknown object type: " + type);
-                    var partIds = new HashSet<Guid>();
-                    XElement webForm = null;
-                    foreach (var part in obj.Elements().Where(e => e.Name.LocalName == "Part"))
+                    reader.MoveToContent();
+                    if (reader.NodeType != XmlNodeType.Element || !string.Equals(reader.LocalName, "ExportFile", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("The XPZ contains an unrecognized XML document.");
+                    // An XPZ with only delete actions (GAM_Lib_Delete.xpz) has no object list.
+                    int containers = 0;
+                    foreach (var obj in ReadExportObjects(reader, () => ++containers))
                     {
-                        if (!Guid.TryParse((string)part.Attribute("type"), out var partId) || partId == Guid.Empty || !partIds.Add(partId))
-                            throw new InvalidDataException("The XPZ contains an invalid or duplicate part identity for " + name);
-                        if (partId == WebFormPartId) webForm = part;
-                        else if (part.Elements().Any(e => e.Name.LocalName == "Source" && IsWebFormPayload(e.Value)))
-                            throw new InvalidDataException("The XPZ contains an ambiguous visual source for " + name);
+                        ImportWebFormSnapshot form = ReadRawImportWebForm(obj, resolve, identities);
+                        if (form == null) continue;
+                        if (!formIdentities.Add(form.TypeFilter + "|" + form.Name))
+                            throw new InvalidDataException("The XPZ contains two WebForms for " + form.Name);
+                        forms.Add(form);
                     }
-                    if (!descriptor.Item2 && webForm != null)
-                        throw new InvalidDataException("The XPZ contains an unexpected WebForm part for " + name);
-                    if (!descriptor.Item2) continue;
-                    var sources = webForm?.Elements().Where(e => e.Name.LocalName == "Source").ToList();
-                    string xml = sources?.Count == 1 ? sources[0].Value : null;
-                    if (string.IsNullOrWhiteSpace(xml) || !IsWebFormPayload(xml))
-                        throw new InvalidDataException("The XPZ has no unambiguous raw WebForm source for " + name);
-                    forms.Add(new ImportWebFormSnapshot { Name = name, TypeFilter = descriptor.Item1, PartName = "WebForm", ExpectedXml = xml.Trim() });
                 }
             }
-            if (objectCount == 0) throw new InvalidDataException("The XPZ contains no import objects.");
             return forms;
+        }
+
+        private static IEnumerable<XElement> ReadExportObjects(XmlReader reader, Func<int> containerSeen)
+        {
+            if (reader.IsEmptyElement) yield break;
+            reader.Read();
+            while (!reader.EOF && !(reader.NodeType == XmlNodeType.EndElement && reader.Depth == 0))
+            {
+                if (reader.NodeType != XmlNodeType.Element || reader.Depth != 1) { reader.Read(); continue; }
+                if (reader.LocalName != "Objects") { reader.Skip(); continue; }
+                if (containerSeen() > 1) throw new InvalidDataException("The XPZ object list is ambiguous.");
+                foreach (var obj in ReadObjectList(reader)) yield return obj;
+            }
+        }
+
+        private static IEnumerable<XElement> ReadObjectList(XmlReader reader)
+        {
+            if (reader.IsEmptyElement) { reader.Read(); yield break; }
+            reader.Read();
+            while (!reader.EOF && !(reader.NodeType == XmlNodeType.EndElement && reader.Depth == 1))
+            {
+                if (reader.NodeType != XmlNodeType.Element) { reader.Read(); continue; }
+                if (reader.LocalName != "Object") throw new InvalidDataException("Unrecognized XPZ object metadata.");
+                yield return (XElement)XNode.ReadFrom(reader);
+            }
+            reader.Read();
+        }
+
+        private static ImportWebFormSnapshot ReadRawImportWebForm(XElement obj, Func<Guid, Tuple<string, bool>> resolve, HashSet<string> identities)
+        {
+            string name = (string)obj.Attribute("name");
+            // The guid is the identity: GeneXus 16 themes carry several classes named Text.
+            string guid = (string)obj.Attribute("guid");
+            if (string.IsNullOrWhiteSpace(name) || !Guid.TryParse((string)obj.Attribute("type"), out var type) || type == Guid.Empty
+                || !identities.Add(string.IsNullOrWhiteSpace(guid) ? type + "|" + name : guid))
+                throw new InvalidDataException("The XPZ contains an invalid or duplicate object identity.");
+            XElement webForm = FindWebFormPart(obj, name);
+            // Without a serialized WebForm source there is no payload whose survival needs checking:
+            // Finance.xpz exports the Quote transaction's WebForm with Properties only.
+            var sources = webForm?.Elements().Where(e => e.Name.LocalName == "Source").ToList();
+            if (sources == null || sources.Count == 0 || sources.All(e => string.IsNullOrWhiteSpace(e.Value))) return null;
+            var descriptor = resolve(type);
+            if (descriptor == null || string.IsNullOrWhiteSpace(descriptor.Item1))
+                throw new InvalidDataException("The XPZ contains a WebForm of an unknown object type: " + type);
+            if (!descriptor.Item2)
+                throw new InvalidDataException("The XPZ contains an unexpected WebForm part for " + name);
+            string xml = sources.Count == 1 ? sources[0].Value : null;
+            if (string.IsNullOrWhiteSpace(xml) || !IsWebFormPayload(xml))
+                throw new InvalidDataException("The XPZ has no unambiguous raw WebForm source for " + name);
+            return new ImportWebFormSnapshot { Name = name, TypeFilter = descriptor.Item1, PartName = "WebForm", ExpectedXml = xml.Trim() };
+        }
+
+        private static XElement FindWebFormPart(XElement obj, string name)
+        {
+            var partIds = new HashSet<Guid>();
+            XElement webForm = null;
+            foreach (var part in obj.Elements().Where(e => e.Name.LocalName == "Part"))
+            {
+                if (!Guid.TryParse((string)part.Attribute("type"), out var partId) || partId == Guid.Empty || !partIds.Add(partId))
+                    throw new InvalidDataException("The XPZ contains an invalid or duplicate part identity for " + name);
+                if (partId == WebFormPartId) webForm = part;
+                else if (part.Elements().Any(e => e.Name.LocalName == "Source" && IsWebFormPayload(e.Value)))
+                    throw new InvalidDataException("The XPZ contains an ambiguous visual source for " + name);
+            }
+            return webForm;
         }
 
         internal static bool IsWebFormFidelityCandidate(string partClassFullName)
