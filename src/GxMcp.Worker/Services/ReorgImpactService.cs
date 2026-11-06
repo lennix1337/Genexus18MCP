@@ -791,6 +791,9 @@ namespace GxMcp.Worker.Services
             }
 
             result[propertyName] = plan;
+            string deepVerdict = result["deepAnalysis"]?.ToString() ?? result["deep"]?["deepAnalysis"]?.ToString();
+            JObject verdictEvidence = deep ? ReorgSqlPreview.AssessVerdict(deepVerdict, plan["ddlEffective"]?.ToObject<bool?>() ?? false) : null;
+            if (verdictEvidence != null) result["verdictEvidence"] = verdictEvidence;
             if (string.Equals(propertyName, "preview", StringComparison.OrdinalIgnoreCase))
             {
                 result["nonMutating"] = true;

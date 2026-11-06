@@ -34,6 +34,35 @@ namespace GxMcp.Worker.Services
             catch { return null; }
         }
 
+        /// <summary>
+        /// Qualifies the SDK Impact Analysis verdict with what this run could prove.
+        /// The verdict itself is never downgraded (a false negative would let a build
+        /// run against a database that needs a reorg); a "needed" verdict without any
+        /// DDL from this run is reported as its own state so callers can tell it apart
+        /// from a confirmed reorganization (issue #928).
+        /// </summary>
+        public static JObject AssessVerdict(string deepAnalysis, bool ddlEffective)
+        {
+            if (string.IsNullOrWhiteSpace(deepAnalysis)) return null;
+            bool needed = string.Equals(deepAnalysis, "ReorganizationNeeded", StringComparison.OrdinalIgnoreCase);
+            var evidence = new JObject
+            {
+                ["sdkVerdict"] = deepAnalysis,
+                ["ddlFromThisRun"] = ddlEffective
+            };
+            if (!needed)
+            {
+                evidence["state"] = "NoReorganizationReported";
+                evidence["confirmed"] = false;
+                return evidence;
+            }
+            evidence["state"] = ddlEffective ? "ReorganizationConfirmedByDdl" : "ReorganizationNeededDdlUnavailable";
+            evidence["confirmed"] = ddlEffective;
+            if (!ddlEffective)
+                evidence["note"] = "The SDK reported ReorganizationNeeded but Impact Analysis produced no DDL in this run, so the verdict is not corroborated. It is kept as needed (fail-safe). The timestamp heuristic (lastModifiedTable > lastReorg) is not evidence: IDE builds that need no reorg do not update lastReorg. Compare with the IDE's Impact Analysis before treating it as a false positive.";
+            return evidence;
+        }
+
         public static JObject Parse(string sql, bool effective)
         {
             var statements = new JArray();
