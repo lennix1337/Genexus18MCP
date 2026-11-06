@@ -138,7 +138,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
             ["params"] = new JObject { ["fakeDurationMs"] = durationMs }
         };
 
-        private static Process StartBroker(string exe, SharedWorkerIdentity identity, string kbPath, string installation, string registryDir, StringBuilder stderr)
+        internal static Process StartBroker(string exe, SharedWorkerIdentity identity, string kbPath, string installation, string registryDir, StringBuilder stderr)
         {
             var start = new ProcessStartInfo
             {
@@ -171,7 +171,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
             return process;
         }
 
-        private static async Task<SharedHostRecord> WaitForRecordAsync(string path, Process broker, StringBuilder stderr)
+        internal static async Task<SharedHostRecord> WaitForRecordAsync(string path, Process broker, StringBuilder stderr)
         {
             DateTime deadline = DateTime.UtcNow.AddMilliseconds(TimeoutMs);
             while (DateTime.UtcNow < deadline)
@@ -232,7 +232,7 @@ namespace GxMcp.Gateway.Tests.SharedHost
         }
 
         // Same rule as SharedHostTestHostSmokeTests: the variable wins, then bin\Debug or bin\Release.
-        private static string? LocateTestHost()
+        internal static string? LocateTestHost()
         {
             string? configured = Environment.GetEnvironmentVariable(SharedHostTestHostSmokeTests.ExecutableVariable);
             if (!string.IsNullOrWhiteSpace(configured))

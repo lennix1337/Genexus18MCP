@@ -156,6 +156,7 @@ namespace GxMcp.Gateway
     {
         private static readonly TimeSpan ElectionWait = TimeSpan.FromMilliseconds(250);
         private const int MaxRecordChangedRetries = 3;
+        internal static SharedWorkerRecoveryContext? RecoveryContextForTest;
 
         internal static SharedWorkerConnection Connect(
             Configuration config,
@@ -179,7 +180,7 @@ namespace GxMcp.Gateway
                 LegacyProvider = legacyProvider,
                 LaunchTimeoutMs = timeoutMs
             };
-            ISharedWorkerAttachment attachment = ConnectV2(request, new SharedWorkerRecoveryContext());
+            ISharedWorkerAttachment attachment = ConnectV2(request, RecoveryContextForTest ?? new SharedWorkerRecoveryContext());
             if (attachment is SharedWorkerConnection connection) return connection;
             attachment.Dispose();
             throw new InvalidOperationException("The shared Worker pipe connector returned an unsupported attachment type.");
