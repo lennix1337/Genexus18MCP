@@ -35,33 +35,4 @@ namespace GxMcp.Worker.Services
             "genexus_module", args?["action"]?.ToString(), "the module package manager (OPC packages)");
     }
 
-    public class DeployService
-    {
-        public DeployService(KbService kb)
-        {
-        }
-
-        public string Run(JObject args) => Evolution3Unsupported.Refuse(
-            "genexus_deploy", args?["action"]?.ToString(), "the deployment-target services");
-    }
-
-    public class GxServerWriteService
-    {
-        public GxServerWriteService(KbService kb)
-        {
-        }
-
-        public string Run(string action, JObject args) => Evolution3Unsupported.Refuse(
-            "genexus_gxserver", action, "the token-authenticated GeneXus Server client");
-    }
-
-    public class UserControlsListService
-    {
-        public UserControlsListService(KbService kb)
-        {
-        }
-
-        public string Run(JObject args) => Evolution3Unsupported.Refuse(
-            "genexus_user_controls", "list", "the user-control definition catalog");
-    }
 }

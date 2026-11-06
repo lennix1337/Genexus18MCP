@@ -41,7 +41,7 @@ namespace GxMcp.Worker.Services
 
                 var results = Directory.EnumerateFiles(rootPath, normalizedPattern, SearchOption.AllDirectories)
                     .Take(cappedLimit)
-                    .Select(path => BuildAssetDescriptor(kbRoot, path, includeContent: false))
+                    .Select(path => DescribeForSearch(kbRoot, path))
                     .ToArray();
 
                 return Models.McpResponse.Ok(
@@ -238,6 +238,38 @@ namespace GxMcp.Worker.Services
             }
 
             return candidate;
+        }
+
+        /// <summary>
+        /// Metadata for one search hit. A KB folder holds files another process keeps open
+        /// exclusively (the KB's own SQL Server .mdf/.ldf), so a file that cannot be read is
+        /// listed with readable=false and no hash instead of failing the whole search.
+        /// </summary>
+        internal static JObject DescribeForSearch(string kbRoot, string fullPath)
+        {
+            var info = new FileInfo(fullPath);
+            string sha256 = null;
+            try
+            {
+                using (var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var sha = SHA256.Create())
+                {
+                    sha256 = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+
+            return new JObject
+            {
+                ["path"] = fullPath,
+                ["relativePath"] = GetRelativePath(kbRoot, fullPath),
+                ["fileName"] = info.Name,
+                ["size"] = info.Length,
+                ["mimeType"] = GuessMimeType(fullPath),
+                ["sha256"] = sha256 != null ? new JValue(sha256) : JValue.CreateNull(),
+                ["readable"] = sha256 != null
+            };
         }
 
         private static JObject BuildAssetDescriptor(string kbRoot, string fullPath, bool includeContent)

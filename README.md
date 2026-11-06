@@ -379,9 +379,20 @@ GeneXus X Evolution 3 (10.3) is native through its own Worker build. Its SDK
 assemblies are 10.1.0.0, so `build.ps1` compiles a second Worker against the
 installed Evolution 3 (`GX_EV3_PATH`, or the catalog install path) into
 `publish/worker-ev3`, and the Gateway starts it for 10.3 KBs. Tools for features
-Evolution 3 does not have (module packages, deploy, GeneXus Server writes)
-return `UNSUPPORTED_IN_GENEXUS_VERSION`. WorkWithPlus needs a Theme imported once
-through the IDE Startup Wizard before its first apply, as on any GeneXus version.
+Evolution 3 does not have return `UNSUPPORTED_IN_GENEXUS_VERSION`: module
+packages, the deployment-target catalog (`genexus_deploy list_targets`), API and
+Design System objects, generator references, and GeneXus Server sends of the
+whole KB (`all=true`) or with a pre-acquired token. User controls, GeneXus Server
+commit/update of named objects, deploy, `genexus_test` (when GXtest is installed;
+Evolution 3 does not ship it) and `genexus_kb_version changed_objects` are wired to
+the Evolution 3 SDK. Builds never generate or run a reorganization there (Evolution 3
+has `DoNotGenerateReorg`/`DoNotExecuteReorg` but no `FailIfReorg`).
+
+What the installed licences allow still applies: generating code needs a
+licensed generator (the build reports `Not authorized` otherwise), and applying
+WorkWithPlus needs a DVelop WorkWithPlus licence (`Pattern key is not valid`
+otherwise) plus a Theme imported once through the IDE Startup Wizard, as on any
+GeneXus version.
 
 ### Basic legacy compatibility (not native SDK support)
 

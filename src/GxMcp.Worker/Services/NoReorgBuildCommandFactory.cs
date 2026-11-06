@@ -21,9 +21,10 @@ namespace GxMcp.Worker.Services
         public override IGxCommand Create(BuildArgs args)
         {
 #if GXMCP_SDK_EV3
-            // Without FailIfReorg the SDK would build past a pending reorganization;
-            // refusing keeps the no-reorg guarantee instead of weakening it.
-            throw new InvalidOperationException("GeneXus X Evolution 3 has no BuildOptions.FailIfReorg; the no-reorganization build guard cannot be enforced, so the build was not started.");
+            // GeneXus X Evolution 3 has no FailIfReorg, but it has DoNotGenerateReorg and
+            // DoNotExecuteReorg: the build neither writes nor runs a reorganization program.
+            args.Options |= BuildOptions.DoNotGenerateReorg | BuildOptions.DoNotExecuteReorg;
+            return _inner.Create(args);
 #else
             args.Options |= BuildOptions.FailIfReorg | BuildOptions.DoNotExecuteReorg;
             return _inner.Create(args);

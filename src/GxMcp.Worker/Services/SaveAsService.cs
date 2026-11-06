@@ -801,7 +801,23 @@ namespace GxMcp.Worker.Services
                     text => _writes.WriteObject(newName, partName, text, typeFilter));
             }
 
+            // A part the new object already holds verbatim needs no write. GeneXus X Evolution 3 keeps an empty
+            // Documentation part as "<Properties />" and rewrites it on save, so writing it back never re-reads as written.
+            string targetRead = _objects.ReadObjectSource(newName, partName, null, 0, "mcp", false, typeFilter);
+            if (TargetAlreadyHolds(code, targetRead))
+                return McpResponse.Ok(code: "PartUnchanged", result: new JObject { ["part"] = partName, ["unchanged"] = true });
+
             return _writes.WriteObject(newName, partName, code, typeFilter);
+        }
+
+        internal static bool TargetAlreadyHolds(string sourceText, string targetReadJson)
+        {
+            JObject target;
+            try { target = JObject.Parse(targetReadJson ?? string.Empty); }
+            catch { return false; }
+            if (RefuseTruncatedRead(target, "part") != null) return false;
+            string held = target["source"]?.Type == JTokenType.String ? target["source"].ToString() : null;
+            return held != null && string.Equals(held, sourceText, StringComparison.Ordinal);
         }
 
         /// <summary>

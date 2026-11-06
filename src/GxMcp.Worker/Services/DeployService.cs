@@ -52,6 +52,11 @@ namespace GxMcp.Worker.Services
 
             if (action == "list_targets")
             {
+#if GXMCP_SDK_EV3
+                // Evolution 3 deploys to one fixed target (an OPC package under the
+                // environment's Deploy folder) and has no IDeploymentTargetService.
+                return Evolution3Unsupported.Refuse("genexus_deploy", "list_targets", "the deployment-target catalog");
+#else
                 var tgtSvc = SdkServiceLocator.ConstructOrResolve<GenexusServices.IDeploymentTargetService>(
                     () => new Artech.Packages.Genexus.BL.Services.DeploymentTargetService());
                 if (tgtSvc == null)
@@ -81,6 +86,7 @@ namespace GxMcp.Worker.Services
                 {
                     return McpResponse.Err("DeployListFailed", ex.Message, "Check the worker log for details.");
                 }
+#endif
             }
 
             if (action == "deploy")

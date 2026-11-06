@@ -42,14 +42,12 @@ namespace GxMcp.Worker.Services
             int limit = args?["limit"]?.ToObject<int?>() ?? 200;
             try
             {
-                try { svc.Initialize(model); } catch { /* getter may work without it */ }
-
                 var controls = new JArray();
                 if (limit > 0)
                 {
                     try
                     {
-                        foreach (var def in svc.GetControlDefinitionCollection(model))
+                        foreach (var def in GxMcp.Worker.Compatibility.SdkCompat.UserControlDefinitions(svc, model))
                         {
                             if (def == null) continue;
                             controls.Add(new JObject

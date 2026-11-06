@@ -187,12 +187,14 @@ namespace GxMcp.Worker.Services
                     KnowledgeBase = SafeStr(() => tdSvc.GetRemoteKBName(kb)),
                     Comments = message,
                     ObjectList = toCommit,
-                    Options = ExportOptions.SilentDefault,
+                    Options = GxMcp.Worker.Compatibility.SdkCompat.SilentExportOptions(),
                     MinUnselectedTimestamp = DateTime.Now,
                     Url = creds.Url,
                     User = creds.User,
                     Password = creds.Password,
+#if !GXMCP_SDK_EV3
                     AuthenticationToken = string.IsNullOrEmpty(authToken) ? creds.Token : authToken
+#endif
                 };
 
                 bool ok = tdSvc.SendChanges(scd);
@@ -202,7 +204,11 @@ namespace GxMcp.Worker.Services
                     // credentials, is there a broken commit, and were the target objects staged.
                     var diag = new JObject { ["authTokenAcquired"] = !string.IsNullOrEmpty(authToken) };
                     if (!string.IsNullOrEmpty(authErr)) diag["authError"] = authErr;
+#if GXMCP_SDK_EV3
+                    try { diag["serverReachableWithCreds"] = tdSvc.CheckConectivitySecure(scd); }
+#else
                     try { diag["serverReachableWithCreds"] = tdSvc.GetServerInfo(creds.Url, creds.User, creds.Password) != null; }
+#endif
                     catch (Exception dx) { diag["serverInfoError"] = dx.Message; }
                     try { diag["hasBrokenCommits"] = tdSvc.HasBrokenCommits(model); } catch { }
                     try
@@ -250,6 +256,12 @@ namespace GxMcp.Worker.Services
         private string DoUpdate(ITeamDevClientService tdSvc, KnowledgeBase kb, KBModel model, string kbAlias, JObject args)
         {
             bool exportAll = args?["all"]?.ToObject<bool?>() ?? false;
+#if GXMCP_SDK_EV3
+            // ReceiveChangesData has no ExportAll in Evolution 3: refuse instead of silently
+            // receiving only the pending changes.
+            if (exportAll)
+                return Evolution3Unsupported.Refuse("genexus_gxserver", "update", "receiving every object (all=true)");
+#endif
 
             // Update applies the server's pending changes into the local KB via
             // ITeamDevClientService.JustReceiveChanges(...).Update() — which resolves in a
@@ -273,8 +285,10 @@ namespace GxMcp.Worker.Services
                     Url = creds.Url,
                     User = creds.User,
                     Password = creds.Password,
+#if !GXMCP_SDK_EV3
                     AuthenticationToken = string.IsNullOrEmpty(authToken) ? creds.Token : authToken,
                     ExportAll = exportAll,
+#endif
                     IncludeReferencesDependencies = true
                 };
 
@@ -432,7 +446,9 @@ namespace GxMcp.Worker.Services
                                 Url = creds.Url,
                                 User = creds.User,
                                 Password = creds.Password,
+#if !GXMCP_SDK_EV3
                                 AuthenticationToken = creds.Token
+#endif
                             });
 
                             if (theirs == null)
@@ -539,6 +555,11 @@ namespace GxMcp.Worker.Services
         private static string AcquireAuthToken(ITeamDevClientService tdSvc, KnowledgeBase kb, KBModel model, Creds creds, out string authError)
         {
             authError = null;
+#if GXMCP_SDK_EV3
+            // GeneXus Server X Evolution 3 has no token endpoint: the SDK authenticates each
+            // call from the User/Password carried on the data objects.
+            return null;
+#else
             try
             {
                 // Pre-fill url / remote-KB name / instance from the KB's own server link, then
@@ -578,6 +599,7 @@ namespace GxMcp.Worker.Services
                 GxMcp.Worker.Helpers.Logger.Error("[GxServer] AcquireAuthToken failed: " + authError);
                 return null;
             }
+#endif
         }
 
         private static string CredentialsRequired(string op)
