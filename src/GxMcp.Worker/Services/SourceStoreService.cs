@@ -894,7 +894,13 @@ namespace GxMcp.Worker.Services
             var entryList = entries as IList<SearchIndex.IndexEntry> ?? entries.ToList();
             coverage.TotalObjects = entryList.Count;
 
-            foreach (var e in entryList)
+            AccumulateCoverage(coverage, entryList, scope);
+            return coverage;
+        }
+
+        internal void AccumulateCoverage(SourceStoreCoverage coverage, IEnumerable<SearchIndex.IndexEntry> entries, List<string> scope)
+        {
+            foreach (var e in entries)
             {
                 if (string.IsNullOrWhiteSpace(e?.Guid)) continue;
                 var requestedParts = ResolveRequestedParts(e.Type, scope);
@@ -929,7 +935,6 @@ namespace GxMcp.Worker.Services
                 else if (anyStale) coverage.StaleObjects++;
             }
 
-            return coverage;
         }
 
         public bool IsStoredAndFresh(SearchIndex.IndexEntry entry, List<string> scope)
