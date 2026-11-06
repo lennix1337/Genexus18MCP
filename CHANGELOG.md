@@ -47,6 +47,8 @@
 
 ### Changed
 
+- In the opt-in `shared-host` mode, every request bound to a shared Worker that exits before answering now gets `SHARED_WORKER_RESTARTED` with the stop reason, not only a request cut off by a host disconnect. A request that never reached the pipe reports `dispatchState="not-delivered"`, is retryable and is still re-sent to a replacement Worker; a request that was written reports `delivered-unanswered` and is retryable only when its command is a read. `isolated` mode output is unchanged. https://github.com/lennix1337/Genexus18MCP/issues/854
+
 ### Fixed
 
 - **Transfer import preflight avoids SDK preparation**: raw XPZ metadata and the initialized descriptor registry replace object construction before import, so a failed preflight no longer leaves empty stubs in the KB and reports `persistedState: "unchanged"`. The XPZ is read one object at a time, so packages above 8 MB (such as `Startup/Web/DefaultStyle.xpz`), packages with only delete actions, and objects that share a name under different identities are accepted. https://github.com/lennix1337/Genexus18MCP/issues/886

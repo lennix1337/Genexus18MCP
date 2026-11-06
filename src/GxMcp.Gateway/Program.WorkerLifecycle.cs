@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using GxMcp.Common.SharedHost;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -46,14 +47,13 @@ namespace GxMcp.Gateway
                             continue;
                         }
                         bool delivered = pending.Worker == null || !pending.Worker.IsCommandUndelivered(id);
-                        // RFC #854: a shared Worker reports a host disconnect as an exit with
-                        // no stop reason (planned shared stops carry their reason). A request
-                        // written to that pipe gets SHARED_WORKER_RESTARTED with retryable from
-                        // its Operation_Class. Isolated Workers and undelivered requests keep
-                        // the Issue #692 error, so an undelivered command is still re-sent.
-                        var exitError = delivered && stopReason == WorkerStopReason.None && pending.Worker?.IsSharedWorker == true
-                            ? WorkerProcess.BuildSharedHostDisconnectError(kb.Alias, pending.WorkerMethod, pending.WorkerAction,
-                                config.EffectiveSharedHost.QueueWaitMs)
+                        // RFC #854: a request bound to a shared Worker gets SHARED_WORKER_RESTARTED
+                        // (not-delivered, or delivered-unanswered with retryable from its
+                        // Operation_Class). Isolated Workers keep the Issue #692 error; an
+                        // undelivered command is re-sent in both modes.
+                        var exitError = pending.Worker?.IsSharedWorker == true
+                            ? BuildWorkerExitError(kb.Alias, stopReason, delivered, sharedWorker: true,
+                                pending.WorkerMethod, pending.WorkerAction, config.EffectiveSharedHost.QueueWaitMs)
                             : BuildWorkerExitError(kb.Alias, stopReason, delivered);
                         _operationTracker.MarkFailedByRequest(id, exitError["message"]!.ToString());
                         var errorJson = new JObject
@@ -771,6 +771,46 @@ namespace GxMcp.Gateway
                     ["stopReason"] = stopReason.ToString()
                 }
             };
+        }
+
+        /// <summary>
+        /// RFC #854, Requirements 8.4, 12.3 and 12.4: the exit error for a pending request,
+        /// for either sharing mode. An isolated Worker gets the Issue #692 error above,
+        /// unchanged. A shared Worker gets <c>SHARED_WORKER_RESTARTED</c> from the catalog:
+        /// <c>not-delivered</c> (always retryable, still re-sent by the dispatcher) when no
+        /// byte reached the pipe, else <c>delivered-unanswered</c> with <c>retryable</c> from
+        /// the command's Operation_Class (unknown commands are Write). <c>data.stopReason</c>
+        /// names the local stop reason in both shared cases.
+        /// </summary>
+        internal static JObject BuildWorkerExitError(string kbAlias, WorkerStopReason stopReason, bool delivered,
+            bool sharedWorker, string? method, string? action, int queueWaitMs)
+        {
+            if (!sharedWorker) return BuildWorkerExitError(kbAlias, stopReason, delivered);
+
+            JObject error;
+            if (delivered)
+            {
+                error = WorkerProcess.BuildSharedHostDisconnectError(kbAlias, method, action, queueWaitMs);
+            }
+            else
+            {
+                error = new JObject
+                {
+                    ["code"] = -32603,
+                    ["message"] = $"Shared Worker for KB '{kbAlias}' crashed/exited ({stopReason}) before the command was delivered; it was not executed.",
+                    ["data"] = ConcurrencyErrorCatalog.Build(
+                        ConcurrencyErrorCatalog.SharedWorkerRestarted,
+                        null,
+                        new ConcurrencyErrorFields
+                        {
+                            DispatchState = ConcurrencyDispatchState.NotDelivered,
+                            OperationClass = WorkerCommandCatalog.Classify(method, action),
+                            QueueWaitMs = queueWaitMs
+                        })
+                };
+            }
+            ((JObject)error["data"]!)["stopReason"] = stopReason.ToString();
+            return error;
         }
 
         internal static bool ShouldRedispatchUndeliveredCommand(JObject workerResponse, int redispatches)
