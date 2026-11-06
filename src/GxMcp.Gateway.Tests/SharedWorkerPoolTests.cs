@@ -255,6 +255,29 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public async Task SharedMode_PoolFullSessions_CountSessionsSelectingAnyAliasOfTheIdentity()
+        {
+            var cfg = SharedConfig(maxOpenKbs: 1);
+            var pool = SharedPool(cfg, out _);
+            var store = new SessionKbContextStore(TimeSpan.FromMinutes(10));
+            pool.SessionCountForKey = key => Program.CountSessionsForPoolKey(store, pool, key);
+            await pool.AcquireAsync(new KbHandle("kba", KbAPath), CancellationToken.None);
+            await pool.AcquireAsync(new KbHandle("kba-alias", KbAPath), CancellationToken.None);
+            pool.BeginCommand("kba");
+            store.Set("session-1", "KBA");
+            store.Set("session-2", "kba-alias");
+            store.Set("session-3", "kbb");
+            store.Initialize("session-4", null);
+
+            var ex = await Assert.ThrowsAsync<WorkerPoolFullException>(() =>
+                pool.AcquireAsync(new KbHandle("kbb", KbBPath), CancellationToken.None));
+
+            var open = Assert.Single(Assert.IsType<JArray>(Program.BuildKbPoolFullPayload(ex)["openKbs"]));
+            Assert.Equal(IdentityKey(KbAPath), (string?)open["key"]);
+            Assert.Equal(2, (int)open["sessions"]!);
+        }
+
+        [Fact]
         public void IsolatedMode_PoolFullPayload_IsUnchanged()
         {
             var ex = new WorkerPoolFullException(new List<KbHandle> { new KbHandle("kba", KbAPath), new KbHandle("kbb", KbBPath) });

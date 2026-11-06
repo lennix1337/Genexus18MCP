@@ -15,6 +15,8 @@ namespace GxMcp.Gateway
         {
             _kbResolver = new KbResolver(config);
             _workerPool = new WorkerPool(config);
+            var pool = _workerPool;
+            pool.SessionCountForKey = key => CountSessionsForPoolKey(pool, key);
             _workerPool.WorkerSideActivity = alias =>
                 JobRegistry.HasLiveJobOnWorker(alias)
                 || _pendingRequests.Values.Any(p => string.Equals(p.WorkerAlias, alias, StringComparison.OrdinalIgnoreCase));
