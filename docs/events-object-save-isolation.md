@@ -100,6 +100,7 @@ Only the audited bundles are eligible (`evidence.auditedBundles` lists their ids
 | `18.0.16.189550`, `18.0.16.189595` | The hashes of the assemblies listed in `EventsSaveIsolation`, each with the exact WorkWithPlus implementation when that package is loaded. | [Events canonical snapshot](events-canonical-snapshot.md). |
 | `18.0.16.189595+wwp16.2.0.8386` | The complete-bundle manifest `config/events-u16-wwp16.2-audit.json` (452 files). | A synthetic WebPanel with a persisted WorkWithPlus host in a test Knowledge Base, 2026-10-14 ([Events canonical snapshot](events-canonical-snapshot.md)). |
 | `18.0.11.54344+wwp16.1.2.8167` | The complete-bundle manifest `config/events-u11-wwp16.1-audit.json` (459 files). | A synthetic WebPanel in a Knowledge Base without pattern instances, 2026-10-28; scoped, see [Scope of a native proof](#scope-of-a-native-proof). |
+| `18.0.10.184260` (no WorkWithPlus) | The complete-bundle manifest `config/events-u10-audit.json` (372 files), selected by the hash of `Artech.Architecture.Common` because the installation has no WorkWithPlus package. | Pending: only its synthetic WebPanel `McpU10AuditProbe01` may be saved until the native proof (`EventsBundleNativeProofLiveTests`) is recorded; scoped to Knowledge Bases without pattern instances. |
 
 An installation of another update level (for example GeneXus 18 U12), or one with
 another WorkWithPlus, is refused with `SdkBundleNotAudited` whatever the pins say,
@@ -114,7 +115,9 @@ implicit operation).
 When the WorkWithPlus package is loaded, `EventsBundleAudits` audits the bundle as a
 whole. It picks the manifest by the exact bytes of the loaded
 `DVelop.Patterns.WorkWithPlus` (nothing else selects one, and a mixture of two
-bundles matches none) and checks, in this order:
+bundles matches none). An installation without WorkWithPlus is audited the same way
+when a manifest was made without it: the exact bytes of `Artech.Architecture.Common`
+select that manifest. Then it checks, in this order:
 
 1. the copy of the manifest distributed beside the Worker is byte-identical to the
    one embedded in the Worker (editing the distributed copy authorizes nothing; a
