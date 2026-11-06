@@ -29,7 +29,12 @@ foreach ($entry in @($budget.exceptions.dotnet.PSObject.Properties)) {
 $results = @($trx.GetElementsByTagName('UnitTestResult') | ForEach-Object {
     # A Theory's cases share one entry: the name up to its argument list.
     $name = ([string]$_.testName -split '\(', 2)[0]
-    [pscustomobject]@{ Name = $name; Seconds = [TimeSpan]::Parse([string]$_.duration).TotalSeconds }
+    $stdout = $_.GetElementsByTagName('StdOut') | Select-Object -First 1
+    [pscustomobject]@{
+        Name = $name
+        Seconds = [TimeSpan]::Parse([string]$_.duration).TotalSeconds
+        Output = if ($null -ne $stdout) { [string]$stdout.InnerText } else { '' }
+    }
 })
 if ($results.Count -eq 0) { throw "No test results in $TrxPath; the per-test budget cannot be checked." }
 
@@ -44,6 +49,13 @@ $failures = @()
 foreach ($result in @($results | Where-Object { $_.Seconds -gt $limit })) {
     if (-not $exceptions.ContainsKey($result.Name)) {
         $failures += [string]::Format($invariant, '{0} took {1:N1}s (budget {2}s)', $result.Name, $result.Seconds, $limit)
+        # The test's own output (phase timings, for one) says where the time went.
+        if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
+            $text = $result.Output.Trim()
+            if ($text.Length -gt 4000) { $text = $text.Substring($text.Length - 4000) }
+            Write-Host "Output of $($result.Name):"
+            Write-Host $text
+        }
     }
 }
 $names = [System.Collections.Generic.HashSet[string]]::new([string[]]@($results.Name))

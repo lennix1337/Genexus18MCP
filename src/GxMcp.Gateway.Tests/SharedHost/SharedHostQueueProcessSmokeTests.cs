@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using GxMcp.Common.SharedHost;
 using Newtonsoft.Json.Linq;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace GxMcp.Gateway.Tests.SharedHost
 {
@@ -32,6 +33,13 @@ namespace GxMcp.Gateway.Tests.SharedHost
         private const int TimeoutMs = 20_000;
         private const int FirstDurationMs = 1500;
 
+        private readonly ITestOutputHelper _output;
+
+        public SharedHostQueueProcessSmokeTests(ITestOutputHelper output)
+        {
+            _output = output;
+        }
+
         [Fact]
         public async Task A_Second_Sessions_Sdk_Request_Queues_Behind_The_First_And_Is_Answered()
         {
@@ -52,12 +60,24 @@ namespace GxMcp.Gateway.Tests.SharedHost
             Process? broker = null;
             SharedWorkerConnection? a = null;
             SharedWorkerConnection? b = null;
+            // On a hosted runner this test has taken 10-12s against about 2s locally; the phase
+            // timings go to the TRX, and assert-test-durations.ps1 prints them when it is slow.
+            var clock = Stopwatch.StartNew();
+            long mark = 0;
+            void Phase(string name)
+            {
+                long now = clock.ElapsedMilliseconds;
+                _output.WriteLine("phase " + name + " " + (now - mark) + " ms (at " + now + " ms)");
+                mark = now;
+            }
             try
             {
                 broker = StartBroker(exe, identity, kbPath, installation, registryDir, stderr);
+                Phase("broker-process-start");
                 // Registry v2 (decision A4): one record per KB directory, <kbKey>.json under --registry-dir.
                 string recordPath = SharedWorkerRegistry.GetRecordPathV2(identity.KbKey, registryDir);
                 SharedHostRecord record = await WaitForRecordAsync(recordPath, broker, stderr);
+                Phase("registry-record");
                 Assert.Equal(SharedWorkerRegistry.PipeNameV2(identity), record.PipeName);
                 Assert.Equal(identity.Key, record.Identity.Key);
                 Assert.False(File.Exists(realRecord), "the smoke wrote the real registry record " + realRecord);
@@ -66,16 +86,19 @@ namespace GxMcp.Gateway.Tests.SharedHost
                 var toB = new ConcurrentQueue<JObject>();
                 a = Connect(identity, record, "smoke-a", toA);
                 b = Connect(identity, record, "smoke-b", toB);
+                Phase("connect-two-sessions");
                 Assert.Equal(a.HostPid, b.HostPid);
                 Assert.Equal(a.WorkerPid, b.WorkerPid);
                 Assert.NotEqual(a.AttachId, b.AttachId);
 
                 await WaitForStatusAsync(a, s => (string?)s["childState"] == "ready", "a ready child");
+                Phase("child-ready");
 
                 // Both sessions use id 1: the broker keeps them apart.
                 await a.SendAsync(Probe(FirstDurationMs), CancellationToken.None);
                 JObject runningStatus = await WaitForStatusAsync(a, s => s["running"] is JObject, "a running request");
                 Assert.Equal(a.AttachId, (string?)runningStatus["running"]!["ownerAttachId"]);
+                Phase("first-request-running");
 
                 await b.SendAsync(Probe(50), CancellationToken.None);
                 JObject queuedStatus = await WaitForStatusAsync(b, s => ((JArray)s["queue"]!).Count == 1, "a queued request");
@@ -83,9 +106,11 @@ namespace GxMcp.Gateway.Tests.SharedHost
                 Assert.Equal(b.AttachId, (string?)entry["ownerAttachId"]);
                 Assert.Equal("sta-busy", (string?)entry["waitReason"]);
                 Assert.Equal(a.AttachId, (string?)queuedStatus["running"]!["ownerAttachId"]);
+                Phase("second-request-queued");
 
                 JObject first = await WaitForResponseAsync(toA, broker, stderr);
                 JObject second = await WaitForResponseAsync(toB, broker, stderr);
+                Phase("both-responses");
 
                 foreach (var response in new[] { first, second })
                 {
@@ -121,12 +146,14 @@ namespace GxMcp.Gateway.Tests.SharedHost
                     try { broker.WaitForExit(5000); } catch { }
                     broker.Dispose();
                 }
+                Phase("broker-shutdown");
                 for (int i = 0; i < 10 && Directory.Exists(root); i++)
                 {
                     try { Directory.Delete(root, recursive: true); }
                     catch (IOException) { await Task.Delay(200); }
                     catch (UnauthorizedAccessException) { await Task.Delay(200); }
                 }
+                Phase("temp-cleanup");
             }
         }
 

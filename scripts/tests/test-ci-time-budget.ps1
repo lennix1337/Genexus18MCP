@@ -23,7 +23,7 @@ try {
 <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
   <Results>
     <UnitTestResult testName="Ns.Fast.Runs" duration="00:00:01.2000000" outcome="Passed" />
-    <UnitTestResult testName="Ns.Slow.WaitsOutATimeout" duration="00:00:12.5000000" outcome="Passed" />
+    <UnitTestResult testName="Ns.Slow.WaitsOutATimeout" duration="00:00:12.5000000" outcome="Passed"><Output><StdOut>phase broker-start 9100 ms</StdOut></Output></UnitTestResult>
     <UnitTestResult testName="Ns.Theory.Case(x: 1)" duration="00:00:15.0000000" outcome="Passed" />
     <UnitTestResult testName="Ns.Theory.Case(x: 2)" duration="00:00:00.1000000" outcome="Passed" />
   </Results>
@@ -43,6 +43,7 @@ try {
     $over = Invoke-Pwsh @('-File', $assertDurations, '-TrxPath', $trx, '-BudgetPath', $budget, '-SummaryPath', $summary)
     Assert-True ($over.ExitCode -ne 0) 'a test over the per-test budget must fail the lane.'
     Assert-True ($over.Output -match 'Ns\.Slow\.WaitsOutATimeout took 12\.5') "the slow test must be named with its duration: $($over.Output)"
+    Assert-True ($over.Output -match 'phase broker-start 9100 ms') "the slow test's own output must be printed, so the log names the slow phase: $($over.Output)"
     Assert-True ($over.Output -notmatch 'Ns\.Theory\.Case took') 'an excepted Theory (matched without its arguments) must not fail.'
     Assert-True ((Get-Content -LiteralPath $summary -Raw) -match '\| 15[.,]0 \| Ns\.Theory\.Case \|') 'the step summary must list the slowest tests.'
 
