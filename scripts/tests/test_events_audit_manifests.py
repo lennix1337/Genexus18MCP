@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "config"
 MANIFESTS = sorted(CONFIG.glob("events-*-audit.json"))
 U11_MANIFEST = CONFIG / "events-u11-wwp16.1-audit.json"
-U11_PROOF = ROOT / "docs" / "evidence" / "events-u11-wwp16.1-native-proof.json"
+# The U16 proof (2026-10-14) predates the sanitized result kept in the repository; later proofs ship theirs.
+U16_MANIFEST = CONFIG / "events-u16-wwp16.2-audit.json"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 CRITICAL = (
     "Artech.Architecture.Common",
@@ -26,6 +27,19 @@ CRITICAL = (
 
 def _load(path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _proof_path(manifest):
+    # events-<bundle>-audit.json cites docs/evidence/events-<bundle>-native-proof.json.
+    return ROOT / "docs" / "evidence" / manifest.name.replace("-audit.json", "-native-proof.json")
+
+
+def _verified_manifests():
+    return [
+        manifest
+        for manifest in MANIFESTS
+        if manifest != U16_MANIFEST and _load(manifest)["nativeVerification"]["status"] == "verified"
+    ]
 
 
 def _includes_workwithplus(data):
@@ -81,22 +95,28 @@ class EventsAuditManifestTests(unittest.TestCase):
                 for critical in expected:
                     self.assertEqual(1, names.count(critical), critical)
 
-    def test_the_u11_proof_digest_is_the_sha256_of_the_sanitized_result_kept_in_the_repository(self):
-        proof = _load(U11_MANIFEST)["nativeVerification"]
-        raw = U11_PROOF.read_bytes()
+    def test_the_u10_and_u11_manifests_are_verified_by_a_sanitized_result(self):
+        self.assertEqual([CONFIG / "events-u10-audit.json", U11_MANIFEST], _verified_manifests())
 
-        # The repository checks text files out with LF line endings (.gitattributes), so that is the form the digest covers.
-        self.assertNotIn(b"\r", raw)
-        self.assertEqual(hashlib.sha256(raw).hexdigest(), proof["proofEvidenceSha256"])
+    def test_each_verified_proof_digest_is_the_sha256_of_the_sanitized_result_kept_in_the_repository(self):
+        verified = _verified_manifests()
+        self.assertIn(U11_MANIFEST, verified)
+        for manifest in verified:
+            with self.subTest(manifest=manifest.name):
+                raw = _proof_path(manifest).read_bytes()
+                # The repository checks text files out with LF line endings (.gitattributes), so that is the form the digest covers.
+                self.assertNotIn(b"\r", raw)
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), _load(manifest)["nativeVerification"]["proofEvidenceSha256"])
 
-    def test_the_sanitized_u11_result_has_no_failed_check(self):
-        result = json.loads(U11_PROOF.read_text(encoding="utf-8"))
-        self.assertTrue(result["sets"])
-        for name, group in result["sets"].items():
-            with self.subTest(set=name):
-                self.assertEqual(len(group["checks"]), group["total"])
-                self.assertEqual(0, group["failed"])
-                self.assertTrue(all(check["ok"] is True for check in group["checks"]))
+    def test_each_sanitized_verified_result_has_no_failed_check(self):
+        for manifest in _verified_manifests():
+            result = json.loads(_proof_path(manifest).read_text(encoding="utf-8"))
+            self.assertTrue(result["sets"], manifest.name)
+            for name, group in result["sets"].items():
+                with self.subTest(manifest=manifest.name, set=name):
+                    self.assertEqual(len(group["checks"]), group["total"])
+                    self.assertEqual(0, group["failed"])
+                    self.assertTrue(all(check["ok"] is True for check in group["checks"]))
 
 
 if __name__ == "__main__":

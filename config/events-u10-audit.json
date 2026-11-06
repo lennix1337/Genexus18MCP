@@ -2803,9 +2803,21 @@
     }
   ],
   "nativeVerification": {
-    "status": "pending",
-    "syntheticObject": "McpU10AuditProbe01",
-    "scope": "kb-without-pattern-instances"
+    "status": "verified",
+    "date": "2026-11-06",
+    "scope": "kb-without-pattern-instances",
+    "scenario": "synthetic-webpanel-in-kb-without-pattern-instances",
+    "proofEvidenceSha256": "339ae3c5978e0beaa520478b66c7f1e2cbee4bd48bc1d9d68d486e3922df5ce7",
+    "previewNoMutation": true,
+    "objectSaveVerified": true,
+    "idempotentSaveVerified": true,
+    "staleTokenRejected": true,
+    "atomicRollbackVerified": true,
+    "canonicalPartsAndOtherObjectMetadataPreserved": true,
+    "nativeWorkerTimeoutResultConsulted": true,
+    "automaticSaveRetries": 0,
+    "implicitOperations": [],
+    "syntheticObjectsRemoved": true
   },
   "saveApi": "EventsPart.Save;KBObject.Save(KBObjectSavePreferences)",
   "savePreferences": {
