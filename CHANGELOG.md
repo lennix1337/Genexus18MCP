@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- **WorkWithPlus Selection tables**: raw PatternInstance edits can insert a named nested table with specification-declared controls when the installed pattern specification is available, and `genexus_wwp add_table` can target a Selection root table without a conventional name. Explicit row/cell elements remain unsupported; use table column and cell layout properties. Unit-tested only; live projection remains to be verified. https://github.com/lennix1337/Genexus18MCP/issues/890
 - **`genexus_create action=save_as` no longer fails on Evolution 3 with `SaveAsPartFailed` on the Documentation part**: an empty Documentation (`<Properties />`) is rewritten by the SDK on save, so a part the new object already holds verbatim is now left as it is instead of being written again.
 - **`genexus_kb_version changed_objects` finds the frozen model on Evolution 3**, where it is `KBVersion.ModelVersion` (`KBVersion.Model` there is the entity's empty Udm model), instead of answering `ChangedObjectsNotSupported`.
 - **`genexus_asset_find` lists a file another process holds open** (such as a Knowledge Base `.mdf`) with `readable=false` and no hash, instead of failing the whole search with `AssetSearchFailed`.

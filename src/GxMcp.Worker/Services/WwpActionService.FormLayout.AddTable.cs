@@ -120,7 +120,15 @@ namespace GxMcp.Worker.Services
                 JObject moveError = MoveFormAttributesIntoTab(table, FormScope(container), movedAttributes, sourceParents, maintainOrderedLists: true);
                 if (moveError != null) { RestoreDocument(document, snapshot); return moveError; }
             }
-            catch (WwpTabException ex) { RestoreDocument(document, snapshot); return TableError(ex.Code, ex.Message); }
+            catch (WwpTabException ex)
+            {
+                RestoreDocument(document, snapshot);
+                bool selection = container.Ancestors().Any(e => Is(e, "WPRoot")
+                    && string.Equals(Attr(e, "Template"), "Selection", StringComparison.OrdinalIgnoreCase));
+                return TableError(ex.Code, selection
+                    ? "Selection template: " + ex.Message + " Use nested tables with numberOfColumns and typed controls; explicit row/cell elements are not supported."
+                    : ex.Message);
+            }
 
             JObject placementError = ResolveInsertIndex(container, args, out int index);
             if (placementError != null) { RestoreDocument(document, snapshot); return placementError; }
