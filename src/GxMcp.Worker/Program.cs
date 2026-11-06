@@ -70,7 +70,11 @@ namespace GxMcp.Worker
             return Path.Combine(jobsRoot, "jobs.json");
         }
 
-        internal static bool EnqueueSdkAction(Action action) => SdkExecutor.TryEnqueue(action);
+        private static readonly GxMcp.Worker.Services.SdkActionTrace SdkActionTrace =
+            new GxMcp.Worker.Services.SdkActionTrace(Logger.Info);
+
+        internal static bool EnqueueSdkAction(Action action, string name) =>
+            SdkExecutor.TryEnqueue(() => SdkActionTrace.Run(name, action));
 
         // FR#20 (v2.6.6 Stream B): soft-reload coordination. When a genexus_worker_reload
         // with mode=soft arrives, we flip this flag, drain the queues, persist
@@ -748,6 +752,9 @@ namespace GxMcp.Worker
                 return false;
             }
 
+            var activeAction = SdkActionTrace.Active;
+            if (activeAction != null)
+                Logger.Info("[STA-QUEUE] commandId=" + (Guid.TryParse(idJson, out var requestId) ? requestId.ToString() : "other") + " active " + activeAction);
             try
             {
                 if (_bridgeForm != null && _bridgeForm.IsHandleCreated)

@@ -610,7 +610,7 @@ namespace GxMcp.Worker.Services
             if (criteria == null || string.IsNullOrWhiteSpace(nextCursor)) return false;
             try
             {
-                bool queued = GxMcp.Worker.Program.EnqueueSdkAction(() => RunContinuation(criteria, nextCursor));
+                bool queued = GxMcp.Worker.Program.EnqueueSdkAction(() => RunContinuation(criteria, nextCursor), "source-search-continuation");
                 if (queued)
                     Logger.Debug("[SEARCH-SOURCE-PHASE] continuation queued cursor=" + nextCursor);
                 return queued;
