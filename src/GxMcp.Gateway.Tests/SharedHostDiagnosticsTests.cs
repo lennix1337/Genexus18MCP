@@ -121,6 +121,17 @@ namespace GxMcp.Gateway.Tests
     {
         // Virtual time advances in steps of StepMs, so a measured virtual elapsed time can exceed its exact value by
         // at most a few steps.
+        [Fact]
+        public async Task RegistryReadFailure_DoesNotReportZeroWorkers()
+        {
+            var diagnostics = new SharedHostDiagnostics(new SharedHostDiagnosticsInputs
+            {
+                ReadRegistry = () => throw new System.IO.IOException("registry unavailable")
+            });
+
+            await Assert.ThrowsAsync<System.IO.IOException>(() => diagnostics.BuildAsync());
+        }
+
         private const int StepMs = 25;
         private const int GatewayPid = 3900;
         private const int LaunchingGatewayPid = 3777;

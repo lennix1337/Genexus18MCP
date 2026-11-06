@@ -232,16 +232,9 @@ namespace GxMcp.Gateway
 
         private IReadOnlyList<SharedHostDiagnosticsRecord> ReadRecords()
         {
-            try
-            {
-                return (_inputs.ReadRegistry() ?? Array.Empty<SharedHostDiagnosticsRecord>())
-                    .Where(r => r?.Record != null)
-                    .ToList();
-            }
-            catch (Exception ex) when (!(ex is OutOfMemoryException))
-            {
-                return Array.Empty<SharedHostDiagnosticsRecord>();
-            }
+            return _inputs.ReadRegistry()
+                .Where(r => r?.Record != null)
+                .ToList();
         }
 
         // One status query raced against the clock, so a source that ignores its timeout or cancellation cannot
@@ -600,7 +593,7 @@ namespace GxMcp.Gateway
             return hosts;
         }
 
-        // Every registry v2 record; absent, unparseable and unreadable files carry no record and are skipped.
+        // A disappearing record is harmless; unreadable or uncertain records cannot support an exact count.
         private static IReadOnlyList<SharedHostDiagnosticsRecord> ReadRegistryV2(IProcessProbe probe)
         {
             var records = new List<SharedHostDiagnosticsRecord>();
@@ -608,10 +601,9 @@ namespace GxMcp.Gateway
             string[] files;
             try
             {
-                if (!Directory.Exists(root)) return records;
                 files = Directory.GetFiles(root, "*.json");
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            catch (DirectoryNotFoundException)
             {
                 return records;
             }
@@ -619,7 +611,12 @@ namespace GxMcp.Gateway
             {
                 // "*.json" can also match longer extensions on Windows; temp files end in ".tmp-<pid>-<guid>".
                 if (!string.Equals(Path.GetExtension(file), ".json", StringComparison.OrdinalIgnoreCase)) continue;
-                var classification = SharedHostRecordClassifier.Classify(RecordReadResult.ReadFile(file), probe);
+                var read = RecordReadResult.ReadFile(file);
+                if (read.Status == RecordReadStatus.Unreadable || read.Status == RecordReadStatus.Unparseable)
+                    throw new IOException("Shared-host registry record is unreadable or invalid.");
+                var classification = SharedHostRecordClassifier.Classify(read, probe);
+                if (classification.Liveness == RecordLiveness.LivenessUnverified)
+                    throw new IOException("Shared-host registry liveness could not be verified.");
                 if (classification.Record == null) continue;
                 records.Add(new SharedHostDiagnosticsRecord { Record = classification.Record, Liveness = classification.Liveness });
             }
