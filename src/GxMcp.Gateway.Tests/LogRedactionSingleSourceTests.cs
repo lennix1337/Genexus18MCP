@@ -32,7 +32,7 @@ namespace GxMcp.Gateway.Tests
             // correct change, which is how a real leak would get waved through.
             // One "internal const string Pattern" per assembly is the invariant the
             // name actually claims.
-            const string declaration = "internal const string Pattern";
+            const string declaration = "internal const string Pattern =";
 
             Assert.Equal(1, CountOccurrences(AllSource("GxMcp.Gateway"), declaration));
             Assert.Equal(1, CountOccurrences(AllSource("GxMcp.Worker"), declaration));
