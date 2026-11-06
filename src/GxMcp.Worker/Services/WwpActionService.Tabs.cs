@@ -290,6 +290,16 @@ namespace GxMcp.Worker.Services
                     return ambiguous;
                 }
             }
+            if (operation == "add_table" && string.IsNullOrWhiteSpace(requested))
+            {
+                var roots = document.Descendants().Where(e => Is(e, "WPRoot")
+                    && string.Equals(Attr(e, "Template"), "Selection", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (roots.Count == 1)
+                {
+                    var tables = roots[0].Elements().Where(e => Is(e, "table")).ToList();
+                    if (tables.Count == 1) { container = tables[0]; return null; }
+                }
+            }
             JObject notFound = TabError(notFoundCode,
                 string.IsNullOrWhiteSpace(requested)
                     ? context + " no TableContent or TableMain table to create " + subject + " under; " + operation + " does not pick an arbitrary table."
@@ -601,6 +611,16 @@ namespace GxMcp.Worker.Services
                 if (candidates.Count > 1)
                     return TabError(ambiguousCode,
                         context + " '" + name + "' matched more than one table; pass containerName with a path of named ancestors.");
+            }
+            if (operation == "add_table")
+            {
+                var roots = Walk(root).Where(e => NativeType(e).Equals("WPRoot", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(NativeAttribute(e, "Template"), "Selection", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (roots.Count == 1)
+                {
+                    var tables = NativeChildren(roots[0]).Where(IsNativeTable).ToList();
+                    if (tables.Count == 1) { container = tables[0]; return null; }
+                }
             }
             JObject notFound = TabError(notFoundCode,
                 context + " no TableContent or TableMain table to create " + subject + " under; " + operation + " does not pick an arbitrary table.");
