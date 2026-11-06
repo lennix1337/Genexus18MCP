@@ -1,8 +1,10 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [ValidateSet('MarkFixedPendingRelease', 'CloseAfterRelease')]
     [string]$Action,
-    [int[]]$Issue,
+    # Strings, not [int[]]: `pwsh -File ... -Issue 184,185` passes '184,185' as
+    # one string, which an int conversion reads as 184185.
+    [string[]]$Issue,
     [string]$ReleaseUrl,
     [switch]$DryRun,
     [Parameter(DontShow = $true)]
@@ -22,6 +24,23 @@ function Get-ReleaseIssueLabelNames {
             [string]$_.name
         }
     } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
+function ConvertTo-ReleaseIssueNumbers {
+    param([string[]]$Value)
+
+    $numbers = New-Object System.Collections.Generic.List[int]
+    foreach ($token in @($Value | ForEach-Object { [string]$_ -split '[,\s]+' })) {
+        $text = $token.Trim().TrimStart('#')
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        $parsed = 0
+        if (-not [int]::TryParse($text, [System.Globalization.NumberStyles]::None, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$parsed) -or $parsed -le 0) {
+            throw "Invalid issue number: '$token'."
+        }
+        if (-not $numbers.Contains($parsed)) { $numbers.Add($parsed) }
+    }
+    if ($numbers.Count -eq 0) { throw 'At least one issue number is required.' }
+    return $numbers.ToArray()
 }
 
 function Assert-ReleaseIssueAction {
@@ -179,5 +198,5 @@ if (-not $DefineOnly) {
     if ([string]::IsNullOrWhiteSpace($Action)) {
         throw 'Specify -Action MarkFixedPendingRelease or -Action CloseAfterRelease.'
     }
-    Invoke-ReleaseIssueWorkflow -Action $Action -Issue $Issue -ReleaseUrl $ReleaseUrl
+    Invoke-ReleaseIssueWorkflow -Action $Action -Issue (ConvertTo-ReleaseIssueNumbers -Value $Issue) -ReleaseUrl $ReleaseUrl
 }
