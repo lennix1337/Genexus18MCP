@@ -82,7 +82,7 @@ try {
     # A release process that died without recording a result must not read as running forever.
     # A hidden console can inherit invalid output handles in a headless runner.
     # Redirect every stream so the fixture does not depend on the caller's console.
-    $startInfo = [Diagnostics.ProcessStartInfo]::new((Get-Command pwsh -CommandType Application).Source)
+    $startInfo = [Diagnostics.ProcessStartInfo]::new((Get-Command pwsh -CommandType Application | Select-Object -First 1).Source)
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardInput = $true

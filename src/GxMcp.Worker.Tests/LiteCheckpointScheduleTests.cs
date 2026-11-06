@@ -23,14 +23,14 @@ namespace GxMcp.Worker.Tests
         /// as serializing everything accumulated so far (what WriteLiteWalkCheckpoint does)
         /// at a fixed per-entry size.
         /// </summary>
-        private static long TotalCheckpointBytes(int n, Func<LiteCheckpointSchedule, long> dueAt)
+        private static long TotalCheckpointBytes(int n)
         {
             var schedule = new LiteCheckpointSchedule();
             const long bytesPerEntry = 256;
             long total = 0;
             for (long processed = 1; processed <= n; processed++)
             {
-                if (dueAt(schedule) != processed) continue;
+                if (!schedule.IsDue(processed)) continue;
                 total += processed * bytesPerEntry;
                 schedule.Record();
             }
@@ -40,16 +40,8 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void Checkpoint_Total_Bytes_Grow_Linearly_Not_Quadratically()
         {
-            long At(int n) => TotalCheckpointBytes(n, s =>
-            {
-                long last = 0;
-                // The schedule is monotone, so replaying IsDue per object is enough.
-                for (long p = last + 1; p <= s.NextAt; p++) if (s.IsDue(p)) { last = p; return p; }
-                return -1;
-            });
-
-            long small = At(10_000);
-            long large = At(40_000);
+            long small = TotalCheckpointBytes(10_000);
+            long large = TotalCheckpointBytes(40_000);
 
             Assert.True(small > 0, "the model must actually write checkpoints");
             // 4x the objects must cost far less than 16x the bytes. A fixed interval

@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading;
 using GxMcp.Worker.Models;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
@@ -149,19 +148,25 @@ namespace GxMcp.Worker.Tests
             index.LoadFromEntries(entries);
             index.MarkIndexComplete(entries.Length);
             var service = new SourceSearchService(index, objectService: null);
+            // This case resumes a completed census; timeout continuation has its own tests.
+            service.BudgetElapsedMillisecondsForTest = () => 0;
             int lookups = 0;
             long censusTicks = 0;
             service.CoverageForTest = (candidates, scope) =>
             {
                 var timer = Stopwatch.StartNew();
                 int count = 0;
-                foreach (var candidate in candidates) { Thread.SpinWait(2000); lookups++; count++; }
+                foreach (var candidate in candidates) { lookups++; count++; }
                 timer.Stop();
                 censusTicks += timer.ElapsedTicks;
                 return new SourceStoreCoverage { TotalObjects = count, StaleObjects = count };
             };
             var criteria = new SourceSearchCriteria { Pattern = "needle", MaxResults = 1, TimeoutMs = 30000 };
             var first = JObject.Parse(service.SearchAsJson(criteria));
+            Assert.Equal("SourceSearchCompleted", first["code"]?.ToString());
+            Assert.Equal(true, first["result"]?["coverageComplete"]?.Value<bool>());
+            Assert.Equal(entries.Length, lookups);
+            Assert.Equal("Proc00000", first["result"]?["hits"]?[0]?["objectName"]?.ToString());
             criteria.Cursor = first["result"]?["nextCursor"]?.ToString();
             Assert.False(string.IsNullOrEmpty(criteria.Cursor));
             int firstLookups = lookups;

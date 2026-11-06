@@ -104,6 +104,11 @@ must compile every selected test project before the final package build; do not
 rely on a developer's existing `bin/obj`. Regression-test missing outputs and
 compilation failure without skipping the live check.
 
+Coverage cleanup accepts only a child directory under `artifacts`, `TEMP` or
+`RUNNER_TEMP`. For an external artifact directory, pass `-AllowedOutputRoot`
+and an `-OutputRoot` strictly below it. Checkout/source directories, filesystem
+roots, and symbolic links or junctions are refused before recursive cleanup.
+
 **Artifact identity.** Compare equivalent target/runtime/publish representations.
 A ReadyToRun published DLL is not byte-identical to its IL build. Verify the
 matching RID module identity, native-header state and manifest hashes instead

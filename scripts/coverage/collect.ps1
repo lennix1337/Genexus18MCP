@@ -1,6 +1,8 @@
 param(
     [string]$OutputRoot = "",
-    [string]$GxPath = ""
+    [string]$GxPath = "",
+    # Required for an output directory outside artifacts and the runner's temporary roots.
+    [string]$AllowedOutputRoot = ""
 )
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -42,7 +44,11 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     }
 }
 
-Remove-Item -LiteralPath $OutputRoot -Recurse -Force -ErrorAction SilentlyContinue
+. (Join-Path $repoRoot 'scripts/coverage/output-path.ps1')
+$OutputRoot = Resolve-CoverageOutputDirectory -OutputRoot $OutputRoot -RepoRoot $repoRoot -AllowedOutputRoot $AllowedOutputRoot
+if (Test-Path -LiteralPath $OutputRoot) {
+    Remove-Item -LiteralPath $OutputRoot -Recurse -Force -ErrorAction Stop
+}
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 
 # Ensure gxwire binary is available in publish for gateway integration tests

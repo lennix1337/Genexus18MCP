@@ -24,6 +24,26 @@ fence. A generic `reconciliationRequired` flag alone can describe a refusal
 before dispatch, so it does not poison a new key after the earlier write is
 reconciled. Unresolved entries count toward the existing 4,096-entry/2 MiB
 bounds; reaching a bound fails closed, never silently evicts unknown outcomes.
+
+Client cancellation after dispatch follows the same rule: the Worker can still
+finish its SDK command. The compact error preserves `mutationOutcomeUnknown`,
+`operationId` when available, and `reconciliationRequired`; the operation stays
+`CancellationRequested` until a terminal reply arrives. A late reply can update
+the observable operation status but does not authorize replay of the same key.
+Read the affected target and reconcile before another authorized attempt.
+Known read-only calls and effect-free previews do not acquire this mutation flag.
+
+Journal inspection takes the file lease and reloads records written by other
+Gateways. Contention reports `operation_journal_unavailable` with retry disabled;
+it is not evidence that the requested operation is absent.
+
+Legacy `genexus_bulk_edit` with `transactional=true` requires a complete recovery
+snapshot before each real write. Recovery counts an item only after an explicit
+successful write receipt without contradictory persistence evidence. A failed
+restore or an uncertain outcome on the failing target keeps
+`rollbackSucceeded=false` and `reconciliationRequired=true`; inspect every affected
+target before retrying. This is compensating recovery, not an atomic SDK transaction.
+Textual Variables snapshots cannot restore metadata and are refused in that mode.
 Use inspection and explicit reconciliation rather than deleting the journal.
 
 Post-timeout read fences are stored separately in the versioned

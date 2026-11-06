@@ -103,10 +103,35 @@ namespace GxMcp.Worker.Tests
         public void Blame_KbDirWithoutGit_ReturnsCanonicalKbNotInGitError()
         {
             var kbSvc = BuildKbServiceWithPath(_tempDir);
-            var svc = new BlameService(kbSvc, objectService: null);
+            // TEMP may itself be inside a checkout. This case tests the no-repository
+            // envelope; real filesystem discovery is exercised separately below.
+            var svc = new BlameService(kbSvc, objectService: null, findGitRoot: path =>
+            {
+                Assert.Equal(_tempDir, path);
+                return null;
+            });
             var json = JObject.Parse(svc.Blame(new BlameService.BlameRequest { Name = "Foo" }));
             Assert.Equal("error", (string)json["status"]);
             Assert.Equal("KbNotInGit", (string)json["error"]["code"]);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void FindGitRoot_FindsNearestMarkerRegardlessOfTempAncestors(bool worktreeFile)
+        {
+            var repository = Path.Combine(_tempDir, "repository");
+            var nested = Path.Combine(repository, "nested");
+            var child = Path.Combine(nested, "child");
+            Directory.CreateDirectory(child);
+            Directory.CreateDirectory(Path.Combine(repository, ".git"));
+            if (worktreeFile)
+                File.WriteAllText(Path.Combine(nested, ".git"), "gitdir: synthetic");
+            else
+                Directory.CreateDirectory(Path.Combine(nested, ".git"));
+
+            Assert.Equal(nested, BlameService.FindGitRoot(child));
+            Assert.Equal(repository, BlameService.FindGitRoot(repository));
         }
     }
 }

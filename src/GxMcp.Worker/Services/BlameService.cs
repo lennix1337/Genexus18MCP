@@ -25,11 +25,18 @@ namespace GxMcp.Worker.Services
     {
         private readonly KbService _kbService;
         private readonly ObjectService _objectService;
+        private readonly Func<string, string> _findGitRoot;
 
         public BlameService(KbService kbService, ObjectService objectService)
+            : this(kbService, objectService, FindGitRoot)
+        {
+        }
+
+        internal BlameService(KbService kbService, ObjectService objectService, Func<string, string> findGitRoot)
         {
             _kbService = kbService;
             _objectService = objectService;
+            _findGitRoot = findGitRoot ?? throw new ArgumentNullException(nameof(findGitRoot));
         }
 
         public sealed class BlameRequest
@@ -53,7 +60,7 @@ namespace GxMcp.Worker.Services
             if (string.IsNullOrEmpty(kbDir) || !Directory.Exists(kbDir))
                 return Error("KB is not open or its directory could not be resolved.", "NoKb");
 
-            string gitRoot = FindGitRoot(kbDir);
+            string gitRoot = _findGitRoot(kbDir);
             if (string.IsNullOrEmpty(gitRoot))
                 return Models.McpResponse.Err(
                     code: "KbNotInGit",
@@ -147,7 +154,7 @@ namespace GxMcp.Worker.Services
             return null;
         }
 
-        private static string FindGitRoot(string startDir)
+        internal static string FindGitRoot(string startDir)
         {
             try
             {

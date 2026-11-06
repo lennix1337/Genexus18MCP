@@ -211,6 +211,30 @@ namespace GxMcp.Gateway
         /// </summary>
         internal JObject Inspect(string kbPath, string tool, string key)
         {
+            // A peer can change the journal after this instance was constructed.
+            // Failure to acquire its lease is not evidence that a record is absent.
+            JObject result = new JObject
+            {
+                ["journalHealthy"] = false,
+                ["code"] = "operation_journal_unavailable",
+                ["error"] = LeaseBusyError,
+                ["recordId"] = RecordId(kbPath, tool, key),
+                ["operationKey"] = key ?? string.Empty,
+                ["tool"] = tool ?? string.Empty,
+                ["known"] = false,
+                ["retryWithSameKey"] = false,
+                ["recoveryRequired"] = true
+            };
+            TryExclusiveJournal(() =>
+            {
+                LoadLocked();
+                result = InspectLocked(kbPath, tool ?? string.Empty, key ?? string.Empty);
+            });
+            return result;
+        }
+
+        private JObject InspectLocked(string kbPath, string tool, string key)
+        {
             string id = RecordId(kbPath, tool, key);
             lock (_gate)
             {
@@ -310,7 +334,7 @@ namespace GxMcp.Gateway
                     ["message"] = "No durable operation record exists for this KB, tool, and idempotency key."
                 };
             if (!string.Equals(entry.Status, "started", StringComparison.OrdinalIgnoreCase))
-                return Inspect(kbPath, tool, key);
+                return InspectLocked(kbPath, tool, key);
 
             if (!string.IsNullOrWhiteSpace(entry.TargetHash)
                 && !string.Equals(entry.TargetHash, observedEvidence?.TargetHash, StringComparison.Ordinal))
@@ -364,7 +388,7 @@ namespace GxMcp.Gateway
                     ["error"] = _error,
                     ["message"] = "The journal could not persist the reconciliation; the unknown fence remains active in memory."
                 };
-            return Inspect(kbPath, tool, key);
+            return InspectLocked(kbPath, tool, key);
         }
 
         private JObject UnavailableEnvelope(string message)
@@ -421,6 +445,7 @@ namespace GxMcp.Gateway
             }
             catch (LeaseBusyException)
             {
+                _leaseBusy = true;
                 return false;
             }
             using (lease)

@@ -46,7 +46,17 @@ namespace GxMcp.Worker.Services
                         ["message"] = "Textual Variables snapshots cannot certify metadata or an atomic conditional restore; no recovery write was attempted." });
                     continue;
                 }
-                string priorContent = snapshotReader?.Invoke(item.SnapshotPath);
+                string priorContent;
+                try
+                {
+                    priorContent = snapshotReader?.Invoke(item.SnapshotPath);
+                }
+                catch (Exception ex)
+                {
+                    rollbackResults.Add(new JObject { ["target"] = item.Name, ["itemStatus"] = "Error",
+                        ["message"] = "Snapshot read failed; rollback skipped: " + ex.Message });
+                    continue;
+                }
                 if (priorContent == null)
                 {
                     rollbackResults.Add(new JObject
@@ -73,19 +83,49 @@ namespace GxMcp.Worker.Services
                     continue;
                 }
                 var rparsed = GxMcp.Worker.Helpers.JsonUtil.SafeParse(raw);
-                var rstatus = (rparsed as JObject)?["status"]?.ToString();
                 rollbackResults.Add(new JObject
                 {
                     ["target"] = item.Name,
-                    ["itemStatus"] = string.Equals(rstatus, "Error", StringComparison.OrdinalIgnoreCase) ? "Error" : "Restored",
+                    ["itemStatus"] = IsConfirmedBulkWrite(rparsed) ? "Restored" : "Error",
                     ["detail"] = rparsed
                 });
             }
             return rollbackResults;
         }
 
+        private static bool IsConfirmedBulkWrite(JToken response, bool dryRun = false)
+        {
+            var value = response as JObject;
+            string status = value?["status"]?.ToString();
+            if (!string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(status, "success", StringComparison.OrdinalIgnoreCase)) return false;
+
+            // Save evidence lives at the envelope root or in result, depending on the part writer.
+            foreach (var receipt in new[] { value, value["result"] as JObject })
+            {
+                if (receipt == null) continue;
+                if (string.Equals(receipt["isError"]?.ToString(), "true", StringComparison.OrdinalIgnoreCase)
+                    || JsonUtil.IsSupplied(receipt["error"])) return false;
+                if (dryRun) continue;
+                foreach (string field in new[] { "verified", "persistedVerified", "persistedStateKnown", "persisted" })
+                    if (string.Equals(receipt[field]?.ToString(), "false", StringComparison.OrdinalIgnoreCase)) return false;
+                if (JsonUtil.IsSupplied(receipt["persistedState"])
+                    && !string.Equals(receipt["persistedState"]?.ToString(), "confirmed", StringComparison.OrdinalIgnoreCase)) return false;
+                if (string.Equals(receipt["reconciliationRequired"]?.ToString(), "true", StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+
         // Item shape: { name, part?, content, type?, dryRun? }. stopOnError halts at first failure.
         public string BulkWrite(JObject args)
+            => BulkWrite(args, TryCapturePreWriteSnapshot,
+                (name, part, content, type, dryRun) => WriteObject(name, part, content, type, true, false, true, dryRun),
+                EditSnapshotStore.ReadSnapshot);
+
+        internal string BulkWrite(JObject args,
+            Func<string, string, string, EditSnapshotStore.SnapshotInfo> captureSnapshot,
+            Func<string, string, string, string, bool, string> writer,
+            Func<string, string> snapshotReader)
         {
             var items = args?["targets"] as JArray;
             if (items == null || items.Count == 0)
@@ -102,8 +142,8 @@ namespace GxMcp.Worker.Services
             {
                 string part = item["part"]?.ToString() ?? "Source";
                 if (!VariablesTextReceipt.Applies(part)) continue;
-                string preview = WriteObject(item["name"]?.ToString(), part, item["content"]?.ToString(),
-                    item["type"]?.ToString(), dryRun: true);
+                string preview = writer(item["name"]?.ToString(), part, item["content"]?.ToString(),
+                    item["type"]?.ToString(), true);
                 if (JObject.Parse(preview)["status"]?.ToString() == "error") return preview;
             }
 
@@ -158,6 +198,7 @@ namespace GxMcp.Worker.Services
             // can replay prior bytes in reverse order.
             var rollbackPlan = new List<(string Name, string Part, string Type, GxMcp.Worker.Helpers.EditSnapshotStore.SnapshotInfo Snapshot)>();
             string failedAt = null;
+            bool failedWriteRequiresReconciliation = false;
 
             foreach (var it in items)
             {
@@ -191,10 +232,29 @@ namespace GxMcp.Worker.Services
                 GxMcp.Worker.Helpers.EditSnapshotStore.SnapshotInfo preSnap = null;
                 if (transactional && !itemDryRun)
                 {
-                    preSnap = TryCapturePreWriteSnapshot(name, part, itemType);
+                    preSnap = captureSnapshot(name, part, itemType);
+                    if (preSnap == null || preSnap.PriorContent == null || string.IsNullOrEmpty(preSnap.Path)
+                        || VariablesTextReceipt.Applies(part))
+                    {
+                        results.Add(JObject.Parse(McpResponse.Err(
+                            code: "RollbackSnapshotUnavailable",
+                            message: "A complete restorable snapshot is required for a transactional write; this target was not written.",
+                            target: name)));
+                        failure++;
+                        failedAt = name;
+                        break;
+                    }
                 }
 
-                string raw = WriteObject(name, part, content, itemType, true, false, true, itemDryRun);
+                string raw;
+                try
+                {
+                    raw = writer(name, part, content, itemType, itemDryRun);
+                }
+                catch (Exception ex)
+                {
+                    raw = McpResponse.Err(code: "BulkWriteOutcomeUnknown", message: ex.Message, target: name);
+                }
 
                 // Issue #128: attach IDE concurrency warning and nudge IDE if applicable
                 IdeConcurrencyStatus itemProbe = null;
@@ -211,14 +271,16 @@ namespace GxMcp.Worker.Services
                 var parsed = GxMcp.Worker.Helpers.JsonUtil.SafeParse(raw);
                 results.Add(parsed);
 
-                var status = (parsed as JObject)?["status"]?.ToString();
-                bool isError = string.Equals(status, "Error", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(status, "error", StringComparison.OrdinalIgnoreCase);
+                bool isError = !IsConfirmedBulkWrite(parsed, itemDryRun);
                 if (isError)
                 {
                     failure++;
                     if (transactional)
                     {
+                        // A failed or pending write may already have persisted. Do not
+                        // replay it blindly or call the whole batch restored without evidence.
+                        failedWriteRequiresReconciliation = !itemDryRun
+                            && !string.Equals((parsed as JObject)?["persistedState"]?.ToString(), "unchanged", StringComparison.OrdinalIgnoreCase);
                         failedAt = name;
                         break;
                     }
@@ -246,20 +308,19 @@ namespace GxMcp.Worker.Services
                 }
                 var rollbackResults = BulkRollbackReplay(
                     planForHelper,
-                    GxMcp.Worker.Helpers.EditSnapshotStore.ReadSnapshot,
-                    (name, part, content, type) => WriteObject(name, part, content, type, true, false, true, false));
+                    snapshotReader,
+                    (name, part, content, type) => writer(name, part, content, type, false));
 
                 // Surface rollback-itself-failures at the top level so callers don't have to
                 // walk rollbackResults to learn the KB is in a half-restored state.
                 int rollbackErrors = 0;
                 foreach (var r in rollbackResults)
                 {
-                    var s = r["status"]?.ToString();
-                    if (string.Equals(s, "Error", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(s, "error", StringComparison.OrdinalIgnoreCase)) rollbackErrors++;
+                    if (!string.Equals(r["itemStatus"]?.ToString(), "Restored", StringComparison.OrdinalIgnoreCase)) rollbackErrors++;
                 }
-                bool rollbackSucceeded = rollbackErrors == 0;
+                bool rollbackSucceeded = rollbackErrors == 0 && !failedWriteRequiresReconciliation;
                 string rollbackCode = rollbackSucceeded ? "BulkWriteRolledBack"
+                    : failedWriteRequiresReconciliation && rollbackErrors == 0 ? "BulkRollbackUnconfirmed"
                     : (rollbackErrors == rollbackResults.Count ? "BulkRollbackFailed" : "BulkRollbackPartial");
 
                 // Return as error when rollback succeeded (batch failed), partial when rollback itself partially failed.
@@ -270,6 +331,7 @@ namespace GxMcp.Worker.Services
                 var rollbackResultObj = new JObject
                 {
                     ["rollbackSucceeded"] = rollbackSucceeded,
+                    ["reconciliationRequired"] = !rollbackSucceeded,
                     ["failedAt"] = failedAt,
                     ["successfulBeforeFailure"] = new JArray(rollbackPlan.Select(r => (JToken)r.Name).ToArray()),
                     ["counts"] = new JObject {

@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using GxMcp.Worker;
 using GxMcp.TestSupport;
 using Xunit;
@@ -75,26 +79,67 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void ATimedOutChildIsKilledNotMerelyAbandoned()
         {
-            // Checking TimedOut is not enough: an abandoned child still leaves the
-            // caller reporting a timeout while the process lives on. So the child
-            // is asked to drop a marker file once it finishes, and the test waits
-            // long enough for that to have happened.
-            string marker = Path.Combine(Path.GetTempPath(), "gxmcp-launcher-" + Guid.NewGuid().ToString("N") + ".txt");
-            string inner = "ping -n 4 127.0.0.1 > nul & echo survived > \"" + marker + "\"";
+            CheckSignaledChild(releaseBeforeTimeout: true);
+            CheckSignaledChild(releaseBeforeTimeout: false);
+        }
 
-            // First: with room to finish, the command really does write the marker.
-            var roomy = ProcessLauncher.Run(Cmd, "/c " + inner, Environment.CurrentDirectory, 30000);
-            Assert.False(roomy.TimedOut);
-            Assert.True(File.Exists(marker), "the marker command itself did not run, so the kill test would be vacuous");
-            File.Delete(marker);
-
-            // Now: with a 500 ms budget against a ~3 s command.
-            var tight = ProcessLauncher.Run(Cmd, "/c " + inner, Environment.CurrentDirectory, 500);
-            Assert.True(tight.TimedOut);
-
-            System.Threading.Thread.Sleep(5000);
-            Assert.False(File.Exists(marker),
-                "the timed-out child was abandoned rather than killed - it outlived the tool call");
+        private static void CheckSignaledChild(bool releaseBeforeTimeout)
+        {
+            var id = Guid.NewGuid().ToString("N");
+            var directory = Path.Combine(Path.GetTempPath(), "gxmcp-launcher-" + id);
+            Directory.CreateDirectory(directory);
+            var marker = Path.Combine(directory, "completed");
+            var pidFile = Path.Combine(directory, "pid");
+            var readyName = "gxmcp-ready-" + id;
+            var releaseName = "gxmcp-release-" + id;
+            using (var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName))
+            using (var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName))
+            {
+                // The direct child identifies itself before waiting. This proves the kill
+                // against that process, without sleeping and hoping a marker appears later.
+                var script = "$ErrorActionPreference='Stop'; " +
+                    "$ready=[Threading.EventWaitHandle]::OpenExisting($env:GXMCP_TEST_READY); " +
+                    "$release=[Threading.EventWaitHandle]::OpenExisting($env:GXMCP_TEST_RELEASE); " +
+                    "[IO.File]::WriteAllText($env:GXMCP_TEST_PID,[string]$PID); " +
+                    "$null=$ready.Set(); " +
+                    "if($release.WaitOne(30000)){[IO.File]::WriteAllText($env:GXMCP_TEST_MARKER,'completed')}";
+                var executable = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+                var arguments = "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+                var task = Task.Run(() => ProcessLauncher.Run(executable, arguments, directory,
+                    releaseBeforeTimeout ? 10000 : 3000, environment: new Dictionary<string, string>
+                    {
+                        ["GXMCP_TEST_READY"] = readyName,
+                        ["GXMCP_TEST_RELEASE"] = releaseName,
+                        ["GXMCP_TEST_PID"] = pidFile,
+                        ["GXMCP_TEST_MARKER"] = marker
+                    }));
+                Process child = null;
+                try
+                {
+                    Assert.True(ready.WaitOne(10000), "the child did not reach its wait; the kill check would be vacuous");
+                    child = Process.GetProcessById(int.Parse(File.ReadAllText(pidFile)));
+                    _ = child.Handle; // Hold this process identity even if its PID is later reused.
+                    if (releaseBeforeTimeout) release.Set();
+                    Assert.True(task.Wait(10000), "the launcher did not return within the test deadline");
+                    var outcome = task.GetAwaiter().GetResult();
+                    Assert.False(outcome.StartFailed);
+                    Assert.Equal(!releaseBeforeTimeout, outcome.TimedOut);
+                    Assert.True(child.WaitForExit(3000), "the timed-out child was abandoned rather than killed");
+                    Assert.Equal(releaseBeforeTimeout, File.Exists(marker));
+                    if (releaseBeforeTimeout) Assert.Equal(0, outcome.ExitCode);
+                }
+                finally
+                {
+                    release.Set();
+                    if (child != null)
+                    {
+                        if (!child.WaitForExit(5000)) child.Kill();
+                        child.Dispose();
+                    }
+                    task.Wait(15000);
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
         }
 
         [Fact]
