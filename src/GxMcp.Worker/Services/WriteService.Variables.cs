@@ -2801,7 +2801,7 @@ namespace GxMcp.Worker.Services
                     return McpResponse.Ok(
                         target: target,
                         code: "VariableRenamed",
-                        result: resultPayload);
+                        result: MarkRetypeConfirmed(resultPayload));
                 }
                 catch (Exception ex)
                 {
@@ -2902,6 +2902,18 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        /// <summary>
+        /// Issue #886: the success code of a type change is "VariableRenamed" (kept for existing
+        /// clients), which reads as a rename. The payload says outright that the variable was
+        /// retyped and that the new type was read back from the persisted object.
+        /// </summary>
+        internal static JObject MarkRetypeConfirmed(JObject payload)
+        {
+            payload["retyped"] = true;
+            payload["persistedState"] = "confirmed";
+            return payload;
+        }
+
         private string RetypePrimitiveVariableInPlace(string target, string varName,
             global::Artech.Architecture.Common.Objects.KBObject obj,
             global::Artech.Genexus.Common.Variable existing,
@@ -2934,13 +2946,13 @@ namespace GxMcp.Worker.Services
                 return McpResponse.Ok(
                     target: target,
                     code: "VariableRenamed",
-                    result: new JObject
+                    result: MarkRetypeConfirmed(new JObject
                     {
                         ["requestedType"] = canonicalType,
                         ["persistedType"] = persistedDesc,
                         ["inPlace"] = true,
                         ["details"] = $"Variable '&{varName}' retyped to '{persistedDesc}' in place; control bindings kept."
-                    });
+                    }));
             }
             catch (Exception ex)
             {

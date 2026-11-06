@@ -13,6 +13,8 @@
 
 - **Adding a variable that already exists says so** (#886): the batch result carries a `hint` pointing to `genexus_modify_variable`, since add never changes the type of a declared variable.
 
+- **`genexus_modify_variable` states that it retyped** (#886): the success result (code `VariableRenamed`, kept for existing clients) now also carries `retyped: true` and `persistedState: "confirmed"` — the new type was read back from the saved object — so a retype is no longer mistaken for a rename or for an unverified write.
+
 ### Changed
 
 ### Fixed
