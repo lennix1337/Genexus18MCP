@@ -144,7 +144,7 @@ namespace GxMcp.Worker.Services
                     {
                         try { done.Set(); } catch { }
                     }
-            });
+            }, "kb-watcher");
             if (!queued)
             {
                 Logger.Warn("[Watcher] SDK action queue is full; skipping this tick until the next poll.");
