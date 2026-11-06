@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- SDK and native page projections retain the original line endings, so their unmarked page contents can be concatenated without losing or changing newline bytes. The read response still embeds truncation markers and needs further work for end-to-end reconstruction. https://github.com/lennix1337/Genexus18MCP/issues/881
+- A singular `genexus_read` no longer cuts an oversized first line at an unreachable line-based continuation offset. https://github.com/lennix1337/Genexus18MCP/issues/881
 - Cold index search snapshots identify the cold state and explain how to wait before treating an empty result as definitive; impact analysis now gives the same guidance while the index is cold or the wait times out ([#887](https://github.com/lennix1337/Genexus18MCP/issues/887)).
 - `genexus_properties action=get` accepts `refresh: true` to bypass cached properties and read the persisted object independently ([#887](https://github.com/lennix1337/Genexus18MCP/issues/887)).
 - Text write and patch verification receipts now report whether the requested content is confirmed, not persisted, or unknown when the verification read is unreliable, including in terse error responses. A later rollback invalidates the earlier patch verdict. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886)
