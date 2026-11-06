@@ -29,7 +29,7 @@
       "major": "10.3",
       "displayName": "GeneXus Evolution 3",
       "driver": "dotnet-reflection",
-      "defaultInstallPath": "C:\\Program Files (x86)\\GeneXus\\GeneXusXEv3",
+      "defaultInstallPath": "C:\\Program Files (x86)\\ARTech\\GeneXus\\GeneXusXEv3",
       "registryNames": ["GeneXus X Evolution 3", "GeneXus 10.3"],
       "legacyRegistryVersions": ["10.3"]
     },

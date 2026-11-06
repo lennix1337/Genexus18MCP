@@ -32,7 +32,7 @@ namespace GxMcp.Worker.Services
         private SpecificationAttribute Spec(string sdkName) =>
             _element.Specification.Attributes.FirstOrDefault(a => string.Equals(a.Name, sdkName, StringComparison.Ordinal));
 
-        private string Bag(SpecificationAttribute spec) => PatternInstanceElementAttributes.AttributeNameToPropertyBagName(spec);
+        private string Bag(SpecificationAttribute spec) => spec.PropertyDescriptorName;
 
         public bool HasProperty(string sdkName) => Spec(sdkName) != null;
 

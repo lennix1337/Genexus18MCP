@@ -984,7 +984,7 @@ namespace GxMcp.Worker.Helpers
             try
             {
                 var fromModule = contextModule ?? model.RootModule;
-                var resolved = global::Artech.Genexus.Common.Objects.Domain.ResolveName(fromModule, name);
+                var resolved = GxMcp.Worker.Compatibility.SdkCompat.ResolveDomain(fromModule, name);
                 if (resolved != null) return resolved;
             }
             catch { /* fall through to the root/object lookup for SDK-version resilience */ }
@@ -993,7 +993,7 @@ namespace GxMcp.Worker.Helpers
             {
                 try
                 {
-                    var resolved = global::Artech.Genexus.Common.Objects.Domain.ResolveName(model.RootModule, name);
+                    var resolved = GxMcp.Worker.Compatibility.SdkCompat.ResolveDomain(model.RootModule, name);
                     if (resolved != null) return resolved;
                 }
                 catch { }

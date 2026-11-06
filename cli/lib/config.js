@@ -127,7 +127,7 @@ function getGeneXusVersionCatalog() {
             { major: '18', displayName: 'GeneXus 18', defaultInstallPath: 'C:\\Program Files (x86)\\GeneXus\\GeneXus18' }
         ],
         legacyMajors: [
-            { major: '10.3', displayName: 'GeneXus Evolution 3', defaultInstallPath: 'C:\\Program Files (x86)\\GeneXus\\GeneXusXEv3' },
+            { major: '10.3', displayName: 'GeneXus Evolution 3', defaultInstallPath: 'C:\\Program Files (x86)\\ARTech\\GeneXus\\GeneXusXEv3' },
             { major: '9', displayName: 'GeneXus 9.0', defaultInstallPath: 'C:\\Program Files (x86)\\ARTech\\GeneXus\\GeneXus 9.0' },
             { major: '8', displayName: 'GeneXus 8.0', defaultInstallPath: 'C:\\Program Files (x86)\\ARTech\\GeneXus\\gxw80' }
         ],

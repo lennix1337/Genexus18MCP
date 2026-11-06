@@ -54,8 +54,14 @@ namespace GxMcp.Worker.Services
         // Artech.Genexus.Common.Commands.BuildOptions (GeneXus 18) values for
         // ContinueOnError (0xE0) | BuildProcess (Specify|Generate|Compile, 0x3800) | BuildCalled (0x1).
         // 0x01|0x04|0x08 (BuildCalled|CompileMains|OnlyThemes) skipped generating called SDTs.
+#if GXMCP_SDK_EV3
+        // GeneXus X Evolution 3 has no BuildOptions.FailIfReorg: a batch build there could
+        // reorganize the database, so the native batch path is never taken (see ExecuteBuildBatch).
+        internal const int BatchBuildOptions = 0;
+#else
         internal const int BatchBuildOptions = 0xE0 | 0x3800 | 0x1
             | (int)Artech.Genexus.Common.Commands.BuildOptions.FailIfReorg;
+#endif
         private static Type _typeGenexusBLServices;
         private static System.Reflection.MethodInfo _miBuildBuild; // Build(workingSet, BuildOptions, IEnumerable<EntityKey>, CancellationToken)
         private static System.Reflection.MethodInfo _miBuildWithTheseOnly; // BuildWithTheseOnly(workingSet, IEnumerable<EntityKey>, CancellationToken)
@@ -707,6 +713,11 @@ namespace GxMcp.Worker.Services
                 }
                 object workingSet = workingSetCtor.Invoke(new object[] { designModel });
 
+                if (!Compatibility.SdkCompat.HasFailIfReorg)
+                {
+                    Logger.Warn("[BUILD-INPROCESS] ExecuteBuildBatch: BuildOptions.FailIfReorg does not exist in this GeneXus version; native batch build refused.");
+                    return BatchOutcome.NotApplicable;
+                }
                 object buildOptions = Enum.ToObject(_typeBuildOptions, BatchBuildOptions);
 
                 using (var cts = new CancellationTokenSource())
@@ -1141,7 +1152,7 @@ namespace GxMcp.Worker.Services
                     }
                     if (norm.Equals("Domain", StringComparison.OrdinalIgnoreCase))
                     {
-                        try { return Artech.Genexus.Common.Objects.Domain.Get(modelObj, qName); } catch { }
+                        try { return Compatibility.SdkCompat.GetDomain(modelObj, qName); } catch { }
                     }
 
                     // 2. Lookup across all objects via modelObj.Objects.GetByName

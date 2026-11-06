@@ -110,7 +110,7 @@ namespace GxMcp.Worker.Services
             {
                 if (mode == "properties")
                 {
-                    bool eqProps = svc.AreEqualInProperties(objA, objB, ComparePropertiesOptions.Default);
+                    bool eqProps = Compatibility.SdkCompat.AreEqualInProperties(svc, objA, objB);
                     return McpResponse.Ok(
                         code: "CompareCompleted",
                         result: new JObject
@@ -123,7 +123,7 @@ namespace GxMcp.Worker.Services
                         });
                 }
 
-                bool equal = svc.AreEqualInContent(objA, objB, CompareObjectOptions.Default);
+                bool equal = Compatibility.SdkCompat.AreEqualInContent(svc, objA, objB);
                 var result = new JObject
                 {
                     ["equal"] = equal,
@@ -172,7 +172,7 @@ namespace GxMcp.Worker.Services
 
                     AppendPartDifference(differences, diffs, key,
                         ResolveReadPart(objA.TypeDescriptor?.Name, pa.Type, key),
-                        () => svc.AreEqualInContent(pa, pb, false, CompareObjectOptions.Default),
+                        () => Compatibility.SdkCompat.AreEqualInContent(svc, pa, pb, false),
                         SourceReader(pa), SourceReader(pb));
                 }
             }

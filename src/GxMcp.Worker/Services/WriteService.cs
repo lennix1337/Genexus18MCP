@@ -86,7 +86,9 @@ namespace GxMcp.Worker.Services
             try
             {
                 var now = DateTime.UtcNow;
+#if !GXMCP_SDK_EV3
                 try { obj.LastUpdate = now; } catch { }
+#endif
                 try { obj.SaveModelEntityDate(301, 0, now); metadataStampPersisted = true; } catch { }
                 try { obj.SaveModelEntityDate(300, 0, now); metadataStampPersisted = true; } catch { }
                 try { obj.SaveVersionIndependentDate(310, 0, now); metadataStampPersisted = true; } catch { }
