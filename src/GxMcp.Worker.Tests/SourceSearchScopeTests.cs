@@ -484,6 +484,44 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void MixedSearchPageFullAtDeadlineResumesSourceBeforeMetadata()
+        {
+            var index = new IndexCacheService();
+            var entries = new[]
+            {
+                new SearchIndex.IndexEntry { Name = "One", Type = "Procedure", FullSource = "needle", Description = "needle one" },
+                new SearchIndex.IndexEntry { Name = "Two", Type = "Procedure", FullSource = "needle", Description = "needle two" }
+            };
+            index.LoadFromEntries(entries);
+            index.MarkIndexComplete(entries.Length);
+            var service = new SourceSearchService(index, objectService: null);
+            int clockCalls = 0;
+            service.BudgetElapsedMillisecondsForTest = () => clockCalls++ == 0 ? 0 : 2;
+            var criteria = new SourceSearchCriteria
+            {
+                Pattern = "needle", Fields = new List<string> { "source", "description" },
+                MaxResults = 1, TimeoutMs = 1
+            };
+            var page = JObject.Parse(service.SearchAsJson(criteria));
+            string cursor = page["result"]!["nextCursor"]!.ToString();
+            Assert.True(SourceSearchService.TryParseResumeCursor(cursor, out _, out _, out bool metadata));
+            Assert.False(metadata);
+            var hits = new List<string>();
+            hits.Add(page["result"]!["hits"]![0]!["objectName"]!.ToString() + ":source");
+            service.BudgetElapsedMillisecondsForTest = () => 0;
+            for (int i = 0; i < 8 && cursor != null; i++)
+            {
+                criteria.Cursor = cursor;
+                page = JObject.Parse(service.SearchAsJson(criteria));
+                foreach (var hit in (JArray)page["result"]!["hits"]!)
+                    hits.Add(hit["objectName"]!.ToString() + ":" + (hit["field"]?.ToString() ?? "source"));
+                cursor = page["result"]!["nextCursor"]?.ToString();
+            }
+            Assert.Null(cursor);
+            Assert.Equal(new[] { "One:description", "One:source", "Two:description", "Two:source" }, hits.OrderBy(x => x));
+        }
+
+        [Fact]
         public void WordBoundaryPattern_DoesNotDropIndexedSourceHits()
         {
             var index = new IndexCacheService();

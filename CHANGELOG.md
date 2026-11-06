@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- **Mixed source searches retain their source cursor** when a full results page reaches its deadline, rather than skipping remaining source hits by returning a metadata-phase cursor. https://github.com/lennix1337/Genexus18MCP/issues/882
 - **Post-timeout recovery diagnostics** identify the affected object, part and recorded GUID in the refusal message; reconciliation requirements are unchanged. https://github.com/lennix1337/Genexus18MCP/issues/887
 - **Shared-host recovery cannot wait behind a blocked stdin write**: terminate the child before closing its input stream, so a child that stops reading cannot block its own restart. A process regression reproduces the blocked pipe without a KB or GeneXus SDK operation.
 - **Multi-class `themeClass` with dashed utility classes no longer rolls the save back** (#880): the layout verifier treats names such as `u-w-14` as symbolic theme classes, so their `<guid>-<int>` re-read is accepted instead of failing as `PatternProjectionFailed`. Unit-tested on synthetic values only; not run on a real WWP KB.

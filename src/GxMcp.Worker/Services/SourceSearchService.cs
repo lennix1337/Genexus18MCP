@@ -111,6 +111,7 @@ namespace GxMcp.Worker.Services
 
         private readonly IndexCacheService _index;
         private readonly ObjectService _objectService;
+        internal Func<long> BudgetElapsedMillisecondsForTest { get; set; }
 
         // PERFORMANCE (perf round 4): compiled-regex cache. On net48,
         // RegexOptions.Compiled emits + JITs IL on EVERY new Regex(pattern,
@@ -942,6 +943,7 @@ namespace GxMcp.Worker.Services
                     ? Math.Min(requestedTimeoutMs, 250)
                     : requestedTimeoutMs;
                 var swBudget = System.Diagnostics.Stopwatch.StartNew();
+                long BudgetElapsedMilliseconds() => BudgetElapsedMillisecondsForTest?.Invoke() ?? swBudget.ElapsedMilliseconds;
 
                 int produced = 0;
                 int scanned = 0;
@@ -1090,7 +1092,7 @@ namespace GxMcp.Worker.Services
                             ["resumeHint"] = "Pass cursor=nextCursor to resume this scan; legacy callers may pass startIndex=nextOffset."
                         });
                     }
-                    if (timeoutMs == 0 || swBudget.ElapsedMilliseconds > timeoutMs)
+                    if (timeoutMs == 0 || BudgetElapsedMilliseconds() > timeoutMs)
                     {
                         JObject executionSnapshot = BuildExecutionSnapshot();
                         int pct = entries.Count > 0 ? (int)(100L * cursor / entries.Count) : 100;
@@ -1322,7 +1324,9 @@ namespace GxMcp.Worker.Services
                 int metadataNextSkip = 0;
                 int metadataPosition = 0;
                 List<Models.SearchIndex.IndexEntry> metadataEntries = null;
-                if (extraFields.Count > 0 && rx != null)
+                // A full source page must publish its source cursor before metadata
+                // can consume the remaining budget or replace that cursor.
+                if (extraFields.Count > 0 && rx != null && !sourcePageStoppedInsideEntry && cursor >= entries.Count)
                 {
                     metadataEntries = index.Objects.Values
                         .Where(e => MatchesSearchObjectScope(e, c, objectNameSet))
@@ -1345,7 +1349,7 @@ namespace GxMcp.Worker.Services
                                 ? resumeSkipped : 0;
                             break;
                         }
-                        if (timeoutMs == 0 || swBudget.ElapsedMilliseconds > timeoutMs)
+                        if (timeoutMs == 0 || BudgetElapsedMilliseconds() > timeoutMs)
                         {
                             metadataInterrupted = true;
                             metadataNextEntry = metadataCursor;
