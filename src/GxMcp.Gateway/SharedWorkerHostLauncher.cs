@@ -716,8 +716,10 @@ namespace GxMcp.Gateway
         }
 
         /// <summary>
-        /// Attaches over the record's pipe. A host that is still admitting answers the attach without Worker process
-        /// identity; that handshake is retried until the child exists or the timeout ends.
+        /// Attaches over the record's pipe. A host without a Worker child yet (admitting, held, refused, no-worker)
+        /// acknowledges with workerPid 0 and its child state, and the attachment is kept; worker_restarted names
+        /// the child later. An acknowledgement that lacks the Worker identity without such a state is retried until
+        /// the child exists or the timeout ends.
         /// </summary>
         internal static ISharedWorkerAttachment ConnectPipeProcess(
             SharedWorkerIdentity identity, SharedHostRecord record, string clientId, int timeoutMs)

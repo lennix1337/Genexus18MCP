@@ -20,6 +20,9 @@ namespace GxMcp.Gateway
         public long WorkerStartTimeUtcTicks { get; init; }
         public long Generation { get; init; }
         public bool SdkReady { get; init; }
+
+        /// <summary>The host's child state from the attach acknowledgement (protocol v2); empty when absent.</summary>
+        public string State { get; init; } = string.Empty;
     }
 
     /// <summary>One <c>admission</c> frame from the host Admission_Guard (protocol v2).</summary>
@@ -329,7 +332,13 @@ namespace GxMcp.Gateway
                 long workerStart = frame.Value<long?>("workerStartTimeUtcTicks") ?? 0;
                 long generation = frame.Value<long?>("generation") ?? 0;
                 bool sdkReady = frame.Value<bool?>("ready") ?? false;
-                if (string.IsNullOrWhiteSpace(attachId) || hostPid <= 0 || hostStart <= 0 || workerPid <= 0 || workerStart <= 0 || generation <= 0)
+                string state = frame["state"]?.Type == JTokenType.String ? (string)frame["state"]! : string.Empty;
+                // Protocol v2: a host that is admitting, held, refused or without a Worker acknowledges with
+                // workerPid and workerStartTimeUtcTicks both 0 and names its child state; worker_restarted then
+                // names the child. A partial Worker identity, or a zero one without a pre-child state, stays invalid.
+                bool workerKnown = workerPid > 0 && workerStart > 0;
+                bool beforeWorker = workerPid == 0 && workerStart == 0 && !sdkReady && IsPreWorkerState(state);
+                if (string.IsNullOrWhiteSpace(attachId) || hostPid <= 0 || hostStart <= 0 || (!workerKnown && !beforeWorker) || generation <= 0)
                 {
                     error = "attach acknowledgement is missing process identity";
                     return false;
@@ -343,7 +352,8 @@ namespace GxMcp.Gateway
                     WorkerPid = workerPid,
                     WorkerStartTimeUtcTicks = workerStart,
                     Generation = generation,
-                    SdkReady = sdkReady
+                    SdkReady = sdkReady,
+                    State = state
                 };
                 error = string.Empty;
                 return true;
@@ -354,6 +364,15 @@ namespace GxMcp.Gateway
                 return false;
             }
         }
+
+        // Registry v2 states in which the host has no Worker child (design "Registry v2 record").
+        private static bool IsPreWorkerState(string state)
+            => string.Equals(state, SharedHostRecordState.Admitting, StringComparison.Ordinal)
+                || string.Equals(state, SharedHostRecordState.Held, StringComparison.Ordinal)
+                || string.Equals(state, SharedHostRecordState.Refused, StringComparison.Ordinal)
+                || string.Equals(state, SharedHostRecordState.NoWorker, StringComparison.Ordinal)
+                || string.Equals(state, SharedHostRecordState.Recovering, StringComparison.Ordinal)
+                || string.Equals(state, SharedHostRecordState.Replacing, StringComparison.Ordinal);
 
         internal static bool IsControlFrame(JObject frame, string name)
             => frame != null && string.Equals(frame["gxmcp"]?.ToString(), name, StringComparison.Ordinal);

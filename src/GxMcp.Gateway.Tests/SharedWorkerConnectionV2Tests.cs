@@ -103,6 +103,117 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("attach-a", info!.AttachId);
         }
 
+        // Task 5.6, design "Protocol v2 frames": a host without a Worker child yet acknowledges the attach with
+        // workerPid and workerStartTimeUtcTicks both 0 and its child state.
+        [Theory]
+        [InlineData("admitting")]
+        [InlineData("held")]
+        [InlineData("refused")]
+        [InlineData("no-worker")]
+        [InlineData("recovering")]
+        [InlineData("replacing")]
+        public void AttachAckBeforeTheWorkerExistsIsAcceptedWithItsState(string state)
+        {
+            var identity = Identity();
+            string line = PreWorkerAck(identity, state).ToString(Formatting.None);
+
+            Assert.True(SharedWorkerConnection.TryParseAttachAck(line, identity, out var info, out string error), error);
+            Assert.Equal(0, info!.WorkerPid);
+            Assert.Equal(0L, info.WorkerStartTimeUtcTicks);
+            Assert.Equal(state, info.State);
+            Assert.False(info.SdkReady);
+        }
+
+        [Theory]
+        [InlineData(null, 0, 0L, false)]          // no state: a zero Worker identity stays invalid
+        [InlineData("ready", 0, 0L, false)]       // a ready host always has a Worker
+        [InlineData("starting", 0, 0L, false)]    // a starting record names its child
+        [InlineData("held", 0, 13L, false)]       // partial Worker identity
+        [InlineData("held", 12, 0L, false)]       // partial Worker identity
+        [InlineData("held", -1, -1L, false)]      // negative identity
+        [InlineData("held", 0, 0L, true)]         // ready without a Worker
+        public void AttachAckWithAnIncompleteWorkerIdentityIsStillRejected(string? state, int workerPid, long workerStart, bool ready)
+        {
+            var identity = Identity();
+            var ack = PreWorkerAck(identity, state);
+            ack["workerPid"] = workerPid;
+            ack["workerStartTimeUtcTicks"] = workerStart;
+            ack["ready"] = ready;
+
+            Assert.False(SharedWorkerConnection.TryParseAttachAck(ack.ToString(Formatting.None), identity, out _, out string error));
+            Assert.Contains("missing process identity", error, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task AHeldAttachLearnsTheWorkerPidFromWorkerRestarted()
+        {
+            var identity = Identity();
+            await using var host = FakeHost.Start(identity, ackVersion: 2, ack: () => PreWorkerAck(identity, "held"));
+            using var connection = host.CreateConnection();
+
+            connection.Connect(IoTimeoutMs);
+            Assert.True(connection.IsConnected);
+            Assert.Equal(0, connection.WorkerPid);
+
+            await host.SendAsync(WorkerRestarted(identity, workerPid: 21, workerStart: 22, generation: 3));
+
+            await WaitUntil(() => connection.WorkerPid == 21);
+            Assert.True(connection.IsConnected);
+            Assert.Equal(3, connection.Generation);
+        }
+
+        [Fact]
+        public async Task WorkerRestartedWithoutAWorkerIdentityStillDisconnects()
+        {
+            var identity = Identity();
+            await using var host = FakeHost.Start(identity, ackVersion: 2, ack: () => PreWorkerAck(identity, "held"));
+            using var connection = host.CreateConnection();
+            connection.Connect(IoTimeoutMs);
+
+            await host.SendAsync(WorkerRestarted(identity, workerPid: 0, workerStart: 0, generation: 3));
+
+            await WaitUntil(() => !connection.IsConnected);
+            Assert.Equal(0, connection.WorkerPid);
+        }
+
+        private static JObject PreWorkerAck(SharedWorkerIdentity identity, string? state)
+        {
+            var ack = AttachAck(identity, version: 2);
+            ack["workerPid"] = 0;
+            ack["workerStartTimeUtcTicks"] = 0;
+            ack["generation"] = 1;
+            ack["ready"] = false;
+            if (state != null) ack["state"] = state;
+            return ack;
+        }
+
+        private static JObject WorkerRestarted(SharedWorkerIdentity identity, int workerPid, long workerStart, long generation) => new JObject
+        {
+            ["gxmcp"] = "worker_restarted",
+            ["type"] = "worker_restarted",
+            ["version"] = 2,
+            ["protocolVersion"] = 2,
+            ["key"] = identity.Key,
+            ["identityKey"] = identity.Key,
+            ["hostPid"] = 10,
+            ["hostStartTimeUtcTicks"] = 11,
+            ["workerPid"] = workerPid,
+            ["workerStartTimeUtcTicks"] = workerStart,
+            ["generation"] = generation,
+            ["ready"] = false,
+            ["failureStage"] = "worker_start"
+        };
+
+        private static async Task WaitUntil(Func<bool> condition)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(IoTimeoutMs);
+            while (!condition())
+            {
+                Assert.True(DateTime.UtcNow < deadline, "the condition was not met within " + IoTimeoutMs + " ms");
+                await Task.Delay(20);
+            }
+        }
+
         [Fact]
         public async Task ConnectPerformsVersionTwoHandshakeOverThePipe()
         {
@@ -436,6 +547,7 @@ namespace GxMcp.Gateway.Tests
             private readonly SemaphoreSlim _writeGate = new SemaphoreSlim(1, 1);
             private StreamWriter? _writer;
             private Task? _loop;
+            private Func<JObject>? _ack;
 
             private FakeHost(SharedWorkerIdentity identity, int ackVersion)
             {
@@ -449,9 +561,10 @@ namespace GxMcp.Gateway.Tests
 
             internal Task<JObject> AttachFrame => _attach.Task;
 
-            internal static FakeHost Start(SharedWorkerIdentity identity, int ackVersion)
+            // ack replaces the default attach acknowledgement.
+            internal static FakeHost Start(SharedWorkerIdentity identity, int ackVersion, Func<JObject>? ack = null)
             {
-                var host = new FakeHost(identity, ackVersion);
+                var host = new FakeHost(identity, ackVersion) { _ack = ack };
                 host._loop = Task.Run(host.RunAsync);
                 return host;
             }
@@ -504,7 +617,7 @@ namespace GxMcp.Gateway.Tests
                         if (type == "attach")
                         {
                             _attach.TrySetResult(frame);
-                            await SendAsync(AttachAck(_identity, _ackVersion)).ConfigureAwait(false);
+                            await SendAsync(_ack?.Invoke() ?? AttachAck(_identity, _ackVersion)).ConfigureAwait(false);
                         }
                         else if (type == "status" && AnswerStatus)
                         {
