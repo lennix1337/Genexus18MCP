@@ -180,6 +180,17 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void SingularRead_LongLineMustNotBeCutAtAnUnreachableLineOffset()
+        {
+            string source = new string('x', 210000);
+            var payload = new JObject { ["part"] = "Source", ["source"] = source, ["explicitFullRead"] = true, ["offset"] = 0 };
+            var method = typeof(Program).GetMethod("TruncateResponseIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+            var result = (JObject)method!.Invoke(null, new object?[] { payload, "genexus_read" })!;
+            Assert.Equal(source, result["source"]!.Value<string>());
+            Assert.Null(result["gatewaySafeNextOffset"]);
+        }
+
+        [Fact]
         public void TruncateResponseIfNeeded_ShouldDropDerivedReadMetadataBeforeTruncatingSource()
         {
             var payload = new JObject
