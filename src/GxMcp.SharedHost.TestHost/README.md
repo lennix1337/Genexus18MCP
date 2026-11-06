@@ -76,7 +76,9 @@ Example:
   broker stamped on the forwarded request).
 - Control methods answer at once, even while an SDK-like request runs:
   - `fake/status`: `pid`, `ready`, `workingSetBytes`, `workingSetTargetMb`,
-    `queued`, `completed`.
+    `queued`, `completed`, `initStartedUtcTicks` (UTC ticks when the scripted SDK
+    initialization, the `readyDelayMs` wait, began) and `readyUtcTicks` (UTC ticks
+    taken just before `sdk_ready` was written; `0` before that).
   - `fake/setWorkingSet` with `params.mb` (0 to 1024): resizes the held memory and
     answers with the status. Lowering it releases the memory; the OS may trim the
     working set later.

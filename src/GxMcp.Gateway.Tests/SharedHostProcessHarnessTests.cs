@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using GxMcp.Common.SharedHost;
 using Newtonsoft.Json.Linq;
@@ -453,6 +455,208 @@ namespace GxMcp.Gateway.Tests
             Assert.False(string.IsNullOrWhiteSpace((string?)error["hint"]), error.ToString());
             return availableMb;
         }
+
+        // Requirement 13 criterion 8: the fake child's scripted SDK initialization, the bound between the two
+        // starts, and the release bound of Requirement 6 criterion 4.
+        private const int ColdStartMs = 1500;
+        private const int StartSpreadMs = 1000;
+        private const int ReleaseBoundMs = 500;
+
+        // Requirement 13 criterion 8, 6.3, 6.4 and 11.6: two Gateways request Worker starts for two KBs within
+        // 1000 ms with cold-start concurrency 1. One broker starts its Worker; the other holds its start without a
+        // Worker process (record "held" with heldSinceUtc) until the first Cold_Start ends, then starts ("starting").
+        // Worker timestamps come from the fake child (fake/status: initStartedUtcTicks, readyUtcTicks) and from
+        // the OS (the Worker's process start time in the attach reply). While the start is held, a request sent to
+        // the held KB queues with wait reason worker-starting in the broker's status_ack, and the Gateway's
+        // Diagnostics_Surface builder (SharedHostDiagnostics) reports the held start with that waiting request.
+        [Fact]
+        public Task Second_cold_start_waits_for_the_first_and_reports_worker_starting() => RunAsync(async harness =>
+        {
+            var settings = new SharedHostHarnessSettings
+            {
+                ColdStartConcurrency = 1,
+                ChildScript = new JObject { ["readyDelayMs"] = ColdStartMs }
+            };
+            var clients = await harness.StartClientsAsync(2, new SharedHostClientOptions { Settings = settings });
+            string[] kbs = { harness.CreateKbDirectory(), harness.CreateKbDirectory() };
+
+            // Every record change of both KBs while the opens run, with the time this process saw it.
+            var timeline = new ConcurrentQueue<(DateTime SeenUtc, int Kb, SharedHostRecord Record)>();
+            using var stopPolling = new CancellationTokenSource();
+            var poller = Task.Run(async () =>
+            {
+                var last = new string?[2];
+                while (!stopPolling.IsCancellationRequested)
+                {
+                    for (int i = 0; i < 2; i++)
+                    {
+                        var record = harness.ReadRecord(kbs[i]);
+                        string? json = record?.ToJson();
+                        if (record == null || json == last[i]) continue;
+                        last[i] = json;
+                        timeline.Enqueue((DateTime.UtcNow, i, record));
+                    }
+                    await Task.Delay(10);
+                }
+            });
+
+            var opens = new[] { clients[0].OpenAsync(kbs[0]), clients[1].OpenAsync(kbs[1]) };
+
+            // The held start: wait for one record in state "held".
+            var clock = Stopwatch.StartNew();
+            (DateTime SeenUtc, int Kb, SharedHostRecord Record) held = default;
+            while (held.Record == null)
+            {
+                Assert.False(opens.All(o => o.IsCompleted), "both opens finished and no start was held");
+                Assert.True(clock.ElapsedMilliseconds < SharedHostProcessHarness.DefaultTimeoutMs, "no start was held");
+                held = timeline.FirstOrDefault(t => t.Record.State == SharedHostRecordState.Held);
+                if (held.Record == null) await Task.Delay(10);
+            }
+            int second = held.Kb;
+            int first = 1 - second;
+            string heldKb = kbs[second];
+            _output.WriteLine("held: kb" + (second + 1) + " " + held.Record.ToJson());
+            Assert.Equal(0, held.Record.WorkerPid);
+            Assert.NotNull(held.Record.HeldSinceUtc);
+
+            // A request for the held KB queues behind the held start: an attachment of this process sends it.
+            var identity = harness.IdentityFor(heldKb);
+            var waiterResponses = new ConcurrentQueue<JObject>();
+            using var waiter = new SharedWorkerConnection(identity, held.Record, "cold-start-waiter");
+            waiter.LineReceived += line =>
+            {
+                var frame = JObject.Parse(line);
+                if (frame["id"] != null && frame["method"] == null) waiterResponses.Enqueue(frame);
+            };
+            waiter.Connect(5000);
+            await waiter.SendAsync(SharedHostGatewayClient.ProbeFrame(1, 0, "while-held"), CancellationToken.None);
+
+            JObject? status = null;
+            var statusClock = Stopwatch.StartNew();
+            while (statusClock.ElapsedMilliseconds < ColdStartMs)
+            {
+                status = await waiter.RequestStatusAsync(1000);
+                if (status?["queue"] is JArray q && q.Count > 0) break;
+                await Task.Delay(10);
+            }
+            _output.WriteLine("held status: " + status?.ToString(Newtonsoft.Json.Formatting.None));
+            Assert.NotNull(status);
+            Assert.Equal(SharedHostRecordState.Held, (string?)status!["childState"]);
+            var entry = Assert.Single((JArray)status["queue"]!);
+            Assert.Equal(waiter.AttachId, (string?)entry["ownerAttachId"]);
+            Assert.Equal("worker-starting", (string?)entry["waitReason"]);
+
+            // The Diagnostics_Surface builder over this attachment and the harness registry.
+            var configured = SharedHostSettingsResolver.Resolve(settings.ToSection(), false, string.Empty, _ => null);
+            var probe = new ProcessIdentity();
+            var diagnostics = new SharedHostDiagnostics(new SharedHostDiagnosticsInputs
+            {
+                PoolView = () => new[]
+                {
+                    new SharedHostDiagnosticsHost
+                    {
+                        IdentityKey = identity.KbKey,
+                        HostPid = held.Record.HostPid,
+                        RequestStatusAsync = (timeoutMs, ct) => waiter.RequestStatusAsync(timeoutMs, ct)
+                    }
+                },
+                ReadRegistry = () => kbs
+                    .Select(kb => RecordReadResult.ReadFile(harness.RecordPath(kb)))
+                    .Where(read => read.Record != null)
+                    .Select(read => new SharedHostDiagnosticsRecord
+                    {
+                        Record = read.Record!,
+                        Liveness = SharedHostRecordClassifier.Classify(read, probe).Liveness
+                    })
+                    .ToList(),
+                Configured = configured,
+                GatewayPid = Environment.ProcessId
+            });
+            var block = await diagnostics.BuildAsync();
+            _output.WriteLine("diagnostics admission: " + block["admission"]!.ToString(Newtonsoft.Json.Formatting.None));
+            var admission = (JObject)block["admission"]!;
+            Assert.Equal(1, (int)admission["coldStartConcurrency"]!);
+            Assert.Equal(1, (int)admission["coldStartsInProgress"]!);
+            var heldStart = Assert.Single((JArray)admission["heldStarts"]!);
+            Assert.Equal(identity.KbKey, (string?)heldStart["identityKey"]);
+            Assert.Equal(1, (int)heldStart["waiting"]!);
+            var kbEntry = Assert.Single((JArray)block["kbs"]!);
+            Assert.Contains(((JArray)kbEntry["queue"]!).OfType<JObject>(), q => (string?)q["waitReason"] == "worker-starting");
+
+            var replies = await Task.WhenAll(opens);
+            stopPolling.Cancel();
+            await poller;
+            var openFirst = replies[first];
+            var openSecond = replies[second];
+            _output.WriteLine("open kb" + (first + 1) + " (first): " + openFirst.ToString(Newtonsoft.Json.Formatting.None));
+            _output.WriteLine("open kb" + (second + 1) + " (second): " + openSecond.ToString(Newtonsoft.Json.Formatting.None));
+            Assert.True((bool?)openFirst["ok"] == true && (bool?)openSecond["ok"] == true, openFirst + " " + openSecond);
+
+            // The two starts were requested within 1000 ms of each other.
+            double spreadMs = Math.Abs(((DateTime)replies[0]["openStartedUtc"]! - (DateTime)replies[1]["openStartedUtc"]!).TotalMilliseconds);
+            _output.WriteLine("open spread " + spreadMs.ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + " ms");
+            Assert.True(spreadMs <= StartSpreadMs, "the opens started " + spreadMs + " ms apart");
+
+            // Record states: the first start was never held; the second was held, then started.
+            var states = Enumerable.Range(0, 2).Select(i => timeline.Where(t => t.Kb == i).Select(t => t.Record.State).ToList()).ToArray();
+            _output.WriteLine("states kb" + (first + 1) + ": " + string.Join(" > ", states[first]));
+            _output.WriteLine("states kb" + (second + 1) + ": " + string.Join(" > ", states[second]));
+            Assert.DoesNotContain(SharedHostRecordState.Held, states[first]);
+            Assert.Contains(SharedHostRecordState.Starting, states[first]);
+            int heldAt = states[second].IndexOf(SharedHostRecordState.Held);
+            int startingAt = states[second].IndexOf(SharedHostRecordState.Starting);
+            Assert.True(heldAt >= 0 && startingAt > heldAt, "kb" + (second + 1) + " states: " + string.Join(" > ", states[second]));
+            var released = timeline.First(t => t.Kb == second && t.Record.State == SharedHostRecordState.Starting).Record;
+            Assert.NotNull(released.ColdStartStartedUtc);
+
+            // Worker timestamps from each fake child, read through its broker.
+            async Task<JObject> ChildStatus(int kb, int id, JObject open)
+            {
+                var response = await clients[kb].CallAsync(kbs[kb], new JObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = id,
+                    ["method"] = "fake/status"
+                });
+                var result = (JObject)response["result"]!;
+                Assert.Equal((int)open["workerPid"]!, (int)result["pid"]!);
+                return result;
+            }
+            var childFirst = await ChildStatus(first, 100, openFirst);
+            var childSecond = await ChildStatus(second, 101, openSecond);
+            var firstReady = new DateTime((long)childFirst["readyUtcTicks"]!, DateTimeKind.Utc);
+            var firstInit = new DateTime((long)childFirst["initStartedUtcTicks"]!, DateTimeKind.Utc);
+            var secondInit = new DateTime((long)childSecond["initStartedUtcTicks"]!, DateTimeKind.Utc);
+            var secondProcessStart = new DateTime((long)openSecond["workerStartTimeUtcTicks"]!, DateTimeKind.Utc);
+            var secondRelease = released.ColdStartStartedUtc!.Value.ToUniversalTime();
+            var heldSince = held.Record.HeldSinceUtc!.Value.ToUniversalTime();
+            string Iso(DateTime t) => t.ToString("HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture);
+            _output.WriteLine("first: init " + Iso(firstInit) + " ready " + Iso(firstReady)
+                + "; second: held since " + Iso(heldSince) + " released " + Iso(secondRelease)
+                + " process start " + Iso(secondProcessStart) + " init " + Iso(secondInit)
+                + "; release after first ready " + (secondRelease - firstReady).TotalMilliseconds.ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + " ms");
+
+            // The child clocks are coarse (about 16 ms on .NET Framework), hence the margin.
+            Assert.True(firstReady - firstInit >= TimeSpan.FromMilliseconds(ColdStartMs - 50), "the first Cold_Start was too short");
+            // Requirement 6.3: the second Worker process and its SDK initialization begin after the first Cold_Start
+            // ended. The child's ready time precedes the broker's end of that Cold_Start, so this bound is safe.
+            Assert.True(secondRelease >= firstReady, "the second start was released at " + Iso(secondRelease) + ", before " + Iso(firstReady));
+            Assert.True(secondProcessStart >= firstReady, "the second Worker started at " + Iso(secondProcessStart) + ", before " + Iso(firstReady));
+            Assert.True(secondInit >= firstReady, "the second SDK initialization began at " + Iso(secondInit) + ", before " + Iso(firstReady));
+            // Requirement 6.4: released within 500 ms after the first Cold_Start ended.
+            Assert.True(secondRelease - firstReady <= TimeSpan.FromMilliseconds(ReleaseBoundMs),
+                "the held start was released " + (secondRelease - firstReady).TotalMilliseconds + " ms after the first Cold_Start ended");
+
+            // The request that waited for the held start ran on the second Worker once it was ready.
+            var waitClock = Stopwatch.StartNew();
+            JObject? answered = null;
+            while (answered == null && waitClock.ElapsedMilliseconds < 5000)
+            {
+                if (!waiterResponses.TryDequeue(out answered)) await Task.Delay(20);
+            }
+            Assert.NotNull(answered);
+            AssertOwnResponse(answered!, 1, "while-held", waiter.AttachId!, (int)openSecond["workerPid"]!);
+        });
 
         private static void AssertOwnResponse(JObject response, int id, string method, string attachId, int workerPid)
         {

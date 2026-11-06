@@ -41,6 +41,9 @@ namespace GxMcp.SharedHost.TestHost
         private readonly string _kb;
         private long _completed;
         private int _workingSetTargetMb;
+        // UTC ticks: the start of the scripted SDK initialization (the ready delay) and the sdk_ready write.
+        private long _initStartedUtcTicks;
+        private long _readyUtcTicks;
 
         private FakeChild(FakeChildScript script, string kb, Stream stdout, TextWriter stderr)
         {
@@ -124,7 +127,10 @@ namespace GxMcp.SharedHost.TestHost
 
         private void ReadyLoop()
         {
+            Interlocked.Exchange(ref _initStartedUtcTicks, DateTime.UtcNow.Ticks);
             if (_script.ReadyDelayMs > 0) Thread.Sleep(_script.ReadyDelayMs);
+            // Taken before the write, so the broker cannot see sdk_ready before this instant.
+            Interlocked.Exchange(ref _readyUtcTicks, DateTime.UtcNow.Ticks);
             WriteLine(new JObject
             {
                 ["jsonrpc"] = "2.0",
@@ -190,7 +196,9 @@ namespace GxMcp.SharedHost.TestHost
                 ["workingSetBytes"] = workingSet,
                 ["workingSetTargetMb"] = Volatile.Read(ref _workingSetTargetMb),
                 ["queued"] = _sdkQueue.Count,
-                ["completed"] = Interlocked.Read(ref _completed)
+                ["completed"] = Interlocked.Read(ref _completed),
+                ["initStartedUtcTicks"] = Interlocked.Read(ref _initStartedUtcTicks),
+                ["readyUtcTicks"] = Interlocked.Read(ref _readyUtcTicks)
             };
         }
 
