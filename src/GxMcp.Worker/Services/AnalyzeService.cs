@@ -212,6 +212,8 @@ namespace GxMcp.Worker.Services
                     if (!waitForIndex)
                     {
                         var env = new JObject { ["status"] = state.Status };
+                        if (state.Status == "Cold") env["indexState"] = "cold";
+                        env["retry_hint"] = "Wait with genexus_lifecycle action=status wait=30 freshness=current, then retry; an incomplete index cannot establish that an object has no references.";
                         if (state.EtaMs.HasValue) env["etaMs"] = state.EtaMs.Value;
                         if (state.Progress.HasValue) env["progress"] = state.Progress.Value;
                         env["hint"] = "Pass waitForIndex=true to block until the lite index pass completes.";
@@ -231,7 +233,9 @@ namespace GxMcp.Worker.Services
                         return new JObject
                         {
                             ["status"] = "Timeout",
-                            ["waitedMs"] = sw.ElapsedMilliseconds
+                            ["waitedMs"] = sw.ElapsedMilliseconds,
+                            ["indexState"] = finalState?.Status == "Cold" ? "cold" : "reindexing",
+                            ["retry_hint"] = "Wait with genexus_lifecycle action=status wait=30 freshness=current, then retry."
                         }.ToString();
                     }
                 }

@@ -145,7 +145,9 @@ namespace GxMcp.Gateway
 
                         // Cut on a line boundary at/under the budget so we never split a line.
                         int cut = val.LastIndexOf('\n', Math.Min(readFieldBudget, val.Length) - 1);
-                        if (cut <= 0) cut = Math.Min(readFieldBudget, val.Length); // no newline: hard prefix
+                        // Line offsets cannot resume inside a line. Preserve an oversized
+                        // first line rather than discard content that cannot be paged back.
+                        if (cut <= 0) continue;
                         string kept = val.Substring(0, cut);
                         int keptLines = kept.Length == 0 ? 0 : kept.Split('\n').Length;
                         int baseOffset = obj["offset"]?.ToObject<int?>() ?? 0;
@@ -680,7 +682,9 @@ namespace GxMcp.Gateway
         }
 
         internal static bool IsRefreshRead(string toolName, JObject? args)
-            => string.Equals(toolName, "genexus_read", StringComparison.OrdinalIgnoreCase)
+            => (string.Equals(toolName, "genexus_read", StringComparison.OrdinalIgnoreCase)
+                || (string.Equals(toolName, "genexus_properties", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(args?["action"]?.ToString(), "get", StringComparison.OrdinalIgnoreCase)))
                 && args?["refresh"]?.Type == JTokenType.Boolean && args["refresh"]!.Value<bool>();
 
         /// <summary>

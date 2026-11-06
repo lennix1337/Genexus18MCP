@@ -16,6 +16,16 @@ namespace GxMcp.Gateway.Tests
         };
 
         [Theory]
+        [InlineData("WriteNotPersisted", "not_persisted")]
+        [InlineData("WriteVerificationUnavailable", "unknown")]
+        public void TextWriteErrorRetainsPersistedState(string code, string state)
+        {
+            var input = new JObject { ["code"] = code, ["message"] = "verification", ["persistedState"] = state };
+            var trimmed = McpRouter.TrimErrorEnvelope(input, verbose: false);
+            Assert.Equal(state, trimmed["persistedState"]?.ToString());
+        }
+
+        [Theory]
         [InlineData("partial", true)]
         [InlineData("unknown", null)]
         public void PatternReceiptRetainsPartialOrUnknownPersistence(string state, bool? persisted)

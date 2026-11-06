@@ -3,9 +3,8 @@
 //! The SDK projects one part's complete stored text into the `source` field of a
 //! read response. `totalLines` counts the text's lines with `StringReader`
 //! semantics, `totalBytes` is the UTF-16 code-unit count of the complete text,
-//! and a page joins its lines with the Worker's Windows newline (`\r\n`),
-//! which drops the final newline of a complete read. An explicit `limit=0` read
-//! is an evidence path: it returns the original slice, final newline included.
+//! and each page retains its original line terminators. An explicit `limit=0`
+//! read is an evidence path: it returns the original slice, final newline included.
 //!
 //! This module is a pure projection. It reads no Knowledge Base. `kb_ops` wires it
 //! into the single-part `kb-read --page` envelope for the MCP client only; routing
@@ -122,7 +121,9 @@ pub fn apply_default(
     let end = start.saturating_add(lines_returned);
     let truncated = end < total_lines;
     ReadPage {
-        content: page_lines.join(PAGE_NEWLINE),
+        content: content
+            [line_start_byte_offset(content, start)..line_start_byte_offset(content, end)]
+            .to_string(),
         offset: start,
         lines_returned,
         total_lines,
@@ -194,6 +195,25 @@ mod tests {
     use super::{DEFAULT_BYTE_BUDGET, ReadClient, apply_default};
 
     #[test]
+    fn successive_pages_preserve_exact_original_line_endings() {
+        let content = "first\r\nsecond\nthird\rfourth\r\n";
+        let mut collected = String::new();
+        let mut offset = 0;
+        loop {
+            let page = apply_default(content, Some(offset), Some(2), ReadClient::Mcp);
+            collected.push_str(&page.content);
+            if !page.truncated {
+                break;
+            }
+            offset = page.suggested_next_offset.unwrap();
+        }
+        assert_eq!(
+            collected,
+            apply_default(content, None, Some(0), ReadClient::Mcp).content
+        );
+    }
+
+    #[test]
     fn empty_text_has_no_lines() {
         let page = apply_default("", None, None, ReadClient::Mcp);
         assert_eq!(page.content, "");
@@ -206,7 +226,7 @@ mod tests {
     #[test]
     fn a_trailing_terminator_does_not_add_a_line() {
         let page = apply_default("a\nb\n", None, None, ReadClient::Mcp);
-        assert_eq!(page.content, "a\r\nb");
+        assert_eq!(page.content, "a\nb\n");
         assert_eq!(page.total_lines, 2);
         assert_eq!(page.total_bytes, 4);
         assert_eq!(page.lines_returned, 2);
@@ -217,7 +237,7 @@ mod tests {
     fn crlf_and_lone_cr_are_line_terminators() {
         for content in ["a\r\nb", "a\rb", "a\nb"] {
             let page = apply_default(content, None, None, ReadClient::Mcp);
-            assert_eq!(page.content, "a\r\nb", "{content:?}");
+            assert_eq!(page.content, content, "{content:?}");
             assert_eq!(page.total_lines, 2, "{content:?}");
             assert_eq!(
                 page.total_bytes,
@@ -235,7 +255,7 @@ mod tests {
         let page = apply_default("\u{1f600}\nx", None, None, ReadClient::Mcp);
         assert_eq!(page.total_bytes, 4);
         assert_eq!(page.total_lines, 2);
-        assert_eq!(page.content, "\u{1f600}\r\nx");
+        assert_eq!(page.content, "\u{1f600}\nx");
     }
 
     #[test]
@@ -267,7 +287,7 @@ mod tests {
         assert!(page.truncated);
         assert_eq!(page.suggested_next_offset, Some(81));
         assert_eq!(page.total_bytes, 200 * 200 + 199);
-        assert_eq!(page.content.encode_utf16().count(), 81 * 202 - 2);
+        assert_eq!(page.content.encode_utf16().count(), 81 * 201);
     }
 
     #[test]
@@ -328,7 +348,7 @@ mod tests {
         let content = format!("{line}\n{line}");
         let page = apply_default(&content, None, Some(1), ReadClient::Mcp);
         assert_eq!(page.lines_returned, 1);
-        assert_eq!(page.content.len(), 20_000);
+        assert_eq!(page.content.len(), 20_001);
         assert!(page.truncated);
     }
 

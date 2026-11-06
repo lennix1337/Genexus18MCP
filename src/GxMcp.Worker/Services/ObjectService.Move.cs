@@ -582,6 +582,7 @@ namespace GxMcp.Worker.Services
 
                     tx.Commit();
                     committed = true;
+                    PropertyService.InvalidatePropertyCache(current);
                 }
                 catch (Exception ex)
                 {

@@ -518,6 +518,7 @@ namespace GxMcp.Worker.Services
         internal static void StampPerTargetWrite(string target)
         {
             if (string.IsNullOrWhiteSpace(target)) return;
+            PropertyService.InvalidatePropertiesAfterWrite();
             _lastWriteAtUtc[target] = DateTime.UtcNow;
         }
 

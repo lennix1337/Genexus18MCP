@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -16,6 +17,39 @@ namespace GxMcp.Worker.Tests
             public string Guid { get; set; }
             public string BaseOperation { get; set; }
             public string Status { get; set; }
+        }
+
+        [Fact]
+        public void ImportFidelityFailure_AfterPreparation_RequiresReconciliationOfTargets()
+        {
+            var targets = JArray.Parse("[{\"name\":\"P360CPACBUGuardar\",\"type\":\"Procedure\"},{\"name\":\"PreCBUItmUlt\",\"type\":\"Procedure\"}]");
+            var result = JObject.Parse(TransferService.ImportFidelityFailure(new InvalidDataException("unreadable"), new JObject(), true, targets));
+            string text = result.ToString();
+            Assert.Contains("TransferImportVerificationUnavailable", text);
+            Assert.Contains("\"persistedState\": \"unknown\"", text);
+            Assert.Contains("\"reconciliationRequired\": true", text);
+            Assert.Equal(2, result.SelectTokens("$..reconciliationCalls[*]").Count());
+            Assert.Equal("P360CPACBUGuardar", result.SelectToken("$..reconciliationCalls[0].args.name").ToString());
+            Assert.Equal("PreCBUItmUlt", result.SelectToken("$..reconciliationCalls[1].args.name").ToString());
+            Assert.All(result.SelectTokens("$..reconciliationCalls[*].tool"), call => Assert.Equal("genexus_inspect", call.ToString()));
+            Assert.DoesNotContain("no import was attempted", text);
+        }
+
+        [Fact]
+        public void ImportFidelityFailure_BeforePreparation_DoesNotClaimUncertainPreparation()
+        {
+            var result = JObject.Parse(TransferService.ImportFidelityFailure(new InvalidDataException("unreadable"), new JObject(), false, new JArray()));
+            Assert.Contains("no import was attempted", result.ToString());
+            Assert.Null(result.SelectToken("$..persistedState"));
+        }
+
+        [Fact]
+        public void CaptureImportFidelity_MarksPreparationBeforeSdkCallAndReportsFailure()
+        {
+            string source = GxMcp.TestSupport.RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "TransferService.cs");
+            Assert.Contains("preparationStarted();\n            var prepared = svc.PrepareImport", source.Replace("\r\n", "\n"));
+            Assert.Contains("ImportFidelityFailure(ex, ImportDiagnostics(diagnostics, imported: false), preparationStarted, targets)", source);
+            Assert.Contains("targets.Add(new JObject", source);
         }
 
         [Fact]

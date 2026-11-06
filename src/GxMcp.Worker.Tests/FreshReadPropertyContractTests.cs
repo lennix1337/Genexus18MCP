@@ -56,10 +56,9 @@ namespace GxMcp.Worker.Tests
         {
             string src = PropertySource();
 
-            // Three sites read the object independently: the preview / version-checked write, the refresh inside the write
-            // transaction, and the reconciliation read of the write path.
-            Assert.Equal(3, SourceAssert.Count(src, "return FreshReadUnavailableEnvelope(target,"));
-            Assert.Equal(3, SourceAssert.Count(src, "_objectService.GetLastResolutionDiagnostic()"));
+            // The post-write cache miss also requires an independent read, alongside the preview, transaction and refresh paths.
+            Assert.Equal(4, SourceAssert.Count(src, "return FreshReadUnavailableEnvelope(target,"));
+            Assert.Equal(4, SourceAssert.Count(src, "_objectService.GetLastResolutionDiagnostic()"));
             Assert.DoesNotContain("code: \"FreshReadUnavailable\"", src);
         }
 
