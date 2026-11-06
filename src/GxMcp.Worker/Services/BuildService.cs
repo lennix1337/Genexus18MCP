@@ -1230,6 +1230,8 @@ namespace GxMcp.Worker.Services
             foreach (var p in searchPaths) { if (File.Exists(p)) { _msbuildPath = p; break; } }
         }
 
+        internal string MsBuildPath => _msbuildPath;
+
         public void SetKbService(KbService kbService) { _kbService = kbService; }
         public void SetIndexCacheService(IndexCacheService ics) { _indexCacheService = ics; }
         public void SetCallerGraphService(CallerGraphService graph) { _callerGraphService = graph; }

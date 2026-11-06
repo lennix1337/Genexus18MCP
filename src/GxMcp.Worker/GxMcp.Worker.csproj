@@ -31,7 +31,7 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(GxMcpSdkProfile)' == 'evolution3'">
-    <Compile Remove="Services\ModuleService.cs;Services\ModuleInstallSdkBackend.cs;Services\ModuleInstallPackage.cs;Services\ModuleInstallFlow.cs;Services\DeployService.cs;Services\GxServerWriteService.cs;Services\UserControlsListService.cs" />
+    <Compile Remove="Services\ModuleService.cs;Services\ModuleInstallSdkBackend.cs;Services\ModuleInstallPackage.cs;Services\ModuleInstallFlow.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(GxMcpSdkProfile)' != 'evolution3'">

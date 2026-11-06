@@ -57,35 +57,36 @@ namespace GxMcp.Worker.Services
                 var kb = _kbService.GetKB();
                 Logger.Info(string.Format("Preparing to run test: {0}", target));
 
-                // MSBuild based execution is more resilient as it handles the full environment
                 string kbPath = _buildService.GetKBPath();
-                string gxPath = Environment.GetEnvironmentVariable("GX_PROGRAM_DIR") ?? @"C:\Program Files (x86)\GeneXus\GeneXus18";
-                string msbuildPath = Path.Combine(gxPath, "MSBuild.exe");
+                string gxPath = GeneXusInstallPath.Resolve();
+                string gxTestProject = ResolveGxTestProject(gxPath);
+                if (gxTestProject == null)
+                {
+                    return Models.McpResponse.Err(
+                        code: "GXtestNotInstalled",
+                        message: "GXtest is not installed in " + (gxPath ?? "the GeneXus installation") + " (no GXtest.msbuild), so there is nothing to run the tests with.",
+                        hint: "Install GXtest for this GeneXus version. GeneXus X Evolution 3 does not ship it.",
+                        target: target);
+                }
+                string msbuildPath = _buildService.MsBuildPath;
+                if (string.IsNullOrEmpty(msbuildPath) || !File.Exists(msbuildPath))
+                {
+                    return Models.McpResponse.Err(
+                        code: "MsBuildNotFound",
+                        message: "No MSBuild.exe was found to run GXtest.",
+                        hint: "Install the .NET Framework 4.x MSBuild or Visual Studio Build Tools.",
+                        target: target);
+                }
 
-                string tempFile = Path.Combine(Path.GetTempPath(), "RunGXTest_" + Guid.NewGuid().ToString() + ".msbuild");
-                // Defense-in-depth: SecurityElement.Escape on every interpolated
-                // value, even after IsSafeTestTarget. This means a future widening
-                // of the allowlist can't reintroduce XML injection.
-                string safeGx = System.Security.SecurityElement.Escape(gxPath);
-                string safeKb = System.Security.SecurityElement.Escape(kbPath);
-                string safeTarget = System.Security.SecurityElement.Escape(target);
-                string msbuildContent = string.Format(
-                    "<Project DefaultTargets='Run' xmlns='http://schemas.microsoft.com/developer/msbuild/2003'>" +
-                    "    <Import Project='{0}\\Genexus.Tasks.targets' />" +
-                    "    <Import Project='{0}\\Abstracta.GXtest.Tasks.targets' />" +
-                    "    <Target Name='Run'>" +
-                    "        <OpenKnowledgeBase Book='{1}' />" +
-                    "        <ExecuteTests Objects='{2}' />" +
-                    "    </Target>" +
-                    "</Project>", safeGx, safeKb, safeTarget);
-
-                File.WriteAllText(tempFile, msbuildContent);
+                // GXtest's own project opens the KB and runs RunTests with its defaults; the
+                // target list is validated by IsSafeTestTarget, so it is safe as a property.
                 Logger.Info(string.Format("Running GXtest via MSBuild for {0}...", target));
 
                 var startInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = msbuildPath,
-                    Arguments = string.Format("/nologo /verbosity:normal \"{0}\"", tempFile),
+                    Arguments = BuildGxTestArguments(gxTestProject, kbPath, target),
+                    WorkingDirectory = gxPath,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -97,8 +98,6 @@ namespace GxMcp.Worker.Services
                     string stdout = process.StandardOutput.ReadToEnd();
                     string stderr = process.StandardError.ReadToEnd();
                     process.WaitForExit();
-
-                    try { File.Delete(tempFile); } catch { }
 
                     bool success = stdout.Contains("Tests execution succeeded") || stdout.Contains("Passed: 1");
                     
@@ -112,6 +111,21 @@ namespace GxMcp.Worker.Services
                 Logger.Error(string.Format("Test execution error: {0}", ex.Message));
                 return "{\"status\":\"Error\",\"message\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        /// <summary>The GXtest project a GeneXus install ships, or null when GXtest is not installed.</summary>
+        internal static string ResolveGxTestProject(string gxPath)
+        {
+            if (string.IsNullOrWhiteSpace(gxPath)) return null;
+            string project = Path.Combine(gxPath, "GXtest.msbuild");
+            return File.Exists(project) ? project : null;
+        }
+
+        internal static string BuildGxTestArguments(string gxTestProject, string kbPath, string target)
+        {
+            return string.Format(
+                "/nologo /verbosity:normal /t:RunTests \"{0}\" \"/p:KBPath={1}\" \"/p:TestObjects={2}\"",
+                gxTestProject, kbPath, target.Replace(',', ';'));
         }
     }
 }

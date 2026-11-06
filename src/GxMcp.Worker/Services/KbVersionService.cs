@@ -385,9 +385,7 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                object versionModel = version == null
-                    ? null
-                    : version.GetType().GetProperty("Model", BindingFlags.Public | BindingFlags.Instance)?.GetValue(version, null);
+                object versionModel = VersionModelOf(version);
                 if (versionModel is KBModel typedVersionModel && typedVersionModel.Objects != null)
                     return new FrozenObjectSnapshot
                     {
@@ -441,6 +439,20 @@ namespace GxMcp.Worker.Services
                 GxMcp.Worker.Helpers.Logger.Debug("[KB-VERSION-DELTA] KBModelVersionObjects unavailable: " + ex.Message);
                 return null;
             }
+        }
+
+        // GeneXus 16-18 name the frozen version's model KBVersion.Model. GeneXus X Evolution 3 names it
+        // KBVersion.ModelVersion, and its KBVersion.Model is the entity's Udm model (ModelNone), so
+        // ModelVersion wins whenever the SDK has it.
+        internal static object VersionModelOf(object version)
+        {
+            if (version == null) return null;
+            foreach (string name in new[] { "ModelVersion", "Model" })
+            {
+                object model = version.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance)?.GetValue(version, null);
+                if (model != null) return model;
+            }
+            return null;
         }
 
         private static Dictionary<string, KBObject> BuildObjectMap(IEnumerable<KBObject> objects, out int metadataExcluded)

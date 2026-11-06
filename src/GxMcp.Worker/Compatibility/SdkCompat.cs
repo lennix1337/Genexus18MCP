@@ -112,6 +112,32 @@ namespace GxMcp.Worker.Compatibility
 #endif
         }
 
+        /// <summary>Export options for a non-interactive GeneXus Server send. Evolution 3 has no SilentDefault.</summary>
+        internal static ExportOptions SilentExportOptions()
+        {
+#if GXMCP_SDK_EV3
+            return ExportOptions.Default;
+#else
+            return ExportOptions.SilentDefault;
+#endif
+        }
+
+        /// <summary>
+        /// The user-control definitions the KB can use. Evolution 3 keeps one catalog per
+        /// installation (Initialize() without a model and a ControlDefinitionCollection property).
+        /// </summary>
+        internal static System.Collections.IEnumerable UserControlDefinitions(
+            Artech.Genexus.Common.Services.IUserControlsManagerService service, KBModel model)
+        {
+#if GXMCP_SDK_EV3
+            try { service.Initialize(); } catch { /* the collection may already be loaded */ }
+            return service.ControlDefinitionCollection;
+#else
+            try { service.Initialize(model); } catch { /* the getter may work without it */ }
+            return service.GetControlDefinitionCollection(model);
+#endif
+        }
+
         internal static bool AreEqualInProperties(IComparerService comparer, KBObject left, KBObject right)
         {
 #if GXMCP_SDK_EV3
