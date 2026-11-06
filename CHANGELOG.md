@@ -19,7 +19,7 @@
 
 ### Fixed
 
-- Cold index search snapshots identify the cold state and explain how to wait before treating an empty result as definitive ([#887](https://github.com/lennix1337/Genexus18MCP/issues/887)).
+- Cold index search snapshots identify the cold state and explain how to wait before treating an empty result as definitive; impact analysis now gives the same guidance while the index is cold or the wait times out ([#887](https://github.com/lennix1337/Genexus18MCP/issues/887)).
 - `genexus_properties action=get` accepts `refresh: true` to bypass cached properties and read the persisted object independently ([#887](https://github.com/lennix1337/Genexus18MCP/issues/887)).
 - **XPZ import fidelity failures after SDK preparation now require reconciliation**: the response identifies available targets and read-only inspection calls, and reports their persisted state as unknown instead of implying preparation could not change the KB. [#886](https://github.com/lennix1337/Genexus18MCP/issues/886)
 
