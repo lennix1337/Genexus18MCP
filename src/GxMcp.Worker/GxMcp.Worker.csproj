@@ -22,6 +22,25 @@
     <GxMcpSdkManifest Condition="'$(GxMcpSdkManifest)' == ''">$(MSBuildProjectDirectory)\..\..\config\sdk-compatibility.json</GxMcpSdkManifest>
   </PropertyGroup>
 
+  <!-- GeneXus X Evolution 3 (10.3) predates the module package manager (OPC), the
+       Trial object cap and BuildOptions.FailIfReorg. Its Worker is built with
+       -p:GxMcpSdkProfile=evolution3 and refuses those tools instead of calling them. -->
+  <PropertyGroup Condition="'$(GxMcpSdkProfile)' == 'evolution3'">
+    <DefineConstants>$(DefineConstants);GXMCP_SDK_EV3</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(GxMcpSdkProfile)' == 'evolution3'">
+    <Compile Remove="Services\ModuleService.cs;Services\ModuleInstallSdkBackend.cs;Services\ModuleInstallPackage.cs;Services\ModuleInstallFlow.cs;Services\DeployService.cs;Services\GxServerWriteService.cs;Services\UserControlsListService.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(GxMcpSdkProfile)' != 'evolution3'">
+    <Compile Remove="Services\Evolution3Unsupported.cs" />
+  </ItemGroup>
+
+  <Target Name="Evolution3LegacyRuntimePolicy" AfterTargets="Build" Condition="'$(GxMcpSdkProfile)' == 'evolution3'">
+    <XmlPoke XmlInputPath="$(TargetDir)$(TargetFileName).config" Query="/configuration/startup/@useLegacyV2RuntimeActivationPolicy" Value="true" />
+  </Target>
+
   <PropertyGroup Condition="'$(GxMcpSkipSdkValidation)' == ''">
     <GxMcpSkipSdkValidation>false</GxMcpSkipSdkValidation>
   </PropertyGroup>
@@ -88,7 +107,7 @@
       <HintPath>$(GX_PATH)\Artech.Common.Language.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Artech.Architecture.Interfaces">
+    <Reference Include="Artech.Architecture.Interfaces" Condition="'$(GxMcpSdkProfile)' != 'evolution3'">
       <HintPath>$(GX_PATH)\Artech.Architecture.Interfaces.dll</HintPath>
       <Private>False</Private>
     </Reference>

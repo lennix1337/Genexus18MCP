@@ -265,6 +265,16 @@ namespace GxMcp.Worker.Parsers
             CreatedGlobals.Clear();
         }
 
+        /// <summary>
+        /// The DSL type of a Transaction attribute: the Domain name when the attribute is
+        /// based on one, so `Qty : MyDomain` reads back as written; otherwise its primitive type.
+        /// </summary>
+        internal static string RenderAttributeType(object attribute, string primitiveType)
+        {
+            string domain = GxMcp.Worker.Helpers.DomainPropertyApplier.GetDomainBasedOnName(attribute);
+            return string.IsNullOrEmpty(domain) ? primitiveType : domain;
+        }
+
         private void SerializeLevel(dynamic level, StringBuilder sb, int indent)
         {
             string indentStr = new string(' ', indent * 4);
@@ -296,6 +306,8 @@ namespace GxMcp.Worker.Parsers
                             }
                         }
                     } catch { }
+
+                    try { typeStr = RenderAttributeType((object)attr.Attribute, typeStr); } catch { }
 
                     string desc = "";
                     string formula = "";

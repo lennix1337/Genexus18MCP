@@ -264,7 +264,7 @@ namespace GxMcp.Worker.Services
             {
                 candidates = Table.GetAll(selector.Model)
                     .Where(t => t?.TableStructure != null && anchors.All(a => t.TableStructure.GetAttribute(a) != null))
-                    .OrderBy(t => t.QualifiedNameString ?? t.Name, StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(t => Compatibility.SdkCompat.TableQualifiedName(t) ?? t.Name, StringComparer.OrdinalIgnoreCase)
                     .ToList();
             }
             catch (Exception ex)
@@ -288,7 +288,7 @@ namespace GxMcp.Worker.Services
                 : "Resolved uniquely from complete referenced-attribute coverage.";
             snapshot.BaseTable = CaptureTable(table);
             Transaction transaction = null;
-            try { transaction = table.BestAssociatedTransaction; } catch { }
+            try { transaction = Compatibility.SdkCompat.BestAssociatedTransaction(table); } catch { }
             if (transaction != null)
             {
                 snapshot.BaseTransaction = transaction.Name;
@@ -300,7 +300,7 @@ namespace GxMcp.Worker.Services
             var result = new TableSnapshot
             {
                 Name = table.Name ?? string.Empty,
-                OriginalName = table.OriginalName ?? string.Empty
+                OriginalName = Compatibility.SdkCompat.TableOriginalName(table) ?? string.Empty
             };
             try
             {
