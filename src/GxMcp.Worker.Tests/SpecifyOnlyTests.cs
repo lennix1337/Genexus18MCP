@@ -975,7 +975,7 @@ namespace GxMcp.Worker.Tests
         {
             var sw = new FakeSwitch { Value = true };
             bool? seenInside = null;
-            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => seenInside = sw.Value, out string failure);
+            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => seenInside = sw.Value, out string failure, null);
             Assert.True(ran);
             Assert.Null(failure);
             Assert.False(seenInside);
@@ -988,7 +988,7 @@ namespace GxMcp.Worker.Tests
         {
             var sw = new FakeSwitch { Value = true };
             Assert.Throws<InvalidOperationException>(() =>
-                SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new InvalidOperationException("boom"), out string ignored));
+                SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new InvalidOperationException("boom"), out string ignored, null));
             Assert.True(sw.Value);
         }
 
@@ -996,7 +996,7 @@ namespace GxMcp.Worker.Tests
         public void A_switch_that_was_already_off_stays_off()
         {
             var sw = new FakeSwitch { Value = false };
-            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => { }, out string failure);
+            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => { }, out string failure, null);
             Assert.True(ran);
             Assert.False(sw.Value);
             Assert.Equal(new[] { false, false }, sw.Writes);
@@ -1006,7 +1006,7 @@ namespace GxMcp.Worker.Tests
         public void A_switch_that_cannot_be_read_never_runs_the_body_and_is_never_touched()
         {
             var sw = new FakeSwitch { Value = true, FailRead = true };
-            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new Xunit.Sdk.XunitException("body ran"), out string failure);
+            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new Xunit.Sdk.XunitException("body ran"), out string failure, null);
             Assert.False(ran);
             Assert.Contains("could not be read", failure);
             Assert.Empty(sw.Writes);
@@ -1016,7 +1016,7 @@ namespace GxMcp.Worker.Tests
         public void A_switch_that_stays_on_never_runs_the_body_and_the_old_value_is_restored()
         {
             var sw = new FakeSwitch { Value = true, Stuck = true };
-            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new Xunit.Sdk.XunitException("body ran"), out string failure);
+            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new Xunit.Sdk.XunitException("body ran"), out string failure, null);
             Assert.False(ran);
             Assert.Contains("could not be switched off", failure);
             Assert.Equal(new[] { false, true }, sw.Writes);
@@ -1026,7 +1026,7 @@ namespace GxMcp.Worker.Tests
         public void A_switch_that_cannot_be_written_never_runs_the_body_and_the_failed_restore_does_not_throw()
         {
             var sw = new FakeSwitch { Value = true, FailWrite = true };
-            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new Xunit.Sdk.XunitException("body ran"), out string failure);
+            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new Xunit.Sdk.XunitException("body ran"), out string failure, null);
             Assert.False(ran);
             Assert.Contains("could not be turned off", failure);
             Assert.Equal(new[] { false, true }, sw.Writes); // the restore was attempted
@@ -1040,10 +1040,10 @@ namespace GxMcp.Worker.Tests
             var release = new System.Threading.ManualResetEventSlim(false);
 
             var first = System.Threading.Tasks.Task.Run(() => SpecifyOnlyGenerationSwitch.RunWithSwitchOff(
-                sw.Get, sw.Set, () => { inside.Set(); release.Wait(5000); }, out string f1));
+                sw.Get, sw.Set, () => { inside.Set(); release.Wait(5000); }, out string f1, null));
             Assert.True(inside.Wait(5000));
             var second = System.Threading.Tasks.Task.Run(() => SpecifyOnlyGenerationSwitch.RunWithSwitchOff(
-                sw.Get, sw.Set, () => { }, out string f2));
+                sw.Get, sw.Set, () => { }, out string f2, null));
 
             try
             {
@@ -1792,6 +1792,706 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("ExecutionFailed", status.SpecifyOnlyOutcome);
             Assert.False(status.SpecifyOnlySpecified);
             Assert.DoesNotContain("specify", env.Calls); // the environment served the plan only
+        }
+
+        // ---------- the receipt tells the truth: stages, written files, SDK output, generation switch ----------
+
+        private static void Feed(GxMcp.Worker.Helpers.InProcessBuildEngine engine, params string[] lines)
+        {
+            foreach (var line in lines)
+                engine.LogMessageEvent(new Microsoft.Build.Framework.BuildMessageEventArgs(line, null, "test", Microsoft.Build.Framework.MessageImportance.Normal));
+        }
+
+        private static JToken SpecificationOutputOf(SpecifyOnlyRun run)
+            => SpecifyOnlyReceiptBuilder.Build(Request(), run, new JArray())["persisted"].Single(p => (string)p["kind"] == "specification-output");
+
+        // -- confirmedStages: a task that never generates or compiles does not claim it did
+
+        [Fact]
+        public void A_finished_specify_only_task_confirms_only_the_stage_the_specifier_ran()
+        {
+            var status = StrictStatus();
+            RunStrict(status, new FakeEnvironment(Facts()), new List<string>());
+
+            BuildService.RecordTerminalStages(status);
+
+            Assert.Equal(new[] { "OpeningKB", "Specifying" }, status.ConfirmedStages);
+            Assert.True((bool)status.SpecifyOnlyReceipt["evidence"]["noGenerationObserved"]);
+        }
+
+        [Fact]
+        public void A_specification_that_failed_confirms_the_specifier_stage_and_nothing_after_it()
+        {
+            var status = StrictStatus();
+            var env = new FakeEnvironment(Facts()) { OnSpecify = () => Spec(r => r.SpecifierReturned = false) };
+            RunStrict(status, env, new List<string>());
+
+            BuildService.RecordTerminalStages(status);
+
+            Assert.Equal(new[] { "OpeningKB", "Specifying" }, status.ConfirmedStages);
+        }
+
+        [Fact]
+        public void A_task_whose_specifier_never_came_back_confirms_no_stage()
+        {
+            var environments = new[]
+            {
+                new FakeEnvironment(Facts(found: false)),                                                              // refused
+                new FakeEnvironment(Facts()) { OnSpecify = () => Spec(r => r.SpecifierInvoked = false) },              // not invoked
+                new FakeEnvironment(Facts()) { OnSpecify = () => new SpecifyOnlyRunResult { SpecifierInvoked = true, Failure = "boom" } } // threw
+            };
+            foreach (var env in environments)
+            {
+                var status = StrictStatus();
+                RunStrict(status, env, new List<string>());
+
+                BuildService.RecordTerminalStages(status);
+
+                Assert.Empty(status.ConfirmedStages);
+            }
+        }
+
+        [Fact]
+        public void Stages_the_task_confirmed_from_its_own_output_stay_and_are_not_repeated()
+        {
+            var status = StrictStatus();
+            BuildService.RecordStageConfirmed(status, "OpeningKB");
+            BuildService.RecordStageConfirmed(status, "Generating"); // a stage the helper would not add by itself
+            RunStrict(status, new FakeEnvironment(Facts()), new List<string>());
+
+            BuildService.RecordTerminalStages(status);
+
+            Assert.Equal(new[] { "OpeningKB", "Generating", "Specifying" }, status.ConfirmedStages);
+        }
+
+        [Fact]
+        public void A_generation_or_compilation_section_the_sdk_opened_is_confirmed_so_the_stages_agree_with_the_outcome()
+        {
+            foreach (var (section, expected) in new[]
+            {
+                ("Default (.NET Framework) Generation", new[] { "OpeningKB", "Specifying", "Generating" }),
+                ("DeveloperMenu Compilation", new[] { "OpeningKB", "Specifying", "Compiling" })
+            })
+            {
+                var status = StrictStatus();
+                var env = new FakeEnvironment(Facts()) { OnSpecify = () => Spec(r => r.SectionsObserved.Add(section)) };
+                RunStrict(status, env, new List<string>());
+
+                BuildService.RecordTerminalStages(status);
+
+                Assert.Equal("GenerationObserved", status.SpecifyOnlyOutcome);
+                Assert.Equal(expected, status.ConfirmedStages);
+            }
+        }
+
+        [Fact]
+        public void A_task_that_is_not_specify_only_still_confirms_every_stage_when_it_ends()
+        {
+            var plain = new BuildService.BuildTaskStatus { TaskId = "plain003", Status = "Succeeded" };
+
+            BuildService.RecordTerminalStages(plain);
+
+            Assert.Equal(BuildService.KnownBuildStages, plain.ConfirmedStages);
+        }
+
+        [Fact]
+        public void The_older_specify_action_has_no_request_and_still_confirms_every_stage_when_it_ends()
+        {
+            // action=specify (Spec+Gen) sets SpecifyOnly but carries no SpecifyOnlyRequest: it is not a strict specify_only task.
+            var legacy = new BuildService.BuildTaskStatus { TaskId = "legacy001", Status = "Succeeded", SpecifyOnly = true };
+
+            BuildService.RecordTerminalStages(legacy);
+
+            Assert.Equal(BuildService.KnownBuildStages, legacy.ConfirmedStages);
+        }
+
+        [Fact]
+        public void A_strict_task_that_cannot_run_in_process_confirms_no_stage()
+        {
+            var status = StrictStatus();
+
+            new BuildService().RunInProcessBuildPhase(status, "Build", new List<string> { ObjectGuid.ToString("D") });
+
+            Assert.Empty(status.ConfirmedStages);
+        }
+
+        [Fact]
+        public void The_three_in_process_task_endings_confirm_their_stages_through_the_specify_only_aware_helper()
+        {
+            string source = GxMcp.TestSupport.RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "BuildService.cs")
+                .Replace("\r\n", "\n");
+            string phase = GxMcp.TestSupport.SourceAssert.MethodBody(source, "internal bool RunInProcessBuildPhase(");
+            string unavailable = GxMcp.TestSupport.SourceAssert.MethodBody(source, "private void TerminalizeSpecUnavailable(");
+            string failure = GxMcp.TestSupport.SourceAssert.MethodBody(source, "private void SetFailure(BuildTaskStatus status, string error)");
+
+            foreach (string body in new[] { phase, unavailable, failure })
+            {
+                Assert.Contains("RecordTerminalStages(status);", body);
+                Assert.DoesNotContain("RecordStagesUpTo(status, \"Done\")", body);
+            }
+            // In the in-process phase the call sits where the status is written terminal (the branch for a task that is
+            // not terminal yet), before the generate evidence is attached.
+            int branch = phase.IndexOf("if (!IsTerminalStatus(status.Status))", StringComparison.Ordinal);
+            int call = phase.IndexOf("RecordTerminalStages(status);", StringComparison.Ordinal);
+            int evidence = phase.IndexOf("AttachGenerateEvidence(status, action, targets);", StringComparison.Ordinal);
+            Assert.True(branch >= 0 && call > branch && evidence > call,
+                "RecordTerminalStages must be called inside the not-yet-terminal branch, before the evidence is attached");
+        }
+
+        // -- persisted: how much the specifier wrote, not only what sits at the top of its folder
+
+        [Fact]
+        public void The_output_listing_counts_every_file_written_below_the_folder_and_names_the_subfolders()
+        {
+            string folder = TempRoot();
+            try
+            {
+                DateTime start = DateTime.UtcNow;
+                string gen = System.IO.Path.Combine(folder, "GEN41");
+                string nvg = System.IO.Path.Combine(gen, "NVG");
+                System.IO.Directory.CreateDirectory(nvg);
+                void Write(string path, DateTime when)
+                {
+                    System.IO.File.WriteAllText(path, "x");
+                    System.IO.File.SetLastWriteTimeUtc(path, when);
+                }
+                Write(System.IO.Path.Combine(folder, "top-old.ari"), start.AddMinutes(-5));
+                Write(System.IO.Path.Combine(folder, "top-new.ari"), start.AddSeconds(2));
+                Write(System.IO.Path.Combine(gen, "A.sp0"), start.AddSeconds(1));
+                Write(System.IO.Path.Combine(gen, "old.sp0"), start.AddMinutes(-5));
+                Write(System.IO.Path.Combine(nvg, "A.xml"), start.AddSeconds(3));
+                Write(System.IO.Path.Combine(nvg, "B.xml"), start.AddSeconds(4));
+
+                var listing = SpecifyOnlyGeneratorProbe.ListOutputSince(folder, start, 20);
+
+                Assert.Equal(new[] { "top-new.ari" }, listing.TopLevelNames);
+                Assert.Equal(4, listing.Count); // top-new.ari, A.sp0, A.xml, B.xml; the two old files are not counted
+                Assert.Equal(new[] { "GEN41", "GEN41\\NVG" }, listing.Directories);
+                Assert.False(listing.Truncated);
+            }
+            finally { System.IO.Directory.Delete(folder, recursive: true); }
+        }
+
+        [Fact]
+        public void The_output_listing_caps_the_names_it_gives_but_still_counts_every_file()
+        {
+            string folder = TempRoot();
+            try
+            {
+                DateTime start = DateTime.UtcNow;
+                foreach (var name in new[] { "a.ari", "b.ari", "c.ari" })
+                {
+                    string path = System.IO.Path.Combine(folder, name);
+                    System.IO.File.WriteAllText(path, "x");
+                    System.IO.File.SetLastWriteTimeUtc(path, start.AddSeconds(1));
+                }
+
+                var listing = SpecifyOnlyGeneratorProbe.ListOutputSince(folder, start, 1);
+
+                Assert.Single(listing.TopLevelNames);
+                Assert.Equal(3, listing.Count);
+                Assert.Empty(listing.Directories);
+            }
+            finally { System.IO.Directory.Delete(folder, recursive: true); }
+        }
+
+        [Fact]
+        public void The_output_listing_does_not_claim_a_count_when_there_is_no_folder_to_walk()
+        {
+            Assert.Equal(-1, SpecifyOnlyGeneratorProbe.ListOutputSince(null, DateTime.UtcNow, 20).Count);
+            Assert.Equal(-1, SpecifyOnlyGeneratorProbe.ListOutputSince("  ", DateTime.UtcNow, 20).Count);
+            string missing = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "specify-only-missing-" + Guid.NewGuid().ToString("N"));
+            var listing = SpecifyOnlyGeneratorProbe.ListOutputSince(missing, DateTime.UtcNow, 20);
+            Assert.Equal(-1, listing.Count);
+            Assert.Empty(listing.TopLevelNames);
+        }
+
+        [Fact]
+        public void The_receipt_says_when_the_files_it_names_are_only_part_of_what_was_written()
+        {
+            var run = RunWith(() => Spec(r =>
+            {
+                r.SpecificationFiles = new List<string> { "userControls.v2.ari" };
+                r.SpecificationOutputCount = 7;
+                r.SpecificationOutputFolder = "GXSPC002";
+                r.SpecificationOutputDirectories = new List<string> { "GEN41", "GEN41\\NVG" };
+                r.SpecificationOutputDirectoriesOmitted = 3;
+            }));
+
+            var output = SpecificationOutputOf(run);
+
+            Assert.Equal(new[] { "userControls.v2.ari" }, output["files"].Select(f => (string)f).ToArray()); // the field keeps its meaning
+            Assert.Equal("GXSPC002", (string)output["folder"]); // what the figures below are about
+            Assert.Equal(7, (int)output["filesWrittenCount"]);
+            Assert.Equal(new[] { "GEN41", "GEN41\\NVG" }, output["directories"].Select(d => (string)d).ToArray());
+            Assert.Equal(3, (int)output["directoriesOmitted"]);
+            Assert.False((bool)output["filesListComplete"]);
+            Assert.Null(output["filesWrittenCountIsLowerBound"]);
+            Assert.Contains("filesListComplete", (string)output["note"]);
+        }
+
+        [Fact]
+        public void The_receipt_calls_the_file_list_complete_only_when_it_names_everything_that_was_written()
+        {
+            var run = RunWith(() => Spec(r =>
+            {
+                r.SpecificationFiles = new List<string> { "a.ari", "b.ari" };
+                r.SpecificationOutputCount = 2;
+            }));
+
+            var output = SpecificationOutputOf(run);
+
+            Assert.True((bool)output["filesListComplete"]);
+            Assert.Equal(2, (int)output["filesWrittenCount"]);
+            Assert.Empty(output["directories"]);
+            Assert.Null(output["directoriesOmitted"]); // only when some were left out
+            Assert.Null(output["folder"]);             // only when it is known
+        }
+
+        [Fact]
+        public void The_receipt_does_not_invent_a_count_that_was_not_made()
+        {
+            var run = RunWith(() => Spec(r => r.SpecificationFiles = new List<string> { "a.ari" })); // SpecificationOutputCount stays -1
+
+            var output = SpecificationOutputOf(run);
+
+            Assert.Equal(new[] { "a.ari" }, output["files"].Select(f => (string)f).ToArray());
+            Assert.Null(output["filesWrittenCount"]);
+            Assert.Null(output["directories"]);
+            Assert.False((bool)output["filesListComplete"]);
+        }
+
+        [Fact]
+        public void A_count_that_stopped_at_the_cap_is_reported_as_a_lower_bound()
+        {
+            var run = RunWith(() => Spec(r =>
+            {
+                r.SpecificationFiles = new List<string> { "a.ari" };
+                r.SpecificationOutputCount = 200000;
+                r.SpecificationOutputTruncated = true;
+            }));
+
+            var output = SpecificationOutputOf(run);
+
+            Assert.True((bool)output["filesWrittenCountIsLowerBound"]);
+            Assert.False((bool)output["filesListComplete"]);
+
+            // Even when the count happens to equal the names given, a count that stopped at the cap is not "everything".
+            var same = RunWith(() => Spec(r =>
+            {
+                r.SpecificationFiles = new List<string> { "a.ari" };
+                r.SpecificationOutputCount = 1;
+                r.SpecificationOutputTruncated = true;
+            }));
+            Assert.False((bool)SpecificationOutputOf(same)["filesListComplete"]);
+        }
+
+        [Fact]
+        public void The_output_listing_names_a_bounded_number_of_subfolders_but_counts_every_file()
+        {
+            string folder = TempRoot();
+            try
+            {
+                DateTime start = DateTime.UtcNow;
+                for (int i = 0; i < 25; i++)
+                {
+                    string sub = System.IO.Path.Combine(folder, "GEN" + i.ToString("D2"));
+                    System.IO.Directory.CreateDirectory(sub);
+                    string file = System.IO.Path.Combine(sub, "x.sp0");
+                    System.IO.File.WriteAllText(file, "x");
+                    System.IO.File.SetLastWriteTimeUtc(file, start.AddSeconds(1));
+                }
+
+                var listing = SpecifyOnlyGeneratorProbe.ListOutputSince(folder, start, 20);
+
+                Assert.Equal(25, listing.Count);
+                Assert.Equal(20, listing.Directories.Count);
+                Assert.Equal("GEN00", listing.Directories[0]);
+            }
+            finally { System.IO.Directory.Delete(folder, recursive: true); }
+        }
+
+        private static void TouchFile(string path, DateTime when)
+        {
+            System.IO.File.WriteAllText(path, "x");
+            System.IO.File.SetLastWriteTimeUtc(path, when);
+        }
+
+        [Fact]
+        public void A_walk_that_fails_makes_the_count_unknown_but_keeps_the_names_at_the_top()
+        {
+            string folder = TempRoot();
+            try
+            {
+                DateTime start = DateTime.UtcNow;
+                string top = System.IO.Path.Combine(folder, "top.ari");
+                TouchFile(top, start.AddSeconds(1));
+                IEnumerable<System.IO.FileInfo> Failing(System.IO.DirectoryInfo root)
+                {
+                    yield return new System.IO.FileInfo(top);
+                    throw new UnauthorizedAccessException("a subfolder cannot be listed");
+                }
+
+                var listing = SpecifyOnlyGeneratorProbe.ListOutputSince(folder, start, 20, 1000, TimeSpan.FromMinutes(1), Failing);
+
+                Assert.Equal(-1, listing.Count); // not counted: never zero, never a partial number
+                Assert.Empty(listing.Directories);
+                Assert.Equal(0, listing.DirectoriesOmitted);
+                Assert.False(listing.Truncated);
+                Assert.Equal(new[] { "top.ari" }, listing.TopLevelNames);
+            }
+            finally { System.IO.Directory.Delete(folder, recursive: true); }
+        }
+
+        [Fact]
+        public void The_walk_stops_at_the_file_cap_and_a_cap_equal_to_the_number_of_files_is_not_a_truncation()
+        {
+            string folder = TempRoot();
+            try
+            {
+                DateTime start = DateTime.UtcNow;
+                for (int i = 0; i < 3; i++) TouchFile(System.IO.Path.Combine(folder, "f" + i + ".ari"), start.AddSeconds(1));
+
+                var capped = SpecifyOnlyGeneratorProbe.ListOutputSince(folder, start, 20, 2, TimeSpan.FromMinutes(1), null);
+                Assert.True(capped.Truncated);
+                Assert.Equal(2, capped.Count); // what it had seen when it stopped
+
+                var exact = SpecifyOnlyGeneratorProbe.ListOutputSince(folder, start, 20, 3, TimeSpan.FromMinutes(1), null);
+                Assert.False(exact.Truncated);
+                Assert.Equal(3, exact.Count);
+            }
+            finally { System.IO.Directory.Delete(folder, recursive: true); }
+        }
+
+        [Fact]
+        public void The_walk_stops_when_its_time_budget_is_spent()
+        {
+            string folder = TempRoot();
+            try
+            {
+                DateTime start = DateTime.UtcNow;
+                for (int i = 0; i < 3; i++) TouchFile(System.IO.Path.Combine(folder, "f" + i + ".ari"), start.AddSeconds(1));
+
+                var listing = SpecifyOnlyGeneratorProbe.ListOutputSince(folder, start, 20, 1000, TimeSpan.Zero, null);
+
+                Assert.True(listing.Truncated);
+                Assert.True(listing.Count < 3);
+            }
+            finally { System.IO.Directory.Delete(folder, recursive: true); }
+        }
+
+        [Fact]
+        public void The_output_listing_names_the_folder_and_says_how_many_subfolders_it_left_out()
+        {
+            string folder = TempRoot();
+            try
+            {
+                DateTime start = DateTime.UtcNow;
+                for (int i = 0; i < 23; i++)
+                {
+                    string sub = System.IO.Path.Combine(folder, "GEN" + i.ToString("D2"));
+                    System.IO.Directory.CreateDirectory(sub);
+                    TouchFile(System.IO.Path.Combine(sub, "x.sp0"), start.AddSeconds(1));
+                }
+
+                var listing = SpecifyOnlyGeneratorProbe.ListOutputSince(folder, start, 20);
+
+                Assert.Equal(new System.IO.DirectoryInfo(folder).Name, listing.FolderName);
+                Assert.Equal(20, listing.Directories.Count);
+                Assert.Equal(3, listing.DirectoriesOmitted);
+            }
+            finally { System.IO.Directory.Delete(folder, recursive: true); }
+        }
+
+        // -- the observations a call leaves in its run result (the SDK-bound wiring, testable without the SDK)
+
+        [Fact]
+        public void The_sdk_bound_environment_keeps_the_switch_outcome_and_hands_its_observations_to_the_shared_wiring()
+        {
+            string source = GxMcp.TestSupport.RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "InProcessBuildRunner.SpecifyOnly.cs")
+                .Replace("\r\n", "\n");
+            Assert.Matches(@"RunWithSwitchOff\([\s\S]*?out failure,\s*switchOutcome\);", source);
+            // The whole statement, so that no argument can be swapped for null; the output folder is walked only for
+            // a call that invoked the specifier (the receipt names the output only then).
+            Assert.Matches(@"SpecifyOnlyObservations\.Apply\(result,\s*_engine as InProcessBuildEngine,\s*switchOutcome,\s*"
+                + @"result\.SpecifierInvoked \? ListSpecificationOutputSince\(model, startedUtc\) : null,\s*UnreachableObjectCode\);", source);
+            Assert.Contains("SpecifyOnlyGeneratorProbe.ListOutputSince(folder, startedUtc, 20)", source);
+        }
+
+        [Fact]
+        public void The_observations_copy_what_the_engine_the_switch_and_the_folder_showed_into_the_run_result()
+        {
+            var engine = new GxMcp.Worker.Helpers.InProcessBuildEngine((l, e) => { });
+            Feed(engine,
+                ">SSpecification:-:Specification",
+                ">O2spc0217: Object is unreachable.|Artech.Architecture.Common.Location.SourcePosition;",
+                ">R[7] Internal Error, convertion of formId=1 returned null",
+                ">E0Specification:-:Specification");
+            var result = new SpecifyOnlyRunResult();
+            var outcome = new SpecifyOnlySwitchOutcome { Restored = true };
+            var output = new SpecifyOnlyOutputListing
+            {
+                FolderName = "GXSPC002",
+                TopLevelNames = new List<string> { "userControls.v2.ari" },
+                Count = 5,
+                Directories = new List<string> { "GEN41" },
+                DirectoriesOmitted = 2,
+                Truncated = true
+            };
+
+            SpecifyOnlyObservations.Apply(result, engine, outcome, output, "spc0217");
+
+            Assert.Equal(new[] { "Specification" }, result.SectionsObserved);
+            Assert.True(result.ObjectUnreachable);
+            Assert.True(result.GenerationRestored);
+            Assert.Contains("convertion of formId=1 returned null", result.ChannelDetail);
+            Assert.Equal(new[] { "userControls.v2.ari" }, result.SpecificationFiles);
+            Assert.Equal(5, result.SpecificationOutputCount);
+            Assert.Equal("GXSPC002", result.SpecificationOutputFolder);
+            Assert.Equal(new[] { "GEN41" }, result.SpecificationOutputDirectories);
+            Assert.Equal(2, result.SpecificationOutputDirectoriesOmitted);
+            Assert.True(result.SpecificationOutputTruncated);
+        }
+
+        [Fact]
+        public void The_observations_ask_the_engine_about_the_code_they_are_given_and_no_other()
+        {
+            var engine = new GxMcp.Worker.Helpers.InProcessBuildEngine((l, e) => { });
+            Feed(engine, ">O2spc0217: Object is unreachable.|x");
+
+            var other = new SpecifyOnlyRunResult();
+            SpecifyOnlyObservations.Apply(other, engine, new SpecifyOnlySwitchOutcome(), new SpecifyOnlyOutputListing(), "spc0099");
+
+            Assert.False(other.ObjectUnreachable);
+        }
+
+        [Fact]
+        public void The_observations_claim_nothing_when_there_is_no_engine_no_switch_outcome_and_no_listing()
+        {
+            var result = new SpecifyOnlyRunResult { GenerationRestored = true, ChannelDetail = "stale" };
+
+            SpecifyOnlyObservations.Apply(result, null, null, null, "spc0217");
+
+            Assert.Empty(result.SectionsObserved);
+            Assert.False(result.ObjectUnreachable);
+            Assert.Null(result.GenerationRestored);
+            Assert.Null(result.ChannelDetail);
+            Assert.Empty(result.SpecificationFiles);
+            Assert.Equal(-1, result.SpecificationOutputCount);
+            Assert.Null(result.SpecificationOutputFolder);
+            Assert.Empty(result.SpecificationOutputDirectories);
+            Assert.Equal(0, result.SpecificationOutputDirectoriesOmitted);
+            Assert.False(result.SpecificationOutputTruncated);
+        }
+
+        // -- the SDK's own account of a failure that has no diagnostic code
+
+        [Fact]
+        public void The_engine_remembers_the_lines_the_sdk_wrote_on_its_runtime_channel_and_only_those()
+        {
+            var engine = new GxMcp.Worker.Helpers.InProcessBuildEngine((l, e) => { });
+            Feed(engine,
+                ">SSpecification:-:Specification",
+                ">L[50060]  Specifying SampleProc (1 of 1) ...",
+                ">R[50060] Object reference not set to an instance of an object.",
+                ">R[50060] Internal Error, convertion of formId=1 returned null",
+                "a line that only mentions >R in the middle",
+                "  >R padded with blanks  ",
+                ">E0Specification:-:Specification");
+
+            Assert.Equal(new[]
+            {
+                ">R[50060] Object reference not set to an instance of an object.",
+                ">R[50060] Internal Error, convertion of formId=1 returned null",
+                ">R padded with blanks"
+            }, engine.ChannelLines);
+        }
+
+        [Fact]
+        public void The_engine_keeps_a_bounded_number_of_runtime_channel_lines_the_first_ones()
+        {
+            var engine = new GxMcp.Worker.Helpers.InProcessBuildEngine((l, e) => { });
+            for (int i = 0; i < 80; i++) Feed(engine, ">R line " + i);
+
+            Assert.Equal(50, engine.ChannelLines.Count);
+            Assert.Equal(">R line 0", engine.ChannelLines[0]);
+            Assert.Equal(">R line 49", engine.ChannelLines[49]);
+        }
+
+        [Fact]
+        public void A_failure_without_an_itemized_diagnostic_quotes_what_the_sdk_said_on_its_runtime_channel()
+        {
+            var run = RunWith(() => Spec(r =>
+            {
+                r.SpecifierReturned = false;
+                r.ChannelDetail = "[7] Internal Error, convertion of formId=1 returned null.";
+            }));
+
+            var verdict = SpecifyOnlyJudge.Judge(run, specifierErrors: false);
+
+            Assert.Equal(SpecifyOnlyVerdictKind.SpecificationFailed, verdict.Kind);
+            Assert.True(verdict.OwnDiagnostic);
+            Assert.Equal(SpecifyOnlyCodes.SpecificationFailed, verdict.Code);
+            Assert.StartsWith("The specifier returned failure without an itemized diagnostic", verdict.Message);
+            Assert.Contains("convertion of formId=1 returned null", verdict.Message);
+        }
+
+        [Fact]
+        public void Without_a_runtime_channel_line_the_failure_message_stays_the_generic_one()
+        {
+            const string generic = "The specifier returned failure without an itemized diagnostic.";
+            Assert.Equal(generic, SpecifyOnlyJudge.Judge(RunWith(() => Spec(r => r.SpecifierReturned = false)), specifierErrors: false).Message);
+            Assert.Equal(generic, SpecifyOnlyJudge.Judge(RunWith(() => Spec(r => { r.SpecifierReturned = false; r.ChannelDetail = "  "; })), specifierErrors: false).Message);
+        }
+
+        [Fact]
+        public void Errors_the_sdk_itemized_win_over_the_runtime_channel()
+        {
+            var run = RunWith(() => Spec(r => { r.SpecifierReturned = false; r.ChannelDetail = "[7] something"; }));
+
+            var verdict = SpecifyOnlyJudge.Judge(run, specifierErrors: true);
+
+            Assert.Equal(SpecifyOnlyVerdictKind.SpecificationFailed, verdict.Kind);
+            Assert.False(verdict.OwnDiagnostic);
+            Assert.Null(verdict.Message);
+        }
+
+        [Fact]
+        public void The_runtime_channel_text_reaches_the_task_error_line_and_the_receipt_diagnostic()
+        {
+            var status = StrictStatus();
+            var lines = new List<string>();
+            var env = new FakeEnvironment(Facts())
+            {
+                OnSpecify = () => Spec(r =>
+                {
+                    r.SpecifierReturned = false;
+                    r.ChannelDetail = "[7] Internal Error, convertion of formId=1 returned null.";
+                })
+            };
+
+            RunStrict(status, env, lines);
+
+            var error = Assert.Single(lines, l => l.StartsWith("E:"));
+            Assert.Contains(SpecifyOnlyCodes.SpecificationFailed, error);
+            Assert.Contains("convertion of formId=1 returned null", error);
+            var diagnostic = (JObject)status.SpecifyOnlyReceipt["diagnostics"][0];
+            Assert.Equal(SpecifyOnlyCodes.SpecificationFailed, (string)diagnostic["code"]);
+            Assert.Contains("convertion of formId=1 returned null", (string)diagnostic["message"]);
+        }
+
+        // -- the generation switch: the receipt says whether it was given back
+
+        [Fact]
+        public void The_outcome_says_the_switch_was_given_back_and_read_back()
+        {
+            var sw = new FakeSwitch { Value = true };
+            var outcome = new SpecifyOnlySwitchOutcome();
+
+            SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => { }, out string failure, outcome);
+
+            Assert.True(outcome.Restored);
+            Assert.True(sw.Value);
+        }
+
+        [Fact]
+        public void The_outcome_says_the_switch_was_given_back_also_when_the_body_threw()
+        {
+            var sw = new FakeSwitch { Value = true };
+            var outcome = new SpecifyOnlySwitchOutcome();
+
+            Assert.Throws<InvalidOperationException>(() =>
+                SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => throw new InvalidOperationException("boom"), out string ignored, outcome));
+
+            Assert.True(outcome.Restored);
+        }
+
+        [Fact]
+        public void The_outcome_says_the_switch_was_not_given_back_when_a_read_shows_another_value_or_cannot_be_made()
+        {
+            // The restore call throws and the switch stays off.
+            bool value = true;
+            int writes = 0;
+            var thrown = new SpecifyOnlySwitchOutcome();
+            SpecifyOnlyGenerationSwitch.RunWithSwitchOff(() => value,
+                v => { if (writes++ > 0) throw new InvalidOperationException("no restore"); value = v; },
+                () => { }, out string failure, thrown);
+            Assert.False(thrown.Restored);
+
+            // The restore call returns, but a read still shows the switch off.
+            value = true;
+            writes = 0;
+            var ignored = new SpecifyOnlySwitchOutcome();
+            SpecifyOnlyGenerationSwitch.RunWithSwitchOff(() => value,
+                v => { if (writes++ == 0) value = v; },
+                () => { }, out failure, ignored);
+            Assert.False(ignored.Restored);
+
+            // The restore works, but the read that would confirm it fails: it cannot be said to be back.
+            value = true;
+            int reads = 0;
+            var unreadable = new SpecifyOnlySwitchOutcome();
+            SpecifyOnlyGenerationSwitch.RunWithSwitchOff(
+                () => { if (++reads > 2) throw new InvalidOperationException("no read"); return value; },
+                v => value = v,
+                () => { }, out failure, unreadable);
+            Assert.False(unreadable.Restored);
+        }
+
+        [Fact]
+        public void A_switch_that_was_already_off_is_reported_as_back_where_it_was()
+        {
+            // The old value was "off": giving it back leaves it off, which is where it was.
+            var sw = new FakeSwitch { Value = false };
+            var outcome = new SpecifyOnlySwitchOutcome();
+
+            SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => { }, out string failure, outcome);
+
+            Assert.True(outcome.Restored);
+            Assert.False(sw.Value);
+        }
+
+        [Fact]
+        public void A_switch_that_could_not_be_changed_is_reported_as_where_it_was_not_as_a_failed_restore()
+        {
+            // The write is ignored: the body never runs, and the read after shows the value it had.
+            var stuck = new FakeSwitch { Value = true, Stuck = true };
+            var stuckOutcome = new SpecifyOnlySwitchOutcome();
+            Assert.False(SpecifyOnlyGenerationSwitch.RunWithSwitchOff(stuck.Get, stuck.Set,
+                () => throw new Xunit.Sdk.XunitException("body ran"), out string failure, stuckOutcome));
+            Assert.True(stuckOutcome.Restored);
+
+            // Every write throws: the switch never changed, so it is where it was.
+            var broken = new FakeSwitch { Value = true, FailWrite = true };
+            var brokenOutcome = new SpecifyOnlySwitchOutcome();
+            Assert.False(SpecifyOnlyGenerationSwitch.RunWithSwitchOff(broken.Get, broken.Set,
+                () => throw new Xunit.Sdk.XunitException("body ran"), out failure, brokenOutcome));
+            Assert.True(brokenOutcome.Restored);
+            Assert.True(broken.Value);
+        }
+
+        [Fact]
+        public void The_outcome_stays_unknown_when_the_switch_was_never_touched()
+        {
+            var sw = new FakeSwitch { Value = true, FailRead = true };
+            var outcome = new SpecifyOnlySwitchOutcome();
+
+            bool ran = SpecifyOnlyGenerationSwitch.RunWithSwitchOff(sw.Get, sw.Set, () => { }, out string failure, outcome);
+
+            Assert.False(ran);
+            Assert.Null(outcome.Restored);
+            Assert.Empty(sw.Writes);
+        }
+
+        [Fact]
+        public void The_receipt_evidence_reports_whether_the_generation_switch_was_given_back()
+        {
+            JToken Restored(bool? value)
+                => SpecifyOnlyReceiptBuilder.Build(Request(), RunWith(() => Spec(r => r.GenerationRestored = value)), new JArray())["evidence"]["generationRestored"];
+
+            Assert.True((bool)Restored(true));
+            Assert.False((bool)Restored(false));
+            Assert.Equal(JTokenType.Null, Restored(null).Type);
         }
     }
 }
