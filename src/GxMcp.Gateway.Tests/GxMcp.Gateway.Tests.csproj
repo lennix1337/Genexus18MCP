@@ -24,6 +24,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\GxMcp.Gateway\GxMcp.Gateway.csproj" />
+    <!-- Build-order only: the process smoke tests launch this net48 broker from its own bin folder. -->
+    <ProjectReference Include="..\GxMcp.SharedHost.TestHost\GxMcp.SharedHost.TestHost.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
   <Compile Include="..\TestSupport\RepoSource.cs" Link="TestSupport\RepoSource.cs" />
     <Compile Include="..\TestSupport\SourceAssert.cs" Link="TestSupport\SourceAssert.cs" />
   </ItemGroup>
