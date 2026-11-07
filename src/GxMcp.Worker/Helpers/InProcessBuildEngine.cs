@@ -47,6 +47,18 @@ namespace GxMcp.Worker.Helpers
             get { lock (_startedSections) return _startedSections.ToArray(); }
         }
 
+        // The lines the SDK wrote on its ">R" output channel (runtime messages that carry no diagnostic code), in
+        // order and bounded. A specification that fails with nothing but these (an internal error of the SDK) has no
+        // itemized diagnostic; specify_only quotes them instead of a generic message.
+        private static readonly Regex _rxChannelLine = new Regex(@"^[ \t]*>R", RegexOptions.Compiled);
+        private const int ChannelLineCap = 50;
+        private readonly System.Collections.Generic.List<string> _channelLines = new System.Collections.Generic.List<string>();
+
+        public System.Collections.Generic.IReadOnlyList<string> ChannelLines
+        {
+            get { lock (_channelLines) return _channelLines.ToArray(); }
+        }
+
         // Every GeneXus diagnostic code (spc0217, gen0001, ...) any message mentioned. The line parsers downstream
         // classify a line by its shape; this answers "did the SDK say spc0217 at all", whatever the shape. The SDK
         // glues the code to its output marker (">O2spc0217: ..."), so the code is delimited by "not a letter before,
@@ -73,6 +85,12 @@ namespace GxMcp.Worker.Helpers
                 var sectionMatch = _rxSectionStartName.Match(sectionPayloadStart >= 0 ? s.Substring(sectionPayloadStart + 2) : s);
                 if (sectionMatch.Success)
                     lock (_startedSections) _startedSections.Add(sectionMatch.Groups["name"].Value.Trim());
+                string channelPayload = sectionPayloadStart >= 0 ? s.Substring(sectionPayloadStart + 2) : s;
+                if (_rxChannelLine.IsMatch(channelPayload))
+                    lock (_channelLines)
+                    {
+                        if (_channelLines.Count < ChannelLineCap) _channelLines.Add(channelPayload.Trim());
+                    }
                 foreach (Match code in _rxDiagnosticCode.Matches(s))
                     lock (_seenCodes) _seenCodes.Add(code.Value);
             }

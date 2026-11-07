@@ -145,12 +145,42 @@ namespace GxMcp.Worker.Services
         public List<string> Names { get; set; } = new List<string>();
     }
 
+    // What a call left under the specifier's own output folder (GXSPC<model>), at any depth. Count is -1 when it
+    // could not be counted (no folder to look at, an unreadable subfolder).
+    internal sealed class SpecifyOnlyOutputListing
+    {
+        // The name (not the path) of the folder these figures are about, e.g. GXSPC002.
+        public string FolderName { get; set; }
+        // The files directly in the folder, newest first and capped: what SpecifyOnlyRunResult.SpecificationFiles holds.
+        public List<string> TopLevelNames { get; set; } = new List<string>();
+        // Every file written at or after the start anywhere under the folder; a lower bound when Truncated.
+        public int Count { get; set; } = -1;
+        // The subfolders (relative to the folder, capped) that received a file, and how many more there were.
+        public List<string> Directories { get; set; } = new List<string>();
+        public int DirectoriesOmitted { get; set; }
+        // The walk stopped at its file or time limit, so Count and Directories are what it had seen by then.
+        public bool Truncated { get; set; }
+    }
+
+    // What a read after a call showed of the process-wide generation switch: true = the value it had before the call
+    // (also when the call could not change it); false = another value, or it could not be read; null = the call never
+    // got as far as reading it.
+    internal sealed class SpecifyOnlySwitchOutcome
+    {
+        public bool? Restored { get; set; }
+    }
+
     // Outcome of the specifier call itself, as the SDK-bound environment saw it.
     internal sealed class SpecifyOnlyRunResult
     {
         public bool SpecifierInvoked { get; set; }
         public bool SpecifierReturned { get; set; }
         public bool GenerationSuppressed { get; set; }
+        // What a read after the call showed of the generation switch (see SpecifyOnlySwitchOutcome).
+        public bool? GenerationRestored { get; set; }
+        // What the SDK's ">R" output channel said, in short (BuildChannelFailureExcerpt); null when it said nothing.
+        // It is the only account of a specification that failed with an internal error and no itemized diagnostic.
+        public string ChannelDetail { get; set; }
         // The specifier said the object is unreachable (spc0217: no Main program reaches it), which GeneXus
         // answers by not specifying it at all.
         public bool ObjectUnreachable { get; set; }
@@ -158,8 +188,17 @@ namespace GxMcp.Worker.Services
         // (BuildOptions.Rebuild, what SpecifyOneOnly.ForceRebuild sets); false when this SDK has no such option.
         public bool RebuildApplied { get; set; }
         public List<string> SectionsObserved { get; set; } = new List<string>();
-        // Files the specifier wrote in its own output folder (GXSPC<model>) during the call.
+        // Files the specifier wrote directly in its own output folder (GXSPC<model>) during the call. It keeps most of
+        // what it writes in subfolders, which the three members below count.
         public List<string> SpecificationFiles { get; set; } = new List<string>();
+        // How many files the call wrote anywhere under that folder (-1 = not counted), the subfolders that received
+        // them (and how many more there were), and whether the walk stopped at its limits (so the count is a lower
+        // bound). SpecificationOutputFolder is the folder's name, e.g. GXSPC002.
+        public int SpecificationOutputCount { get; set; } = -1;
+        public string SpecificationOutputFolder { get; set; }
+        public List<string> SpecificationOutputDirectories { get; set; } = new List<string>();
+        public int SpecificationOutputDirectoriesOmitted { get; set; }
+        public bool SpecificationOutputTruncated { get; set; }
         public string Failure { get; set; }
     }
 
@@ -211,13 +250,17 @@ namespace GxMcp.Worker.Services
         private static readonly object Gate = new object();
 
         // Runs body only when the switch could be read, switched off and confirmed off. Returns false (and
-        // does not run body) otherwise, with the reason in failure.
-        public static bool RunWithSwitchOff(Func<bool> get, Action<bool> set, Action body, out string failure)
+        // does not run body) otherwise, with the reason in failure. outcome (null = not wanted) says afterwards what a
+        // read showed of the switch once the call was over, also when body threw or the switch could not be changed:
+        // the caller keeps it to put in the receipt. It is required so that a caller cannot leave it out by accident.
+        public static bool RunWithSwitchOff(Func<bool> get, Action<bool> set, Action body, out string failure,
+            SpecifyOnlySwitchOutcome outcome)
         {
-            lock (Gate) return RunWithSwitchOffLocked(get, set, body, out failure);
+            lock (Gate) return RunWithSwitchOffLocked(get, set, body, out failure, outcome);
         }
 
-        private static bool RunWithSwitchOffLocked(Func<bool> get, Action<bool> set, Action body, out string failure)
+        private static bool RunWithSwitchOffLocked(Func<bool> get, Action<bool> set, Action body, out string failure,
+            SpecifyOnlySwitchOutcome outcome)
         {
             failure = null;
             bool previous;
@@ -247,6 +290,13 @@ namespace GxMcp.Worker.Services
             {
                 try { set(previous); }
                 catch (Exception ex) { Logger.Warn("[SPECIFY-ONLY] could not restore the generation switch: " + ex.Message); }
+                // Whether it is back is a fact about the switch now, not about whether a write threw: a switch that
+                // never changed is back, and one that did not come back (or cannot be read) is not.
+                if (outcome != null)
+                {
+                    try { outcome.Restored = get() == previous; }
+                    catch { outcome.Restored = false; }
+                }
             }
         }
     }
@@ -259,6 +309,11 @@ namespace GxMcp.Worker.Services
     {
         private const int Cap = 1000;
         private const int NameCap = 10;
+        // ListOutputSince: files examined and time spent before the walk gives up (it runs under the KB lock), and
+        // subfolders named.
+        private const int ExamineCap = 200000;
+        private static readonly TimeSpan WalkBudget = TimeSpan.FromSeconds(2);
+        private const int DirectoryCap = 20;
 
         // Entries at or after startedUtc under outputRoot: files directly in the folder and in its web\ folder,
         // plus folders created inside it (a first web\ appearing is the clearest sign of a first generation) and
@@ -311,6 +366,84 @@ namespace GxMcp.Worker.Services
                 .Take(Math.Max(0, max)))
                 names.Add(file.Name);
             return names;
+        }
+
+        // The specifier keeps most of what it writes in subfolders of its output folder (one per generator, one
+        // for navigation), so the files directly in the folder are a small part of the answer. This names those
+        // (TopLevelNames, as ListFilesSince does) and also counts every file written anywhere under the folder and
+        // names the subfolders that received them. Count stays -1 when there is no folder to look at or the listing
+        // fails (an unreadable subfolder): "not counted", never zero. The walk runs under the KB lock, so it stops at
+        // ExamineCap files or WalkBudget of time, whichever comes first, and then Count and Directories are what it
+        // had seen by then (Truncated).
+        public static SpecifyOnlyOutputListing ListOutputSince(string folder, DateTime startedUtc, int maxNames)
+            => ListOutputSince(folder, startedUtc, maxNames, ExamineCap, WalkBudget, null);
+
+        // The same with its limits and its enumeration given, so that tests can reach the cap, the time budget and a
+        // walk that fails; enumerate null = every file below the folder.
+        internal static SpecifyOnlyOutputListing ListOutputSince(string folder, DateTime startedUtc, int maxNames,
+            int examineCap, TimeSpan budget, Func<System.IO.DirectoryInfo, IEnumerable<System.IO.FileInfo>> enumerate)
+        {
+            var listing = new SpecifyOnlyOutputListing();
+            if (string.IsNullOrWhiteSpace(folder) || !System.IO.Directory.Exists(folder)) return listing;
+            try
+            {
+                listing.TopLevelNames = ListFilesSince(folder, startedUtc, maxNames);
+                var root = new System.IO.DirectoryInfo(folder);
+                listing.FolderName = root.Name;
+                string rootPath = root.FullName.TrimEnd('\\', '/');
+                var directories = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                int examined = 0;
+                int written = 0;
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                var files = enumerate != null ? enumerate(root) : root.EnumerateFiles("*", System.IO.SearchOption.AllDirectories);
+                foreach (var file in files)
+                {
+                    if (++examined > examineCap || clock.Elapsed > budget) { listing.Truncated = true; break; }
+                    if (file.LastWriteTimeUtc < startedUtc) continue;
+                    written++;
+                    string parent = (file.DirectoryName ?? rootPath).TrimEnd('\\', '/');
+                    if (!string.Equals(parent, rootPath, StringComparison.OrdinalIgnoreCase))
+                        directories.Add(parent.Substring(rootPath.Length).TrimStart('\\', '/'));
+                }
+                listing.Count = written;
+                listing.DirectoriesOmitted = Math.Max(0, directories.Count - DirectoryCap);
+                listing.Directories = directories.Take(DirectoryCap).ToList();
+            }
+            catch (Exception ex)
+            {
+                // Nothing but the names at the top is kept: the figures below are assigned only after a complete walk.
+                Logger.Warn("[SPECIFY-ONLY] could not count the specification output: " + ex.Message);
+                listing.Count = -1;
+            }
+            return listing;
+        }
+    }
+
+    // Copies what a specification call left behind into its run result: the sections and codes the SDK's output showed
+    // (read from the engine that listened to it), what its ">R" channel said, whether the generation switch was given
+    // back, and what the specifier wrote under its folder. The SDK-bound environment calls this once, in a finally, so
+    // this wiring is one place and can be tested without the SDK.
+    internal static class SpecifyOnlyObservations
+    {
+        public static void Apply(SpecifyOnlyRunResult result, InProcessBuildEngine engine, SpecifyOnlySwitchOutcome switchOutcome,
+            SpecifyOnlyOutputListing output, string unreachableCode)
+        {
+            result.SectionsObserved = engine?.StartedSections.ToList() ?? new List<string>();
+            result.ObjectUnreachable = engine != null && engine.SawCode(unreachableCode);
+            result.GenerationRestored = switchOutcome?.Restored;
+            // The only account of a specification that failed with an internal error and no itemized diagnostic: the
+            // same excerpt a failed build quotes (#608).
+            string channelHint;
+            result.ChannelDetail = engine == null
+                ? null
+                : BuildChannelFailureExcerpt.Describe(string.Join("\n", engine.ChannelLines), out channelHint);
+            output = output ?? new SpecifyOnlyOutputListing();
+            result.SpecificationFiles = output.TopLevelNames;
+            result.SpecificationOutputCount = output.Count;
+            result.SpecificationOutputFolder = output.FolderName;
+            result.SpecificationOutputDirectories = output.Directories;
+            result.SpecificationOutputDirectoriesOmitted = output.DirectoriesOmitted;
+            result.SpecificationOutputTruncated = output.Truncated;
         }
     }
 
@@ -722,7 +855,10 @@ namespace GxMcp.Worker.Services
                 return new SpecifyOnlyVerdict { Kind = SpecifyOnlyVerdictKind.SpecificationFailed, OwnDiagnostic = false };
             if (!spec.SpecifierReturned)
                 return Own(SpecifyOnlyVerdictKind.SpecificationFailed, SpecifyOnlyCodes.SpecificationFailed,
-                    "The specifier returned failure without an itemized diagnostic.");
+                    string.IsNullOrWhiteSpace(spec.ChannelDetail)
+                        ? "The specifier returned failure without an itemized diagnostic."
+                        : "The specifier returned failure without an itemized diagnostic; the GeneXus output channel (>R) reported: "
+                          + spec.ChannelDetail);
 
             if (IsFailedTaskStatus(taskStatus))
                 return Own(SpecifyOnlyVerdictKind.ExecutionFailed, SpecifyOnlyCodes.ExecutionFailed,
@@ -890,6 +1026,9 @@ namespace GxMcp.Worker.Services
             {
                 ["specifierInvoked"] = spec != null && spec.SpecifierInvoked,
                 ["generationSuppressed"] = spec != null && spec.GenerationSuppressed,
+                // True when a read after the call showed the SDK's switch at the value it had before; false when it
+                // showed another value or could not be read; null when the call never got as far as reading it.
+                ["generationRestored"] = spec != null && spec.GenerationRestored.HasValue ? (JToken)spec.GenerationRestored.Value : JValue.CreateNull(),
                 ["rebuildApplied"] = spec != null && spec.RebuildApplied,
                 ["sdkSectionsObserved"] = new JArray((spec?.SectionsObserved ?? new List<string>()).Cast<object>().ToArray()),
                 ["generationOrCompilationSectionObserved"] = spec != null && spec.SectionsObserved.Any(IsGenerationOrLaterSection),
@@ -1050,14 +1189,42 @@ namespace GxMcp.Worker.Services
                 list.Add(copy);
             }
             if (run.Specify != null && run.Specify.SpecifierInvoked)
-                list.Add(new JObject
-                {
-                    ["kind"] = "specification-output",
-                    ["scope"] = "environment model",
-                    ["files"] = new JArray(run.Specify.SpecificationFiles.Cast<object>().ToArray()),
-                    ["note"] = "The specification results the specifier keeps for the object; the same store a build's specification step writes. 'files' names what it wrote in its output folder during this call."
-                });
+                list.Add(SpecificationOutput(run.Specify));
             return list;
+        }
+
+        // What the specifier left in its output folder ('folder', its name). 'files' keeps its meaning (the files
+        // directly in the top of that folder, newest first, at most 20) and stays a partial list: most of what the
+        // specifier writes is in subfolders. The additive fields say how much more there is, all of them about that
+        // one folder: 'filesWrittenCount' counts every file written anywhere under it ('filesWrittenCountIsLowerBound'
+        // when the walk stopped at its limits), 'directories' names the subfolders that received them
+        // ('directoriesOmitted' counts the ones beyond the 20 named); 'filesListComplete' is true only when 'files' is
+        // everything that was written there. The count and the directories are absent when they could not be made.
+        private static JObject SpecificationOutput(SpecifyOnlyRunResult spec)
+        {
+            var output = new JObject
+            {
+                ["kind"] = "specification-output",
+                ["scope"] = "environment model",
+                ["files"] = new JArray(spec.SpecificationFiles.Cast<object>().ToArray())
+            };
+            if (!string.IsNullOrEmpty(spec.SpecificationOutputFolder)) output["folder"] = spec.SpecificationOutputFolder;
+            if (spec.SpecificationOutputCount >= 0)
+            {
+                output["filesWrittenCount"] = spec.SpecificationOutputCount;
+                if (spec.SpecificationOutputTruncated) output["filesWrittenCountIsLowerBound"] = true;
+                output["directories"] = new JArray(spec.SpecificationOutputDirectories.Cast<object>().ToArray());
+                if (spec.SpecificationOutputDirectoriesOmitted > 0) output["directoriesOmitted"] = spec.SpecificationOutputDirectoriesOmitted;
+            }
+            // An uncounted run (-1) never equals the number of names, so it is never reported complete.
+            output["filesListComplete"] = !spec.SpecificationOutputTruncated
+                && spec.SpecificationOutputCount == spec.SpecificationFiles.Count;
+            output["note"] = "The specification results the specifier keeps for the object; the same store a build's specification step writes. "
+                + "'files' names the files it wrote directly in the top of its output folder ('folder') during this call (at most 20); "
+                + "'filesWrittenCount' counts every file it wrote anywhere under that folder and 'directories' names the subfolders that received them, "
+                + "so 'files' is the complete list only when 'filesListComplete' is true. "
+                + "The specifier can also update files elsewhere in the Knowledge Base folder (for example navigation files at its root and a per-user model folder); this receipt neither lists nor counts them.";
+            return output;
         }
 
         private static JObject Rollback(SpecifyOnlyRun run)

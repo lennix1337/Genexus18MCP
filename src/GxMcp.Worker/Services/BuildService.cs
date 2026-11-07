@@ -1153,6 +1153,32 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // What a task that has ended confirms. The generic rule is that it went through every stage, also when it
+        // failed. A specify_only task never generates or compiles (its receipt says so), so it confirms the stages
+        // it reached: the specifier, once it was invoked and came back (with errors, or having skipped the object:
+        // the outcome says which), plus any generation or compilation section the SDK opened anyway (the receipt
+        // reports that as GenerationObserved), so the two cannot disagree. A task that was refused, never invoked
+        // the specifier or whose specifier threw confirms none. Stages the task's own output lines already
+        // confirmed stay. OpeningKB is confirmed with the first stage, as the output-driven rule does.
+        internal static void RecordTerminalStages(BuildTaskStatus status)
+        {
+            if (status == null) return;
+            if (status.SpecifyOnlyRequest == null)
+            {
+                RecordStagesUpTo(status, "Done");
+                return;
+            }
+            SpecifyOnlyRunResult specify;
+            lock (status._lock) specify = status.SpecifyOnlyRun?.Specify;
+            if (specify == null || !specify.SpecifierInvoked || specify.Failure != null) return;
+            RecordStageConfirmed(status, "OpeningKB");
+            RecordStageConfirmed(status, "Specifying");
+            if (specify.SectionsObserved.Any(s => s != null && s.IndexOf("Generat", StringComparison.OrdinalIgnoreCase) >= 0))
+                RecordStageConfirmed(status, "Generating");
+            if (specify.SectionsObserved.Any(s => s != null && s.IndexOf("Compil", StringComparison.OrdinalIgnoreCase) >= 0))
+                RecordStageConfirmed(status, "Compiling");
+        }
+
         internal static string ResolveChildProcessState(Process process, bool killRequested = false)
         {
             if (process == null) return "unknown";
@@ -4588,7 +4614,7 @@ namespace GxMcp.Worker.Services
                             status.PartialSuccess = true;
                         }
                         status.Phase = "Done";
-                        RecordStagesUpTo(status, "Done");
+                        RecordTerminalStages(status);
                         EmitPhaseProgress(status.Phase);
 
                         // When the pipeline reported failure but emitted no itemized
@@ -4699,7 +4725,7 @@ namespace GxMcp.Worker.Services
             status.ChildProcessState = "none";
             status.MsBuildExitCode = null;
             status.Phase = "Done";
-            RecordStagesUpTo(status, "Done");
+            RecordTerminalStages(status);
             EmitPhaseProgress(status.Phase);
             status.Error = error;
             status.EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
@@ -5309,7 +5335,7 @@ namespace GxMcp.Worker.Services
             status.ExitCode = 1;
             status.FailureOrigin = "error";
             status.ChildProcessState = "none";
-            RecordStagesUpTo(status, "Done");
+            RecordTerminalStages(status);
             EmitPhaseProgress(status.Phase);
             status.Error = error;
             status.EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");

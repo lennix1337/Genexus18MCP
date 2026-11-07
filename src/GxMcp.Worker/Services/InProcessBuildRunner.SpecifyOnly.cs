@@ -189,6 +189,7 @@ namespace GxMcp.Worker.Services
             public SpecifyOnlyRunResult Specify(Guid guid)
             {
                 var result = new SpecifyOnlyRunResult();
+                var switchOutcome = new SpecifyOnlySwitchOutcome();
                 DateTime startedUtc = DateTime.UtcNow;
                 object model = null;
                 try
@@ -223,7 +224,8 @@ namespace GxMcp.Worker.Services
                             result.SpecifierReturned = WithTaskOutput(_kb, _engine,
                                 () => (bool)specifyObjects.Invoke(specifier, new[] { model, keys, options }));
                         },
-                        out failure);
+                        out failure,
+                        switchOutcome);
                     if (!ran) result.Failure = failure;
                 }
                 catch (Exception ex)
@@ -234,10 +236,10 @@ namespace GxMcp.Worker.Services
                 }
                 finally
                 {
-                    var engine = _engine as InProcessBuildEngine;
-                    result.SectionsObserved = engine?.StartedSections.ToList() ?? new List<string>();
-                    result.ObjectUnreachable = engine != null && engine.SawCode(UnreachableObjectCode);
-                    result.SpecificationFiles = ListSpecificationFilesSince(model, startedUtc);
+                    // The receipt names the specification output only for a call that invoked the specifier, so the
+                    // folder is not walked (under the KB lock) for one that was refused or could not start.
+                    SpecifyOnlyObservations.Apply(result, _engine as InProcessBuildEngine, switchOutcome,
+                        result.SpecifierInvoked ? ListSpecificationOutputSince(model, startedUtc) : null, UnreachableObjectCode);
                 }
                 return result;
             }
@@ -261,21 +263,22 @@ namespace GxMcp.Worker.Services
                 return Enum.ToObject(_typeBuildOptions, bits);
             }
 
-            // The specifier keeps its per-object results in <KB>\GXSPC<model id>; name what this call wrote there.
-            private List<string> ListSpecificationFilesSince(object model, DateTime startedUtc)
+            // The specifier keeps its per-object results in <KB>\GXSPC<model id>, mostly in subfolders; name the files this
+            // call wrote directly there and count what it wrote below (a listing that could not be made stays "not counted").
+            private SpecifyOnlyOutputListing ListSpecificationOutputSince(object model, DateTime startedUtc)
             {
                 try
                 {
                     string kbDirectory = _kb.GetType().GetProperty("Location", BindingFlags.Public | BindingFlags.Instance)?.GetValue(_kb) as string;
                     object id = model?.GetType().GetProperty("Id", BindingFlags.Public | BindingFlags.Instance)?.GetValue(model);
-                    if (string.IsNullOrWhiteSpace(kbDirectory) || id == null) return new List<string>();
+                    if (string.IsNullOrWhiteSpace(kbDirectory) || id == null) return new SpecifyOnlyOutputListing();
                     string folder = Path.Combine(kbDirectory, "GXSPC" + Convert.ToInt32(id).ToString("D3"));
-                    return SpecifyOnlyGeneratorProbe.ListFilesSince(folder, startedUtc, 20);
+                    return SpecifyOnlyGeneratorProbe.ListOutputSince(folder, startedUtc, 20);
                 }
                 catch (Exception ex)
                 {
                     Logger.Warn("[BUILD-INPROCESS] SpecifyOnly could not list the specification output: " + ex.Message);
-                    return new List<string>();
+                    return new SpecifyOnlyOutputListing();
                 }
             }
 
