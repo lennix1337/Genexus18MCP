@@ -89,7 +89,7 @@
       "timeoutMs": 120000
     },
     "shared-host-gateway-regression": {
-      "description": "Shared-host Gateway queue, compatibility and process tests; requires shared-host-test-host; no SDK KB or Cloud",
+      "description": "Shared-host Gateway queue, compatibility and process tests; builds the SDK-free TestHost itself; no SDK KB or Cloud",
       "argv": ["dotnet", "test", "src/GxMcp.Gateway.Tests/GxMcp.Gateway.Tests.csproj", "-c", "Release", "--filter", "FullyQualifiedName~SharedHost|FullyQualifiedName~SharedWorker|FullyQualifiedName~ReadLogsOffSdkLane", "--logger", "console;verbosity=minimal"],
       "timeoutMs": 120000
     },
