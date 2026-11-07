@@ -1281,7 +1281,10 @@ namespace GxMcp.Worker.Services
                     string previousValue = ReadStoredProperty(obj, nativeName, controlName);
                     previousValues[propName] = previousValue;
                     // Only a value written to the object itself can be reset. A value in another container is written back instead.
-                    if (string.IsNullOrEmpty(controlName) && ReferenceEquals(propertyContainer, obj) && IsPropertyDefaultSafe(obj, nativeName)) wereDefault.Add(propName);
+                    // The enumerated values of a Domain never go back to a default: the SDK's answer for that name is not reliable, and a
+                    // reset would leave the new list where the previous one belongs.
+                    if (!DomainEnumValuesProperty.Targets((object)obj, nativeName)
+                        && string.IsNullOrEmpty(controlName) && ReferenceEquals(propertyContainer, obj) && IsPropertyDefaultSafe(obj, nativeName)) wereDefault.Add(propName);
                     beforeValues[propName] = previousValue ?? string.Empty;
                 }
 
@@ -1715,6 +1718,11 @@ namespace GxMcp.Worker.Services
                 || string.Equals(propName.Trim(), "OutputSDT", StringComparison.OrdinalIgnoreCase))
                 return null;
 
+            // A Domain's EnumValues are one JSON list written through the SDK's typed helper. The SDK does not list them among
+            // the descriptors below, which answered PropertyNotFound for a name that action=get offers as writable.
+            if (DomainEnumValuesProperty.Applies((object)container, propName))
+                return DomainEnumValuesProperty.Parse(rawValue, out _);
+
             dynamic descriptor = null;
             bool enumerated = false;
             try
@@ -1826,6 +1834,9 @@ namespace GxMcp.Worker.Services
                     }
                     catch { }
                 }
+                // The enumerated values of a Domain are compared as the canonical list (DomainEnumValuesProperty.Matches), exactly.
+                bool enumeratedValues = DomainEnumValuesProperty.IsName(propName) && DomainEnumValuesProperty.IsDomain((object)container);
+                if (enumeratedValues) requested = DomainEnumValuesProperty.CanonicalOrSame(requested);
                 if (string.Equals(propName?.Trim(), "Type", StringComparison.OrdinalIgnoreCase))
                 {
                     try
@@ -1858,7 +1869,7 @@ namespace GxMcp.Worker.Services
                 if (persisted == null) persisted = TryReadPropertyString(container, propName, fresh.Model);
                 if (persisted == null) return reportProperty ? ReportPropertyVerificationUnavailable(target) : null; // unverifiable
 
-                if (!PersistenceVerifier.ValuesMatch(requested, persisted, IsNullablePropertyName(propName)))
+                if (!PersistedValueMatches(propName, enumeratedValues, requested, persisted))
                 {
                     bool preservedExistingAttributeType = original is global::Artech.Genexus.Common.Objects.Attribute
                         && string.Equals(propName?.Trim(), "Type", StringComparison.OrdinalIgnoreCase)
@@ -1900,6 +1911,13 @@ namespace GxMcp.Worker.Services
                     ? ReportPropertyVerificationUnavailable(target) : null;
             }
         }
+
+        // How the value read after the save is compared with the requested one: exactly for the enumerated values of a Domain,
+        // where a change of case or accent is a change; with the case-insensitive comparison of the other properties otherwise.
+        internal static bool PersistedValueMatches(string propName, bool enumeratedValues, string requested, string persisted)
+            => enumeratedValues
+                ? DomainEnumValuesProperty.Matches(requested, persisted)
+                : PersistenceVerifier.ValuesMatch(requested, persisted, IsNullablePropertyName(propName));
 
         private static string ValidateReportTextMode(string value)
             => bool.TryParse(value, out _) ? null : "InvalidPropertyValue: RPT_TEXT_MODE requires True or False.";
@@ -2079,10 +2097,22 @@ namespace GxMcp.Worker.Services
         /// <summary>The name of the SDT a Data Provider outputs, or null when it has none.</summary>
         public string ReadDataProviderOutputSdt(KBObject obj) => TryReadPropertyString(obj, "OutputSDT", obj?.Model);
 
+        /// <summary>The current value of a property as text, null when it cannot be read: the read every write, check and rollback uses.</summary>
+        internal static string ReadPropertyString(dynamic container, string propName, KBModel model = null)
+            => TryReadPropertyString(container, propName, model);
+
         private static string TryReadPropertyString(dynamic container, string propName, KBModel model = null)
         {
             try
             {
+                // The enumerated values of a Domain read as the canonical JSON list that action=get returns, so a write, its
+                // verification and a rollback compare the same text.
+                if (DomainEnumValuesProperty.IsName(propName))
+                {
+                    string enumeratedValues = DomainEnumValuesProperty.Read((object)container);
+                    if (enumeratedValues != null) return enumeratedValues;
+                }
+
                 if (IsDomainPropertyName(propName))
                 {
                     try
@@ -2386,6 +2416,14 @@ namespace GxMcp.Worker.Services
             if (ReportLayoutHelper.IsTextModeProperty(propName) && string.IsNullOrEmpty(controlName))
             {
                 ReportLayoutHelper.SetTextMode((object)container, rawValue);
+                return;
+            }
+
+            // The enumerated values of a Domain replace the whole list through the SDK's typed helper (see ValidatePropertyWrite).
+            // A Domain whose list the SDK emptied is a target too: the rollback of a write puts the previous list back through here.
+            if (string.IsNullOrEmpty(controlName) && DomainEnumValuesProperty.Targets((object)container, propName))
+            {
+                DomainEnumValuesProperty.Apply((object)container, rawValue);
                 return;
             }
 
@@ -2862,6 +2900,19 @@ namespace GxMcp.Worker.Services
                     sdkName = string.Equals(name, "MainProgram", StringComparison.OrdinalIgnoreCase) ? "IsMain" : WebPanelSdkNameOf(name);
                 bool alias = sdkName != null;
                 if (alias) entry = ResolvePropertyEntry(container, sdkName);
+                // The enumerated values of a Domain are not in the property bag. The recovery read after a timed-out write names
+                // the properties it must confirm, so it has to find this one or the fence of that write could never be cleared.
+                if (entry == null && DomainEnumValuesProperty.Targets((object)container, name))
+                {
+                    props.Add(new JObject
+                    {
+                        ["name"] = DomainEnumValuesProperty.PropertyName,
+                        ["value"] = DomainEnumValuesProperty.Read((object)container),
+                        ["type"] = "Artech.Genexus.Common.CustomTypes.EnumValues",
+                        ["readOnly"] = false
+                    });
+                    continue;
+                }
                 if (entry == null) continue;
                 try
                 {
