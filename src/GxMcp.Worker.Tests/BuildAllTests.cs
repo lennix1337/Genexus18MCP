@@ -104,6 +104,17 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("fullLogPath", status.BuildEvents["verification"].ToString());
         }
 
+        [Fact]
+        public void BuildAll_reorg_refusal_explains_unavailable_ddl()
+        {
+            var status = new BuildService.BuildTaskStatus { Action = "BuildAll", ReorgRequired = true };
+            BuildService.FinalizeBuildAllStatus(status, "");
+
+            Assert.Contains("ReorganizationNeededDdlUnavailable", status.Hint);
+            Assert.Contains("deep=true", status.Hint);
+            Assert.Contains("explicit approval", status.Hint);
+        }
+
         [Theory]
         [InlineData("No reorganization is required by the KB")]
         [InlineData("Build completed; reorganization not needed")]
