@@ -7,20 +7,33 @@ namespace GxMcp.Worker.Tests
     public class WriteVerificationIntegrityTests
     {
         [Theory]
-        [InlineData("same", false, null, "confirmed")]
-        [InlineData("different", false, null, "not_persisted")]
-        [InlineData("partial", true, null, "unknown")]
-        [InlineData("partial", false, "readFailed", "unknown")]
-        public void TextWriteReceipt_ReportsPersistedState(string actual, bool truncated, string failure, string expected)
+        [InlineData("before", "same", false, null, "confirmed")]
+        [InlineData("different", "different", false, null, "not_persisted")]
+        [InlineData(null, "different", false, null, "unknown")]
+        [InlineData("before", "partial", true, null, "unknown")]
+        [InlineData("before", "partial", false, "readFailed", "unknown")]
+        public void TextWriteReceipt_ReportsPersistedState(string before, string actual, bool truncated, string failure, string expected)
         {
             var response = new JObject { ["status"] = "ok", ["code"] = "WriteApplied" };
-            var receipt = WriteService.ApplyTextVerificationReceipt(response, "Example", "Source", "before", "same", actual, null, truncated, failure, null);
+            var receipt = WriteService.ApplyTextVerificationReceipt(response, "Example", "Source", before, "same", actual, null, truncated, failure, null);
             Assert.Equal(expected, receipt["persistedState"]?.ToString());
             if (expected == "unknown")
             {
                 Assert.Equal("WriteVerificationUnavailable", receipt["code"]?.ToString());
-                Assert.Equal(failure == null ? "truncation" : "readFailure", receipt["postSaveVerification"]?["reason"]?.ToString());
+                Assert.Equal(truncated ? "truncation" : failure != null ? "readFailure" : "contentMismatch", receipt["postSaveVerification"]?["reason"]?.ToString());
             }
+        }
+
+        [Fact]
+        public void FullReadMismatchWithoutOldStateProof_IsUnknown()
+        {
+            var response = new JObject { ["status"] = "ok", ["code"] = "WriteApplied" };
+            var receipt = WriteService.ApplyTextVerificationReceipt(response, "Example", "Source",
+                "original", "requested", "different persisted content", null, false, null, null);
+
+            Assert.Equal("unknown", receipt["persistedState"]?.ToString());
+            Assert.Equal("WriteVerificationUnavailable", receipt["code"]?.ToString());
+            Assert.True(receipt["postSaveVerification"]?["reReadConfirmed"]?.Value<bool>());
         }
 
         [Fact]

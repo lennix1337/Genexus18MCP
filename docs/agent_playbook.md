@@ -38,6 +38,11 @@ normalized/semantic canonicalization: re-read or verify with a tolerant
 `verifyMode`) or `content` (re-read and compare; never retry blindly).
 Unknown save completion is null. `postSaveVerification`
 identifies `representation=genexus_read`, matches and the observed versionToken.
+For a full-text receipt, a complete read that differs from both the request and
+the captured pre-write content reports `WriteVerificationUnavailable` and
+`persistedState=unknown`, even though `reReadConfirmed` is true: the read proves
+what is present, not whether the requested write was lost. A byte-identical
+pre-write read permits `WriteNotPersisted` / `not_persisted`.
 Async result polling retains this evidence even on error. Do not retry a write
 because verification failed; obtain a new complete read and version first.
 

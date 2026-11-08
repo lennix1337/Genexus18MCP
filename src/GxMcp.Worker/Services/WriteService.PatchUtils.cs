@@ -426,6 +426,7 @@ namespace GxMcp.Worker.Services
                 response[CreatedGlobalsField] = response["result"][CreatedGlobalsField].DeepClone();
             var verification = EvaluatePersistedVerification(requested, actual, truncated, readFailure, verifyMode, part);
             bool known = !verification.IsIndeterminate;
+            bool unchanged = known && before != null && string.Equals(before, actual, StringComparison.Ordinal);
             var diff = BuildPersistenceDiff(requested, actual, verification, known);
             // #557: a Structure whose persisted text differs from the request only by the
             // attribute description GeneXus derives from the attribute name is labelled, so
@@ -452,7 +453,7 @@ namespace GxMcp.Worker.Services
             response["persistedStateKnown"] = known;
             response["persistedState"] = dryRun || !applied || !known
                 ? "unknown"
-                : verification.Matches ? "confirmed" : "not_persisted";
+                : verification.Matches ? "confirmed" : unchanged ? "not_persisted" : "unknown";
             response["verified"] = !dryRun && known && verification.Matches;
             response["persistedVerified"] = response["verified"];
             // A visual write can be physically committed even when the requested
@@ -482,7 +483,7 @@ namespace GxMcp.Worker.Services
             if (!dryRun && applied && !verification.Matches)
             {
                 response["status"] = "error";
-                response["code"] = known ? "WriteNotPersisted" : "WriteVerificationUnavailable";
+                response["code"] = unchanged ? "WriteNotPersisted" : "WriteVerificationUnavailable";
                 string hint = "Do not retry automatically. Read the complete current state and its versionToken before deciding on another edit.";
                 if (sdkDescriptionOnly)
                     hint = "The persisted Structure differs from the request only by the attribute description GeneXus derives from the attribute name; the requested declarations landed. Omit verifyMode (Structure defaults to semantic) or pass verifyMode=semantic to accept that rendering. " + hint;
@@ -490,7 +491,7 @@ namespace GxMcp.Worker.Services
                 {
                     ["code"] = response["code"].DeepClone(),
                     ["message"] = known
-                        ? "The persisted public-read text differs from the request; inspect the diff. The SDK save result is reported separately."
+                        ? "The persisted public-read text differs from the request; inspect the diff. A differing read does not by itself prove the write was lost. The SDK save result is reported separately."
                         : "The post-save state could not be read reliably. The SDK save result is reported separately.",
                     ["hint"] = hint
                 };
