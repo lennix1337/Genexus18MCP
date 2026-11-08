@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+     subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Internal
+
+## v4.4.0 - 2026-11-08
+
+
+### Tracked issues
+
+- [#880](https://github.com/lennix1337/Genexus18MCP/issues/880) — PatternInstance themeClass with multiple class names always fails with PatternProjectionFailed and rolls back
+- [#881](https://github.com/lennix1337/Genexus18MCP/issues/881) — genexus_read truncates large objects (~16KB) and suggested pagination (offset/limit with parts) does not work
+- [#882](https://github.com/lennix1337/Genexus18MCP/issues/882) — genexus_search_source: full-KB scan cannot finish on a large KB even with 240s budget and resumable cursor
+- [#886](https://github.com/lennix1337/Genexus18MCP/issues/886) — Misleading write result codes: WriteNotPersisted (false negative), VariableRenamed (ambiguous), WriteNoChange (silent type mismatch), TransferImportVerificationUnavailable (creates empty stub)
+- [#889](https://github.com/lennix1337/Genexus18MCP/issues/889) — genexus_edit Source: silently auto-creates undeclared &Variables as VarChar(100) — builds fail later with unrelated-looking type errors
+
+
 ### Internal
 
 - Source-search resume tests control the cooperative budget and count completed census reads without CPU waits; the release-status fixture selects one PowerShell executable when several are on PATH.
