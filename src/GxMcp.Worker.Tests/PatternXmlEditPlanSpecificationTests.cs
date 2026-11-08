@@ -57,6 +57,20 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void Selection_TableWithDuplicateControlName_IsRefusedBeforeSave()
+        {
+            var plan = PatternXmlEditPlan.Create(Selection("<textBlock controlName='Show'/>"), Selection("<textBlock controlName='Show'/><table name='Rows'><textBlock controlName='show'/></table>"), false, new FakeSpec());
+            Assert.Equal("PatternDuplicateControlName", plan.ErrorCode);
+        }
+
+        [Fact]
+        public void Selection_TableWithDuplicateNamesInsideSubtree_IsRefusedBeforeSave()
+        {
+            var plan = PatternXmlEditPlan.Create(Selection(""), Selection("<table name='Rows'><textBlock controlName='Show'/><textBlock controlName='SHOW'/></table>"), false, new FakeSpec());
+            Assert.Equal("PatternDuplicateControlName", plan.ErrorCode);
+        }
+
+        [Fact]
         public void Selection_ChildAbsentFromSpecification_IsRefused()
         {
             var plan = PatternXmlEditPlan.Create(Selection(""), Selection("<table name='Rows'><variable name='Missing'/></table>"), false, new FakeSpec());

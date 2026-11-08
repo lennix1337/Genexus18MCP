@@ -432,8 +432,25 @@ namespace GxMcp.Worker.Helpers
                     if (violation != null)
                         Reject("PatternStructureChangeUnsupported", violation);
                     else
+                    {
+                        var names = new HashSet<string>(container.Document.Descendants()
+                            .Where(e => e.Name.LocalName != "attribute")
+                            .SelectMany(e => new[] { (string)e.Attribute("name"), (string)e.Attribute("controlName") })
+                            .Where(n => !string.IsNullOrWhiteSpace(n)), StringComparer.OrdinalIgnoreCase);
+                        foreach (XElement element in inserted.DescendantsAndSelf().Where(e => e.Name.LocalName != "attribute"))
+                        {
+                            foreach (string name in new[] { (string)element.Attribute("name"), (string)element.Attribute("controlName") }.Distinct(StringComparer.OrdinalIgnoreCase))
+                            {
+                                if (!string.IsNullOrWhiteSpace(name) && !names.Add(name))
+                                {
+                                    Reject("PatternDuplicateControlName", "Control name '" + name + "' is duplicated in the PatternInstance; no save was attempted.");
+                                    return true;
+                                }
+                            }
+                        }
                         Changes.Add(new JObject { ["path"] = path, ["operation"] = "Insert", ["element"] = "table",
                             ["identity"] = (string)inserted.Attribute("name"), ["index"] = firstDiff, ["ordering"] = OrderingNote });
+                    }
                     return true;
                 }
                 if (!StructuralLayoutRules.IsPermittedKind(kind)) return false;
