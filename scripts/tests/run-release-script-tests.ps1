@@ -29,6 +29,7 @@ $tests = @(
     'test-collect-diagnostics.ps1',
     'test-release-orchestration.ps1',
     'test-release-preflight.ps1',
+    'test-release-host-blocker.ps1',
     'test-release-workflow.ps1',
     'test-ci-workflow-policy.ps1',
     'test-ci-time-budget.ps1',

@@ -1141,6 +1141,8 @@ function Test-GxMcpVsCodeUpdateMutexHeld {
 }
 
 function Assert-GxMcpReleaseHostReady {
+    # The VS Code updater only exists on Windows hosts; CI on other platforms has nothing to check.
+    if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) { return }
     $updaters = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'CodeSetup%.exe'" -ErrorAction Stop | Where-Object {
         $_.Name -match '^CodeSetup.*\.exe$' -and $_.CommandLine -match '(?i)(?:^|\s)/update(?:\s|$)'
     })
