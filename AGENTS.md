@@ -277,6 +277,15 @@ modes, Worker hot-swap and version smoke fields are in
 - Pull requests are always allowed: create a branch, commit to it, push it and
   open or update the PR without asking. Do not merge, commit or push to `main`,
   release, deploy, or close an issue unless the user explicitly asks. Issue closure requires a released fix and release link.
+- Standing release rule (user, 2026-11-08): when no issue and no PR is open
+  (issues labeled `fixed-pending-release` do not count: the release closes
+  them), checked at the start of a wake or right after the last open issue or PR is
+  merged, the agent may publish a minor or patch release of the merged,
+  unreleased fixes without asking, choosing the bump by the changes (`### Added`
+  or behavior change: minor; only fixes/internal: patch). It follows
+  `docs/release_protocol.md` (canonical preflight, `.\release.ps1`), and the
+  report names the version and release URL. Major releases still need an
+  explicit request.
 - After pushing a merged fix that is not yet released, mark each fixed issue
   with `pwsh -NoProfile -File scripts/release-issues.ps1 -Action MarkFixedPendingRelease -Issue <N>`;
   the release entrypoint closes labeled issues on publish. Do not post issue
@@ -289,7 +298,8 @@ read the decision matrix in
 [`docs/agent-operations.md`](docs/agent-operations.md#mcp-update-and-harness-synchronization)
 and reuse `install.ps1`, `build.ps1`, `scripts/install.ps1` or `cli/`.
 `install.ps1` rewrites `config.json` and client configs (an installer, not a
-build); `.\release.ps1` runs only on explicit user request. A rewritten client
+build); `.\release.ps1` runs only on explicit user request or under the
+standing release rule above. A rewritten client
 config or green build does not reload the current session's MCP: a full client
 restart is required before new tools take effect. Prefer `build.ps1`'s scoped
 process termination over machine-wide `Stop-Process`.
