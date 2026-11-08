@@ -38,12 +38,21 @@ namespace GxMcp.Worker.Tests
         public static TheoryData<string, string, int> AcceptedPackages => new TheoryData<string, string, int>
         {
             { "two procedures", Objects($"<Object name='A' type='{ProcedureType}'/><Object name='B' type='{ProcedureType}'/>"), 0 },
+            { "two procedures with Source parts (issue #886 report)", Objects($"<Object name='Big' type='{ProcedureType}'>{ProcedureSource(15112)}</Object><Object name='Small' type='{ProcedureType}'>{ProcedureSource(243)}</Object>"), 0 },
             { "unknown type without WebForm", Objects($"<Object name='A' type='{Guid.NewGuid()}'/>"), 0 },
             { "same name, different types", Objects($"<Object name='Dashboard' type='{ProcedureType}'/><Object name='Dashboard' type='{PanelType}'>{Form}</Object>"), 1 },
             { "same name, different guids", Objects($"<Object guid='{Guid.NewGuid()}' name='Text' type='{ProcedureType}'/><Object guid='{Guid.NewGuid()}' name='Text' type='{ProcedureType}'/>"), 0 },
             { "actions only", "<ExportFile><KMW /><Source /><Actions><Action type='delete' /></Actions></ExportFile>", 0 },
             { "WebForm without source", Objects($"<Object name='Panel' type='{PanelType}'/><Object name='Quote' type='{PanelType}'><Part type='{WebFormPart}'><Properties /></Part></Object>"), 0 },
         };
+
+        // A Procedure Source is GeneXus code, not XML: `<` and `&` appear unescaped inside the CDATA.
+        private static string ProcedureSource(int length)
+        {
+            var code = new System.Text.StringBuilder();
+            while (code.Length < length) code.Append("if &Total < 10 and &Name = 'A&B'\n  &Total = &Total + 1\nendif\n");
+            return $"<Part type='{Guid.NewGuid()}'><Source><![CDATA[{code.ToString(0, length)}]]></Source></Part>";
+        }
 
         public static TheoryData<string, string> RejectedPackages
         {
