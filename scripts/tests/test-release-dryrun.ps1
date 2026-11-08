@@ -46,7 +46,7 @@ try {
         if ($output -notmatch [regex]::Escape($scenario.Expect)) {
             throw "dry run [$($scenario.Name)] did not reach the step '$($scenario.Expect)'."
         }
-        if ($output -notmatch "RELEASE SUMMARY: version=$([regex]::Escape($version)) tag=v$([regex]::Escape($version)) release=none assets=\S+ npm=not-checked-dry-run rc=0\s") {
+        if ($output -notmatch "RELEASE SUMMARY: version=$([regex]::Escape($version)) tag=v$([regex]::Escape($version)) release=none assets=\S+ npm=genexus-mcp@not-checked-dry-run rc=0\s") {
             throw "dry run [$($scenario.Name)] printed no successful RELEASE SUMMARY line."
         }
         $writes = @(if (Test-Path -LiteralPath $callLog) { Get-Content -LiteralPath $callLog | Where-Object { $_ -match $writePattern } })

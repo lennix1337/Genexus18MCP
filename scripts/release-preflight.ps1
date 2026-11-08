@@ -23,6 +23,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'scripts\gx-version-catalog.ps1')
 . (Join-Path $root 'scripts\release-contract.ps1')
+Assert-GxMcpReleaseHostReady
 $gxCatalog = Get-GxVersionCatalog -Root $root
 
 if ([string]::IsNullOrWhiteSpace($Version)) {

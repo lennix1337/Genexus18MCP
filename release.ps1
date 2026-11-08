@@ -88,6 +88,7 @@ $OutputEncoding = $utf8
 $root = $PSScriptRoot
 . (Join-Path $root 'scripts\gx-version-catalog.ps1')
 . (Join-Path $root 'scripts\release-contract.ps1')
+Assert-GxMcpReleaseHostReady
 $gxCatalog = Get-GxVersionCatalog -Root $root
 if ($Minor -and $Patch) {
     throw "Cannot specify both -Minor and -Patch."
@@ -592,7 +593,7 @@ function Write-ReleaseFinalSummary {
     param([int]$ExitCode, [string]$FailedStep = '')
     $release = if ($statusState.releaseUrl) { [string]$statusState.releaseUrl } else { 'none' }
     $assets = if (@($releaseAssetNames).Count -gt 0) { $releaseAssetNames -join ',' } else { 'none' }
-    $npm = if ($statusState.npmVersion) { [string]$statusState.npmVersion } elseif ($DryRun) { 'not-checked-dry-run' } else { 'unverified' }
+    $npm = if ($statusState.npmVersion) { "genexus-mcp@$($statusState.npmVersion)" } elseif ($DryRun) { 'genexus-mcp@not-checked-dry-run' } else { 'genexus-mcp@unverified' }
     $line = "RELEASE SUMMARY: version=$Version tag=$tag release=$release assets=$assets npm=$npm rc=$ExitCode"
     if ($ExitCode -ne 0) { $line += " failed-step='$FailedStep'" }
     Write-Host "`n$line"

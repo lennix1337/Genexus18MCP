@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Fail release preflight early while the VS Code updater is running, and identify the npm package in release summaries.
+
 ### Internal
 
 ## v4.4.0 - 2026-11-08

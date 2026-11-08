@@ -198,21 +198,23 @@ try {
 # 5. The summary line carries version, tag, release, assets, npm and the failing step.
 $summaryText = Get-FunctionText -Ast $releaseAst -Name 'Write-ReleaseFinalSummary'
 $summaryProbe = {
-    param([string]$FunctionText, [bool]$DryRunMode, [int]$ExitCode, [string]$FailedStep)
+    param([string]$FunctionText, [bool]$DryRunMode, [int]$ExitCode, [string]$FailedStep, [string]$NpmVersion = '')
     $ErrorActionPreference = 'Stop'
     $Version = '9.0.0'
     $tag = 'v9.0.0'
     $DryRun = $DryRunMode
     $releaseAssetNames = @('publish.zip', 'publish.zip.sha256')
-    $statusState = [ordered]@{ releaseUrl = 'https://example.test/release'; npmVersion = $null }
+    $statusState = [ordered]@{ releaseUrl = 'https://example.test/release'; npmVersion = $NpmVersion }
     . ([scriptblock]::Create($FunctionText))
     $output = & { Write-ReleaseFinalSummary -ExitCode $ExitCode -FailedStep $FailedStep } 6>&1 | Out-String
     $output
 }
 $successLine = (& $summaryProbe $summaryText $false 0 '') -split "`n" | Where-Object { $_ -match 'RELEASE SUMMARY:' } | Select-Object -First 1
-if ($successLine -notmatch 'RELEASE SUMMARY: version=9\.0\.0 tag=v9\.0\.0 release=https://example\.test/release assets=publish\.zip,publish\.zip\.sha256 npm=unverified rc=0\s*$') {
+if ($successLine -notmatch 'RELEASE SUMMARY: version=9\.0\.0 tag=v9\.0\.0 release=https://example\.test/release assets=publish\.zip,publish\.zip\.sha256 npm=genexus-mcp@unverified rc=0\s*$') {
     throw "Success summary line is malformed: $successLine"
 }
+$publishedLine = (& $summaryProbe $summaryText $false 0 '' '9.0.0') -split "`n" | Where-Object { $_ -match 'RELEASE SUMMARY:' } | Select-Object -First 1
+if ($publishedLine -notmatch 'npm=genexus-mcp@9\.0\.0 rc=0') { throw "Published npm identity missing: $publishedLine" }
 $failureLine = (& $summaryProbe $summaryText $false 1 'Tagging v9.0.0') -split "`n" | Where-Object { $_ -match 'RELEASE SUMMARY:' } | Select-Object -First 1
 if ($failureLine -notmatch "rc=1 failed-step='Tagging v9\.0\.0'\s*$") { throw "Failure summary line must name the failed step: $failureLine" }
 
