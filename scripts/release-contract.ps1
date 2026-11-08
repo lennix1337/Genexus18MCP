@@ -1140,6 +1140,17 @@ function Test-GxMcpVsCodeUpdateMutexHeld {
     return [bool]$opened
 }
 
+function Assert-GxMcpReleaseHostReady {
+    # The VS Code updater only exists on Windows hosts; CI on other platforms has nothing to check.
+    if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) { return }
+    $updaters = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'CodeSetup%.exe'" -ErrorAction Stop | Where-Object {
+        $_.Name -match '^CodeSetup.*\.exe$' -and $_.CommandLine -match '(?i)(?:^|\s)/update(?:\s|$)'
+    })
+    if ($updaters.Count -gt 0) {
+        throw 'VS Code update in progress. Close VS Code windows, allow the updater to finish, then retry the release preflight.'
+    }
+}
+
 function Get-GxMcpPreflightHostBlocker {
     <#
       .SYNOPSIS

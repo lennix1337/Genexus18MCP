@@ -61,7 +61,7 @@ GxMcp.Gateway (net10.0-windows, one logical MCP context per client)
   when available and parses the `Tokens`/`Styles` source parts independently
   when an SDK helper member is absent.
 - Package artifact: `publish/`; `GxMcp.Gateway.exe` is at its root and
-  `worker/GxMcp.Worker.exe` is one level below. The npm package includes it.
+  `worker/GxMcp.Worker.exe` is one level below. The npm package (`genexus-mcp`) includes it.
 
 <!-- BEGIN GENERATED: gx-compatibility -->
 Supported SDK majors: **GeneXus 16, GeneXus 17, GeneXus 18, GeneXus Evolution 3** (native SDK).
