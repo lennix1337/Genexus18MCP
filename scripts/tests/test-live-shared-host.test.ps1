@@ -152,7 +152,8 @@ $definitions = @(Get-ScriptFunctionDefinitions $scriptPath @(
         'Get-SharedHostCleanupWaitSeconds', 'New-SharedHostCleanupResult', 'Get-SharedHostGateStatus',
         'Get-SharedHostExitCode', 'Get-SharedHostDefaultReportPath', 'New-SharedHostRedaction',
         'Protect-SharedHostText', 'New-SharedHostReport', 'ConvertTo-SharedHostReportMarkdown',
-        'Write-SharedHostReport'))
+        'Write-SharedHostReport', 'Format-SharedHostDetail', 'Invoke-SharedHostBuild',
+        'Get-SharedHostKbOpenFailure', 'Resolve-SharedHostKbListing'))
 # The repository's existing disposable-KB guard, used as the oracle for the new one.
 $definitions += @(Get-ScriptFunctionDefinitions (Join-Path $root 'scripts\sdk-local-build.ps1') @('Resolve-TestKbPath'))
 foreach ($definition in $definitions) { . ([scriptblock]::Create($definition)) }
@@ -324,6 +325,106 @@ if ((Get-SharedHostDefaultReportPath -Root $root -DateUtc ([datetime]'2026-09-21
     throw 'The default report path must be docs/benchmarks/<date>-shared-host-concurrency.md.'
 }
 
+# --- Diagnostic hygiene: bounded details, build output, KB open failures -----
+# First live run: the whole build log leaked into the init error and became one
+# report cell, and a KB the SDK refused to open surfaced only as "No object to
+# read was listed". Details are single-line and capped at 500 characters.
+$longDetail = ('line one of a very long build log ' * 40) + "`r`nsecond line`nthird | piped"
+$bounded = Format-SharedHostDetail -Text $longDetail
+if ($bounded.Length -gt 500 -or $bounded -match '[\r\n]' -or -not $bounded.StartsWith('line one')) {
+    throw "A check detail must be one line of at most 500 characters; got $($bounded.Length) characters."
+}
+if ((Format-SharedHostDetail -Text 'short detail') -ne 'short detail' -or (Format-SharedHostDetail -Text $null) -ne '') {
+    throw 'A short detail must pass unchanged and a missing detail must become an empty string.'
+}
+foreach ($body in @(
+        { @{ status = 'failed'; detail = $longDetail } }
+        { @{ status = 'passed'; detail = $longDetail } }
+        { throw $longDetail })) {
+    $noisy = Invoke-SharedHostCheck -Name 'cleanup' -TargetKbPaths @($kb1) -AllowedKbPaths $allowed `
+        -Prerequisites $allAvailable -RequiredPrerequisites @('sdk') -Body $body
+    $detail = [string](Get-Field $noisy 'detail')
+    if ($detail.Length -gt 500 -or $detail -match '[\r\n]') {
+        throw "Invoke-SharedHostCheck must bound every detail to one line of 500 characters; got $($detail.Length)."
+    }
+}
+$initDefinition = @(Get-ScriptFunctionDefinitions $scriptPath @('Initialize-LiveRun'))[0]
+if (-not $initDefinition.Contains('Invoke-SharedHostBuild') -or $initDefinition -match '&\s*pwsh[^\n]*build\.ps1') {
+    throw 'Initialize-LiveRun must build through Invoke-SharedHostBuild so build output never reaches its return value.'
+}
+$pwshExe = (Get-Process -Id $PID).Path
+$buildRoot = Join-Path ([IO.Path]::GetTempPath()) ('gxmcp-shared-host-build-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $buildRoot | Out-Null
+try {
+    $okLog = Join-Path $buildRoot 'ok.log'
+    $okResult = @(Invoke-SharedHostBuild -FilePath $pwshExe -LogPath $okLog `
+            -ArgumentList @('-NoProfile', '-Command', "1..400 | ForEach-Object { 'build line ' + `$_ }; [Console]::Error.WriteLine('build warning'); exit 0"))
+    if (@($okResult | Where-Object { $null -ne $_ }).Count -ne 0) {
+        throw "A successful build must return `$null and keep its output out of the result; got $(@($okResult).Count) item(s)."
+    }
+    $okText = Get-Content -LiteralPath $okLog -Raw
+    if (-not $okText.Contains('build line 400') -or -not $okText.Contains('build warning')) {
+        throw 'The build output, including stderr, must go to the build log.'
+    }
+    $failLog = Join-Path $buildRoot 'fail.log'
+    $failResult = @(Invoke-SharedHostBuild -FilePath $pwshExe -LogPath $failLog `
+            -ArgumentList @('-NoProfile', '-Command', "1..400 | ForEach-Object { 'build line ' + `$_ }; exit 7"))
+    $failText = [string]($failResult | Select-Object -Last 1)
+    if ($failResult.Count -ne 1 -or $failText -notmatch 'exit code 7' -or -not $failText.Contains($failLog) -or
+        $failText.Contains('build line') -or $failText.Length -gt 500 -or $failText -match '[\r\n]') {
+        throw "A failed build must return one short line with the exit code and the log path; got '$failText'."
+    }
+    $missingResult = [string](Invoke-SharedHostBuild -FilePath (Join-Path $buildRoot 'missing-build.exe') -ArgumentList @() -LogPath (Join-Path $buildRoot 'missing.log'))
+    if ([string]::IsNullOrWhiteSpace($missingResult) -or $missingResult.Length -gt 500) {
+        throw 'A build that cannot start must return a short failure, not throw or pass.'
+    }
+}
+finally {
+    Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+$workerLog = @(
+    '[2026-11-09T09:54:27.133-03:00] [INFO] [] Opening KB: C:\KBs\KBTeste'
+    '[2026-11-09T09:54:27.666-03:00] [ERROR] [] [KB-OPEN-FAIL] elapsedMs=532 path=C:\KBs\KBTeste error=InvalidDirectory'
+    '[2026-11-09T09:54:27.700-03:00] [ERROR] [] [KB-OPEN-FAIL] elapsedMs=12 path=C:\KBs\KBTesteTwo error=OtherKbFailure'
+) -join "`n"
+$openReason = Get-SharedHostKbOpenFailure -LogText $workerLog -KbPath 'c:\kbs\kbteste\'
+if ([string]$openReason -notmatch 'InvalidDirectory' -or [string]$openReason -match 'OtherKbFailure') {
+    throw "The KB open failure must be read for the requested KB only; got '$openReason'."
+}
+if ([string](Get-SharedHostKbOpenFailure -LogText $workerLog -KbPath $kb2) -notmatch 'OtherKbFailure') {
+    throw 'A KB path that another KB path starts with must not hide the second KB failure.'
+}
+if ($null -ne (Get-SharedHostKbOpenFailure -LogText "[INFO] [KB-OPEN] elapsedMs=10 path=$kb1" -KbPath $kb1)) {
+    throw 'A log without a KB open failure must report none.'
+}
+if ($null -ne (Get-SharedHostKbOpenFailure -LogText ($workerLog + "`n[INFO] [] [KB-OPEN] elapsedMs=900 path=$kb1") -KbPath $kb1)) {
+    throw 'A later successful open of the same KB must clear an earlier open failure.'
+}
+$longOpen = Get-SharedHostKbOpenFailure -LogText ("[KB-OPEN-FAIL] elapsedMs=1 path=$kb1 error=" + ('x' * 2000)) -KbPath $kb1
+if ([string]::IsNullOrEmpty($longOpen) -or $longOpen.Length -gt 500) { throw 'A KB open failure reason must be bounded.' }
+$openFailed = Resolve-SharedHostKbListing -KbPath $kb1 -ObjectFound $false -Code 'IndexNotReady' -IsError $false -OpenFailure $openReason -TimedOut $false
+if ((Get-Field $openFailed 'state') -ne 'failed' -or [string](Get-Field $openFailed 'detail') -notmatch 'InvalidDirectory' -or
+    [string](Get-Field $openFailed 'detail') -match 'No object') {
+    throw 'A KB the Worker could not open must fail with the open reason, not as an empty listing.'
+}
+foreach ($case in @(
+        @{ found = $true; code = $null; isError = $false; open = $null; timedOut = $false; expected = 'ready' }
+        @{ found = $false; code = 'IndexNotReady'; isError = $false; open = $null; timedOut = $false; expected = 'wait' }
+        # The first run stopped after one listing whose code it could not read.
+        @{ found = $false; code = $null; isError = $false; open = $null; timedOut = $false; expected = 'wait' }
+        @{ found = $false; code = 'IndexNotReady'; isError = $false; open = $null; timedOut = $true; expected = 'failed' }
+        @{ found = $false; code = 'Boom'; isError = $true; open = $null; timedOut = $false; expected = 'failed' })) {
+    $resolved = Resolve-SharedHostKbListing -KbPath $kb1 -ObjectFound $case.found -Code $case.code -IsError $case.isError `
+        -OpenFailure $case.open -TimedOut $case.timedOut
+    if ((Get-Field $resolved 'state') -ne $case.expected) {
+        throw "Listing (found=$($case.found), code=$($case.code), error=$($case.isError), timedOut=$($case.timedOut)) must be '$($case.expected)'; got '$(Get-Field $resolved 'state')'."
+    }
+    if ($case.expected -eq 'failed' -and [string]::IsNullOrWhiteSpace([string](Get-Field $resolved 'detail'))) {
+        throw 'A failed listing must say why.'
+    }
+}
+$timedOut = Resolve-SharedHostKbListing -KbPath $kb1 -ObjectFound $false -Code 'IndexNotReady' -IsError $false -OpenFailure $null -TimedOut $true
+if ([string](Get-Field $timedOut 'detail') -notmatch 'IndexNotReady') { throw 'A listing that timed out must name the last listing code.' }
 # --- Redaction and report fields ----------------------------------------------
 # Synthetic identity only: the test never writes the real user, machine or profile.
 $savedIdentity = @{}
