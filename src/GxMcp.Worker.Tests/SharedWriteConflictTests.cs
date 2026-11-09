@@ -55,10 +55,10 @@ namespace GxMcp.Worker.Tests
     /// Second pinned seam (also Requirement 9.7, "SHALL perform the write despite that lock"):
     /// <c>WriteService.TryAcquireOperationLock(kbPath, target, part, ownerId, force: true, out error)</c>
     /// over an unexpired foreign lock returns a <c>null</c> lease and a <c>null</c> error and leaves
-    /// the holder's lock file byte-for-byte unchanged. Today it reads the top-level <c>code</c> of the
-    /// <c>MultiAgentLockService</c> reply, while the <c>AlreadyHeld</c> refusal carries its code under
-    /// <c>error.code</c>, so the force exemption never matches and the forced write is refused with
-    /// <c>AlreadyHeld</c>. That path is not shared-child specific; task 6.10 or a separate fix owns it.
+    /// the holder's lock file byte-for-byte unchanged. The <c>AlreadyHeld</c> refusal of the
+    /// <c>MultiAgentLockService</c> reply carries its code under <c>error.code</c>, which the force
+    /// exemption reads in every mode (issue #958); <see cref="WritePipelineIsolatedRegressionTests"/>
+    /// pins the same behaviour with <c>GXMCP_SHARED_CHILD</c> unset.
     /// </para>
     /// </summary>
     [Collection("WritePipelineIsolatedEnvironment")]
@@ -425,9 +425,6 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void Force_OperationLockOverForeignLock_LetsTheWriteProceed_AndLeavesTheHolderInPlace()
         {
-            // Fails today: TryAcquireOperationLock reads the top-level "code", but the AlreadyHeld
-            // refusal is an McpResponse.Err with the code under error.code, so the force exemption
-            // never matches and the forced write is refused with AlreadyHeld.
             AcquireExplicit(_target, "Source", LeaseA);
             byte[] lockBefore = LockBytes(_target, "Source");
             IDisposable lease = TryAcquireOperationLock(_kbPath, _target, "Source", LeaseB, true, out string error);

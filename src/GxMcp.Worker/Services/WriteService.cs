@@ -1455,10 +1455,10 @@ namespace GxMcp.Worker.Services
             string code = envelope["code"]?.ToString();
             if (string.Equals(code, "AlreadyHeld", StringComparison.OrdinalIgnoreCase) && force)
                 return null;
-            // Shared child only: the AlreadyHeld refusal carries its code under error.code, so a
-            // forced write over a foreign lock proceeds without taking or touching that lock.
-            // Isolated_Mode keeps the check above unchanged.
-            if (force && GxMcp.Worker.Helpers.WritePipeline.IsSharedChild()
+            // The AlreadyHeld refusal is an McpResponse.Err, so its code sits under error.code, not
+            // at the top level. In every mode a forced write over a foreign lock proceeds without
+            // taking or touching that lock.
+            if (force
                 && string.Equals((envelope["error"] as JObject)?["code"]?.ToString(), "AlreadyHeld", StringComparison.OrdinalIgnoreCase))
                 return null;
             if (!string.Equals(code, "LockAcquired", StringComparison.OrdinalIgnoreCase))
