@@ -153,7 +153,8 @@ $definitions = @(Get-ScriptFunctionDefinitions $scriptPath @(
         'Get-SharedHostExitCode', 'Get-SharedHostDefaultReportPath', 'New-SharedHostRedaction',
         'Protect-SharedHostText', 'New-SharedHostReport', 'ConvertTo-SharedHostReportMarkdown',
         'Write-SharedHostReport', 'Format-SharedHostDetail', 'Invoke-SharedHostBuild',
-        'Get-SharedHostKbOpenFailure', 'Resolve-SharedHostKbListing'))
+        'Get-SharedHostKbOpenFailure', 'Resolve-SharedHostKbListing',
+        'Get-LiveField', 'Get-LivePath', 'Get-LiveToolOutcome', 'Find-LiveObjectReference'))
 # The repository's existing disposable-KB guard, used as the oracle for the new one.
 $definitions += @(Get-ScriptFunctionDefinitions (Join-Path $root 'scripts\sdk-local-build.ps1') @('Resolve-TestKbPath'))
 foreach ($definition in $definitions) { . ([scriptblock]::Create($definition)) }
@@ -422,6 +423,27 @@ foreach ($case in @(
     if ($case.expected -eq 'failed' -and [string]::IsNullOrWhiteSpace([string](Get-Field $resolved 'detail'))) {
         throw 'A failed listing must say why.'
     }
+}
+# A tools/call response carries one content item. The second live run listed
+# objects for three minutes and never parsed one, because the one-element content
+# array was unrolled to its item before Get-LivePath could index it.
+$toolLine = '{"jsonrpc":"2.0","id":7,"result":{"isError":false,"content":[{"type":"text","text":"{\"count\":1,\"results\":[{\"name\":\"SampleProc\",\"type\":\"Procedure\"}]}"}],"_meta":{"sharedHost":{"queueWaitMs":12,"workerPid":4321}}}}'
+$toolMessage = $toolLine | ConvertFrom-Json -AsHashtable
+if ([string](Get-LivePath $toolMessage @('result', 'content', '0', 'text')) -notmatch 'SampleProc') {
+    throw 'Get-LivePath must index into a one-element array of a parsed tool response.'
+}
+$listingOutcome = Get-LiveToolOutcome $toolMessage
+$listed = Find-LiveObjectReference $listingOutcome.payload
+if ($null -eq $listed -or $listed.name -ne 'SampleProc' -or $listed.type -ne 'Procedure' -or $listingOutcome.isError) {
+    throw 'A successful listing must parse its payload and yield the first listed object.'
+}
+if ([int]$listingOutcome.queueWaitMs -ne 12 -or [int]$listingOutcome.workerPid -ne 4321) {
+    throw 'The shared-host queue wait and Worker PID must be read from the response metadata.'
+}
+$notReadyLine = '{"jsonrpc":"2.0","id":8,"result":{"isError":false,"content":[{"type":"text","text":"{\"status\":\"Indexing\",\"code\":\"IndexNotReady\"}"}]}}'
+$notReadyOutcome = Get-LiveToolOutcome ($notReadyLine | ConvertFrom-Json -AsHashtable)
+if ([string]$notReadyOutcome.code -ne 'IndexNotReady' -or $null -ne (Find-LiveObjectReference $notReadyOutcome.payload)) {
+    throw 'An IndexNotReady listing must expose its code and list no object.'
 }
 $timedOut = Resolve-SharedHostKbListing -KbPath $kb1 -ObjectFound $false -Code 'IndexNotReady' -IsError $false -OpenFailure $null -TimedOut $true
 if ([string](Get-Field $timedOut 'detail') -notmatch 'IndexNotReady') { throw 'A listing that timed out must name the last listing code.' }

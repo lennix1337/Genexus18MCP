@@ -696,9 +696,15 @@ function Get-LivePath($Object, [string[]]$Names) {
             if ($index -ge $current.Count) { return $null }
             $current = $current[$index]
         }
-        else {
-            $current = Get-LiveField $current $name
+        elseif ($current -is [System.Collections.IDictionary]) {
+            # Assigned directly, not through Get-LiveField: a function's output
+            # unrolls a one-element array (result.content) to its only item.
+            if ($current.Contains($name)) { $current = $current[$name] } else { $current = $null }
         }
+        elseif ($null -ne $current -and $null -ne $current.PSObject.Properties[$name]) {
+            $current = $current.PSObject.Properties[$name].Value
+        }
+        else { $current = $null }
         if ($null -eq $current) { return $null }
     }
     return $current
