@@ -141,13 +141,14 @@ namespace GxMcp.Worker.Tests
             // Pins the reason the backstop is necessary rather than defensive boilerplate.
             string source = BuildService();
 
-            int buildAll = source.IndexOf("bool buildAll = string.Equals(action, \"BuildAll\"",
-                StringComparison.Ordinal);
-            Assert.True(buildAll > 0, "the buildAll decision was not found");
+            // Anchored on the classic whole-KB branch: the Evolution 3 branch above it
+            // handles targets through its own task and is pinned by its own tests.
+            int buildAll = source.IndexOf("else if (buildAll)", StringComparison.Ordinal);
+            Assert.True(buildAll > 0, "the whole-KB branch was not found");
             var window = source.Substring(buildAll, Math.Min(2600, source.Length - buildAll));
 
             int specifyOnly = window.IndexOf("SpecifyOneOnly", StringComparison.Ordinal);
-            int ifTargets = window.IndexOf("targets != null && targets.Count > 0", StringComparison.Ordinal);
+            int ifTargets = window.IndexOf("else if (targets != null && targets.Count > 0", StringComparison.Ordinal);
 
             Assert.True(ifTargets > 0, "the targeted branch was not found");
             Assert.True(specifyOnly > ifTargets,
