@@ -384,11 +384,11 @@ finally {
     Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 $workerLog = @(
-    '[2026-11-09T09:54:27.133-03:00] [INFO] [] Opening KB: C:\KBs\KBTeste'
-    '[2026-11-09T09:54:27.666-03:00] [ERROR] [] [KB-OPEN-FAIL] elapsedMs=532 path=C:\KBs\KBTeste error=InvalidDirectory'
-    '[2026-11-09T09:54:27.700-03:00] [ERROR] [] [KB-OPEN-FAIL] elapsedMs=12 path=C:\KBs\KBTesteTwo error=OtherKbFailure'
+    "[2026-11-09T09:54:27.133-03:00] [INFO] [] Opening KB: $kb1"
+    "[2026-11-09T09:54:27.666-03:00] [ERROR] [] [KB-OPEN-FAIL] elapsedMs=532 path=$kb1 error=InvalidDirectory"
+    "[2026-11-09T09:54:27.700-03:00] [ERROR] [] [KB-OPEN-FAIL] elapsedMs=12 path=$kb2 error=OtherKbFailure"
 ) -join "`n"
-$openReason = Get-SharedHostKbOpenFailure -LogText $workerLog -KbPath 'c:\kbs\kbteste\'
+$openReason = Get-SharedHostKbOpenFailure -LogText $workerLog -KbPath ($kb1.ToLowerInvariant() + '\')
 if ([string]$openReason -notmatch 'InvalidDirectory' -or [string]$openReason -match 'OtherKbFailure') {
     throw "The KB open failure must be read for the requested KB only; got '$openReason'."
 }
