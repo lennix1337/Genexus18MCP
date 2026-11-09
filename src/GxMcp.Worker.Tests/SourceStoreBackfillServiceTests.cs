@@ -56,6 +56,29 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void ScheduledSdkActionExcludesSlowStorePut()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "gxmcp-backfill-sta-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var store = new SourceStoreService();
+                store.SetStoreDirectoryForTest(root);
+                long actionMs = -1;
+                var finished = new ManualResetEventSlim();
+                var service = new SourceStoreBackfillService(store,
+                    (guid, part, source, updated, token) => { Thread.Sleep(500); return store.Put(guid, part, source, updated, token); },
+                    action => { var watch = System.Diagnostics.Stopwatch.StartNew(); action(); actionMs = watch.ElapsedMilliseconds; finished.Set(); return true; });
+                service.Start(() => new[] { Entry(Guid.NewGuid().ToString(), 1) },
+                    e => new[] { new SourceStoreBackfillPart { PartName = "Source", Source = "x" } });
+                Assert.True(finished.Wait(TimeSpan.FromSeconds(10)));
+                Assert.True(actionMs < 300, "SDK action held for " + actionMs + " ms");
+                Assert.True(SpinWait.SpinUntil(() => service.GetState().State == "complete", TimeSpan.FromSeconds(10)));
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        }
+
+        [Fact]
         public void SlicePersistsProgressAndResumesFromCursor()
         {
             string root = Path.Combine(Path.GetTempPath(), "gxmcp-source-backfill-" + Guid.NewGuid().ToString("N"));
@@ -425,7 +448,11 @@ namespace GxMcp.Worker.Tests
                     () => Volatile.Read(ref sliceCompleted) == 1,
                     TimeSpan.FromSeconds(5)));
                 Assert.Equal(2, Volatile.Read(ref enqueueAttempts));
-                Assert.Equal("complete", service.GetState().State);
+                // The enqueued action is only the SDK read; the store write and
+                // certification finish off the STA after it returns.
+                Assert.True(SpinWait.SpinUntil(
+                    () => service.GetState().State == "complete",
+                    TimeSpan.FromSeconds(5)));
             }
             finally
             {
