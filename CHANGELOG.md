@@ -14,6 +14,7 @@
 - Fail release preflight early while the VS Code updater is running, and identify the npm package in release summaries.
 - WorkWithPlus: property-only PatternInstance writes on hosts with a grid no longer fail with `PatternProjectionFailed`; the projected-WebForm check ignores the grid and column ids that the pattern engine regenerates on every projection, while control names, columns and classes still have to match ([#948](https://github.com/lennix1337/Genexus18MCP/issues/948)).
 - GeneXus X Evolution 3: `genexus_lifecycle build` no longer fails with MSB4064 (`CompileMains`/`FailIfReorg` are not parameters of the Ev3 build tasks); targeted builds now run through a no-reorg build task, which also reaches the C# Windows generator.
+- Source-store backfill no longer holds the SDK thread for a whole slice (object read, hashing, store write and certification); only the object read is queued on the SDK thread, so a concurrent `genexus_read` no longer times out with `WorkerBusy` ([#943](https://github.com/lennix1337/Genexus18MCP/issues/943)).
 - A generator that is not licensed on the machine (`local protection: Not authorized`) is now an itemized build error naming the generator, instead of a failed build with 0 errors.
 
 ### Internal
