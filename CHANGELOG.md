@@ -11,6 +11,26 @@
 
 ### Fixed
 
+### Internal
+
+## v4.4.1 - 2026-11-08
+
+
+### Tracked issues
+
+- [#943](https://github.com/lennix1337/Genexus18MCP/issues/943) — Backfill do source store segura a thread do SDK e faz genexus_read falhar com WorkerBusy
+- [#948](https://github.com/lennix1337/Genexus18MCP/issues/948) — WWP PatternInstance property-only writes fail with PatternProjectionFailed when the projected WebForm contains grids (simplegrid id mismatch); succeed on grid-less WWP transactions
+
+
+<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+     subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
+
+### Added
+
+### Changed
+
+### Fixed
+
 - Fail release preflight early while the VS Code updater is running, and identify the npm package in release summaries.
 - WorkWithPlus: property-only PatternInstance writes on hosts with a grid no longer fail with `PatternProjectionFailed`; the projected-WebForm check ignores the grid and column ids that the pattern engine regenerates on every projection, while control names, columns and classes still have to match ([#948](https://github.com/lennix1337/Genexus18MCP/issues/948)).
 - GeneXus X Evolution 3: `genexus_lifecycle build` no longer fails with MSB4064 (`CompileMains`/`FailIfReorg` are not parameters of the Ev3 build tasks); targeted builds now run through a no-reorg build task, which also reaches the C# Windows generator.

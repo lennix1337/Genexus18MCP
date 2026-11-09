@@ -1,13 +1,13 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "4.4.0",
-  "tag": "v4.4.0",
-  "collectedAtUtc": "2026-11-08T22:46:33.7492760Z",
+  "version": "4.4.1",
+  "tag": "v4.4.1",
+  "collectedAtUtc": "2026-11-09T02:35:24.2837505Z",
   "issues": [
     {
-      "number": 880,
-      "title": "PatternInstance themeClass with multiple class names always fails with PatternProjectionFailed and rolls back",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/880",
+      "number": 943,
+      "title": "Backfill do source store segura a thread do SDK e faz genexus_read falhar com WorkerBusy",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/943",
       "state": "open",
       "labels": [
         "fixed-pending-release"
@@ -15,39 +15,9 @@
       "milestone": null
     },
     {
-      "number": 881,
-      "title": "genexus_read truncates large objects (~16KB) and suggested pagination (offset/limit with parts) does not work",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/881",
-      "state": "open",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 882,
-      "title": "genexus_search_source: full-KB scan cannot finish on a large KB even with 240s budget and resumable cursor",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/882",
-      "state": "open",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 886,
-      "title": "Misleading write result codes: WriteNotPersisted (false negative), VariableRenamed (ambiguous), WriteNoChange (silent type mismatch), TransferImportVerificationUnavailable (creates empty stub)",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/886",
-      "state": "open",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    },
-    {
-      "number": 889,
-      "title": "genexus_edit Source: silently auto-creates undeclared &Variables as VarChar(100) — builds fail later with unrelated-looking type errors",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/889",
+      "number": 948,
+      "title": "WWP PatternInstance property-only writes fail with PatternProjectionFailed when the projected WebForm contains grids (simplegrid id mismatch); succeed on grid-less WWP transactions",
+      "url": "https://github.com/lennix1337/Genexus18MCP/issues/948",
       "state": "open",
       "labels": [
         "fixed-pending-release"
