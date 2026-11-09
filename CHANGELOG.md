@@ -12,6 +12,8 @@
 ### Fixed
 
 - Fail release preflight early while the VS Code updater is running, and identify the npm package in release summaries.
+- GeneXus X Evolution 3: `genexus_lifecycle build` no longer fails with MSB4064 (`CompileMains`/`FailIfReorg` are not parameters of the Ev3 build tasks); targeted builds now run through a no-reorg build task, which also reaches the C# Windows generator.
+- A generator that is not licensed on the machine (`local protection: Not authorized`) is now an itemized build error naming the generator, instead of a failed build with 0 errors.
 
 ### Internal
 

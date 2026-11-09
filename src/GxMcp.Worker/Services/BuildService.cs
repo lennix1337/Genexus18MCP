@@ -736,6 +736,11 @@ namespace GxMcp.Worker.Services
         // was pushed into TailLines and never counted: `specify` returned errorCount 0 for a
         // run that had in fact failed, and the caller saw only TailLines. Anchored at the
         // start of a line so ordinary prose containing a bare token cannot match.
+        // The generator's licence check prints "<Generator>:\n local protection: \r\n\tNot authorized"
+        // as a plain message, so without this the build fails with errorCount 0.
+        private static readonly Regex _rxGeneratorNotLicensed = new Regex(
+            @"^\s*(?:>R)?(?<gen>[^:>]*Generator)\s*:.*local protection.*Not authorized",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex _rxBareGxDiagnostic = new Regex(
             @"^\s*(?!spc0217\b)(?<code>spc|gen|src|qry)\d{4}\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -4215,8 +4220,10 @@ namespace GxMcp.Worker.Services
             return set;
         }
 
-        internal static string BuildExternalProjectXml(string importPath, string kbPath, string action, IList<string> targets, BuildTaskStatus status = null)
+        internal static string BuildExternalProjectXml(string importPath, string kbPath, string action, IList<string> targets, BuildTaskStatus status = null,
+            bool evolution3 = Compatibility.SdkCompat.IsEvolution3)
         {
+            string gxDir = Path.GetDirectoryName(importPath ?? string.Empty) ?? string.Empty;
             importPath = SecurityElement.Escape(importPath ?? string.Empty);
             string kbPathEsc = SecurityElement.Escape(kbPath ?? string.Empty);
             bool buildAll = string.Equals(action, "BuildAll", StringComparison.OrdinalIgnoreCase);
@@ -4226,10 +4233,31 @@ namespace GxMcp.Worker.Services
             // the .NET Framework MSBuild used by the Worker.
             sb.AppendLine("<Project DefaultTargets=\"Execute\" ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">");
             sb.AppendLine("  <Import Project=\"" + importPath + "\" />");
+            bool ev3Build = evolution3 && IsEv3BuildAction(action);
+            if (ev3Build) AppendEv3BuildTask(sb, gxDir);
             sb.AppendLine("  <Target Name=\"Execute\">");
             sb.AppendLine("    <OpenKnowledgeBase Directory=\"" + kbPathEsc + "\" Output=\"IDE\" />");
 
-            if (buildAll)
+            if (ev3Build)
+            {
+                if (buildAll)
+                {
+                    sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] KB opened\" />");
+                    sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] BuildAll started\" />");
+                }
+                bool force = !buildAll && !string.Equals(action, "Build", StringComparison.OrdinalIgnoreCase);
+                string names = buildAll || targets == null
+                    ? string.Empty
+                    : string.Join(";", targets.Select(t => SecurityElement.Escape(t ?? string.Empty)));
+                if (status != null && !buildAll && targets != null && targets.Count > 0)
+                {
+                    status.TargetsTotal = targets.Count;
+                    status.TargetsDone = 0;
+                }
+                sb.AppendLine("    <GxMcpBuildNoReorg ObjectNames=\"" + names + "\" ForceRebuild=\"" + (force ? "true" : "false") + "\" />");
+                if (buildAll) sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] BuildAll completed\" />");
+            }
+            else if (buildAll)
             {
                 sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] KB opened\" />");
                 sb.AppendLine("    <Message Importance=\"High\" Text=\"[GXMCP-BUILD-ALL] BuildAll started\" />");
@@ -4277,6 +4305,63 @@ namespace GxMcp.Worker.Services
             sb.AppendLine("</Project>");
             return sb.ToString();
         }
+
+        private static bool IsEv3BuildAction(string action) =>
+            !string.Equals(action, "Reorg", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(action, "Validate", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(action, "Check", StringComparison.OrdinalIgnoreCase);
+
+        // GeneXus X Evolution 3 build tasks take no CompileMains/FailIfReorg/DoNotExecuteReorg
+        // (MSB4064) and none of them keeps a build from reorganizing the database. This task
+        // runs the same build command the stock BuildOne/BuildAll tasks run, with the SDK's
+        // DoNotExecuteReorg/DoNotGenerateReorg flags; empty ObjectNames builds every object.
+        private static void AppendEv3BuildTask(StringBuilder sb, string gxDir)
+        {
+            sb.AppendLine("  <UsingTask TaskName=\"GxMcpBuildNoReorg\" TaskFactory=\"CodeTaskFactory\" AssemblyFile=\"$(MSBuildToolsPath)\\Microsoft.Build.Tasks.v4.0.dll\">");
+            sb.AppendLine("    <ParameterGroup><ObjectNames ParameterType=\"System.String\" /><ForceRebuild ParameterType=\"System.Boolean\" /></ParameterGroup>");
+            sb.AppendLine("    <Task>");
+            sb.AppendLine("      <Reference Include=\"Microsoft.Build.Utilities.v3.5, Version=3.5.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a\" />");
+            foreach (string assembly in new[] { "Artech.MsBuild.Common", "Artech.Architecture.Common", "Artech.Genexus.Common", "Artech.Common", "Artech.Common.Framework", "Artech.Common.Properties", "Artech.Udm.Framework" })
+                sb.AppendLine("      <Reference Include=\"" + SecurityElement.Escape(Path.Combine(gxDir, assembly + ".dll")) + "\" />");
+            sb.AppendLine("      <Code Type=\"Class\" Language=\"cs\"><![CDATA[");
+            sb.AppendLine(Ev3BuildTaskSource);
+            sb.AppendLine("]]></Code>");
+            sb.AppendLine("    </Task>");
+            sb.AppendLine("  </UsingTask>");
+        }
+
+        private const string Ev3BuildTaskSource = @"using System; using System.Collections.Generic;
+using Artech.Architecture.Common.Objects; using Artech.Architecture.Common.Services;
+using Artech.Genexus.Common.Commands; using Artech.MsBuild.Common; using Artech.Udm.Framework;
+public class GxMcpBuildNoReorg : ArtechTask {
+  public string ObjectNames { get; set; }
+  public bool ForceRebuild { get; set; }
+  public override bool Execute() {
+    if (KB == null) return false;
+    var keys = new List<EntityKey>();
+    foreach (string raw in (ObjectNames ?? string.Empty).Split(';')) {
+      string name = raw.Trim(); if (name.Length == 0) continue;
+      string type = null; int colon = name.IndexOf(':');
+      if (colon > 0) { type = name.Substring(0, colon); name = name.Substring(colon + 1); }
+      KBObject hit = null;
+      foreach (KBObject o in KB.DesignModel.Objects.GetByName(null, null, name))
+        if (type == null || string.Equals(o.TypeDescriptor.Name, type, StringComparison.OrdinalIgnoreCase)) { hit = o; break; }
+      if (hit == null) { Log.LogError(""error : object '"" + raw.Trim() + ""' was not found in the Knowledge Base.""); return false; }
+      keys.Add(hit.Key);
+    }
+    BuildOptions options = BuildOptions.ContinueOnError | BuildOptions.BuildProcess | BuildOptions.DetailedNavigation
+      | BuildOptions.DoNotExecuteReorg | BuildOptions.DoNotGenerateReorg;
+    if (keys.Count > 0) options |= BuildOptions.BuildCalled;
+    if (ForceRebuild) options |= BuildOptions.Rebuild;
+    OutputSubscribe();
+    try {
+      var command = BuildCommandFactory.Factory.Create(new BuildArgs(new DevelopmentWorkingSet(KB.DesignModel.Environment.TargetModel), options, keys));
+      return command != null && command.Do();
+    }
+    catch (Exception ex) { CommonServices.Output.AddErrorLine(ex.Message); return false; }
+    finally { OutputUnsubscribe(); }
+  }
+}";
 
         internal static string BuildMsBuildArguments(string action, string projectPath)
         {
@@ -5198,6 +5283,15 @@ namespace GxMcp.Worker.Services
                     // spells out "error". Without this the engine's severity signal is
                     // thrown away, because the in-process engine delivers spec/gen
                     // diagnostics as plain messages, and a failed run reports errorCount 0.
+                    var notLicensed = _rxGeneratorNotLicensed.Match(line);
+                    if (notLicensed.Success)
+                    {
+                        status.ErrorCount++;
+                        if (status.Errors.Count < 50)
+                            status.Errors.Add("error : " + notLicensed.Groups["gen"].Value.Trim()
+                                + " is not licensed on this machine (GeneXus local protection: Not authorized); authorize it in the GeneXus License Manager.");
+                        return;
+                    }
                     if (_rxError.IsMatch(line) || _rxBareGxDiagnostic.IsMatch(line))
                 {
                     // v2.6.6 Stream E (FR#9): CS2001 for "<obj>_bc.cs" where the
