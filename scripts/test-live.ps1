@@ -330,6 +330,10 @@ if (-not [string]::IsNullOrWhiteSpace($sourceVersion) -and $sourceVersion -ne $p
 }
 
 $gatewayProject = Join-Path $root 'src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj'
+$missingTestAssemblies = @(Get-LiveMissingTestAssemblies -Root $root -GatewayOnly:$GatewayOnly)
+if ($missingTestAssemblies.Count -gt 0) {
+    Fail-Live ("The live gates run compiled tests (--no-build) and some are missing. " + ($missingTestAssemblies -join ' | ')) 1 'failed'
+}
 # Never inherit a user's default KB or let tests persist selection to their config.
 $runDirectory = Join-Path $root ('scratchpad\live-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
