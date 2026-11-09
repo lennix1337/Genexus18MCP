@@ -61,11 +61,11 @@ namespace GxMcp.Worker.Helpers
                 .SelectMany(e => e.Elements().Where(detail => Is(detail, "detail")))
                 .SelectMany(e => e.Elements().Where(layout => Is(layout, "layout")))
                 .SelectMany(e => e.DescendantsAndSelf());
-            Normalize(document, elements, preserveReferencedIds: true, marker: marker, includeTabContainers: true);
+            Normalize(document, elements, preserveReferencedIds: true, marker: marker, includeNamedControls: true);
         }
 
         private static void Normalize(XDocument document, IEnumerable<XElement> elements,
-            bool preserveReferencedIds = false, string marker = StructuralIdMarker, bool includeTabContainers = false)
+            bool preserveReferencedIds = false, string marker = StructuralIdMarker, bool includeNamedControls = false)
         {
             // Only projected WebForm readback adds reference protection. The DDL
             // comparison keeps its existing structural-id normalization unchanged.
@@ -75,7 +75,7 @@ namespace GxMcp.Worker.Helpers
             var text = preserveReferencedIds ? document.DescendantNodes().OfType<XText>().Select(t => t.Value).ToArray() : null;
             foreach (var element in elements.Where(e =>
                 (Is(e, "layout") || Is(e, "table") || Is(e, "row") || Is(e, "cell")
-                    || (includeTabContainers && IsTabContainer(e)))
+                    || (includeNamedControls && (IsTabContainer(e) || IsGridControl(e))))
                 && e.AncestorsAndSelf().Any(a => Is(a, "layout"))))
             {
                 var id = element.Attribute("id");
@@ -96,6 +96,18 @@ namespace GxMcp.Worker.Helpers
             return Is(element, "item") && Is(element.Parent, "tab")
                 && !string.IsNullOrWhiteSpace((string)element.Parent.Attribute("controlName"))
                 && !string.IsNullOrWhiteSpace((string)element.Attribute("itemControlName"));
+        }
+
+        // Issue #948: the WorkWithPlus engine emits new grid and column ids on every
+        // projection. A grid is identified by its control name and a column by the
+        // attribute or variable it shows, so only those keep the id out of the comparison.
+        private static bool IsGridControl(XElement element)
+        {
+            if (Is(element, "simplegrid") || Is(element, "grid"))
+                return !string.IsNullOrWhiteSpace((string)element.Attribute("controlName"));
+            return Is(element, "item") && Is(element.Parent, "simplegrid")
+                && !string.IsNullOrWhiteSpace((string)element.Parent.Attribute("controlName"))
+                && !string.IsNullOrWhiteSpace((string)element.Attribute("attribute"));
         }
 
         private static bool Is(XElement element, string name)
