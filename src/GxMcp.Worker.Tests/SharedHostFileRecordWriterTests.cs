@@ -13,8 +13,10 @@ namespace GxMcp.Worker.Tests
     // KB_WORKER_OWNED_ELSEWHERE / liveness-unverified (Requirement 2 criterion 2, SharedHostProcessHarnessTests).
     public sealed class SharedHostFileRecordWriterTests
     {
+        private const int MinimumOverlap = 50;
+
         [Fact]
-        public void A_concurrent_reader_never_sees_the_record_absent_or_unreadable_while_the_broker_rewrites_it()
+        public async Task A_concurrent_reader_never_sees_the_record_absent_or_unreadable_while_the_broker_rewrites_it()
         {
             string root = Path.Combine(Path.GetTempPath(), "gxmcp-recordwriter-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
@@ -44,11 +46,14 @@ namespace GxMcp.Worker.Tests
                         {
                             record.Generation++;
                             writer.Write(record);
-                            writes++;
+                            Interlocked.Increment(ref writes);
                         }
                     });
+                    // Read for at least one second and until the writer has done enough rewrites to overlap with the
+                    // reads; a loaded machine (the full suite) slows the writer, so a fixed window alone is not enough.
                     var clock = Stopwatch.StartNew();
-                    while (clock.ElapsedMilliseconds < 1000)
+                    while (clock.ElapsedMilliseconds < 1000
+                        || (Volatile.Read(ref writes) <= MinimumOverlap && clock.ElapsedMilliseconds < 20000))
                     {
                         var read = RecordReadResult.ReadFile(path);
                         reads++;
@@ -56,10 +61,10 @@ namespace GxMcp.Worker.Tests
                             firstFailure = "read " + reads + ": " + read.Status + " " + read.Error;
                     }
                     stop.Cancel();
-                    writing.Wait();
+                    await writing;
                 }
 
-                Assert.True(writes > 50 && reads > 50, "too little overlap: writes=" + writes + " reads=" + reads);
+                Assert.True(writes > MinimumOverlap && reads > MinimumOverlap, "too little overlap: writes=" + writes + " reads=" + reads);
                 Assert.True(firstFailure == null, firstFailure + " (writes=" + writes + ", reads=" + reads + ")");
             }
             finally
