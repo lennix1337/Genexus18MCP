@@ -223,7 +223,7 @@ function Invoke-SharedHostCheck {
         [pscustomobject][ordered]@{
             name = $Name
             status = $Status
-            detail = $Detail
+            detail = (Format-SharedHostDetail -Text $Detail)
             missingPrerequisites = @($Missing)
             rejectedPath = $Rejected
         }
@@ -573,6 +573,90 @@ function Write-SharedHostReport {
     }
 }
 
+function Format-SharedHostDetail {
+    # A detail is one report table cell: one line of at most MaxLength characters,
+    # so a build log or a stack trace never becomes the whole report.
+    param([AllowNull()][string]$Text, [int]$MaxLength = 500)
+    if ([string]::IsNullOrEmpty($Text)) { return '' }
+    $line = ($Text -replace '\s+', ' ').Trim()
+    if ($line.Length -le $MaxLength) { return $line }
+    $marker = ' ...(truncated)'
+    return $line.Substring(0, $MaxLength - $marker.Length).TrimEnd() + $marker
+}
+function Invoke-SharedHostBuild {
+    # Every output stream of the build goes to LogPath, so none of it reaches the
+    # caller's pipeline (the first live run returned the whole build log as the init
+    # error). Returns $null on exit code 0, otherwise one bounded line naming the
+    # exit code and the log.
+    param([string]$FilePath, [string[]]$ArgumentList, [string]$LogPath)
+    $code = $null
+    try {
+        $parent = Split-Path -Parent $LogPath
+        if (-not [string]::IsNullOrWhiteSpace($parent) -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        & $FilePath @ArgumentList *> $LogPath
+        $code = $LASTEXITCODE
+    }
+    catch {
+        return (Format-SharedHostDetail -Text "Artifact build could not start: $($_.Exception.Message) See $LogPath.")
+    }
+    if ($code -eq 0) { return $null }
+    return (Format-SharedHostDetail -Text "Artifact build failed with exit code $code; see $LogPath.")
+}
+function Get-SharedHostKbOpenFailure {
+    # The Gateway answers genexus_kb open once the Worker is attached; the Worker
+    # opens the KB afterwards, so an SDK refusal shows only in the Worker log as
+    # "[KB-OPEN-FAIL] elapsedMs=<n> path=<kb> error=<message>". The last open event
+    # for KbPath wins, so a later "[KB-OPEN] ... path=<kb>" clears an earlier failure.
+    # Returns $null or one bounded reason.
+    param([AllowNull()][string]$LogText, [string]$KbPath)
+    if ([string]::IsNullOrEmpty($LogText) -or [string]::IsNullOrWhiteSpace($KbPath)) { return $null }
+    $normalize = {
+        param([string]$Value)
+        $value = $Value.Trim()
+        try { $value = [IO.Path]::GetFullPath($value) } catch { }
+        if ($value.Length -gt 3) { $value = $value.TrimEnd('\', '/') }
+        return $value
+    }
+    $wanted = & $normalize $KbPath
+    $reason = $null
+    $pattern = '\[(?<event>KB-OPEN|KB-OPEN-FAIL)\] elapsedMs=\d+ path=(?<path>.+?)(?: error=(?<error>[^\r\n]*))?\r?$'
+    $options = [System.Text.RegularExpressions.RegexOptions]::Multiline
+    foreach ($match in [regex]::Matches($LogText, $pattern, $options)) {
+        if (-not [string]::Equals((& $normalize $match.Groups['path'].Value), $wanted, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($match.Groups['event'].Value -eq 'KB-OPEN') { $reason = $null }
+        else { $reason = $match.Groups['error'].Value.Trim() }
+    }
+    if ($null -eq $reason) { return $null }
+    if ($reason.Length -eq 0) { $reason = 'no error text' }
+    return (Format-SharedHostDetail -Text "the Worker could not open the KB: $reason")
+}
+function Resolve-SharedHostKbListing {
+    # One poll of the object listing after genexus_kb open: 'ready' once an object
+    # is listed; 'failed' when the Worker could not open the KB, the listing errored
+    # with a code other than IndexNotReady, or the wait ended; otherwise 'wait'. A
+    # listing whose code could not be read is a reason to wait, not an empty KB.
+    param(
+        [string]$KbPath,
+        [bool]$ObjectFound,
+        [AllowNull()][string]$Code,
+        [bool]$IsError,
+        [AllowNull()][string]$OpenFailure,
+        [bool]$TimedOut
+    )
+    $result = {
+        param($State, $Detail)
+        [pscustomobject]@{ state = $State; detail = (Format-SharedHostDetail -Text $Detail) }
+    }
+    $codeText = $Code
+    if ([string]::IsNullOrWhiteSpace($codeText)) { $codeText = 'none' }
+    if (-not [string]::IsNullOrWhiteSpace($OpenFailure)) { return (& $result 'failed' "KB open failed for ${KbPath}: $OpenFailure") }
+    if ($ObjectFound) { return (& $result 'ready' '') }
+    if ($IsError -and $Code -ine 'IndexNotReady') { return (& $result 'failed' "Listing objects in $KbPath failed (code $codeText).") }
+    if ($TimedOut) { return (& $result 'failed' "No object was listed in $KbPath before the wait ended (last listing code $codeText).") }
+    return (& $result 'wait' '')
+}
 # --- Live run helpers (not part of the pure contract) -------------------------
 
 # Server.WorkerIdleTimeoutMinutes written to the temporary config; the cleanup
@@ -612,9 +696,15 @@ function Get-LivePath($Object, [string[]]$Names) {
             if ($index -ge $current.Count) { return $null }
             $current = $current[$index]
         }
-        else {
-            $current = Get-LiveField $current $name
+        elseif ($current -is [System.Collections.IDictionary]) {
+            # Assigned directly, not through Get-LiveField: a function's output
+            # unrolls a one-element array (result.content) to its only item.
+            if ($current.Contains($name)) { $current = $current[$name] } else { $current = $null }
         }
+        elseif ($null -ne $current -and $null -ne $current.PSObject.Properties[$name]) {
+            $current = $current.PSObject.Properties[$name].Value
+        }
+        else { $current = $null }
         if ($null -eq $current) { return $null }
     }
     return $current
@@ -732,8 +822,9 @@ function Initialize-LiveRun {
     try {
         if (-not $SkipBuild) {
             Write-LiveStep 'Building the current Gateway/Worker artifact'
-            & pwsh -NoProfile -File (Join-Path $root 'build.ps1')
-            if ($LASTEXITCODE -ne 0) { throw "Artifact build failed with exit code $LASTEXITCODE." }
+            $buildError = Invoke-SharedHostBuild -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', (Join-Path $root 'build.ps1')) `
+                -LogPath (Join-Path $script:runDirectory 'build.log')
+            if ($null -ne $buildError) { throw $buildError }
         }
         $gatewayExe = Join-Path $root 'publish\GxMcp.Gateway.exe'
         $workerExe = Join-Path $root 'publish\worker\GxMcp.Worker.exe'
@@ -937,28 +1028,47 @@ function Open-LiveKb($Gateway, [string]$Kb, [string]$Alias) {
     # Returns @{ alias; object } or @{ unavailable = <prerequisite>; detail } or @{ failed = <detail> }.
     $open = Invoke-LiveTool $Gateway 'genexus_kb' @{ action = 'open'; path = $Kb; alias = $Alias } 600
     if ($open.isError) {
-        $prerequisite = 'kb'
-        if ($open.licenseIssue) { $prerequisite = 'license' }
-        return [pscustomobject]@{ unavailable = $prerequisite; detail = "Gateway $($Gateway.name) could not open $Kb (code $($open.code))." }
+        if ($open.licenseIssue) {
+            return [pscustomobject]@{ unavailable = 'license'; detail = "Gateway $($Gateway.name) could not open $Kb (code $($open.code))." }
+        }
+        # The kb prerequisite already found the KB on disk, so a refused open is a
+        # failure of this run, not a missing prerequisite.
+        $message = Get-LiveField $open.payload 'error'
+        if ($message -isnot [string]) { $message = Get-LivePath $open.payload @('error', 'message') }
+        if ($message -isnot [string]) { $message = Get-LiveField $open.payload 'message' }
+        return [pscustomobject]@{ failed = "Gateway $($Gateway.name) could not open $Kb (code $($open.code)): $message" }
     }
     $resolved = [string](Get-LiveField $open.payload 'kbAlias')
     if ([string]::IsNullOrWhiteSpace($resolved)) { $resolved = [string](Get-LivePath $open.payload @('result', 'kbAlias')) }
     if ([string]::IsNullOrWhiteSpace($resolved)) { $resolved = $Alias }
     $deadline = [datetime]::UtcNow.AddSeconds($IndexReadySeconds)
-    $listing = $null
-    while ([datetime]::UtcNow -lt $deadline) {
+    while ($true) {
         $listing = Invoke-LiveTool $Gateway 'genexus_list_objects' @{ kb = $resolved; limit = 5 }
-        $code = [string]$listing.code
-        $state = [string](Get-LiveField $listing.payload 'status')
-        if ($code -ine 'IndexNotReady' -and $state -ine 'Indexing') { break }
-        Start-Sleep -Milliseconds 500
+        $object = $null
+        if (-not $listing.isError) { $object = Find-LiveObjectReference $listing.payload }
+        $verdict = Resolve-SharedHostKbListing -KbPath $Kb -ObjectFound ($null -ne $object) -Code ([string]$listing.code) `
+            -IsError $listing.isError -OpenFailure (Get-LiveKbOpenFailure $Kb) -TimedOut ([datetime]::UtcNow -ge $deadline)
+        if ($verdict.state -eq 'ready') { return [pscustomobject]@{ alias = $resolved; object = $object } }
+        if ($verdict.state -eq 'failed') { return [pscustomobject]@{ failed = "Gateway $($Gateway.name): $($verdict.detail)" } }
+        Update-LiveSamples
+        Start-Sleep -Milliseconds 1000
     }
-    if ($null -eq $listing -or $listing.isError) {
-        return [pscustomobject]@{ failed = "Gateway $($Gateway.name) could not list objects in $Kb (code $($listing.code))." }
+}
+function Get-LiveKbOpenFailure([string]$Kb) {
+    # Every Gateway and Worker of this run logs under the run directory.
+    $text = New-Object System.Text.StringBuilder
+    foreach ($log in @(Get-ChildItem -LiteralPath $script:runDirectory -Recurse -File -Filter 'worker*.log' -ErrorAction SilentlyContinue)) {
+        try {
+            $stream = [IO.File]::Open($log.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+            try {
+                $reader = New-Object System.IO.StreamReader -ArgumentList $stream
+                [void]$text.AppendLine($reader.ReadToEnd())
+            }
+            finally { $stream.Dispose() }
+        }
+        catch { }
     }
-    $object = Find-LiveObjectReference $listing.payload
-    if ($null -eq $object) { return [pscustomobject]@{ failed = "No object to read was listed in $Kb." } }
-    return [pscustomobject]@{ alias = $resolved; object = $object }
+    return (Get-SharedHostKbOpenFailure -LogText $text.ToString() -KbPath $Kb)
 }
 
 function Invoke-LiveOperationLanes([object[]]$Lanes, [int]$Count) {
