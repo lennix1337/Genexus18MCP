@@ -33,7 +33,9 @@ namespace GxMcp.Gateway.Tests
     //     ownership record file and log FormatRecoveryLogEntry(RecoveryActionStoppedProcess,
     //     StaleRecoveryRegistryNames.WorkerOwnershipRegistry, record Key, WorkerPid, WorkerStartTimeUtcTicks,
     //     context.RecoveringGatewayPid, StaleReason.OrphanedWorker) plus one RecoveryActionRemovedRecord entry for the
-    //     deleted file (same registry, key and reason). Any other stop outcome ends recovery with
+    //     deleted file (same registry, key and reason). A record removed without a stop logs only the
+    //     RecoveryActionRemovedRecord entry, with StaleReason.StartTimeMismatch when its Worker PID runs with another
+    //     start time and StaleReason.OwnerNotRunning otherwise. Any other stop outcome ends recovery with
     //     SHARED_WORKER_RECOVERY_FAILED before anything else changes.
     //     (6) context.AcquireElectionMutex(SharedWorkerRegistry.ElectionMutexNameV2(kbKey), timeout).
     //     (7) Stale v2 record (parsed or unparseable): SharedWorkerRegistry.RemoveStaleRecord(kbKey, record, reason,
@@ -263,6 +265,37 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(record.ToJson(), File.ReadAllText(RecordPath(identity)));
         }
 
+        // Requirement 6 criterion 2 and 2.8: the host was "starting" or "held" at attach time and its admission then
+        // refuses the start. The readiness wait returns the refusal of the re-read record on the next poll instead
+        // of waiting out the Attach_Readiness_Wait, and disposes the attachment.
+        [Fact]
+        public void HostThatRefusesItsStartDuringTheReadinessWait_ReturnsTheRecordsRefusalPromptly()
+        {
+            var identity = Identity();
+            var record = SeedLiveHost(identity, SharedHostRecordState.Held);
+            _h.AttachmentReady = false;
+            TimeSpan refusedAt = TimeSpan.FromSeconds(3);
+            _h.Clock.At(refusedAt, () =>
+            {
+                record.State = SharedHostRecordState.Refused;
+                record.WorkerPid = 0;
+                record.WorkerStartTimeUtcTicks = 0;
+                record.Refusal = new SharedHostRefusal { Code = "KB_POOL_FULL", Reason = "low-memory", AvailableMb = 900, FloorMb = 1024 };
+                SharedWorkerRegistry.WriteRecordV2(record, _v2Root);
+            });
+
+            var ex = Assert.Throws<SharedWorkerLaunchException>(() =>
+                SharedWorkerHostLauncher.ConnectV2(Request(attachReadyTimeoutSeconds: 60), _h.Context()));
+
+            var error = AssertCatalogError(ex, ConcurrencyErrorCatalog.KbPoolFull, "low-memory", retryable: false);
+            Assert.Equal(900, (long)error["availableMb"]!);
+            Assert.Equal(1024, (long)error["floorMb"]!);
+            // One poll interval (100 ms) after the refusal, not the 60 s wait.
+            Assert.InRange(_h.Clock.Elapsed, refusedAt, refusedAt + TimeSpan.FromMilliseconds(200));
+            Assert.True(Assert.Single(_h.Connects).Attachment.Disposed);
+            Assert.Empty(_h.Starts);
+        }
+
         [Fact]
         public void ReadinessWait_DefaultsToTheEffectiveAttachReadyTimeoutOf120Seconds()
         {
@@ -460,6 +493,33 @@ namespace GxMcp.Gateway.Tests
             Assert.Single(_h.Starts);
             Assert.Same(Assert.Single(_h.Connects).Attachment, attachment);
             Assert.DoesNotContain(OwnerGatewayPid, _h.Terminated);
+        }
+
+        // Requirement 7 criteria 3 and 7: an ownership record of a dead owner whose Worker is gone (owner-not-running),
+        // or whose Worker PID now names another process (start-time-mismatch), is removed without stopping anything,
+        // and its one log entry names that reason instead of orphaned-worker.
+        [Theory]
+        [InlineData(false, "owner-not-running")]
+        [InlineData(true, "start-time-mismatch")]
+        public void DeadOwnerRecordWithoutItsWorker_IsRemovedWithoutStopping_AndLogsTheMatchingReason(bool pidReused, string expectedReason)
+        {
+            WriteOwnership("orphan", OwnerGatewayPid, OwnerGatewayStartTicks, OrphanWorkerPid, OrphanWorkerStartTicks);
+            if (pidReused)
+            {
+                _h.Probe.Set(OrphanWorkerPid, ProcessProbeResult.Running(OrphanWorkerStartTicks + 3_000_000_000L));
+                _h.Images[OrphanWorkerPid] = WorkerPath;
+            }
+            _h.OnStart = request => PublishNewHost(request, SharedHostRecordState.Ready);
+
+            SharedWorkerHostLauncher.ConnectV2(Request(), _h.Context());
+
+            Assert.Empty(_h.Terminated);
+            Assert.False(File.Exists(Path.Combine(_ownershipRoot, "orphan.json")));
+            var entries = _h.Log.Where(line => line.Contains("registry=" + StaleRecoveryRegistryNames.WorkerOwnershipRegistry)).ToList();
+            var entry = Assert.Single(entries);
+            Assert.Contains("action=" + SharedWorkerRegistry.RecoveryActionRemovedRecord, entry);
+            Assert.Contains("key=orphan ", entry);
+            Assert.EndsWith("reason=" + expectedReason, entry);
         }
 
         // ---------------------------------------------------------------

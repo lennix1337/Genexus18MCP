@@ -329,11 +329,14 @@ namespace GxMcp.Worker
     }
 
     /// <summary>
-    /// The registry v2 record file (<c>shared-workers\v2\&lt;kbKey&gt;.json</c>): a temporary file plus
-    /// <see cref="File.Replace(string, string, string)"/>, so a reader never sees a partial record.
+    /// The registry v2 record file (<c>shared-workers\v2\&lt;kbKey&gt;.json</c>): a temporary file plus one
+    /// MoveFileEx rename over the record, so a reader never sees a partial or missing record.
     /// </summary>
     internal sealed class SharedHostFileRecordWriter : ISharedHostRecordWriter
     {
+        private const uint MoveFileReplaceExisting = 0x1;
+        private static readonly System.TimeSpan ReplaceRetryWindow = System.TimeSpan.FromSeconds(2);
+
         private readonly string _recordPath;
 
         internal SharedHostFileRecordWriter(string recordPath)
@@ -355,8 +358,7 @@ namespace GxMcp.Worker
             try
             {
                 File.WriteAllText(temp, record.ToJson(), new UTF8Encoding(false));
-                if (File.Exists(_recordPath)) File.Replace(temp, _recordPath, null);
-                else File.Move(temp, _recordPath);
+                ReplaceAtomically(temp, _recordPath);
             }
             finally { try { if (File.Exists(temp)) File.Delete(temp); } catch { } }
         }
@@ -364,6 +366,35 @@ namespace GxMcp.Worker
         public void Delete()
         {
             try { if (File.Exists(_recordPath)) File.Delete(_recordPath); } catch { }
+        }
+
+        // File.Replace (ReplaceFile) is not used: while it runs, a concurrent reader finds the record absent or gets
+        // a sharing violation, and a Gateway's ConnectV2 then refuses the open as liveness-unverified or elects a
+        // second host (Requirement 2 criterion 2). MOVEFILE_REPLACE_EXISTING renames over the record in one step,
+        // as SharedWorkerRegistry.WriteRecordV2 does in the Gateway. The rename fails while a reader has the
+        // record open (readers share delete, but a rename over an open file is still refused), so it is retried
+        // for a bounded time.
+        internal static void ReplaceAtomically(string source, string destination)
+        {
+            var retrying = Stopwatch.StartNew();
+            while (true)
+            {
+                if (NativeMethods.MoveFileEx(source, destination, MoveFileReplaceExisting)) return;
+                int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                if (retrying.Elapsed >= ReplaceRetryWindow)
+                {
+                    throw new IOException("Could not replace the registry record " + destination + ": "
+                        + new System.ComponentModel.Win32Exception(error).Message);
+                }
+                Thread.Sleep(1);
+            }
+        }
+
+        private static class NativeMethods
+        {
+            [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode, EntryPoint = "MoveFileExW")]
+            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+            internal static extern bool MoveFileEx(string existingFileName, string newFileName, uint flags);
         }
     }
 

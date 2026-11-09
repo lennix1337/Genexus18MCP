@@ -453,11 +453,15 @@ namespace GxMcp.Gateway
                 while (true)
                 {
                     if (attachment.IsSdkReady) return attachment;
-                    if (IsRecordReady(record, request, context))
+                    var current = ReadSameHostRecord(record, context);
+                    if (current != null && string.Equals(current.State, SharedHostRecordState.Ready, StringComparison.Ordinal))
                     {
                         (attachment as SharedWorkerConnection)?.MarkSdkReady();
                         return attachment;
                     }
+                    // The host's admission refused the start after the attach: return its typed refusal now instead
+                    // of waiting out the Attach_Readiness_Wait. The catch below disposes the attachment.
+                    if (current != null) ThrowOnRefusedRecord(current, request);
                     if (clock.UtcNow >= readyDeadline) break;
                     clock.Sleep(context.RegistryPollInterval);
                 }
@@ -472,8 +476,9 @@ namespace GxMcp.Gateway
             throw AttachFailed(request, "readiness-timeout", null);
         }
 
-        // The re-read record of the same host (same PID and start time) reports state "ready".
-        private static bool IsRecordReady(SharedHostRecord attached, SharedWorkerLaunchRequest request, SharedWorkerRecoveryContext context)
+        // The re-read record of the same host (same PID and start time), or null when it names another host or
+        // cannot be parsed.
+        private static SharedHostRecord? ReadSameHostRecord(SharedHostRecord attached, SharedWorkerRecoveryContext context)
         {
             var read = SharedWorkerRegistry.ReadRecordV2(attached.KbKey, context.RegistryRoot);
             var current = read.Record;
@@ -481,7 +486,8 @@ namespace GxMcp.Gateway
                 && current != null
                 && current.HostPid == attached.HostPid
                 && current.HostStartTimeUtcTicks == attached.HostStartTimeUtcTicks
-                && string.Equals(current.State, SharedHostRecordState.Ready, StringComparison.Ordinal);
+                    ? current
+                    : null;
         }
 
         private static void ThrowOnIdentityMismatch(SharedWorkerIdentity identity, SharedHostRecord record, SharedWorkerLaunchRequest request)
@@ -584,6 +590,14 @@ namespace GxMcp.Gateway
                     record.WorkerPid, record.WorkerStartTimeUtcTicks, context.RecoveringGatewayPid, StaleReason.OrphanedWorker));
             }
 
+            // The removal names why the record was stale: its orphaned Worker was stopped, its Worker PID now names
+            // another process (running with a different recorded start time), or the owner is gone and so is its Worker.
+            StaleReason removalReason = stopped
+                ? StaleReason.OrphanedWorker
+                : workerProbe.Status == ProcessProbeStatus.Running && record.WorkerStartTimeUtcTicks > 0 && !sameWorker
+                    ? StaleReason.StartTimeMismatch
+                    : StaleReason.OwnerNotRunning;
+
             if (!IsSafeRecordKey(key))
                 throw SharedWorkerRecoveryFailure.Exception(key, registry, SharedWorkerRecoveryFailure.RemoveFailed, null,
                     "the ownership record key is not a file name");
@@ -600,7 +614,7 @@ namespace GxMcp.Gateway
 
             context.Log(SharedWorkerRegistry.FormatRecoveryLogEntry(
                 SharedWorkerRegistry.RecoveryActionRemovedRecord, registry, key,
-                record.WorkerPid, record.WorkerStartTimeUtcTicks, context.RecoveringGatewayPid, StaleReason.OrphanedWorker));
+                record.WorkerPid, record.WorkerStartTimeUtcTicks, context.RecoveringGatewayPid, removalReason));
         }
 
         private enum OwnerState

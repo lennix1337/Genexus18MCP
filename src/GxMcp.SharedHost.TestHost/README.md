@@ -76,7 +76,9 @@ Example:
   broker stamped on the forwarded request).
 - Control methods answer at once, even while an SDK-like request runs:
   - `fake/status`: `pid`, `ready`, `workingSetBytes`, `workingSetTargetMb`,
-    `queued`, `completed`.
+    `queued`, `completed`, `initStartedUtcTicks` (UTC ticks when the scripted SDK
+    initialization, the `readyDelayMs` wait, began) and `readyUtcTicks` (UTC ticks
+    taken just before `sdk_ready` was written; `0` before that).
   - `fake/setWorkingSet` with `params.mb` (0 to 1024): resizes the held memory and
     answers with the status. Lowering it releases the memory; the OS may trim the
     working set later.
@@ -98,3 +100,9 @@ this project before the Gateway tests) or under `bin\Debug` / `bin\Release`.
 broker with this binary as its child and two `SharedWorkerConnection` clients, and checks
 that a second session's SDK request queues behind the first and is answered. It finds the
 executable the same way.
+
+`src/GxMcp.Gateway.Tests/SharedHostProcessHarness.cs` is the process harness for the
+multi-session checks: it starts brokers from this binary and Gateway client processes
+(`dotnet GxMcp.Gateway.Tests.dll --shared-host-client <options.json>`) that run the
+Gateway's own attach code against a temporary registry. Its file header documents the
+client protocol, the isolation rules, and the cleanup rules.
