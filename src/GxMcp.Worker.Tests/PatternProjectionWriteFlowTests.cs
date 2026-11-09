@@ -333,6 +333,76 @@ namespace GxMcp.Worker.Tests
             Assert.NotEqual(comparison["expectedHash"].Value<string>(), comparison["persistedHash"].Value<string>());
         }
 
+        // Issue #948: the WorkWithPlus engine emits new grid and column ids on every
+        // projection, so a property-only instance write on a host with a grid could
+        // never pass the projected-WebForm comparison.
+        private const string NativeGridMarkup =
+            "<simplegrid id='14141414-1414-1414-1414-141414141414' controlName='Grid' class='77777777-7777-7777-7777-777777777777-175'>"
+            + "<item id='15151515-1515-1515-1515-151515151515' attribute='att:4' titleExp='=Id.ContextualTitle'/>"
+            + "<item id='16161616-1616-1616-1616-161616161616' attribute='var:5'/></simplegrid>";
+
+        private static string NativeGridForm() => NativeProjectionForm.Replace(
+            "<action controlName='BtnSave' onClickEvent='DoSave'/>", NativeGridMarkup);
+
+        private static string RecreatedGridIds(string xml) => xml
+            .Replace("14141414-1414-1414-1414-141414141414", "0f248b7a-f3fe-47f7-8d45-23f23c64e161")
+            .Replace("15151515-1515-1515-1515-151515151515", "17171717-1717-1717-1717-171717171717")
+            .Replace("16161616-1616-1616-1616-161616161616", "18181818-1818-1818-1818-181818181818");
+
+        [Fact]
+        public void ProjectedWebFormAcceptsRecreatedGridAndColumnIds()
+        {
+            string before = NativeGridForm();
+            string after = RecreatedLayoutIds(RecreatedGridIds(before));
+            var comparison = WriteService.CompareProjectionXml(before, after, projectedWebForm: true);
+            Assert.True(comparison["equal"].Value<bool>(), comparison["difference"]?.ToString());
+            Assert.NotEqual(comparison["expectedHash"].Value<string>(), comparison["persistedHash"].Value<string>());
+            Assert.False(WriteService.CompareProjectionXml(before, after)["equal"].Value<bool>());
+        }
+
+        [Theory]
+        [InlineData("controlName='Grid'", "controlName='OtherGrid'")]
+        [InlineData("attribute='att:4'", "attribute='att:9'")]
+        [InlineData("titleExp='=Id.ContextualTitle'", "titleExp='=Other'")]
+        [InlineData("-175'", "-176'")]
+        public void GridIdentityColumnsAndClassesRemainSignificant(string original, string changed)
+        {
+            string before = NativeGridForm();
+            string after = RecreatedGridIds(before).Replace(original, changed);
+            Assert.NotEqual(RecreatedGridIds(before), after);
+            Assert.False(WriteService.CompareProjectionXml(before, after, projectedWebForm: true)["equal"].Value<bool>());
+        }
+
+        [Theory]
+        [InlineData("14141414-1414-1414-1414-141414141414")]
+        [InlineData("15151515-1515-1515-1515-151515151515")]
+        public void ReferencedGridAndColumnIdsCannotBeSilentlyRecreated(string referencedId)
+        {
+            string before = NativeGridForm().Replace("<simplegrid ", "<data target='" + referencedId + "'/><simplegrid ");
+            Assert.False(WriteService.CompareProjectionXml(before, RecreatedGridIds(before),
+                projectedWebForm: true)["equal"].Value<bool>());
+        }
+
+        [Theory]
+        [InlineData("controlName='Grid'", "14141414-1414-1414-1414-141414141414")]
+        [InlineData("attribute='att:4'", "15151515-1515-1515-1515-151515151515")]
+        public void GridWrappersWithoutTheirNativeIdentityRemainStrict(string missingIdentity, string changedId)
+        {
+            string before = NativeGridForm().Replace(missingIdentity, "");
+            string after = before.Replace(changedId, "abababab-abab-abab-abab-abababababab");
+            Assert.False(WriteService.CompareProjectionXml(before, after,
+                projectedWebForm: true)["equal"].Value<bool>());
+        }
+
+        [Fact]
+        public void GridIdsOutsideLayoutFormsRemainStrict()
+        {
+            string htmlGrid = NativeProjectionForm.Replace("</GxMultiForm>",
+                "<Form id='2' type='html'><detail>" + NativeGridMarkup + "</detail></Form></GxMultiForm>");
+            Assert.False(WriteService.CompareProjectionXml(htmlGrid, RecreatedGridIds(htmlGrid),
+                projectedWebForm: true)["equal"].Value<bool>());
+        }
+
         [Fact]
         public void ProjectedWebFormAcceptsRecreatedTabAndDirectPageIdsInsideNestedUserControl()
         {
