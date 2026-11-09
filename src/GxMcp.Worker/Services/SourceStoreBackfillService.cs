@@ -175,10 +175,11 @@ namespace GxMcp.Worker.Services
     }
 
     /// <summary>
-    /// Low-priority, resumable source-store backfill.  Each SDK-facing slice is
-    /// submitted through the Worker's STA action queue and is bounded by both an
-    /// object count and wall-clock budget; the queue is never held while waiting for
-    /// the next slice.
+    /// Low-priority, resumable source-store backfill.  A slice walks the catalogue
+    /// off the SDK thread, bounded by an object count and a wall-clock budget.  Only
+    /// the SDK read of one object goes through the Worker's STA action queue; hashing,
+    /// store writes and read-back certification run off it, so an interactive command
+    /// waits behind at most one object read (issue #943).
     /// </summary>
     public sealed class SourceStoreBackfillService
     {
@@ -190,6 +191,10 @@ namespace GxMcp.Worker.Services
         private readonly Func<string, string, string, DateTime?, string, bool> _put;
         private readonly Func<Action, bool> _enqueueSdkAction;
         private readonly object _gate = new object();
+        // Serializes slices: they no longer share the single STA thread, and two
+        // slices walking the same cursor would double-count objects.
+        private readonly object _sliceRunLock = new object();
+        internal static TimeSpan SdkReadWait = TimeSpan.FromMinutes(5);
         private readonly ISourceStoreBackfillClock _runClock;
         // ProcessedObjects when _runClock last started from zero.  The ETA rate is
         // measured only over the objects this clock actually timed, so a count
@@ -253,8 +258,9 @@ namespace GxMcp.Worker.Services
         }
 
         /// <summary>
-        /// Starts (or resumes) backfill for the currently loaded index.  The callbacks
-        /// are invoked only from an SDK STA slice, never from the caller's thread.
+        /// Starts (or resumes) backfill for the currently loaded index.  The part reader
+        /// and required-part provider are invoked only inside an SDK STA action, one
+        /// object per action, never from the caller's thread.
         /// </summary>
         public bool Start(
             Func<IReadOnlyList<SearchIndex.IndexEntry>> entryProvider,
@@ -346,7 +352,22 @@ namespace GxMcp.Worker.Services
 
         /// <summary>Runs exactly one slice synchronously; exposed for deterministic tests.</summary>
         public bool RunOneSliceForTest(int maxObjectsPerSlice = 50, int sliceBudgetMs = 250)
-            => RunSlice(maxObjectsPerSlice, sliceBudgetMs, scheduleContinuation: false);
+            => RunSlice(maxObjectsPerSlice, sliceBudgetMs, scheduleContinuation: false, runOnSdk: action => { action(); return null; });
+
+        /// <summary>
+        /// Runs one SDK read on the STA action queue and waits for it off the STA.
+        /// Returns null on success, else the reason the read never ran.  A read that
+        /// outlives the wait only fills locals nobody reads any more.
+        /// </summary>
+        private string RunOnSdkAndWait(Action action)
+        {
+            var done = new ManualResetEventSlim(false);
+            if (!_enqueueSdkAction(() => { try { action(); } finally { done.Set(); } }))
+                return "SDK action queue rejected source-store backfill read.";
+            if (!done.Wait(SdkReadWait))
+                return "Source-store backfill read waited more than " + (int)SdkReadWait.TotalSeconds + " s for the SDK action queue.";
+            return null;
+        }
 
         private void QueueNextSlice(int maxObjectsPerSlice, int sliceBudgetMs)
         {
@@ -357,20 +378,12 @@ namespace GxMcp.Worker.Services
                 try
                 {
                     // Yield once so the SDK action queue can service interactive work
-                    // before the next P2 slice is posted.
+                    // before the next P2 slice starts posting reads.
                     Thread.Sleep(1);
-                    if (!_enqueueSdkAction(() => RunSlice(maxObjectsPerSlice, sliceBudgetMs, true)))
-                    {
-                        lock (_gate)
-                        {
-                            _state.State = "error";
-                            _state.LastError = "SDK action queue rejected source-store backfill slice.";
-                            _state.RetryCount++;
-                            _state.UpdatedAtUtc = DateTime.UtcNow;
-                            PersistStateLocked();
-                        }
-                        retryRequested = true;
-                    }
+                    // Cleared before the slice runs so the slice can queue its own
+                    // continuation; _sliceRunLock keeps slices from overlapping.
+                    Interlocked.Exchange(ref _scheduled, 0);
+                    lock (_sliceRunLock) RunSlice(maxObjectsPerSlice, sliceBudgetMs, true, RunOnSdkAndWait);
                 }
                 catch (Exception ex)
                 {
@@ -383,9 +396,6 @@ namespace GxMcp.Worker.Services
                         PersistStateLocked();
                     }
                     retryRequested = true;
-                }
-                finally
-                {
                     Interlocked.Exchange(ref _scheduled, 0);
                 }
 
@@ -415,7 +425,7 @@ namespace GxMcp.Worker.Services
             });
         }
 
-        private bool RunSlice(int maxObjectsPerSlice, int sliceBudgetMs, bool scheduleContinuation)
+        private bool RunSlice(int maxObjectsPerSlice, int sliceBudgetMs, bool scheduleContinuation, Func<Action, string> runOnSdk)
         {
             if (maxObjectsPerSlice <= 0) maxObjectsPerSlice = 50;
             if (sliceBudgetMs <= 0) sliceBudgetMs = 250;
@@ -471,18 +481,36 @@ namespace GxMcp.Worker.Services
                     }
 
                     IReadOnlyList<SourceStoreBackfillPart> parts = null;
+                    IReadOnlyList<string> suppliedParts = null;
                     string objectError = null;
-                    var readWatch = Stopwatch.StartNew();
-                    try { parts = reader(entry); }
-                    catch (Exception ex)
+                    string requiredPartError = null;
+                    // The only work done on the SDK thread: this object's read and its
+                    // required-part list.  Everything after it runs off the STA.
+                    string queueError = runOnSdk(() =>
                     {
-                        objectError = "The SDK source-part reader failed for object '" + entry.Guid + "': " + ex.Message;
-                    }
-                    finally
-                    {
+                        var readWatch = Stopwatch.StartNew();
+                        try { parts = reader(entry); }
+                        catch (Exception ex)
+                        {
+                            objectError = "The SDK source-part reader failed for object '" + entry.Guid + "': " + ex.Message;
+                        }
+                        if (objectError == null && parts != null && requiredPartProvider != null
+                            && !(parts.Count == 1 && parts[0] != null && parts[0].IsDeleted))
+                        {
+                            try { suppliedParts = requiredPartProvider(entry); }
+                            catch (Exception ex) { requiredPartError = ex.Message; }
+                        }
                         if (readWatch.ElapsedMilliseconds >= 250)
                             Logger.Info("[SOURCE-STORE-SLOW-READ] actionId=" + SdkActionTrace.CurrentId
                                 + " elapsedMs=" + readWatch.ElapsedMilliseconds);
+                    });
+                    if (queueError != null)
+                    {
+                        // A queue failure is slice-level: it consumes the transient retry
+                        // budget instead of marking the object unreadable.
+                        if (SetSliceError(queueError, generation)) sliceHadError = true;
+                        else stale = true;
+                        break;
                     }
 
                     if (objectError == null && parts == null)
@@ -511,7 +539,7 @@ namespace GxMcp.Worker.Services
                     {
                         try
                         {
-                            var suppliedParts = requiredPartProvider(entry);
+                            if (requiredPartError != null) throw new InvalidOperationException(requiredPartError);
                             if (suppliedParts == null)
                                 throw new InvalidOperationException("the required-part provider returned null");
                             requiredParts = NormalizePartNames(entry.Type, suppliedParts);
@@ -680,7 +708,7 @@ namespace GxMcp.Worker.Services
 
                 // Every object is certified before its cursor advances (see the
                 // per-part read-back above).  Do not perform an unbounded second
-                // catalogue walk here: this method is the bounded STA slice.
+                // catalogue walk here: this method is one bounded slice.
                 bool complete;
                 lock (_gate)
                 {
