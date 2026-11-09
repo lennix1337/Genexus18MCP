@@ -219,3 +219,27 @@ try {
 } finally { $holder.Dispose() }
 
 Write-Host 'PASS: fixture rejection, provenance hashes, master/proxy log guard, benchmark alias contract, owned process selection and bindable port choice.'
+
+# test-live.ps1 runs both test projects with --no-build. A checkout where only the publish artifact was built has no
+# test assemblies, and dotnet then reports a bare "provided was not found" after the KB was already opened. The
+# preflight must name each missing assembly and the command that builds it before any KB is touched.
+$fakeRoot = Join-Path ([IO.Path]::GetTempPath()) ('live-assemblies-' + [guid]::NewGuid().ToString('N'))
+try {
+    New-Item -ItemType Directory -Path $fakeRoot | Out-Null
+    $missing = @(Get-LiveMissingTestAssemblies -Root $fakeRoot)
+    if ($missing.Count -ne 2) { throw "Both test assemblies must be reported missing in an unbuilt tree, got $($missing.Count)." }
+    if (($missing -join "`n") -notmatch 'GxMcp\.Worker\.Tests' -or ($missing -join "`n") -notmatch 'dotnet build') {
+        throw 'The report must name the Worker test assembly and the build command.'
+    }
+    if (@(Get-LiveMissingTestAssemblies -Root $fakeRoot -GatewayOnly).Count -ne 1) { throw '-GatewayOnly must not require the Worker test assembly.' }
+    $gatewayDir = Join-Path $fakeRoot 'src\GxMcp.Gateway.Tests\bin\Release\net8.0'
+    $workerDir = Join-Path $fakeRoot 'src\GxMcp.Worker.Tests\bin\x86\Release\net48'
+    New-Item -ItemType Directory -Path $gatewayDir, $workerDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $gatewayDir 'GxMcp.Gateway.Tests.dll') -Value 'x'
+    Set-Content -LiteralPath (Join-Path $workerDir 'GxMcp.Worker.Tests.dll') -Value 'x'
+    if (@(Get-LiveMissingTestAssemblies -Root $fakeRoot).Count -ne 0) { throw 'Built test assemblies must pass the preflight.' }
+} finally { Remove-Item -LiteralPath $fakeRoot -Recurse -Force -ErrorAction SilentlyContinue }
+if ((Get-Content (Join-Path $PSScriptRoot '../test-live.ps1') -Raw) -notmatch 'Get-LiveMissingTestAssemblies') {
+    throw 'test-live.ps1 must run the test-assembly preflight before opening the KB.'
+}
+Write-Host 'PASS: missing test assemblies are reported before any KB is opened.'
