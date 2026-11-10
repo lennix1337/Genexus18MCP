@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using GxMcp.Worker.Helpers;
+using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -226,6 +228,55 @@ namespace GxMcp.Worker.Tests
             DateTime parsed = DateTime.ParseExact(raw, "o", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
             Assert.Equal(DateTimeKind.Utc, parsed.Kind);
             Assert.Equal(at.AddSeconds(120), parsed);
+        }
+
+        private static IDisposable TryAcquireOperationLock(
+            string kbPath, string target, string part, string owner, bool force, out string error)
+        {
+            MethodInfo method = typeof(WriteService).GetMethod("TryAcquireOperationLock", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            var args = new object[] { kbPath, target, part, owner, force, null };
+            var lease = (IDisposable)method.Invoke(null, args);
+            error = (string)args[5];
+            return lease;
+        }
+
+        private string HolderLockPath()
+        {
+            return Path.Combine(_kbPath, ".gx", "locks", LockFileKey.Sanitize(_target, "Source") + ".lock");
+        }
+
+        [Fact]
+        public void Force_OperationLockOverForeignLock_LetsTheWriteProceed_AndLeavesTheHolderInPlace()
+        {
+            // Issue #958: the AlreadyHeld refusal carries its code under error.code, so the force
+            // exemption must read it there in Isolated_Mode as well.
+            Assert.Null(Environment.GetEnvironmentVariable(SharedChildVariable));
+            Assert.Equal("LockAcquired",
+                (string)JObject.Parse(MultiAgentLockService.DispatchCore(_kbPath, "acquire", _target, "Source", Holder, 300))["code"]);
+            byte[] lockBefore = File.ReadAllBytes(HolderLockPath());
+
+            IDisposable lease = TryAcquireOperationLock(_kbPath, _target, "Source", Caller, true, out string error);
+
+            Assert.Null(error);
+            Assert.Null(lease);
+            Assert.Equal(lockBefore, File.ReadAllBytes(HolderLockPath()));
+        }
+
+        [Fact]
+        public void NoForce_OperationLockOverForeignLock_IsRefusedWithAlreadyHeld_AndLeavesTheHolderInPlace()
+        {
+            Assert.Null(Environment.GetEnvironmentVariable(SharedChildVariable));
+            Assert.Equal("LockAcquired",
+                (string)JObject.Parse(MultiAgentLockService.DispatchCore(_kbPath, "acquire", _target, "Source", Holder, 300))["code"]);
+            byte[] lockBefore = File.ReadAllBytes(HolderLockPath());
+
+            IDisposable lease = TryAcquireOperationLock(_kbPath, _target, "Source", Caller, false, out string error);
+
+            Assert.Null(lease);
+            Assert.NotNull(error);
+            Assert.Equal("AlreadyHeld", (string)JObject.Parse(error)["error"]?["code"]);
+            Assert.Equal(lockBefore, File.ReadAllBytes(HolderLockPath()));
         }
     }
 }
