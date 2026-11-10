@@ -89,6 +89,33 @@ namespace GxMcp.Worker.Tests
         private static CommandDispatcher CreateDispatcherWithoutCtor()
             => (CommandDispatcher)FormatterServices.GetUninitializedObject(typeof(CommandDispatcher));
 
+        // issue #957: the index state is what the gateway mirrors into whoami and its
+        // IndexNotReady gate, so it must carry the recorded KB open failure.
+        [Fact]
+        public void HandleKbIndexState_ReportsTheRecordedKbOpenFailure()
+        {
+            var cache = new IndexCacheService();
+            var kb = new KbService(cache);
+            var dispatcher = CreateDispatcherWithoutCtor();
+            SetField(dispatcher, "_indexCacheService", cache);
+            SetField(dispatcher, "_kbService", kb);
+
+            var before = JObject.Parse(dispatcher.HandleKbIndexState(new JObject(), "kb", "GetIndexState", null, null, new JObject()));
+            Assert.Equal(JTokenType.Null, before["result"]?["kbOpenFailure"]?.Type);
+
+            kb.RecordOpenFailure("C:\\KBs\\x", "KbOpenFailed", "InvalidDirectory");
+            var after = JObject.Parse(dispatcher.HandleKbIndexState(new JObject(), "kb", "GetIndexState", null, null, new JObject()));
+
+            JObject failure = after["result"]?["kbOpenFailure"] as JObject;
+            Assert.NotNull(failure);
+            Assert.Equal("KbOpenFailed", failure["code"]?.ToString());
+            Assert.Equal("InvalidDirectory", failure["message"]?.ToString());
+        }
+
+        private static void SetField(object target, string name, object value)
+            => typeof(CommandDispatcher).GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(target, value);
+
         [Fact]
         public void HandleKbNameTypeMap_WithoutKb_ReturnsEmptyMap()
         {

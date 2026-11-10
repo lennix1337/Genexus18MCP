@@ -410,6 +410,17 @@ namespace GxMcp.Gateway
                 }
                 if (!indexUsable)
                 {
+                    // A KB the Worker failed to open never leaves Cold: report why, do not make the
+                    // caller wait out the settle window and loop on IndexNotReady (issue #957).
+                    JObject? openFailed = BuildKbOpenFailedEnvelope(idxSnap);
+                    if (openFailed != null)
+                    {
+                        Log($"[IndexGate] closed tool={tName} kbOpenFailed={openFailed["message"]}");
+                        return BuildToolResultContent(openFailed, true, tName, tArgs);
+                    }
+                }
+                if (!indexUsable)
+                {
                     // Cold path: right after a KB open the bootstrap settles the index mirror, and
                     // this call can land inside that short window. Joining that settle is bounded
                     // and turns the agent's first index-dependent call into a real result instead

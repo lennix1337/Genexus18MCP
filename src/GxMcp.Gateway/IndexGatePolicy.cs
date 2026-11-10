@@ -150,6 +150,38 @@ namespace GxMcp.Gateway
         // ETA when it has one, mirroring the SourceSearchService fallback otherwise).
         internal const int DefaultIndexRetryAfterMs = 5000;
 
+        // Longest genexus_kb action=open waits to learn whether the Worker's own open failed.
+        internal const int KbOpenFailureProbeCeilingMs = 2000;
+
+        internal static JObject? BuildKbOpenFailedEnvelopeForTest(string? kbAlias)
+            => BuildKbOpenFailedEnvelope(GetLastKnownIndexState(kbAlias));
+
+        // A KB the Worker failed to open stays Cold forever, so the IndexNotReady envelope
+        // ("wait, then retry") is a lie for it: name the failure the Worker recorded instead.
+        internal static JObject? BuildKbOpenFailedEnvelope(IndexStateSnapshot? snapshot)
+        {
+            JObject? failure = snapshot?.KbOpenFailure;
+            if (failure == null) return null;
+            string message = failure["message"]?.ToString() ?? string.Empty;
+            var envelope = new JObject
+            {
+                ["status"] = "error",
+                ["code"] = "KbOpenFailed",
+                ["message"] = string.IsNullOrWhiteSpace(message)
+                    ? "The Worker could not open the Knowledge Base."
+                    : message,
+                ["hint"] = "Fix the cause named in the message (path, directory link, GeneXus installation or KB version), "
+                    + "then reopen with genexus_kb action=open. Waiting or reindexing cannot recover a KB that is not open.",
+                ["retryable"] = false
+            };
+            if (failure["path"] != null) envelope["path"] = failure["path"]!.DeepClone();
+            if (failure["atUtc"] != null) envelope["failedAtUtc"] = failure["atUtc"]!.DeepClone();
+            string? workerCode = failure["code"]?.ToString();
+            if (!string.IsNullOrWhiteSpace(workerCode) && workerCode != "KbOpenFailed")
+                envelope["openFailureCode"] = workerCode;
+            return envelope;
+        }
+
         internal static JObject BuildIndexNotReadyEnvelopeForTest(
             string? status, string? freshness, int totalObjects, double? progress, int? etaMs,
             string? operationId = null, string? operationState = null, bool? workerAlive = null,

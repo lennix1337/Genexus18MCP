@@ -522,6 +522,18 @@ namespace GxMcp.Gateway
 
                             handleToOpen = ApplyKbOpenOverrides(handleToOpen, args);
                             var w = await _workerPool.AcquireAsync(handleToOpen, CancellationToken.None);
+                            // The Worker opens the KB on its own while it starts. When that open has
+                            // already failed, say so now instead of answering "opened" (issue #957).
+                            // The command waits for a Worker that is still starting, so the wait is
+                            // bounded here as well: a slow Worker must not slow down the open.
+                            Task<bool> openStateRefresh = TryRefreshIndexStateFromWorkerAsync(1500, handleToOpen.NormalizedAlias);
+                            if (await Task.WhenAny(openStateRefresh, Task.Delay(KbOpenFailureProbeCeilingMs)) == openStateRefresh
+                                && openStateRefresh.Result)
+                            {
+                                JObject? openFailed = BuildKbOpenFailedEnvelope(GetLastKnownIndexState(handleToOpen.NormalizedAlias));
+                                if (openFailed != null)
+                                    return BuildToolTextResponse(idToken, openFailed, true, "genexus_kb", args, payloadOwned: true);
+                            }
                             TriggerIndexBootstrapOnce(handleToOpen.NormalizedAlias);
                             // Opening a worker must not mutate the persisted default or
                             // another MCP session's selection. Use set_default to select

@@ -478,6 +478,7 @@ namespace GxMcp.Worker
                             if (!GxMcp.Worker.Drivers.ComGxPublicDriver.Instance.OpenKB(kbPath, out string openError))
                             {
                                 Logger.Error($"Worker failed to open KB via GXPublic COM: {openError}");
+                                _dispatcher.GetKbService().RecordOpenFailure(kbPath, "KbOpenFailed", openError);
                             }
                             else
                             {
@@ -491,6 +492,7 @@ namespace GxMcp.Worker
                         }
                     } catch (Exception ex) {
                         Logger.Error($"Worker failed to auto-open KB: {ex.Message}");
+                        _dispatcher.GetKbService().RecordOpenFailure(kbPath, "KbOpenFailed", ex.Message);
                     }
                 }
 
