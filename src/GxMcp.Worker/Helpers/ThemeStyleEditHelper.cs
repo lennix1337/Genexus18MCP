@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Artech.Architecture.Common.Objects;
 using GxMcp.Worker.Structure;
 using Newtonsoft.Json.Linq;
@@ -75,8 +76,11 @@ namespace GxMcp.Worker.Helpers
         /// <summary>
         /// Applies either raw CSS/source or a structured class edit to an SDK part.
         /// No Save is performed here; the caller owns the transaction and object save.
+        /// <paramref name="imageExists"/> answers whether an Image object of that name exists in the Knowledge Base
+        /// (null when it cannot tell). It is consulted only after the SDK refuses a source, to name the gx-image()
+        /// references that cannot be resolved; without it the refusal keeps the SDK's own words.
         /// </summary>
-        public static bool TryApply(object part, string content, out JObject details, out string error)
+        public static bool TryApply(object part, string content, out JObject details, out string error, Func<string, bool?> imageExists = null)
         {
             details = new JObject();
             error = ValidateRequest(content);
@@ -124,7 +128,11 @@ namespace GxMcp.Worker.Helpers
                 if (request["baseClass"] != null && !TrySetMember(style, "BaseClass", request["baseClass"].ToString(), out error)) return false;
                 if (request["css"] != null)
                 {
-                    if (!TryInvokeTextImport(style, request["css"].ToString(), out error)) return false;
+                    if (!TryInvokeTextImport(style, request["css"].ToString(), details, out error))
+                    {
+                        error = ExplainRejection(details, error, request["css"].ToString(), imageExists);
+                        return false;
+                    }
                 }
 
                 details["mode"] = "class";
@@ -136,7 +144,11 @@ namespace GxMcp.Worker.Helpers
             string text = request?["css"]?.ToString() ?? request?["source"]?.ToString() ?? content;
             if (isDesignStyles)
             {
-                if (!TryValidateNewSource(part, text, out error)) return false;
+                if (!TryValidateNewSource(part, text, details, out error))
+                {
+                    error = ExplainRejection(details, error, text, imageExists);
+                    return false;
+                }
                 PropertyInfo source = part.GetType().GetProperty("Source", BindingFlags.Public | BindingFlags.Instance);
                 if (source == null || !source.CanWrite)
                 {
@@ -151,7 +163,11 @@ namespace GxMcp.Worker.Helpers
 
             if (isThemeStyles)
             {
-                if (!TryInvokeTextImport(part, text, out error)) return false;
+                if (!TryInvokeTextImport(part, text, details, out error))
+                {
+                    error = ExplainRejection(details, error, text, imageExists);
+                    return false;
+                }
                 details["mode"] = "themeCss";
                 details["sourceLength"] = text?.Length ?? 0;
                 return true;
@@ -236,7 +252,7 @@ namespace GxMcp.Worker.Helpers
             catch (Exception ex) { error = "Structured style request is not valid JSON: " + ex.Message; return null; }
         }
 
-        private static bool TryValidateNewSource(object part, string source, out string error)
+        private static bool TryValidateNewSource(object part, string source, JObject details, out string error)
         {
             error = null;
             try
@@ -247,6 +263,13 @@ namespace GxMcp.Worker.Helpers
                 if (result is bool && !(bool)result)
                 {
                     error = "The GeneXus SDK rejected the StyleSheet source during validation.";
+                    // ValidateNewSource validates into an OutputMessages it never returns, so the reason is lost to the caller.
+                    JArray messages = CaptureSdkValidationMessages(part, source);
+                    if (messages.Count > 0)
+                    {
+                        details["sdkMessages"] = messages;
+                        error += " SDK messages: " + SummarizeMessages(messages);
+                    }
                     return false;
                 }
                 return true;
@@ -258,7 +281,197 @@ namespace GxMcp.Worker.Helpers
             }
         }
 
-        private static bool TryInvokeTextImport(object target, string text, out string error)
+        /// <summary>
+        /// Asks the SDK again the question <c>ValidateNewSource</c> just answered "no" to, this time keeping its answer.
+        /// <c>DesignStylesPart.ValidateNewSource(source)</c> is <c>Validate(source, InheritedClasses, ChildrenDesignSystemNames,
+        /// new OutputMessages())</c>: the same private method with a collector it throws away, in every GeneXus 18 update
+        /// checked (U11, U12, U15, U16). Calling it with a collector of our own returns what the SDK said (level and text)
+        /// and leaves the part alone - the public <c>ValidateData</c> would validate the part's current Source instead, which
+        /// means replacing the Source (marking the object modified) and making the SDK drop its parsed members. Empty when
+        /// the part has no such method or the SDK says nothing.
+        /// </summary>
+        private static JArray CaptureSdkValidationMessages(object part, string source)
+        {
+            var captured = new JArray();
+            try
+            {
+                MethodInfo validate = part.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .FirstOrDefault(m => m.Name == "Validate" && IsSourceValidatorSignature(m.GetParameters()));
+                if (validate == null) return captured;
+
+                object inheritedClasses = ReadPropertyOrThrow(part, "InheritedClasses");
+                object childrenDesignSystems = ReadPropertyOrThrow(part, "ChildrenDesignSystemNames");
+                object output = Activator.CreateInstance(validate.GetParameters()[3].ParameterType);
+                validate.Invoke(part, new[] { source, inheritedClasses, childrenDesignSystems, output });
+
+                // The collector enumerates every message. Its OnlyMessages member is the informational ones alone, which
+                // would leave out exactly the errors and warnings that explain a refusal.
+                var messages = output as IEnumerable;
+                if (messages == null) return captured;
+                foreach (object message in messages)
+                {
+                    if (message == null) continue;
+                    Type messageType = message.GetType();
+                    string text = SdkDiagnosticsHelper.ReadStringMember(message, messageType, "Text")
+                        ?? SdkDiagnosticsHelper.ReadStringMember(message, messageType, "Description")
+                        ?? SdkDiagnosticsHelper.ReadStringMember(message, messageType, "Message")
+                        ?? message.ToString();
+                    var entry = new JObject
+                    {
+                        ["level"] = SdkDiagnosticsHelper.ReadMember(message, messageType, "Level")?.ToString() ?? "Error",
+                        ["text"] = text
+                    };
+                    string code = SdkDiagnosticsHelper.ReadStringMember(message, messageType, "ErrorCode");
+                    if (code != null) entry["code"] = code;
+                    captured.Add(entry);
+                    if (captured.Count >= MaxSdkMessages) break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[THEME-WRITE] SDK validation messages not captured: " + (ex.InnerException ?? ex).Message);
+            }
+            return captured;
+        }
+
+        // Validate(string source, IEnumerable<DesignSystemClass> inheritedClasses, IEnumerable<string> childrenDSOs, OutputMessages output)
+        private static bool IsSourceValidatorSignature(ParameterInfo[] parameters) =>
+            parameters.Length == 4
+            && parameters[0].ParameterType == typeof(string)
+            && parameters[3].ParameterType.Name == "OutputMessages";
+
+        private static object ReadPropertyOrThrow(object target, string name)
+        {
+            PropertyInfo property = target.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
+            if (property == null) throw new MissingMemberException(target.GetType().Name, name);
+            return property.GetValue(target, null);
+        }
+
+        private const int MaxSdkMessages = 20;
+        private const int MaxSummarizedMessages = 5;
+
+        private static string SummarizeMessages(JArray messages)
+        {
+            var parts = new List<string>();
+            foreach (JToken message in messages.Take(MaxSummarizedMessages))
+            {
+                string text = (message["text"]?.ToString() ?? string.Empty).Trim();
+                parts.Add(text.Length > 240 ? text.Substring(0, 240) + "..." : text);
+            }
+            string summary = string.Join("; ", parts);
+            return messages.Count > MaxSummarizedMessages
+                ? summary + " (+" + (messages.Count - MaxSummarizedMessages) + " more in sdkMessages)"
+                : summary;
+        }
+
+        /// <summary>
+        /// The gx-image() references of a style source that name no Image object in the Knowledge Base, in order of
+        /// appearance. A reference whose existence cannot be determined (the probe answers null or throws) is not listed.
+        /// </summary>
+        internal static IReadOnlyList<string> FindUnresolvedImageReferences(string source, Func<string, bool?> imageExists)
+        {
+            var unresolved = new List<string>();
+            if (imageExists == null || string.IsNullOrEmpty(source)) return unresolved;
+            foreach (string name in DesignSystemSourceParser.ExtractImageNames(source))
+            {
+                bool? exists;
+                try { exists = imageExists(name); }
+                catch { exists = null; }
+                if (exists == false) unresolved.Add(name);
+            }
+            return unresolved;
+        }
+
+        /// <summary>
+        /// After the SDK refused a style source: when the source points at Image objects that do not exist, say so. The
+        /// SDK refuses such a source and its public validation keeps the reason to itself, so the generic answer sends the
+        /// caller off to rewrite a source that is fine. The names always go to <c>details.unresolvedImageReferences</c>.
+        /// They are named as the CAUSE (<c>details.rejectionCause</c>, the code <c>ThemeStyleUnresolvedReferences</c>) only
+        /// when an SDK message confirms it - the message says that one of them is not there. Without that confirmation (the
+        /// SDK said something else, a syntax error which it reports before it looks at any reference, or nothing the helper
+        /// could read) the missing images are a fact about the source, not a proven reason for this refusal: they are only
+        /// listed beside the SDK's own words and the generic code stays. The SDK words for a missing image are
+        /// "&lt;Name&gt; not found" (Error, no code; GeneXus 18 U16, live), and only for the first one it meets. The residual
+        /// case is a message about something else that cites the same whole name (a class called like the missing image):
+        /// the image is missing all the same, so the worst outcome is a second refusal after it is created.
+        /// </summary>
+        private static string ExplainRejection(JObject details, string sdkError, string source, Func<string, bool?> imageExists)
+        {
+            IReadOnlyList<string> unresolved = FindUnresolvedImageReferences(source, imageExists);
+            if (unresolved.Count == 0) return sdkError;
+
+            var names = new JArray();
+            foreach (string name in unresolved) names.Add(name);
+            details["unresolvedImageReferences"] = names;
+            bool one = unresolved.Count == 1;
+            string missing = unresolved.Count + (one ? " Image object that does" : " Image objects that do")
+                + " not exist in this Knowledge Base: " + string.Join(", ", unresolved);
+
+            var messages = details["sdkMessages"] as JArray;
+            bool confirmed = messages != null && messages.Any(m => ConfirmsMissingImage((string)m["text"], unresolved));
+            if (!confirmed)
+                return sdkError + " The source also refers to " + missing + ".";
+
+            details["rejectionCause"] = UnresolvedImagesCause;
+            return "The style source refers to " + missing
+                + ". The GeneXus SDK refuses a style source while a gx-image() reference cannot be resolved. Create or import "
+                + (one ? "this Image object" : "these Image objects") + " first, then write the style again. SDK result: " + sdkError;
+        }
+
+        private const string UnresolvedImagesCause = "unresolvedImageReferences";
+
+        // The grammar's own complaints about the shape of the source ("mismatched input '"Logo"' expecting ..."). They quote the
+        // offending token, so a message that merely contains an image name can be about its spelling, not about its absence.
+        private static readonly Regex ParserSyntaxMessage = new Regex(
+            @"\b(mismatched input|extraneous input|no viable alternative|token recognition error|missing .{1,40} at|expecting)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // True when the SDK's message names one of the missing images, as a whole name, and is not a complaint about syntax:
+        // it says the image is not there. A name that only occurs inside a longer one ("Log" in "SynthLogo") does not count.
+        private static bool ConfirmsMissingImage(string message, IReadOnlyList<string> unresolved)
+        {
+            if (string.IsNullOrWhiteSpace(message) || ParserSyntaxMessage.IsMatch(message)) return false;
+            return unresolved.Any(name => Regex.IsMatch(message, @"(?<![\w.])" + Regex.Escape(name) + @"(?!\w)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+        }
+
+        /// <summary>
+        /// The error code of a refused style write: a source refused because of Image objects that do not exist has a code
+        /// of its own; any other refusal keeps the generic one.
+        /// </summary>
+        internal static string FailureCode(JObject details)
+            => string.Equals(details?["rejectionCause"]?.ToString(), UnresolvedImagesCause, StringComparison.Ordinal)
+                ? "ThemeStyleUnresolvedReferences"
+                : "ThemeStyleApplyFailed";
+
+        private const string GenericFailureGuidance =
+            "Read the style part first; use raw CSS/source for StyleSheet or {className, properties} for a Theme class.";
+
+        /// <summary>
+        /// The message and the hint of a refused style write, from its error code and the details <see cref="TryApply"/>
+        /// produced. Without anything new to say (no SDK messages, no unresolved images) both are the historical generic
+        /// ones; the hint only ever gains sentences. "Nothing was saved" because the structured class edit sets properties
+        /// on the in-memory object before the SDK refuses the CSS, so "changed" would not always be true.
+        /// </summary>
+        internal static void DescribeFailure(string code, JObject details, out string message, out string hint)
+        {
+            if (string.Equals(code, "ThemeStyleUnresolvedReferences", StringComparison.Ordinal))
+            {
+                message = "Theme/StyleSheet write refused: the style source refers to Image objects that do not exist in the Knowledge Base.";
+                hint = "Create or import the Image objects listed in unresolvedImageReferences (genexus_create type=Image, or genexus_transfer import), then repeat the write. Nothing was saved.";
+                return;
+            }
+
+            message = "Theme/StyleSheet write failed.";
+            hint = details?["sdkMessages"] != null
+                ? "The SDK's own validation messages are in sdkMessages; correct what they report in the style source and write again. If they do not explain it: "
+                    + char.ToLowerInvariant(GenericFailureGuidance[0]) + GenericFailureGuidance.Substring(1)
+                : GenericFailureGuidance;
+            if (details?["unresolvedImageReferences"] != null)
+                hint += " The Image objects listed in unresolvedImageReferences do not exist in the Knowledge Base either: create or import them too.";
+        }
+
+        private static bool TryInvokeTextImport(object target, string text, JObject details, out string error)
         {
             error = null;
             try
@@ -278,9 +491,24 @@ namespace GxMcp.Worker.Helpers
             }
             catch (Exception ex)
             {
-                error = "The GeneXus SDK rejected the CSS source: " + (ex.InnerException ?? ex).Message;
+                // The SDK's ImportCss returns nothing: a refusal is the exception it throws, and that text is the SDK's own reason.
+                string reason = (ex.InnerException ?? ex).Message;
+                error = "The GeneXus SDK rejected the CSS source: " + reason;
+                AddSdkMessage(details, reason);
                 return false;
             }
+        }
+
+        private static void AddSdkMessage(JObject details, string text)
+        {
+            if (details == null || string.IsNullOrWhiteSpace(text)) return;
+            var list = details["sdkMessages"] as JArray;
+            if (list == null)
+            {
+                list = new JArray();
+                details["sdkMessages"] = list;
+            }
+            list.Add(new JObject { ["level"] = "Error", ["text"] = text });
         }
 
         private static bool TrySetPropertyValue(object data, string name, JToken value, out string error)

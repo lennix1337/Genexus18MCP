@@ -160,6 +160,36 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(new[] { 7 }, info.DimensionSizes);
         }
 
+        // A quirk worth modelling: writing the column count resets the row count. Every write reads back as written, yet the
+        // variable ends up with other sizes than the ones requested.
+        private sealed class ResettingPropertyBag
+        {
+            private readonly Dictionary<string, object> _values =
+                new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+            public object GetPropertyValue(string name)
+                => _values.TryGetValue(name ?? string.Empty, out object value) ? value : null;
+
+            public void SetPropertyValue(string name, object value)
+            {
+                _values[name ?? string.Empty] = value;
+                if (string.Equals(name, "AttCols", StringComparison.OrdinalIgnoreCase)) _values["AttRows"] = 1;
+            }
+        }
+
+        [Fact]
+        public void TryApply_WhenTheSdkEndsWithOtherSizes_SaysWhatWasRequestedAndWhatTheVariableReports()
+        {
+            var variable = new ResettingPropertyBag();
+
+            Assert.False(VariableDimensionSupport.TryApply((object)variable, 2,
+                new JArray(4, 5), out string error));
+
+            Assert.Contains("did not retain the requested values", error);
+            Assert.Contains("requested dimensions=2 sizes=[4,5]", error);
+            Assert.Contains("the variable reports dimensions=2 sizes=[1,5]", error);
+        }
+
         private sealed class PartialPropertyBag
         {
             private readonly Dictionary<string, object> _values =

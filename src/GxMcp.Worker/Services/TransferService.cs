@@ -350,7 +350,7 @@ namespace GxMcp.Worker.Services
 
             if (!ok)
             {
-                return ImportDeclined(file, diagnostics);
+                return ImportDeclined(file, diagnostics, FindUnresolvedPackageImageReferences(file));
             }
 
             var fidelity = VerifyImportedWebForms(fidelityPlan);
@@ -396,24 +396,128 @@ namespace GxMcp.Worker.Services
                 extra: failure);
         }
 
-        internal static string ImportDeclined(string file, TransferDiagnostics diagnostics)
+        internal static string ImportDeclined(string file, TransferDiagnostics diagnostics, IReadOnlyList<string> unresolvedImageReferences = null)
         {
+            var extra = new JObject
+            {
+                ["success"] = false,
+                ["file"] = file,
+                ["source"] = "sdk:IKnowledgeManagerService.ImportFile",
+                ["imported"] = false,
+                ["sdkDiagnostics"] = diagnostics.Messages,
+                ["diagnosticsAvailable"] = diagnostics.Available,
+                ["diagnosticsTruncated"] = diagnostics.Truncated,
+                ["fidelityVerified"] = false,
+                ["fidelity"] = new JObject { ["objectsChecked"] = 0 }
+            };
+            string hint = "Inspect sdkDiagnostics; an empty list means the SDK supplied no output diagnostic. Verify persisted objects before retrying.";
+            if (unresolvedImageReferences != null && unresolvedImageReferences.Count > 0)
+            {
+                var names = new JArray();
+                foreach (string name in unresolvedImageReferences) names.Add(name);
+                extra["unresolvedImageReferences"] = names;
+                hint = "The package refers, through gx-image(), to Image objects that are neither in the package nor in the Knowledge Base ("
+                    + string.Join(", ", unresolvedImageReferences) + "; see unresolvedImageReferences). The SDK refuses a style source with an unresolved "
+                    + "reference and does not always say so: import or create those Image objects first, then repeat the import. " + hint;
+            }
             return McpResponse.Err(
                     code: "TransferImportDeclined",
                     message: "GeneXus ImportFile returned false; import was not confirmed.",
-                    hint: "Inspect sdkDiagnostics; an empty list means the SDK supplied no output diagnostic. Verify persisted objects before retrying.",
-                    extra: new JObject
+                    hint: hint,
+                    extra: extra);
+        }
+
+        // After a declined import: name the gx-image() references of the package's style sources (Design Systems and Themes)
+        // that point at no Image object, neither one the package carries nor one the Knowledge Base has. Best effort; it
+        // never changes the answer's outcome.
+        private IReadOnlyList<string> FindUnresolvedPackageImageReferences(string file)
+        {
+            try
+            {
+                return FindUnresolvedPackageImageReferences(file, type =>
+                {
+                    try { return KBObjectDescriptor.Get(type)?.Name; }
+                    catch { return null; }
+                }, name =>
+                {
+                    if (_objects == null) return (bool?)null;
+                    try { return _objects.FindObject(name, "Image") != null; }
+                    catch { return (bool?)null; }
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[TRANSFER] unresolved image references not computed: " + ex.Message);
+                return new string[0];
+            }
+        }
+
+        // Only the objects that hold a style source are read for gx-image(): the text of a Procedure or a WebPanel that happens
+        // to contain the same words is not a reference that stops a Design System from being imported.
+        private static bool HoldsStyleSource(string typeName) =>
+            string.Equals(typeName, "DesignSystem", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(typeName, "Theme", StringComparison.OrdinalIgnoreCase);
+
+        internal const int MaxPackageEntriesScannedForImages = 2048;
+
+        // A reference may be module-qualified ("Module.Logo") while the package lists the image by its own name: when the
+        // exact name is not there, the part after the last dot is tried. Lenient on purpose - a name listed as missing must
+        // really be missing.
+        private static bool CarriedByPackage(ICollection<string> inPackage, string reference)
+        {
+            if (inPackage.Contains(reference)) return true;
+            int dot = reference.LastIndexOf('.');
+            return dot >= 0 && inPackage.Contains(reference.Substring(dot + 1));
+        }
+
+        internal static IReadOnlyList<string> FindUnresolvedPackageImageReferences(string file, Func<Guid, string> typeNameOf, Func<string, bool?> existsInKb)
+        {
+            var referenced = new List<string>();
+            var inPackage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int xmlEntries = 0;
+            using (var archive = ZipFile.OpenRead(file))
+            foreach (var entry in archive.Entries.Where(e => e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (++xmlEntries > MaxPackageEntriesScannedForImages) break;
+                using (var stream = entry.Open())
+                using (var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersFromEntities = 0 }))
+                {
+                    reader.MoveToContent();
+                    if (reader.NodeType != XmlNodeType.Element || !string.Equals(reader.LocalName, "ExportFile", StringComparison.OrdinalIgnoreCase)) continue;
+                    int containers = 0;
+                    // One object at a time, as the fidelity capture does: a single Theme in a package can exceed 20 MB.
+                    foreach (var obj in ReadExportObjects(reader, () => ++containers))
                     {
-                        ["success"] = false,
-                        ["file"] = file,
-                        ["source"] = "sdk:IKnowledgeManagerService.ImportFile",
-                        ["imported"] = false,
-                        ["sdkDiagnostics"] = diagnostics.Messages,
-                        ["diagnosticsAvailable"] = diagnostics.Available,
-                        ["diagnosticsTruncated"] = diagnostics.Truncated,
-                        ["fidelityVerified"] = false,
-                        ["fidelity"] = new JObject { ["objectsChecked"] = 0 }
-                    });
+                        string name = (string)obj.Attribute("name");
+                        string typeName = Guid.TryParse((string)obj.Attribute("type"), out var type) ? typeNameOf(type) : null;
+                        if (string.Equals(typeName, "Image", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (!string.IsNullOrWhiteSpace(name)) inPackage.Add(name.Trim());
+                            continue;
+                        }
+                        if (!HoldsStyleSource(typeName)) continue;
+                        // Text nodes one by one (CDATA included): the concatenated Value of a large object would double its memory.
+                        foreach (XText node in obj.DescendantNodes().OfType<XText>())
+                        {
+                            string text = node.Value;
+                            if (text == null || text.IndexOf("gx-image", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                            foreach (string image in DesignSystemSourceParser.ExtractImageNames(text))
+                                if (!referenced.Contains(image, StringComparer.OrdinalIgnoreCase)) referenced.Add(image);
+                        }
+                    }
+                }
+            }
+
+            var unresolved = new List<string>();
+            foreach (string image in referenced)
+            {
+                if (CarriedByPackage(inPackage, image)) continue;
+                bool? exists;
+                try { exists = existsInKb(image); }
+                catch { exists = null; }
+                if (exists == false) unresolved.Add(image);
+            }
+            return unresolved;
         }
 
         private static JObject ImportDiagnostics(TransferDiagnostics diagnostics, bool? imported)
