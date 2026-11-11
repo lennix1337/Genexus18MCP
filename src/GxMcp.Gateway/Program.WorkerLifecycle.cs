@@ -1422,7 +1422,6 @@ namespace GxMcp.Gateway
         internal static bool IsAsyncLongReadAction(string? toolName, JObject? args)
         {
             if (args?["async"]?.ToObject<bool?>() != true) return false;
-            if (IsAsyncTransferAction(toolName, args)) return true;
             if (!string.Equals(toolName, "genexus_versioning", StringComparison.OrdinalIgnoreCase)) return false;
             string? action = args["action"]?.ToString()?.Trim().ToLowerInvariant();
             return string.Equals(action, "history_get", StringComparison.Ordinal)
@@ -1438,40 +1437,16 @@ namespace GxMcp.Gateway
         /// (so one documented recovery procedure covers both) plus the accepted action and an
         /// explicit statement that the result outlives this call.
         /// </summary>
-        internal static JObject BuildAsyncReadAcceptedPayload(JobEntry job, string action, string kind = "read")
+        internal static JObject BuildAsyncReadAcceptedPayload(JobEntry job, string action)
         {
             if (job == null) throw new ArgumentNullException(nameof(job));
 
-            var payload = BuildAsyncAcceptedPayload(job, AsyncReadKindTitle(kind) + " accepted;");
+            var payload = BuildAsyncAcceptedPayload(job, "Read accepted;");
             payload["action"] = action;
             payload["hint"] = payload["hint"]?.ToString()
-                + " The " + kind + " keeps running if this call's window expires: the result is stored and stays readable with genexus_lifecycle(action='result', target='op:" + job.Id + "') until the job is swept.";
+                + " The read keeps running if this call's window expires: the result is stored and stays readable with genexus_lifecycle(action='result', target='op:" + job.Id + "') until the job is swept.";
             return payload;
         }
-
-        /// <summary>
-        /// A long <c>genexus_transfer</c> export (or inspection of a large package) gets the same accept-then-poll contract
-        /// as the version-store reads. Export writes only the XPZ file the caller named and inspect writes nothing; neither
-        /// changes the Knowledge Base, so neither needs the mutation path's recovery fences. <c>import</c> is a real KB
-        /// mutation and keeps its synchronous path.
-        /// </summary>
-        internal static bool IsAsyncTransferAction(string? toolName, JObject? args)
-        {
-            if (!string.Equals(toolName, "genexus_transfer", StringComparison.OrdinalIgnoreCase)) return false;
-            string? action = args?["action"]?.ToString()?.Trim().ToLowerInvariant();
-            return string.Equals(action, "export", StringComparison.Ordinal)
-                || string.Equals(action, "inspect", StringComparison.Ordinal);
-        }
-
-        /// <summary>What the accepted job is called in its label and its messages: "transfer" or "read".</summary>
-        internal static string AsyncReadKind(string? toolName)
-            => string.Equals(toolName, "genexus_transfer", StringComparison.OrdinalIgnoreCase) ? "transfer" : "read";
-
-        internal static string AsyncReadJobLabel(string? toolName, string action)
-            => (string.Equals(toolName, "genexus_transfer", StringComparison.OrdinalIgnoreCase) ? "transfer" : "versioning") + "/" + action;
-
-        internal static string AsyncReadKindTitle(string kind)
-            => string.IsNullOrEmpty(kind) ? kind : char.ToUpperInvariant(kind[0]) + kind.Substring(1);
 
         private static JObject BuildAsyncAcceptedPayload(JobEntry job, string acceptedSummary)
         {

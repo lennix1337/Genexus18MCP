@@ -158,11 +158,6 @@ result is still fetchable through `genexus_lifecycle action=status/result` when 
 caller's window expires. The flag changes when the handle arrives, never what the
 read returns, so the actions stay read-only. It is refused on the KB-mutating
 `genexus_versioning` actions, which keep the mutation path and its recovery fences.
-Transfer `export` and `inspect` accept the same `async` flag, for an export of a large
-Design System with `includeDependencies` that can outlast the caller's window: they
-write only the XPZ file the caller named (or nothing), never the Knowledge Base, so
-they need no recovery fence, and the job is labelled `transfer/<action>`. Transfer
-`import` mutates the KB and stays synchronous.
 
 `genexus_edit` also takes a `contentPath` in place of `content` for a full-part write
 (`mode=full` or no mode): the fully qualified absolute path of a UTF-8 file, up to 1 MiB

@@ -4629,10 +4629,6 @@
             ],
             "type": "string"
           },
-          "async": {
-            "description": "export|inspect: returns…",
-            "type": "boolean"
-          },
           "confirm": {
             "description": "import with dryRun=false: required.",
             "type": "boolean"
