@@ -196,9 +196,26 @@ namespace GxMcp.Gateway.Tests
             // Requirement 1.1: a Worker_Host and a Worker per KB.
             int host1 = (int)open1["hostPid"]!;
             int host2 = (int)open2["hostPid"]!;
-            int worker1 = (int)open1["workerPid"]!;
-            int worker2 = (int)open2["workerPid"]!;
-            Assert.True(host1 > 0 && host2 > 0 && worker1 > 0 && worker2 > 0, open1 + " " + open2);
+            Assert.True(host1 > 0 && host2 > 0, open1 + " " + open2);
+
+            // ConnectV2 returns once the registry record is Ready, and the reply above is built from AttachInfo right
+            // after. A start that was held (or still admitting) when its attachment was accepted was acknowledged with
+            // workerPid 0; the broker's worker_restarted frame that names the Worker is applied later by the
+            // connection's read loop (SharedWorkerHostLauncher.ConnectPipeProcess: "worker_restarted names the child
+            // later"). So a reply can still be that acknowledgement (workerPid 0, state "held") although the Worker is
+            // up and the open has returned. Cold_Start concurrency is 1 by default, so when the two opens race one of
+            // the starts is held until the other ends; which one, and whether the read loop has run by the time the
+            // reply is built, depends on scheduling (each open blocks a thread-pool thread of the client process while
+            // it waits for the record, and the read loop needs one too). The Worker of each KB is therefore read from
+            // the broker's live status, and a reply that does name a Worker must name that one.
+            var status1 = await client.WaitForStatusAsync(kb1, s => (int?)s["workerPid"] > 0, "a Worker for the first KB");
+            var status2 = await client.WaitForStatusAsync(kb2, s => (int?)s["workerPid"] > 0, "a Worker for the second KB");
+            int worker1 = (int)status1["workerPid"]!;
+            int worker2 = (int)status2["workerPid"]!;
+            int reply1 = (int)open1["workerPid"]!;
+            int reply2 = (int)open2["workerPid"]!;
+            Assert.True((reply1 == 0 || reply1 == worker1) && (reply2 == 0 || reply2 == worker2),
+                "open replies " + open1 + " " + open2 + " against live Workers " + worker1 + " and " + worker2);
             Assert.NotEqual(host1, host2);
             Assert.NotEqual(worker1, worker2);
             Assert.Equal(2, harness.ReadRecords().Count);
