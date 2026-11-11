@@ -5485,12 +5485,32 @@ namespace GxMcp.Worker.Services
                     return McpResponse.Err(code: "FileAlreadyExists", message: "Output file already exists. Set overwrite=true to replace it.", hint: "Pass overwrite=true to replace the existing file.", target: fullPath);
 
                 File.WriteAllText(fullPath, source, new UTF8Encoding(false));
-                return McpResponse.Ok(target: target, code: "ExportCompleted", result: new JObject
+                // What was written, measured on the exact text: a caller that hashes or compares the file needs to
+                // know which bytes the version token's fingerprint covers. The token ends with the SHA-256 of the
+                // part text's UTF-8 bytes AS THE SDK HOLDS IT - no line-ending normalisation, no final newline
+                // added - and the file holds the same bytes, so `sha256` is that fingerprint.
+                var layout = GxMcp.Worker.Helpers.TextLayoutFacts.Measure(source);
+                var exported = new JObject
                 {
                     ["part"] = normalizedPart,
                     ["path"] = fullPath,
-                    ["bytes"] = new FileInfo(fullPath).Length
-                });
+                    ["bytes"] = new FileInfo(fullPath).Length,
+                    ["encoding"] = "utf-8",
+                    ["sha256"] = WriteService.ComputeContentFingerprint(source),
+                    ["lines"] = layout.Lines,
+                    ["lineEnding"] = layout.LineEnding,
+                    ["endsWithNewline"] = layout.EndsWithNewline
+                };
+                string exportedVersionToken = exportResult["versionToken"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(exportedVersionToken))
+                {
+                    exported["versionToken"] = exportedVersionToken;
+                    // True whenever the token covers the text that was exported, which is the usual case (a Procedure
+                    // `Source`, a Design System `Styles` or `Source`): the token ends with the fingerprint of that text.
+                    // An External Object has a token of its own: there it says false.
+                    exported["tokenFingerprintMatchesFile"] = exportedVersionToken.EndsWith(":" + (string)exported["sha256"], StringComparison.Ordinal);
+                }
+                return McpResponse.Ok(target: target, code: "ExportCompleted", result: exported);
             }
             catch (Exception ex)
             {

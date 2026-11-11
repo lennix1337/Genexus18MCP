@@ -1779,7 +1779,9 @@ namespace GxMcp.Gateway
             // poll; the estimate is a cadence hint, so default to the order of magnitude
             // these reads actually take rather than the mutation default.
             int estimate = tArgs["estimated_seconds"]?.ToObject<int?>() ?? 60;
-            var readJob = JobRegistry.Start(sessionId, $"versioning/{action}", estimate, GetCurrentOwnership(sessionId));
+            var readJob = JobRegistry.Start(sessionId, AsyncReadJobLabel(tName, action), estimate, GetCurrentOwnership(sessionId));
+            string asyncKind = AsyncReadKind(tName);
+            string asyncKindTitle = AsyncReadKindTitle(asyncKind);
             readJob.WorkerAlias = _currentKb.Value?.NormalizedAlias;
             readJob.Target = tArgs["name"]?.ToString();
             readJob.Part = tArgs["part"]?.ToString() ?? tArgs["partName"]?.ToString();
@@ -1813,22 +1815,22 @@ namespace GxMcp.Gateway
                     JobRegistry.Complete(
                         readJob.Id,
                         ok,
-                        (ok ? "Read succeeded: " : "Read failed: ") + action,
+                        (ok ? asyncKindTitle + " succeeded: " : asyncKindTitle + " failed: ") + action,
                         inner);
                 }
                 catch (Exception ex)
                 {
-                    JobRegistry.Complete(readJob.Id, false, $"Read exception: {ex.Message}");
+                    JobRegistry.Complete(readJob.Id, false, $"{asyncKindTitle} exception: {ex.Message}");
                     Log($"[AsyncRead] Exception in job={readJob.Id}: {ex.Message}");
                 }
             });
 
-            var asyncReadResponse = BuildAsyncReadAcceptedPayload(readJob, action);
+            var asyncReadResponse = BuildAsyncReadAcceptedPayload(readJob, action, asyncKind);
             if (McpTasksProtocol.SupportsTasks(request))
             {
                 return McpTasksProtocol.BuildCreateTaskResult(
                     readJob,
-                    asyncReadResponse["hint"]?.ToString() ?? "Read accepted; poll tasks/get for completion.");
+                    asyncReadResponse["hint"]?.ToString() ?? asyncKindTitle + " accepted; poll tasks/get for completion.");
             }
             return BuildToolResultContent(asyncReadResponse, false, tName, tArgs);
         }
