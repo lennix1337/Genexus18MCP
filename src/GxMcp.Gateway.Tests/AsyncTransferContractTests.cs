@@ -57,54 +57,41 @@ namespace GxMcp.Gateway.Tests
             Assert.False(Program.IsAsyncTransferAction("genexus_transfer", null));
         }
 
-        [Fact]
-        public void TheJobIsLabelledAndWordedAsATransfer_NotAsAVersionStoreRead()
-        {
-            Assert.Equal("transfer/export", Program.AsyncReadJobLabel("genexus_transfer", "export"));
-            Assert.Equal("versioning/history_get", Program.AsyncReadJobLabel("genexus_versioning", "history_get"));
-            Assert.Equal("transfer", Program.AsyncReadKind("genexus_transfer"));
-            Assert.Equal("read", Program.AsyncReadKind("genexus_versioning"));
-            Assert.Equal("Transfer", Program.AsyncReadKindTitle("transfer"));
-            Assert.Equal("Read", Program.AsyncReadKindTitle("read"));
-        }
-
-        [Fact]
-        public void BuildAsyncReadAcceptedPayload_ForATransferSaysTransfer()
+        // The accepted answer is built from the action alone: the dispatch that starts the job is the one the
+        // version-store reads use, and export/inspect never name a versioning read.
+        [Theory]
+        [InlineData("export")]
+        [InlineData("inspect")]
+        public void BuildAsyncReadAcceptedPayload_ForATransferSaysTransfer(string action)
         {
             var job = new JobEntry { Id = "0123456789abcdef0123456789abcdef", EstimatedSeconds = 60 };
 
-            JObject payload = Program.BuildAsyncReadAcceptedPayload(job, "export", "transfer");
+            JObject payload = Program.BuildAsyncReadAcceptedPayload(job, action);
 
             Assert.Equal(job.Id, payload["operationId"]?.ToString());
             Assert.Equal("op:" + job.Id, payload["pollTarget"]?.ToString());
-            Assert.Equal("export", payload["action"]?.ToString());
+            Assert.Equal(action, payload["action"]?.ToString());
             string hint = payload["hint"]?.ToString() ?? string.Empty;
             Assert.StartsWith("Transfer accepted;", hint);
             Assert.Contains("The transfer keeps running if this call's window expires", hint);
             Assert.Contains("genexus_lifecycle(action='result', target='op:" + job.Id + "')", hint);
         }
 
-        [Fact]
-        public void BuildAsyncReadAcceptedPayload_ForAVersionStoreReadKeepsItsOwnWords()
+        [Theory]
+        [InlineData("history_get")]
+        [InlineData("history_list")]
+        [InlineData("history_diff")]
+        [InlineData("diff")]
+        [InlineData("diff_generated")]
+        [InlineData("blame")]
+        public void BuildAsyncReadAcceptedPayload_ForAVersionStoreReadKeepsItsOwnWords(string action)
         {
             var job = new JobEntry { Id = "0123456789abcdef0123456789abcdef", EstimatedSeconds = 60 };
 
-            string hint = Program.BuildAsyncReadAcceptedPayload(job, "history_get")["hint"]?.ToString() ?? string.Empty;
+            string hint = Program.BuildAsyncReadAcceptedPayload(job, action)["hint"]?.ToString() ?? string.Empty;
 
             Assert.StartsWith("Read accepted;", hint);
             Assert.Contains("The read keeps running if this call's window expires", hint);
-        }
-
-        [Fact]
-        public void TheAsyncReadDispatch_LabelsAndWordsTheJobByItsTool()
-        {
-            // The dispatch needs a live Worker, so pin the wiring at source level.
-            string source = GxMcp.TestSupport.RepoSource.WithoutComments("src", "GxMcp.Gateway", "Program.ToolDispatch.cs");
-
-            Assert.Contains("JobRegistry.Start(sessionId, AsyncReadJobLabel(tName, action), estimate", source, StringComparison.Ordinal);
-            Assert.Contains("string asyncKindTitle = AsyncReadKindTitle(asyncKind);", source, StringComparison.Ordinal);
-            Assert.Contains("BuildAsyncReadAcceptedPayload(readJob, action, asyncKind)", source, StringComparison.Ordinal);
-            Assert.Contains("(ok ? asyncKindTitle + \" succeeded: \" : asyncKindTitle + \" failed: \") + action", source, StringComparison.Ordinal);
         }
 
         [Fact]

@@ -1436,16 +1436,19 @@ namespace GxMcp.Gateway
         /// <summary>
         /// Accepted envelope for an async read. Same id/polling contract as the mutation path
         /// (so one documented recovery procedure covers both) plus the accepted action and an
-        /// explicit statement that the result outlives this call.
+        /// explicit statement that the result outlives this call. A transfer export or inspection is started by the
+        /// same dispatch as a version-store read, so the action (export and inspect never name a versioning read) is
+        /// what tells the two apart here.
         /// </summary>
-        internal static JObject BuildAsyncReadAcceptedPayload(JobEntry job, string action, string kind = "read")
+        internal static JObject BuildAsyncReadAcceptedPayload(JobEntry job, string action)
         {
             if (job == null) throw new ArgumentNullException(nameof(job));
 
-            var payload = BuildAsyncAcceptedPayload(job, AsyncReadKindTitle(kind) + " accepted;");
+            bool transfer = IsAsyncTransferActionName(action);
+            var payload = BuildAsyncAcceptedPayload(job, transfer ? "Transfer accepted;" : "Read accepted;");
             payload["action"] = action;
             payload["hint"] = payload["hint"]?.ToString()
-                + " The " + kind + " keeps running if this call's window expires: the result is stored and stays readable with genexus_lifecycle(action='result', target='op:" + job.Id + "') until the job is swept.";
+                + " The " + (transfer ? "transfer" : "read") + " keeps running if this call's window expires: the result is stored and stays readable with genexus_lifecycle(action='result', target='op:" + job.Id + "') until the job is swept.";
             return payload;
         }
 
@@ -1458,20 +1461,15 @@ namespace GxMcp.Gateway
         internal static bool IsAsyncTransferAction(string? toolName, JObject? args)
         {
             if (!string.Equals(toolName, "genexus_transfer", StringComparison.OrdinalIgnoreCase)) return false;
-            string? action = args?["action"]?.ToString()?.Trim().ToLowerInvariant();
-            return string.Equals(action, "export", StringComparison.Ordinal)
-                || string.Equals(action, "inspect", StringComparison.Ordinal);
+            return IsAsyncTransferActionName(args?["action"]?.ToString());
         }
 
-        /// <summary>What the accepted job is called in its label and its messages: "transfer" or "read".</summary>
-        internal static string AsyncReadKind(string? toolName)
-            => string.Equals(toolName, "genexus_transfer", StringComparison.OrdinalIgnoreCase) ? "transfer" : "read";
-
-        internal static string AsyncReadJobLabel(string? toolName, string action)
-            => (string.Equals(toolName, "genexus_transfer", StringComparison.OrdinalIgnoreCase) ? "transfer" : "versioning") + "/" + action;
-
-        internal static string AsyncReadKindTitle(string kind)
-            => string.IsNullOrEmpty(kind) ? kind : char.ToUpperInvariant(kind[0]) + kind.Substring(1);
+        private static bool IsAsyncTransferActionName(string? action)
+        {
+            string? normalized = action?.Trim().ToLowerInvariant();
+            return string.Equals(normalized, "export", StringComparison.Ordinal)
+                || string.Equals(normalized, "inspect", StringComparison.Ordinal);
+        }
 
         private static JObject BuildAsyncAcceptedPayload(JobEntry job, string acceptedSummary)
         {
