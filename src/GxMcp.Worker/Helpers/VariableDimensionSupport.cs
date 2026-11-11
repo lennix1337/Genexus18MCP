@@ -254,7 +254,11 @@ namespace GxMcp.Worker.Helpers
                     !SameSizes(observed.DimensionSizes, sizes))
                 {
                     RestoreDimensionSnapshot(variable, hadBefore, oldDimensions, oldSizes);
-                    error = "The GeneXus SDK accepted the dimension properties but did not retain the requested values.";
+                    // The SDK gives no reason here: say what was asked and what the variable reports, so the caller can see the difference.
+                    error = "The GeneXus SDK accepted the dimension properties but did not retain the requested values (requested "
+                        + DescribeDimensions(dimensions.Value, sizes) + "; the variable reports "
+                        + (observed.IsValid ? DescribeDimensions(observed.Dimensions, observed.DimensionSizes) : (observed.Error ?? "unreadable dimension metadata"))
+                        + ").";
                     return false;
                 }
 
@@ -328,6 +332,13 @@ namespace GxMcp.Worker.Helpers
                 return false;
             }
             return true;
+        }
+
+        // "dimensions=2 sizes=[4,5]" - the shape of a variable as the messages above report it.
+        private static string DescribeDimensions(int dimensions, IList<int> sizes)
+        {
+            return "dimensions=" + dimensions
+                + (sizes != null && sizes.Count > 0 ? " sizes=[" + string.Join(",", sizes) + "]" : string.Empty);
         }
 
         /// <summary>

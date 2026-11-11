@@ -79,13 +79,7 @@ namespace GxMcp.Worker.Helpers
             ValidateBalance(stylesSource, "Styles", result);
 
             string cleanStyles = StripComments(stylesSource);
-            foreach (Match match in ImageRegex.Matches(cleanStyles))
-            {
-                string imageName = match.Groups["quotedName"].Success
-                    ? match.Groups["quotedName"].Value
-                    : match.Groups["bareName"].Value;
-                AddUnique(result.Images, imageName.Trim());
-            }
+            AddUnique(result.Images, ExtractImageNames(stylesSource));
 
             foreach (Match import in ImportRegex.Matches(cleanStyles))
             {
@@ -97,6 +91,23 @@ namespace GxMcp.Worker.Helpers
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// The Image objects a style source refers to through <c>gx-image(Name)</c> or <c>gx-image("Name")</c>, in order of
+        /// appearance, each name once (compared without regard to case). A reference inside a comment is ignored.
+        /// </summary>
+        internal static IReadOnlyList<string> ExtractImageNames(string styleSource)
+        {
+            var names = new List<string>();
+            foreach (Match match in ImageRegex.Matches(StripComments(styleSource)))
+            {
+                string imageName = match.Groups["quotedName"].Success
+                    ? match.Groups["quotedName"].Value
+                    : match.Groups["bareName"].Value;
+                AddUnique(names, imageName.Trim());
+            }
+            return names;
         }
 
         internal static Dictionary<string, JObject> ParseTokens(string source)

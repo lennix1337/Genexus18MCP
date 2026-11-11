@@ -2058,6 +2058,9 @@ namespace GxMcp.Gateway
                 // genexus_delete_object refusal and dryRun: wouldDelete=false says the object was not deleted, and
                 // foundModule is the module of the object found for a Module.Name target that another module refused.
                 "wouldDelete", "foundModule",
+                // Style writes (ThemeStyleUnresolvedReferences) and XPZ import (TransferImportDeclined): the gx-image() references that
+                // name no Image object. Without them the caller knows the SDK refused the source, not what to create or import first.
+                "unresolvedImageReferences",
                 // Budget cut of an error envelope: the marker says lists and text were shortened, so the caller knows they are
                 // partial. isTruncated stays out: the normalizer turns it into meta.truncated and a help line.
                 "gatewayTruncationHint"

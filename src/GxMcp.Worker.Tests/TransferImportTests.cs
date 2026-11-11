@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -328,6 +330,161 @@ namespace GxMcp.Worker.Tests
             {
                 try { File.Delete(path); } catch { }
             }
+        }
+
+        // ---- a declined import whose package points at Image objects nobody has ------------------------------------------
+
+        private static readonly Guid DesignSystemType = new Guid("22222222-2222-2222-2222-222222222222");
+        private static readonly Guid ImageType = new Guid("33333333-3333-3333-3333-333333333333");
+        private static readonly Guid ThemeType = new Guid("44444444-4444-4444-4444-444444444444");
+
+        private static string TypeNameOf(Guid type)
+        {
+            if (type == DesignSystemType) return "DesignSystem";
+            if (type == ImageType) return "Image";
+            if (type == ThemeType) return "Theme";
+            if (type == ProcedureType) return "Procedure";
+            return null;
+        }
+
+        private static string DesignSystemObject(string name, string stylesCss) =>
+            $"<Object name='{name}' type='{DesignSystemType}'><Part type='{Guid.NewGuid()}'><Source><![CDATA[{stylesCss}]]></Source></Part></Object>";
+
+        private static IReadOnlyList<string> Unresolved(string xml, Func<string, bool?> existsInKb)
+        {
+            string path = RawPackage(xml);
+            try { return TransferService.FindUnresolvedPackageImageReferences(path, TypeNameOf, existsInKb); }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public void FindUnresolvedPackageImageReferences_NamesTheReferencesNeitherThePackageNorTheKbHas()
+        {
+            string css = "styles Brand {\n  .A { background-image: gx-image(SynthLogo); }\n  .B { background-image: gx-image(\"SynthWallpaper\"); }\n"
+                + "  .C { background-image: gx-image(CarriedByThePackage); }\n  .D { background-image: gx-image(AlreadyInTheKb); }\n"
+                + "  .E { background-image: gx-image(NobodyCanTell); }\n  .F { background-image: gx-image(synthlogo); }\n}";
+            string xml = Objects(DesignSystemObject("BrandDS", css) + $"<Object name='CarriedByThePackage' type='{ImageType}'/>");
+
+            var unresolved = Unresolved(xml, name => name == "AlreadyInTheKb" ? true : name == "NobodyCanTell" ? (bool?)null : false);
+
+            Assert.Equal(new[] { "SynthLogo", "SynthWallpaper" }, unresolved);
+        }
+
+        [Fact]
+        public void FindUnresolvedPackageImageReferences_AModuleQualifiedReferenceToAnImageThePackageCarriesIsCarried()
+        {
+            string css = "styles Brand {\n  .A { background-image: gx-image(Mod.SynthCarried); }\n  .B { background-image: gx-image(Mod.SynthMissing); }\n}";
+            string xml = Objects(DesignSystemObject("BrandDS", css) + $"<Object name='SynthCarried' type='{ImageType}'/>");
+
+            Assert.Equal(new[] { "Mod.SynthMissing" }, Unresolved(xml, name => false));
+        }
+
+        [Fact]
+        public void FindUnresolvedPackageImageReferences_AnImageCarriedByThePackageAfterTheStyleIsStillCarried()
+        {
+            string xml = Objects(DesignSystemObject("BrandDS", "styles Brand { .A { background-image: gx-image(Later); } }")
+                + $"<Object name='later' type='{ImageType}'/>");
+
+            Assert.Empty(Unresolved(xml, name => false));
+        }
+
+        [Fact]
+        public void FindUnresolvedPackageImageReferences_IgnoresCommentsAndPackagesWithoutReferences()
+        {
+            string commented = "styles Brand {\n  /* gx-image(Commented) */\n  .A { color: red; }\n}";
+
+            Assert.Empty(Unresolved(Objects(DesignSystemObject("BrandDS", commented)), name => false));
+            Assert.Empty(Unresolved(Objects($"<Object name='A' type='{ProcedureType}'/>"), name => false));
+            Assert.Empty(Unresolved("<ExportFile><KMW /><Actions><Action type='delete' /></Actions></ExportFile>", name => false));
+        }
+
+        [Fact]
+        public void FindUnresolvedPackageImageReferences_FindsAReferenceInAnyStyleObjectOfThePackage()
+        {
+            string xml = Objects(
+                $"<Object name='A' type='{ProcedureType}'/>" +
+                DesignSystemObject("First", "styles First { .A { background-image: gx-image(OnlyInTheSecond); } }") +
+                DesignSystemObject("Second", "styles Second { .A { background-image: gx-image(OnlyInTheSecond); } }") +
+                $"<Object name='ThemeOne' type='{ThemeType}'><Part type='{Guid.NewGuid()}'><Source><![CDATA[.Probe {{ background-image: gx-image(OnlyInTheTheme); }}]]></Source></Part></Object>");
+
+            Assert.Equal(new[] { "OnlyInTheSecond", "OnlyInTheTheme" }, Unresolved(xml, name => false));
+        }
+
+        [Fact]
+        public void FindUnresolvedPackageImageReferences_IgnoresTheTextOfObjectsThatHoldNoStyleSource()
+        {
+            // A Procedure whose source mentions gx-image() as plain text, and an object of a type the SDK cannot name: neither
+            // is a reference that stops a Design System from being imported.
+            string xml = Objects(
+                $"<Object name='Writer' type='{ProcedureType}'><Part type='{Guid.NewGuid()}'><Source><![CDATA[&Css = 'gx-image(NotAStyleReference)']]></Source></Part></Object>" +
+                $"<Object name='Mystery' type='{Guid.NewGuid()}'><Part type='{Guid.NewGuid()}'><Source><![CDATA[gx-image(AlsoNot)]]></Source></Part></Object>" +
+                DesignSystemObject("BrandDS", "styles Brand { .A { color: red; } }"));
+
+            Assert.Empty(Unresolved(xml, name => false));
+        }
+
+        [Fact]
+        public void FindUnresolvedPackageImageReferences_ReadsOnlyTheFirstEntriesOfAHugePackage()
+        {
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".xpz");
+            try
+            {
+                int limit = TransferService.MaxPackageEntriesScannedForImages;
+                using (var archive = ZipFile.Open(path, ZipArchiveMode.Create))
+                {
+                    for (int i = 1; i < limit; i++)
+                        using (var writer = new StreamWriter(archive.CreateEntry("filler" + i + ".xml").Open())) writer.Write("<Other />");
+                    using (var writer = new StreamWriter(archive.CreateEntry("at-the-limit.xml").Open()))
+                        writer.Write(Objects(DesignSystemObject("Last", "styles Last { .A { background-image: gx-image(AtTheLimit); } }")));
+                    using (var writer = new StreamWriter(archive.CreateEntry("beyond-the-limit.xml").Open()))
+                        writer.Write(Objects(DesignSystemObject("Beyond", "styles Beyond { .A { background-image: gx-image(BeyondTheLimit); } }")));
+                }
+
+                var unresolved = TransferService.FindUnresolvedPackageImageReferences(path, TypeNameOf, name => false);
+
+                Assert.Equal(new[] { "AtTheLimit" }, unresolved);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public void ImportDeclined_NamesTheUnresolvedImagesAndKeepsTheRestOfTheAnswer()
+        {
+            using (var capture = new TransferDiagnostics(null))
+            {
+                var response = JObject.Parse(TransferService.ImportDeclined("sample.xpz", capture, new[] { "SynthLogo", "SynthWallpaper" }));
+
+                Assert.Equal("TransferImportDeclined", response["error"]["code"].ToString());
+                Assert.Equal(new[] { "SynthLogo", "SynthWallpaper" }, response["unresolvedImageReferences"].Select(t => (string)t));
+                string hint = response["error"]["hint"].ToString();
+                Assert.Contains("SynthLogo, SynthWallpaper", hint);
+                Assert.Contains("Inspect sdkDiagnostics", hint);
+                Assert.False(response["imported"].Value<bool>());
+                Assert.Equal("GeneXus ImportFile returned false; import was not confirmed.", response["error"]["message"].ToString());
+            }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ImportDeclined_WithoutUnresolvedImagesIsTheAnswerItAlwaysWas(bool emptyList)
+        {
+            using (var capture = new TransferDiagnostics(null))
+            {
+                var response = JObject.Parse(TransferService.ImportDeclined("sample.xpz", capture, emptyList ? new string[0] : null));
+
+                Assert.Null(response["unresolvedImageReferences"]);
+                Assert.StartsWith("Inspect sdkDiagnostics; an empty list means the SDK supplied no output diagnostic.", response["error"]["hint"].ToString());
+            }
+        }
+
+        [Fact]
+        public void ImportDeclined_IsReachedThroughTheReferenceCheck()
+        {
+            // The import needs a live SDK service, so pin the wiring at source level.
+            string source = GxMcp.TestSupport.RepoSource.WithoutComments("src", "GxMcp.Worker", "Services", "TransferService.cs");
+
+            Assert.Contains("return ImportDeclined(file, diagnostics, FindUnresolvedPackageImageReferences(file));", source, StringComparison.Ordinal);
         }
 
         [Fact]

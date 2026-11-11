@@ -50,10 +50,10 @@ namespace GxMcp.Worker.Services
             {
                 try
                 {
-                    if (!ThemeStyleEditHelper.TryApply(stylePart, content, out JObject details, out string applyError))
+                    if (!ThemeStyleEditHelper.TryApply(stylePart, content, out JObject details, out string applyError, ImageObjectExists))
                     {
                         transaction.Rollback();
-                        return CreateThemeWriteError(target, partName, applyError, "ThemeStyleApplyFailed", details);
+                        return CreateThemeWriteError(target, partName, applyError, ThemeStyleEditHelper.FailureCode(details), details);
                     }
 
                     string staged = ThemeStyleEditHelper.ReadText(stylePart) ?? string.Empty;
@@ -126,6 +126,18 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // Consulted only after the SDK refuses a style source, to name the gx-image() references that point at no Image
+        // object. null means the lookup could not tell, which keeps the name out of the answer.
+        private bool? ImageObjectExists(string name)
+        {
+            try { return _objectService.FindObject(name, "Image") != null; }
+            catch (Exception ex)
+            {
+                Logger.Debug("[THEME-WRITE] image lookup skipped for '" + name + "': " + ex.Message);
+                return null;
+            }
+        }
+
         private static void ForceSaveThemeObject(KBObject obj)
         {
             try
@@ -177,10 +189,11 @@ namespace GxMcp.Worker.Services
                     payload[property.Name] = property.Value.DeepClone();
             }
 
+            ThemeStyleEditHelper.DescribeFailure(code, styleDetails, out string message, out string hint);
             return Models.McpResponse.Err(
                 code: code,
-                message: "Theme/StyleSheet write failed.",
-                hint: "Read the style part first; use raw CSS/source for StyleSheet or {className, properties} for a Theme class.",
+                message: message,
+                hint: hint,
                 target: target,
                 extra: payload);
         }
