@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
+using Artech.Architecture.Common.Descriptors;
 using Artech.Architecture.Common.Objects;
 using Artech.Genexus.Common.Objects;
 using Artech.Genexus.Common.Parts;
@@ -13,6 +14,18 @@ namespace GxMcp.Worker.Services.Structure
     {
         private readonly ObjectService _objectService;
         private readonly HashSet<KBObject> _modifiedObjects = new HashSet<KBObject>();
+        private readonly List<string> _problems = new List<string>();
+        private readonly List<string> _createdAttributes = new List<string>();
+        private KBModel _model;
+
+        /// <summary>
+        /// Members of the last SyncVisualStructure call the SDK did not accept (issue #955).
+        /// A requested member that cannot be applied is reported with its reason, never skipped.
+        /// </summary>
+        public IReadOnlyList<string> Problems => _problems;
+
+        /// <summary>Global Attributes the last SyncVisualStructure call created.</summary>
+        public IReadOnlyList<string> CreatedAttributes => _createdAttributes;
 
         public VisualStructureService(ObjectService objectService)
         {
@@ -65,12 +78,61 @@ namespace GxMcp.Worker.Services.Structure
         public void SyncVisualStructure(Transaction trn, JArray visualItems)
         {
             _modifiedObjects.Clear();
+            _problems.Clear();
+            _createdAttributes.Clear();
+            _model = trn.Model;
             SyncVisualLevel(trn.Structure.Root, visualItems);
             
             // Batch Save: Salva cada objeto modificado apenas uma vez
             foreach (var obj in _modifiedObjects) {
-                try { obj.Save(); } catch (Exception ex) { Logger.Error($"Failed to save modified object {obj.Name}: {ex.Message}"); continue; }
+                try { obj.Save(); }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to save modified object {obj.Name}: {ex.Message}");
+                    _problems.Add($"attribute '{obj.Name}' changes were not saved: {(ex.InnerException ?? ex).Message}");
+                    continue;
+                }
                 WriteService.NotePerTargetWrite(obj.Name);
+            }
+        }
+
+        // The Transaction structure can only reference an existing global Attribute, so a
+        // requested member that does not exist yet is created first, typed from the request
+        // (same order as the DSL path: type before Save).
+        private Artech.Genexus.Common.Objects.Attribute CreateGlobalAttribute(string name, JToken vItem)
+        {
+            string type = vItem["type"]?.ToString();
+            if (string.IsNullOrWhiteSpace(type))
+            {
+                _problems.Add($"attribute '{name}' does not exist in the KB and the request gives no 'type' to create it.");
+                return null;
+            }
+            try
+            {
+                var created = KBObject.Create(_model, KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Attribute>().Id)
+                    as Artech.Genexus.Common.Objects.Attribute;
+                if (created == null)
+                {
+                    _problems.Add($"attribute '{name}' could not be created: the SDK returned no Attribute.");
+                    return null;
+                }
+                created.Name = name;
+                if (!AttributeTypeApplier.ApplyFromDslType(created, type, _model))
+                {
+                    _problems.Add($"attribute '{name}' could not be created: type '{type}' was not applied.");
+                    return null;
+                }
+                string description = vItem["description"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(description)) created.Description = description;
+                created.Save();
+                _createdAttributes.Add(name);
+                return created;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[VisualStructureService] creating attribute '{name}' failed: {ex.Message}");
+                _problems.Add($"attribute '{name}' could not be created: {(ex.InnerException ?? ex).Message}");
+                return null;
             }
         }
 
@@ -110,7 +172,12 @@ namespace GxMcp.Worker.Services.Structure
                         targetLevel = new TransactionLevel(sdkLevel);
                         targetLevel.Name = name;
                         try { sdkLevel.AddLevel(targetLevel); }
-                        catch (Exception ex) { Logger.Error($"[VisualStructureService] AddLevel('{name}') failed: {ex.Message}"); continue; }
+                        catch (Exception ex)
+                        {
+                            Logger.Error($"[VisualStructureService] AddLevel('{name}') failed: {ex.Message}");
+                            _problems.Add($"level '{name}' was not added: {(ex.InnerException ?? ex).Message}");
+                            continue;
+                        }
                     }
                     var children = vItem["children"] as JArray;
                     if (children != null) SyncVisualLevel(targetLevel, children);
@@ -120,13 +187,19 @@ namespace GxMcp.Worker.Services.Structure
                         foreach (dynamic attr in sdkLevel.Attributes) { if (attr.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { targetAttr = attr; break; } }
                     }
                     if (targetAttr == null) {
-                        var attrObj = _objectService.FindObject(name) as Artech.Genexus.Common.Objects.Attribute;
+                        var attrObj = _objectService.FindObject(name) as Artech.Genexus.Common.Objects.Attribute
+                            ?? CreateGlobalAttribute(name, vItem);
                         if (attrObj != null) {
                             // Use the typed sdkLevel.AddAttribute(globalAttr) overload — it is the only
                             // path that links the new TransactionAttribute into the structure with the
                             // bookkeeping EnsureSave honors. See commit 8c8f433.
                             try { targetAttr = sdkLevel.AddAttribute(attrObj); }
-                            catch (Exception ex) { Logger.Error($"[VisualStructureService] AddAttribute('{name}') failed: {ex.Message}"); continue; }
+                            catch (Exception ex)
+                            {
+                                Logger.Error($"[VisualStructureService] AddAttribute('{name}') failed: {ex.Message}");
+                                _problems.Add($"attribute '{name}' was not added to the level '{sdkLevel.Name}': {(ex.InnerException ?? ex).Message}");
+                                continue;
+                            }
                         }
                         else continue;
                     }

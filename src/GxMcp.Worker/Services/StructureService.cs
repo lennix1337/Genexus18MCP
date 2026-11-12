@@ -195,12 +195,24 @@ namespace GxMcp.Worker.Services
                                 throw new InvalidOperationException("VersionConflict: the Transaction changed before the atomic save.");
 
                             _visualStructureService.SyncVisualStructure(locked, children);
-                            locked.Save(new Artech.Architecture.Common.Objects.KBObjectSavePreferences
+                            if (_visualStructureService.Problems.Count > 0)
+                                throw new InvalidOperationException("StructureMembersNotApplied: "
+                                    + string.Join("; ", _visualStructureService.Problems));
+                            try
                             {
-                                ForceSave = true,
-                                ForceSaveDefaultParts = true,
-                                SkipValidation = false
-                            });
+                                locked.Save(new Artech.Architecture.Common.Objects.KBObjectSavePreferences
+                                {
+                                    ForceSave = true,
+                                    ForceSaveDefaultParts = true,
+                                    SkipValidation = false
+                                });
+                            }
+                            catch (Exception saveEx)
+                            {
+                                // The raw SDK failure only says "<type> '<name>' validation failed.":
+                                // re-validate so the answer names the rule that rejected the structure.
+                                throw locked.WithValidationDetail(saveEx);
+                            }
 
                             // Only authored non-default parts are invariants. Default WinForm/WebForm
                             // projections legitimately follow Structure and must not create a false
@@ -227,7 +239,7 @@ namespace GxMcp.Worker.Services
                     _objectService.GetKbService().GetIndexCache().UpdateEntry(persistedTrn);
                     if (diff.Count > 0)
                         return RollbackStructureFailure(targetName, "StructureUpdateNotPersisted",
-                            "The persisted Transaction does not match the requested structure.",
+                            "The persisted Transaction does not match the requested structure: " + DescribeStructureDiff(diff) + ".",
                             trn, snapshot, before, children, persisted, diff, versionBefore, rollbackOnFailure);
 
                     if (!VerifyAuthoredPartsPreserved(persistedTrn, snapshot.Parts, out string authoredErr))
@@ -2078,6 +2090,24 @@ namespace GxMcp.Worker.Services
                     hint: "Ensure the target is a Transaction, Table, or SDT.",
                     target: targetName);
             }
+        }
+
+        // Names the members that did not persist (path, requested, persisted) so the failure
+        // says what differs instead of only that something does (issue #955).
+        internal static string DescribeStructureDiff(JArray diff)
+        {
+            const int limit = 10;
+            var items = (diff ?? new JArray()).OfType<JObject>().ToList();
+            string text = string.Join("; ", items.Take(limit).Select(d =>
+            {
+                string path = d["path"]?.ToString() ?? "?";
+                JToken persisted = d["persisted"];
+                string wanted = d["requested"] is JObject ? "member" : d["requested"]?.ToString();
+                return persisted == null || persisted.Type == JTokenType.Null
+                    ? path + " (requested " + wanted + ", not found after save)"
+                    : path + " (requested " + wanted + ", persisted " + persisted + ")";
+            }));
+            return items.Count > limit ? text + "; and " + (items.Count - limit) + " more" : text;
         }
 
         private static JArray CompareRequestedStructure(JArray requested, JArray persisted, string path)
