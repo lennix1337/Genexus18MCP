@@ -249,8 +249,15 @@ namespace GxMcp.Gateway.Tests.SharedHost
                 var actions = new List<string>();
                 if (registration.Groups["handler"].Success)
                 {
-                    string body = SourceAssert.MethodBody(source, "string " + registration.Groups["handler"].Value + "(");
-                    actions.AddRange(ActionLiterals(body));
+                    string handler = registration.Groups["handler"].Value;
+                    actions.AddRange(ActionLiterals(SourceAssert.MethodBody(source, "string " + handler + "(")));
+                    // A handler that must not name SDK types on the legacy COM driver (issue #965) only
+                    // routes to <Handler>Com / <Handler>Sdk; the action literals live in those bodies.
+                    foreach (string route in new[] { handler + "Com", handler + "Sdk" })
+                    {
+                        if (source.Contains("string " + route + "("))
+                            actions.AddRange(ActionLiterals(SourceAssert.MethodBody(source, "string " + route + "(")));
+                    }
                 }
 
                 actionsByMethod[method] = actions;

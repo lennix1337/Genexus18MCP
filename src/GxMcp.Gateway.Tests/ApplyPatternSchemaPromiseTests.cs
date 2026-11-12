@@ -198,7 +198,7 @@ namespace GxMcp.Gateway.Tests
             string dispatcher = WorkerSource(DispatcherPath);
             Assert.Contains(@"args?[""reapply""]?.ToObject<bool?>()", dispatcher);
             Assert.Contains(
-                "if (reapply) return _patternApplyService.ReapplyPattern(target, patKey, patSettings);",
+                "if (reapply) return _patternApplyService.Value.ReapplyPattern(target, patKey, patSettings);",
                 dispatcher);
         }
 

@@ -47,7 +47,10 @@ namespace GxMcp.Worker.Services
         private readonly TranslationsService _translationsService;
         private readonly LinterService _linterService;
         private readonly PatternService _patternService;
-        private readonly PatternApplyService _patternApplyService;
+        // Built on first use: its constructor touches Artech.* types, which a legacy
+        // (com-gxpublic) Worker has no SDK to resolve them from. Constructing the
+        // dispatcher must stay SDK-free so that mode can start (issue #965).
+        private readonly Lazy<PatternApplyService> _patternApplyService;
         private readonly PatchService _patchService;
         private readonly SDTService _sdtService;
         private readonly StructureService _structureService;
@@ -96,7 +99,7 @@ namespace GxMcp.Worker.Services
         private readonly ExplainService _explainService;
         private readonly GeneratedDiffService _generatedDiffService;
         private readonly KbReadmeService _kbReadmeService;
-        private readonly SaveAsService _saveAsService;
+        private readonly Lazy<SaveAsService> _saveAsService;
         private readonly OcrScreenshotService _ocrScreenshotService;
         private readonly PrDescriptionService _prDescriptionService;
         private readonly ScreenshotPublishService _screenshotPublishService;
@@ -236,7 +239,7 @@ namespace GxMcp.Worker.Services
             _saveSpecifyOrchestrator = new SaveSpecifyOrchestrator(_buildService, _historyService);
             _linterService = new LinterService(_objectService, _navigationService);
             _patternService = new PatternService(_indexCacheService, _objectService);
-            _patternApplyService = new PatternApplyService(_objectService);
+            _patternApplyService = new Lazy<PatternApplyService>(() => new PatternApplyService(_objectService));
             _sdtService = new SDTService(_objectService);
             _structureService = new StructureService(_objectService);
             _writeService.SetStructureService(_structureService);
@@ -271,7 +274,7 @@ namespace GxMcp.Worker.Services
             _explainService = new ExplainService(_kbService, _objectService);
             _generatedDiffService = new GeneratedDiffService(_kbService);
             _kbReadmeService = new KbReadmeService(_kbService, _indexCacheService);
-            _saveAsService = new SaveAsService(new SdkObjectCloner(_objectService, _writeService, _patternApplyService, _propertyService));
+            _saveAsService = new Lazy<SaveAsService>(() => new SaveAsService(new SdkObjectCloner(_objectService, _writeService, _patternApplyService.Value, _propertyService)));
             _ocrScreenshotService = new OcrScreenshotService();
             _prDescriptionService = new PrDescriptionService(_kbService);
             _screenshotPublishService = new ScreenshotPublishService(_kbService);
@@ -1742,12 +1745,16 @@ namespace GxMcp.Worker.Services
 
         private string Handle_Read(JObject request, string method, string action, string target, string payload, JObject args)
         {
-            string correlationId = args?["correlationId"]?.ToString()
-                ?? request?["correlationId"]?.ToString()
-                ?? (request?["params"] as JObject)?["correlationId"]?.ToString()
-                ?? ReadDiagnosticContext.CurrentCorrelationId;
+            // The COM (GXPublic) read path lives in its own method: this one must not name
+            // Artech.* types, or a legacy Worker fails to JIT it (issue #965).
+            if (GxMcp.Worker.Compatibility.DynamicSdkBridge.IsComDriver)
+                return Handle_ReadCom(action, target, args);
+            return Handle_ReadSdk(request, method, action, target, payload, args);
+        }
 
-            if (action == "CertifyRecovery" && GxMcp.Worker.Compatibility.DynamicSdkBridge.IsComDriver)
+        private string Handle_ReadCom(string action, string target, JObject args)
+        {
+            if (action == "CertifyRecovery")
             {
                 return Models.McpResponse.Err(
                     code: "UNSUPPORTED_IN_GENEXUS_VERSION",
@@ -1756,39 +1763,45 @@ namespace GxMcp.Worker.Services
                     target: target);
             }
 
-            if (GxMcp.Worker.Compatibility.DynamicSdkBridge.IsComDriver)
-            {
-                string unsupportedRefresh = ObjectService.FreshReadUnsupportedResponse(
-                    target, args?["refresh"]?.ToObject<bool?>() ?? false, isComDriver: true);
-                if (unsupportedRefresh != null) return unsupportedRefresh;
+            string unsupportedRefresh = ObjectService.FreshReadUnsupportedResponse(
+                target, args?["refresh"]?.ToObject<bool?>() ?? false, isComDriver: true);
+            if (unsupportedRefresh != null) return unsupportedRefresh;
 
-                string partName = args?["part"]?.ToString() ?? "Source";
-                string partContent = GxMcp.Worker.Drivers.ComGxPublicDriver.Instance.ReadObjectPart(target, partName, out string readErr);
-                if (readErr != null)
+            string partName = args?["part"]?.ToString() ?? "Source";
+            string partContent = GxMcp.Worker.Drivers.ComGxPublicDriver.Instance.ReadObjectPart(target, partName, out string readErr);
+            if (readErr != null)
+            {
+                if (readErr.StartsWith("GXPUBLIC_SOURCE_UNSUPPORTED:", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (readErr.StartsWith("GXPUBLIC_SOURCE_UNSUPPORTED:", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return Models.McpResponse.Err(
-                            code: "UNSUPPORTED_IN_GENEXUS_VERSION",
-                            message: readErr.Substring("GXPUBLIC_SOURCE_UNSUPPORTED:".Length).Trim(),
-                            hint: GxMcp.Worker.Compatibility.DynamicSdkBridge.GetComAlternativeGuidance("genexus_read"),
-                            target: target,
-                            errorExtra: new JObject
-                            {
-                                ["driver"] = GxMcp.Worker.Compatibility.DynamicSdkBridge.CurrentDriver,
-                                ["currentMajor"] = GxMcp.Worker.Compatibility.DynamicSdkBridge.CurrentMajor,
-                                ["capability"] = "source-parts"
-                            });
-                    }
-                    return Models.McpResponse.Err(code: "ComReadError", message: readErr, target: target);
+                    return Models.McpResponse.Err(
+                        code: "UNSUPPORTED_IN_GENEXUS_VERSION",
+                        message: readErr.Substring("GXPUBLIC_SOURCE_UNSUPPORTED:".Length).Trim(),
+                        hint: GxMcp.Worker.Compatibility.DynamicSdkBridge.GetComAlternativeGuidance("genexus_read"),
+                        target: target,
+                        errorExtra: new JObject
+                        {
+                            ["driver"] = GxMcp.Worker.Compatibility.DynamicSdkBridge.CurrentDriver,
+                            ["currentMajor"] = GxMcp.Worker.Compatibility.DynamicSdkBridge.CurrentMajor,
+                            ["capability"] = "source-parts"
+                        });
                 }
-                return Models.McpResponse.Ok(target: target, code: "ObjectPart", result: new JObject
-                {
-                    ["name"] = target,
-                    ["part"] = partName,
-                    ["source"] = partContent ?? string.Empty
-                });
+                return Models.McpResponse.Err(code: "ComReadError", message: readErr, target: target);
             }
+            return Models.McpResponse.Ok(target: target, code: "ObjectPart", result: new JObject
+            {
+                ["name"] = target,
+                ["part"] = partName,
+                ["source"] = partContent ?? string.Empty
+            });
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private string Handle_ReadSdk(JObject request, string method, string action, string target, string payload, JObject args)
+        {
+            string correlationId = args?["correlationId"]?.ToString()
+                ?? request?["correlationId"]?.ToString()
+                ?? (request?["params"] as JObject)?["correlationId"]?.ToString()
+                ?? ReadDiagnosticContext.CurrentCorrelationId;
 
             if (action == "ExtractFullObject")
             {
@@ -1966,7 +1979,7 @@ namespace GxMcp.Worker.Services
                     NotifyMirrorDeleted(target, type);
                 return response;
             }
-            if (action == "SaveAs") return _saveAsService.SaveAs(args ?? new JObject());
+            if (action == "SaveAs") return _saveAsService.Value.SaveAs(args ?? new JObject());
             if (action == "WorkerReload")
             {
                 // FR#20 (v2.6.6 Stream B): mode=soft is the new default — drain
@@ -2530,15 +2543,15 @@ namespace GxMcp.Worker.Services
                 bool reapply = args?["reapply"]?.ToObject<bool?>() ?? false;
                 var patSettings = args?["settings"] as JObject;
                 string patKey = args?["pattern"]?.ToString();
-                if (reapply) return _patternApplyService.ReapplyPattern(target, patKey, patSettings);
-                return _patternApplyService.ApplyPattern(target, patKey, patSettings);
+                if (reapply) return _patternApplyService.Value.ReapplyPattern(target, patKey, patSettings);
+                return _patternApplyService.Value.ApplyPattern(target, patKey, patSettings);
             }
             if (action == "Diagnose")
             {
                 // Item 45: read-only preflight — returns structured reasons without mutating.
                 var patSettings = args?["settings"] as JObject;
                 string patKey = args?["pattern"]?.ToString();
-                return _patternApplyService.DiagnosePattern(target, patKey, patSettings);
+                return _patternApplyService.Value.DiagnosePattern(target, patKey, patSettings);
             }
             if (action == "ManageActions") return _wwpActionService.Run(target, args ?? new JObject());
             return null;

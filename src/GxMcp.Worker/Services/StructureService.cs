@@ -19,7 +19,10 @@ namespace GxMcp.Worker.Services
     public class StructureService
     {
         private readonly ObjectService _objectService;
-        private readonly VisualStructureService _visualStructureService;
+        // Built on first use: VisualStructureService touches Artech.* types in its
+        // constructor, which a legacy (com-gxpublic) Worker cannot resolve (issue #965).
+        private readonly Lazy<VisualStructureService> _visualStructure;
+        private VisualStructureService _visualStructureService => _visualStructure.Value;
         private readonly IndexService _indexService;
         private readonly AttributeWriteService _attributeWriteService;
         private readonly DomainWriteService _domainWriteService;
@@ -38,7 +41,7 @@ namespace GxMcp.Worker.Services
         public StructureService(ObjectService objectService)
         {
             _objectService = objectService;
-            _visualStructureService = new VisualStructureService(objectService);
+            _visualStructure = new Lazy<VisualStructureService>(() => new VisualStructureService(objectService));
             _indexService = new IndexService(objectService);
             _attributeWriteService = new AttributeWriteService(objectService);
             _domainWriteService = new DomainWriteService(objectService);

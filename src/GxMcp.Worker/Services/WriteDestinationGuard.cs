@@ -23,6 +23,19 @@ namespace GxMcp.Worker.Services
             // Only known observations bypass the version fence. Unknown commands are fenced,
             // including dryRun: a preview on another version must not appear valid.
             if (IsObservation(method, action, args)) return null;
+            // A COM (GXPublic) Worker has no SDK KnowledgeBase to compare against and must not load
+            // Artech.* just to refuse: with pins configured, a non-observation command cannot be
+            // confirmed against the pinned destination, so it is refused (issue #965).
+            if (Compatibility.DynamicSdkBridge.IsComDriver)
+                return Check(expectedPath, expectedVersion, null, null, null, true);
+            return CheckAgainstSdkKb(service, method, args, expectedPath, expectedVersion);
+        }
+
+        // Kept apart so the SDK types it names are only resolved when the SDK is in use.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static string CheckAgainstSdkKb(KbService service, string method, JObject args,
+            string expectedPath, string expectedVersion)
+        {
             var kb = service.KbObject as KnowledgeBase;
             string path = kb?.Location;
             string pathError = Check(expectedPath, expectedVersion, path, null, null, true);
