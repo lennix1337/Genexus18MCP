@@ -218,7 +218,47 @@ namespace GxMcp.Worker.Helpers
         internal static bool ApplySemanticAttribute(object element, string attributeName, string value)
         {
             if (element == null || string.IsNullOrWhiteSpace(attributeName) || value == null) return false;
-            return ApplySemanticAttributeObject(element, attributeName, value, value);
+            object typedValue = TryConvertStorageValue(element, attributeName, value);
+            return ApplySemanticAttributeObject(element, attributeName, typedValue ?? value, value);
+        }
+
+        private static object TryConvertStorageValue(object element, string attributeName, string value)
+        {
+            if (element is Artech.Packages.Patterns.Objects.PatternInstanceElement patternElement
+                && patternElement.Attributes != null)
+            {
+                try
+                {
+                    object converted = patternElement.Attributes
+                        .ConvertPropertyValueFromString<Artech.Common.Properties.StringStorage>(attributeName, value);
+                    if (converted != null) return converted;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Debug("[PATTERN-WRITE] ConvertPropertyValueFromString<StringStorage> skipped for '" + attributeName + "': " + ex.Message);
+                }
+            }
+
+            object attributes = ReadProperty(element, "Attributes");
+            if (attributes == null) return null;
+            MethodInfo genericMethod = attributes.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .FirstOrDefault(m => m.Name == "ConvertPropertyValueFromString"
+                    && m.IsGenericMethodDefinition
+                    && m.GetGenericArguments().Length == 1
+                    && m.GetParameters().Length == 2
+                    && m.GetParameters()[0].ParameterType == typeof(string)
+                    && m.GetParameters()[1].ParameterType == typeof(string));
+            if (genericMethod == null) return null;
+            try
+            {
+                MethodInfo closed = genericMethod.MakeGenericMethod(typeof(Artech.Common.Properties.StringStorage));
+                return closed.Invoke(attributes, new object[] { attributeName, value });
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("[PATTERN-WRITE] ConvertPropertyValueFromString reflection skipped for '" + attributeName + "': " + ex.Message);
+                return null;
+            }
         }
 
         internal static object ReadSemanticAttributeObject(object element, string attributeName)

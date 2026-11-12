@@ -233,6 +233,22 @@ namespace GxMcp.Worker.Services
 
         // ---- layout helpers shared by add_table and move_control ----------------------------
 
+        // A Transaction PatternInstance's <selection>, <extraSelection>, <view>, <prompt>,
+        // <tabularTab>, <gridTab> and <webComponentTab> project onto derived WebPanels/WebComponents
+        // via regenerate_derived, not onto the parent Transaction's own WebForm via UpdateParentObject.
+        internal static bool ProjectsOntoParentWebForm(XElement container)
+        {
+            if (container == null) return true;
+            return !container.AncestorsAndSelf().Any(e =>
+                Is(e, "selection")
+                || Is(e, "extraSelection")
+                || Is(e, "view")
+                || Is(e, "prompt")
+                || Is(e, "tabularTab")
+                || Is(e, "gridTab")
+                || Is(e, "webComponentTab"));
+        }
+
         private static JObject OrderedContainerUnsupported(string path, string reason)
         {
             JObject error = TableError("WwpOrderedContainerUnsupported",
