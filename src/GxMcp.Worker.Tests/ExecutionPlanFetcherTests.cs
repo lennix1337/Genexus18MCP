@@ -23,6 +23,23 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("EXPLAIN SELECT 1", s);
         }
 
+        [Theory]
+        [InlineData("com.ibm.as400.access.AS400JDBCDriver", 0)]
+        [InlineData("IBM", 8)]
+        [InlineData(null, 9)]
+        public void Db2Datastores_KeepNavigationPlanStructuredAsUnavailable(string provider, int dbms)
+        {
+            string family = ExecutionPlanFetcher.ResolveDbmsFamily(provider, dbms);
+            var queries = new JArray { new JObject { ["sql"] = "SELECT * FROM A", ["baseTable"] = "A" } };
+
+            ExecutionPlanFetcher.AttachExecutionPlans(queries, family);
+
+            var plan = queries[0]["executionPlan"];
+            Assert.Equal("db2", (string)plan["dbmsFamily"]);
+            Assert.True((bool)plan["planUnavailable"]);
+            Assert.Equal("no-live-db-connection", (string)plan["reason"]);
+        }
+
         [Fact]
         public void ModernPostgresDbmsCode_UsesPostgresFamily()
         {

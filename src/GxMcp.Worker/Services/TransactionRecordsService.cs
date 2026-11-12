@@ -166,7 +166,7 @@ namespace GxMcp.Worker.Services
             if (expectedCount != (isInsert ? 0 : 1))
                 throw new RecordOperationException("SingleRowUpdateRequired", "The adapter inserts one absent key or updates exactly one row.", "Use expectedCount=0 for insert or expectedCount=1 for update.");
             var managedFields = ResolveManagedFields(metadata, args, normalizedValues);
-            var db = OpenDatabase(args);
+            var db = OpenDatabase(args, forWrite: true);
             db.Bind(metadata);
             var missingKeys = metadata.Keys.Where(k => !normalizedValues.ContainsKey(k.Name)).ToList();
             if (isInsert && (missingKeys.Count > 1 || (missingKeys.Count == 1 && db.Family != "sqlserver")))
@@ -517,7 +517,7 @@ namespace GxMcp.Worker.Services
                 string selectLimit = string.Empty;
                 string suffix = string.Empty;
                 if (limit > 0 && db.Family == "sqlserver") selectLimit = "TOP " + limit.ToString(CultureInfo.InvariantCulture) + " ";
-                else if (limit > 0 && db.Family == "oracle") suffix = " FETCH FIRST " + limit.ToString(CultureInfo.InvariantCulture) + " ROWS ONLY";
+                else if (limit > 0 && (db.Family == "oracle" || db.Family == "db2")) suffix = " FETCH FIRST " + limit.ToString(CultureInfo.InvariantCulture) + " ROWS ONLY";
                 else if (limit > 0 && (db.Family == "postgres" || db.Family == "mysql")) suffix = " LIMIT " + limit.ToString(CultureInfo.InvariantCulture);
                 command.CommandText = "SELECT " + selectLimit + string.Join(", ", fields.Select(a => QuoteIdentifier(a.Name, db.Family)))
                     + " FROM " + db.QualifiedTable + BuildWhere(command, db, filters, ParameterPrefix(db.Family), "f") + suffix;
@@ -860,12 +860,17 @@ namespace GxMcp.Worker.Services
             return string.IsNullOrWhiteSpace(provider) ? "unresolved" : "registered";
         }
 
-        private DatabaseMetadata OpenDatabase(JObject args, bool allowProfileAlias = false)
+        private DatabaseMetadata OpenDatabase(JObject args, bool allowProfileAlias = false, bool forWrite = false)
         {
             string requestedAlias = FirstText(args, "dataStoreAlias", "datastoreAlias");
             if (!allowProfileAlias && !string.IsNullOrWhiteSpace(requestedAlias))
                 throw new RecordOperationException("DataStoreAliasReadOnly", "Connection aliases are available only to records_query.", "Remove dataStoreAlias from records_insert/records_update; writes use the active GeneXus datastore and their existing preview-token safeguards.", "dataStoreAlias");
-            if (_databaseResolver != null) return _databaseResolver(args);
+            if (_databaseResolver != null)
+            {
+                var resolved = _databaseResolver(args);
+                if (forWrite) EnsureWritesSupported(resolved?.Family);
+                return resolved;
+            }
             dynamic kb = _kbService?.GetKB();
             if (kb == null) throw new RecordOperationException("KbNotOpen", "No KB is currently open.", "Open the KB before accessing Transaction records.");
             string requested = FirstText(args, "dataStore", "datastore");
@@ -900,14 +905,17 @@ namespace GxMcp.Worker.Services
                     throw new RecordOperationException("DataStoreAliasProviderMismatch", "The profile alias provider does not match the active GeneXus datastore.", "Remove Provider or set it to the provider reported by GeneXus.", profileAlias.Alias);
             }
             if (!IsSupportedRecordFamily(family))
-                throw new RecordOperationException("DataStoreProviderUnsupported", "The active datastore provider could not be mapped to a supported SQL dialect.", "Use a datastore with a recognized SQL Server, Oracle, PostgreSQL or MySQL provider.");
+                throw new RecordOperationException("DataStoreProviderUnsupported", "The active datastore provider could not be mapped to a supported SQL dialect.", "Use a datastore with a recognized SQL Server, Oracle, PostgreSQL, MySQL or DB2 provider.");
+            // Refuse before resolving a driver: installing one must not turn a refused write into an attempted one.
+            if (forWrite) EnsureWritesSupported(family);
             int timeoutSeconds = ReadTimeout(args);
             string connectionString = profileAlias == null
                 ? FirstConnectionString(selected, "CONNECTION_STRING", "ConnectionString", "CS_CONNECTIONSTRING", "DS_DBMS_ADDINFO", "DBMS_ADDINFO")
                 : ReadProfileConnectionString(profileAlias);
             string server = profileAlias?.Server ?? FirstDynamicProperty(selected, "CS_SERVER", "ServerName", "Server");
             string database = profileAlias?.Database ?? FirstDynamicProperty(selected, "CS_DBNAME", "CS_DATABASE", "DBNAME", "DATABASE", "DATABASE_NAME", "DB_NAME");
-            string schema = profileAlias?.Schema ?? FirstDynamicProperty(selected, "CS_SCHEMA", "DatabaseSchema", "Schema");
+            string schema = profileAlias?.Schema ?? FirstDynamicProperty(selected, "CS_SCHEMA", "DatabaseSchema", "Schema")
+                ?? (family == "db2" ? FirstDynamicProperty(selected, "DTALIB") : null);
             if (string.IsNullOrWhiteSpace(connectionString))
             {
                 string port = profileAlias?.Port ?? FirstDynamicProperty(selected, "CS_PORT", "PORT", "Port", "DBMS_PORT");
@@ -918,7 +926,7 @@ namespace GxMcp.Worker.Services
                     : profileAlias.IntegratedSecurity ?? true;
                 if (profileAlias != null && !integrated && (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(password)))
                     throw new RecordOperationException("DataStoreAliasInvalid", "The selected connection alias requires host credentials that are not available.", "Set the referenced user/password environment variables on the Worker host; their values are never returned.", profileAlias.Alias);
-                if (string.IsNullOrWhiteSpace(server) || (family != "oracle" && string.IsNullOrWhiteSpace(database)))
+                if (string.IsNullOrWhiteSpace(server) || (RequiresDatabaseName(family) && string.IsNullOrWhiteSpace(database)))
                     throw new RecordOperationException(profileAlias == null ? "DataStoreConnectionUnavailable" : "DataStoreAliasInvalid", "The selected datastore does not expose enough connection metadata for a safe native record operation.", profileAlias == null ? BuildConnectionUnavailableHint(family) : "Configure server and database in the selected profile alias; credentials and connection strings are never returned by this tool.");
                 if (family == "sqlserver")
                 {
@@ -932,6 +940,11 @@ namespace GxMcp.Worker.Services
                 {
                     connectionString = BuildPostgresConnectionString(server, database, schema, user, password, integrated, port, timeoutSeconds);
                 }
+                else if (family == "db2")
+                {
+                    bool ibmI = IsIbmIFactory(ResolveFactory(provider, family));
+                    connectionString = BuildDb2ConnectionString(ibmI, server, database, schema, user, password, port, timeoutSeconds);
+                }
                 else
                 {
                     throw new RecordOperationException("DataStoreProviderUnsupported", "The active datastore provider is not supported by the native Transaction records adapter.", "Use a datastore with a supported ADO.NET provider registered in the worker.");
@@ -940,10 +953,10 @@ namespace GxMcp.Worker.Services
             var factory = ResolveFactory(provider, family);
             if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(database))
             {
-                if (string.IsNullOrWhiteSpace(server)) server = ReadConnectionStringValue(connectionString, "Data Source", "Server", "Host");
+                if (string.IsNullOrWhiteSpace(server)) server = ReadConnectionStringValue(connectionString, "Data Source", "DataSource", "Server", "Host");
                 if (string.IsNullOrWhiteSpace(database)) database = ReadConnectionStringValue(connectionString, "Initial Catalog", "Database");
             }
-            if (profileAlias != null && (string.IsNullOrWhiteSpace(server) || (family != "oracle" && string.IsNullOrWhiteSpace(database))))
+            if (profileAlias != null && (string.IsNullOrWhiteSpace(server) || (RequiresDatabaseName(family) && string.IsNullOrWhiteSpace(database))))
                 throw new RecordOperationException("DataStoreAliasInvalid", "The selected connection alias did not resolve a server and database identifier.", "Configure server/database metadata or a host connection string that exposes them; the query was not executed.", profileAlias.Alias);
             return new DatabaseMetadata
             {
@@ -1178,6 +1191,7 @@ namespace GxMcp.Worker.Services
         internal static DbProviderFactory ResolveFactory(string provider, string family)
         {
             if (family == "sqlserver") return System.Data.SqlClient.SqlClientFactory.Instance;
+            if (family == "db2") return ResolveDb2Factory(LookupRegisteredDb2Factory);
             if (family == "oracle")
             {
                 var oracle = Type.GetType("Oracle.ManagedDataAccess.Client.OracleClientFactory, Oracle.ManagedDataAccess", false);
@@ -1210,7 +1224,67 @@ namespace GxMcp.Worker.Services
             => string.Equals(family, "sqlserver", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(family, "oracle", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(family, "postgres", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(family, "mysql", StringComparison.OrdinalIgnoreCase);
+                || string.Equals(family, "mysql", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(family, "db2", StringComparison.OrdinalIgnoreCase);
+
+        // DB2 (Db2Universal / DB2 for IBM i) is read-only: the typed write contract
+        // relies on SQL Server-only generated-key and row-count plumbing.
+        private static void EnsureWritesSupported(string family)
+        {
+            if (string.Equals(family, "db2", StringComparison.OrdinalIgnoreCase))
+                throw new RecordOperationException("DataStoreWritesUnsupported", "Transaction record writes are not supported on db2 datastores; records_query is the only available record action.", "Use records_query for DB2 / IBM i datastores. records_insert and records_update remain refused and no connection was opened.");
+        }
+
+        // Oracle and DB2 for i identify the target by server and library/schema; no database name is required.
+        private static bool RequiresDatabaseName(string family)
+            => family != "oracle" && family != "db2";
+
+        private static readonly string[] Db2ProviderCandidates = { "IBM.Data.DB2.iSeries", "IBM.Data.DB2", "IBM.Data.Db2" };
+
+        private static DbProviderFactory LookupRegisteredDb2Factory(string invariantName)
+        {
+            try { return DbProviderFactories.GetFactory(invariantName); }
+            catch { return null; }
+        }
+
+        // The GeneXus datastore only names a JDBC driver (JT400) or the vendor label "IBM"; the .NET Worker
+        // cannot load JDBC, so it needs an installed IBM ADO.NET provider registered by invariant name.
+        internal static DbProviderFactory ResolveDb2Factory(Func<string, DbProviderFactory> lookup)
+        {
+            foreach (string name in Db2ProviderCandidates)
+            {
+                var factory = lookup(name);
+                if (factory != null) return factory;
+            }
+            throw new RecordOperationException("DataStoreProviderUnavailable",
+                "No IBM DB2 ADO.NET provider is registered in the worker process, so the DB2 datastore cannot be queried.",
+                "Install the IBM i Access Client Solutions .NET provider (IBM.Data.DB2.iSeries) or the IBM Data Server provider (IBM.Data.DB2) on the Worker host. The JT400 JDBC driver used by the GeneXus datastore cannot be loaded by the .NET Worker; no connection was attempted.");
+        }
+
+        internal static bool IsIbmIFactory(DbProviderFactory factory)
+            => factory != null && factory.GetType().FullName.IndexOf("iSeries", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        internal static string BuildDb2ConnectionString(bool ibmIProvider, string server, string database, string schema, string user, string password, string port, int timeoutSeconds = DefaultCommandTimeoutSeconds)
+        {
+            var builder = new DbConnectionStringBuilder();
+            if (ibmIProvider)
+            {
+                builder["DataSource"] = server ?? string.Empty;
+                builder["UserID"] = user ?? string.Empty;
+                builder["Password"] = password ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(schema)) builder["DefaultCollection"] = schema;
+                builder["ConnectionTimeout"] = timeoutSeconds;
+                return builder.ConnectionString;
+            }
+            bool validPort = int.TryParse(port, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedPort) && parsedPort > 0 && parsedPort <= 65535;
+            builder["Server"] = validPort ? (server ?? string.Empty) + ":" + parsedPort.ToString(CultureInfo.InvariantCulture) : server ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(database)) builder["Database"] = database;
+            builder["UID"] = user ?? string.Empty;
+            builder["PWD"] = password ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(schema)) builder["CurrentSchema"] = schema;
+            builder["Connect Timeout"] = timeoutSeconds;
+            return builder.ConnectionString;
+        }
 
         internal static string BuildPostgresConnectionString(string server, string database, string schema, string user, string password, bool integrated, string port = null, int timeoutSeconds = DefaultCommandTimeoutSeconds)
         {
@@ -1308,12 +1382,13 @@ namespace GxMcp.Worker.Services
 
         private static string AddParameter(DbCommand command, string prefix, string name, AttributeMetadata attr, JToken token)
         {
-            string parameterName = prefix + name;
+            bool positional = prefix == "?";
+            string parameterName = positional ? "p_" + name : prefix + name;
             var parameter = command.CreateParameter();
             parameter.ParameterName = parameterName;
             parameter.Value = ToDbValue(token, attr);
             command.Parameters.Add(parameter);
-            return parameterName;
+            return positional ? "?" : parameterName;
         }
 
         private static object ToDbValue(JToken token, AttributeMetadata attr)
@@ -1360,7 +1435,9 @@ namespace GxMcp.Worker.Services
             var parts = name.Split('.');
             string quote = family == "sqlserver" ? "[" : family == "mysql" ? "`" : "\"";
             string close = family == "sqlserver" ? "]" : quote;
-            return string.Join(".", parts.Select(part => QuoteIdentifierPart(part, quote, close)));
+            // GeneXus emits unquoted DB2 DDL, so the catalog stores uppercase names.
+            bool fold = family == "db2";
+            return string.Join(".", parts.Select(part => QuoteIdentifierPart(fold ? part.ToUpperInvariant() : part, quote, close)));
         }
 
         private static string QuoteIdentifierPart(string part, string quote, string close)
@@ -1373,7 +1450,8 @@ namespace GxMcp.Worker.Services
         internal static bool IsWriteAllowed(bool dryRun, string expectedVersion)
             => dryRun || (expectedVersion != null && expectedVersion.StartsWith("trn-v2:", StringComparison.Ordinal));
 
-        private static string ParameterPrefix(string family) => family == "oracle" ? ":" : "@";
+        // DB2 ADO.NET providers bind positionally; "?" marks a positional marker (see AddParameter).
+        private static string ParameterPrefix(string family) => family == "oracle" ? ":" : family == "db2" ? "?" : "@";
         private static int ClampLimit(int limit) => limit <= 0 ? DefaultLimit : Math.Min(limit, MaxLimit);
         private static int ReadTimeout(JObject args) => Math.Max(1, Math.Min(args["timeoutSeconds"]?.Value<int?>() ?? DefaultCommandTimeoutSeconds, 60));
 

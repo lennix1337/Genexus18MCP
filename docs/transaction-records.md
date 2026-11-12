@@ -16,6 +16,24 @@ and primary key from the SDK Transaction structure. Attribute names are resolved
 against that metadata and values are sent as database parameters; callers cannot
 provide SQL identifiers or predicates.
 
+## DB2 and IBM i datastores (read-only)
+
+Datastores whose DBMS is Db2, Db2/AS400 or Db2Universal (including DB2 for IBM i
+reached through the JT400 JDBC driver) map to the `db2` dialect. `records_query`
+generates `SELECT ... FETCH FIRST n ROWS ONLY` with positional `?` parameters and
+uppercase double-quoted identifiers (GeneXus creates unquoted DB2 DDL). The
+library (`DTALIB` / schema) is used as the qualifier. `sample_data`, `drift_check`
+and `sql_navigation` do not generate dialect-specific SQL; `sql_navigation` plans
+are always `planUnavailable` (syntax-only `EXPLAIN`), as on every other DBMS.
+
+`records_insert` and `records_update` are refused on DB2 with
+`DataStoreWritesUnsupported` before any connection is opened.
+
+The Worker is .NET and cannot load the JDBC driver the GeneXus datastore names.
+Executing a query needs an IBM ADO.NET provider registered by invariant name
+(`IBM.Data.DB2.iSeries`, `IBM.Data.DB2` or `IBM.Data.Db2`); without one the
+request fails with `DataStoreProviderUnavailable` naming what to install.
+
 When the GeneXus SDK does not expose connection metadata, `records_query` can
 select an explicit SQL Server `dataStoreAlias`. Configure the alias in the MCP profile under
 `Environment.DataStoreAliases` (or under the matching

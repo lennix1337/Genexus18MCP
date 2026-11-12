@@ -207,7 +207,6 @@ namespace GxMcp.Worker.Tests
         }
 
         [Theory]
-        [InlineData("db2")]
         [InlineData("informix")]
         [InlineData("saphana")]
         [InlineData("unknown")]
@@ -215,6 +214,127 @@ namespace GxMcp.Worker.Tests
         {
             Assert.False(IsSupportedRecordFamily(family));
         }
+
+        [Theory]
+        [InlineData("com.ibm.as400.access.AS400JDBCDriver", 0)]
+        [InlineData("com.ibm.db2.jcc.DB2Driver", 0)]
+        [InlineData("jt400", 0)]
+        [InlineData("IBM.Data.DB2.iSeries", 0)]
+        [InlineData("IBM", 8)]
+        [InlineData("IBM", 9)]
+        [InlineData(null, 2)]
+        public void DetectFamily_RecognizesDb2AndIbmIProviderAndDbms(string provider, int dbms)
+        {
+            Assert.Equal("db2", DetectFamily(provider, dbms));
+            Assert.True(IsSupportedRecordFamily("db2"));
+        }
+
+        [Fact]
+        public void Db2Select_UsesFetchFirstPositionalParametersAndUppercaseQuotedIdentifiers()
+        {
+            var f = new Fixture();
+            f.Database.Family = "db2";
+            f.Database.Provider = "IBM";
+            f.Database.Schema = "mylib";
+            f.Database.Bind(f.Metadata);
+            var filters = new Dictionary<string, Newtonsoft.Json.Linq.JToken> { ["Id"] = 7, ["Value"] = "x" };
+            using (var connection = f.Db.CreateConnection())
+            using (var command = BuildSelect(connection, f.Metadata, f.Metadata.Attributes, filters, 5, null, f.Database))
+            {
+                Assert.Equal("SELECT \"ID\", \"VALUE\", \"STAMP\" FROM \"MYLIB\".\"SYNTHETICRECORD\" WHERE \"ID\"=? AND \"VALUE\"=? FETCH FIRST 5 ROWS ONLY", command.CommandText);
+                Assert.Equal(2, command.Parameters.Count);
+                Assert.Equal(7L, command.Parameters[0].Value);
+                Assert.Equal("x", command.Parameters[1].Value);
+            }
+        }
+
+        [Fact]
+        public void Db2Select_WithoutFilters_HasNoWhereClause()
+        {
+            var f = new Fixture();
+            f.Database.Family = "db2";
+            f.Database.Schema = null;
+            f.Database.Bind(f.Metadata);
+            using (var connection = f.Db.CreateConnection())
+            using (var command = BuildSelect(connection, f.Metadata, f.Metadata.Attributes, null, 101, null, f.Database))
+                Assert.Equal("SELECT \"ID\", \"VALUE\", \"STAMP\" FROM \"SYNTHETICRECORD\" FETCH FIRST 101 ROWS ONLY", command.CommandText);
+        }
+
+        [Theory]
+        [InlineData("InsertRecord", true)]
+        [InlineData("InsertRecord", false)]
+        [InlineData("UpdateRecords", true)]
+        [InlineData("UpdateRecords", false)]
+        public void Db2Writes_AreRefusedBeforeAnyDatabaseAccess(string action, bool dryRun)
+        {
+            var f = new Fixture();
+            f.Database.Family = "db2";
+            var args = action == "InsertRecord" ? Insert() : Update();
+            args["dryRun"] = dryRun;
+            if (!dryRun) args["expectedVersion"] = "trn-v2:anything";
+
+            var error = Error(f.Execute(action, args), "DataStoreWritesUnsupported");
+
+            Assert.Contains("db2", error["message"].Value<string>());
+            Assert.Equal(0, f.Db.Writes);
+            Assert.Empty(f.Db.Commands);
+        }
+
+        [Fact]
+        public void Db2Factory_WithoutInstalledProvider_ReportsDriverUnavailableNamingWhatIsNeeded()
+        {
+            var ex = Assert.Throws<RecordOperationException>(
+                () => ResolveDb2Factory(_ => null));
+
+            Assert.Equal("DataStoreProviderUnavailable", ex.Code);
+            Assert.Contains("IBM.Data.DB2.iSeries", ex.Hint);
+            Assert.Contains("JDBC", ex.Hint);
+        }
+
+        [Fact]
+        public void Db2Factory_UsesFirstInstalledCandidateInPreferenceOrder()
+        {
+            var seen = new List<string>();
+            var expected = new TransactionRecordsFakeDatabase();
+            var factory = ResolveDb2Factory(name =>
+            {
+                seen.Add(name);
+                return name == "IBM.Data.DB2" ? expected : null;
+            });
+
+            Assert.Same(expected, factory);
+            Assert.Equal(new[] { "IBM.Data.DB2.iSeries", "IBM.Data.DB2" }, seen);
+        }
+
+        [Fact]
+        public void Db2ConnectionString_ForIbmIProvider_EscapesMetadataAndSetsLibraryAndTimeout()
+        {
+            string text = BuildDb2ConnectionString(true, "as400;evil=1", "RDB", "MYLIB", "user;x", "pw;y", null, 12);
+            var parsed = new DbConnectionStringBuilder { ConnectionString = text };
+
+            Assert.Equal("as400;evil=1", parsed["DataSource"]?.ToString());
+            Assert.Equal("user;x", parsed["UserID"]?.ToString());
+            Assert.Equal("pw;y", parsed["Password"]?.ToString());
+            Assert.Equal("MYLIB", parsed["DefaultCollection"]?.ToString());
+            Assert.Equal("12", parsed["ConnectionTimeout"]?.ToString());
+        }
+
+        [Fact]
+        public void Db2ConnectionString_ForLuwProvider_UsesServerPortDatabaseAndSchema()
+        {
+            string text = BuildDb2ConnectionString(false, "db2host", "SAMPLE", "MYSCHEMA", "u", "p", "50000", 15);
+            var parsed = new DbConnectionStringBuilder { ConnectionString = text };
+
+            Assert.Equal("db2host:50000", parsed["Server"]?.ToString());
+            Assert.Equal("SAMPLE", parsed["Database"]?.ToString());
+            Assert.Equal("MYSCHEMA", parsed["CurrentSchema"]?.ToString());
+            Assert.Equal("u", parsed["UID"]?.ToString());
+            Assert.Equal("p", parsed["PWD"]?.ToString());
+        }
+
+        [Fact]
+        public void Db2Identifiers_FoldToUppercaseBecauseGeneXusEmitsUnquotedDdl()
+            => Assert.Equal("\"SALES\".\"ORDER\"", QuoteIdentifier("sales.Order", "db2"));
 
         [Fact]
         public void PostgresSelect_UsesPostgresLimitAndQuotedIdentifiers()
