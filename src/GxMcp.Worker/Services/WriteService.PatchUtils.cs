@@ -321,6 +321,11 @@ namespace GxMcp.Worker.Services
                 parsed["mutationDetected"] = false;
             }
 
+            // The WinForm importer adds the properties it defaults (FormType, Canvas properties), so
+            // the text a caller submits never round-trips byte for byte; the writer reports the form
+            // it staged and read back from a fresh instance, which is what the receipt must compare.
+            requestedContent = WinFormPartXml.TakeCanonicalContent(parsed) ?? requestedContent;
+
             if (requestedContent != null)
                 requestedContent = CanonicalizeStructureDomainTypes(requestedContent, finalSource, target, partName, typeFilter);
 

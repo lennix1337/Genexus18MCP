@@ -1707,6 +1707,11 @@ namespace GxMcp.Worker.Services
                     return WritePatternPart(obj, target, partName, decodedCode, dryRun, strictVerify, allowGridStructure);
                 }
 
+                if (IsWinFormPart(partName) && WinFormPartXml.Find(obj) != null)
+                {
+                    return WriteWinFormPart(obj, target, decodedCode, dryRun, forceWrite);
+                }
+
                 if (WebFormXmlHelper.IsVisualPart(partName))
                 {
                     return WriteVisualPart(

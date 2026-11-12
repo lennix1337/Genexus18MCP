@@ -6119,6 +6119,17 @@ namespace GxMcp.Worker.Services
                         ProcessSourceContent(obj, QueryStructureText.Render(part), offset, limit, result, client);
                         Logger.Info("ReadSource (QueryStructure) SUCCESS");
                     }
+                    else if (part is global::Artech.Genexus.Common.Parts.WinFormPart winFormPart)
+                    {
+                        // Issue #963: the generic XML fallback below carries only the Info
+                        // properties; the part's own serializer also writes the Form, Canvas and
+                        // every control, as an XPZ export does.
+                        ProcessSourceContent(obj, WinFormPartXml.Serialize(winFormPart), offset, limit, result, client);
+                        result["serializedPart"] = true;
+                        result["patchable"] = false;
+                        result["contentType"] = "application/xml";
+                        Logger.Info("ReadSource (WinForm) SUCCESS");
+                    }
                     else
                     {
                         string xml = part.SerializeToXml();
