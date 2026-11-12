@@ -432,8 +432,7 @@ namespace GxMcp.Worker.Services
                 // A grid is also addressed by the name it was given (add_grid's gridName, or its controlName), which is how
                 // a client that created it refers to it (#638). A name that matches no grid, or several, is refused.
                 string requestedName = gridPath.Trim();
-                var named = grids.Where(g => Attr(g, "name").Equals(requestedName, StringComparison.OrdinalIgnoreCase)
-                    || Attr(g, "controlName").Equals(requestedName, StringComparison.OrdinalIgnoreCase)).ToList();
+                var named = grids.Where(g => GridMatchesName(g, requestedName)).ToList();
                 if (named.Count == 1) { grid = named[0]; return null; }
                 if (named.Count > 1)
                     return Error("AmbiguousGrid", "More than one grid is named '" + requestedName + "'; use an absolute type path.");

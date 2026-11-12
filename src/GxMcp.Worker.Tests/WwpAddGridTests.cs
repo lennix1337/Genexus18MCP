@@ -1,6 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Xml.Linq;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
@@ -150,6 +153,39 @@ namespace GxMcp.Worker.Tests
         {
             string source = File.ReadAllText(FindSource("WwpActionService.AddGrid.cs"));
             Assert.Contains("did not change after projection", source);
+        }
+
+        [Fact]
+        public void SetNativeDropDownResolvesOptionTypeFromLoadedPackageAssembly()
+        {
+            var assemblyName = new AssemblyName("WwpFakePackage_" + Guid.NewGuid().ToString("N"));
+            var assemblyBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.Run);
+            var moduleBuilder = assemblyBuilder.DefineDynamicModule("Main");
+            var typeBuilder = moduleBuilder.DefineType("DVelop.Patterns.WorkWithPlus.DropDownValueOptionCustomType", TypeAttributes.Public);
+            var field = typeBuilder.DefineField("_value", typeof(string), FieldAttributes.Private);
+            var property = typeBuilder.DefineProperty("Value", PropertyAttributes.HasDefault, typeof(string), null);
+            var getter = typeBuilder.DefineMethod("get_Value", MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig, typeof(string), Type.EmptyTypes);
+            var getterIl = getter.GetILGenerator();
+            getterIl.Emit(OpCodes.Ldarg_0);
+            getterIl.Emit(OpCodes.Ldfld, field);
+            getterIl.Emit(OpCodes.Ret);
+            var setter = typeBuilder.DefineMethod("set_Value", MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig, null, new[] { typeof(string) });
+            var setterIl = setter.GetILGenerator();
+            setterIl.Emit(OpCodes.Ldarg_0);
+            setterIl.Emit(OpCodes.Ldarg_1);
+            setterIl.Emit(OpCodes.Stfld, field);
+            setterIl.Emit(OpCodes.Ret);
+            property.SetGetMethod(getter);
+            property.SetSetMethod(setter);
+            Type optionType = typeBuilder.CreateType();
+
+            var grid = new WwpEmptyNativeCommandTests.Element("grid");
+            WwpActionService.SetNativeDropDown(grid, "cellThemeClass", "SectionGrid GridNoBorderCell");
+
+            object applied = grid.Attributes.GetPropertyValue("cellThemeClass");
+            Assert.NotNull(applied);
+            Assert.Equal(optionType, applied.GetType());
+            Assert.Equal("SectionGrid GridNoBorderCell", optionType.GetProperty("Value")!.GetValue(applied, null));
         }
 
         private static string FindSource(string file)

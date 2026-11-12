@@ -84,8 +84,19 @@ namespace GxMcp.Worker.Services
             return null;
         }
 
+        private static bool GridMatchesName(XElement grid, string requestedName)
+        {
+            if (grid == null || string.IsNullOrWhiteSpace(requestedName)) return false;
+            string name = Attr(grid, "name");
+            if (name.Equals(requestedName, StringComparison.OrdinalIgnoreCase)) return true;
+            string controlName = Attr(grid, "controlName");
+            if (controlName.Equals(requestedName, StringComparison.OrdinalIgnoreCase)) return true;
+            return string.IsNullOrEmpty(name) && string.IsNullOrEmpty(controlName)
+                && requestedName.Equals("Grid", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static XElement FindVariableGrid(XDocument doc, JObject args) => doc.Descendants().FirstOrDefault(e => Is(e, "grid")
-            && string.Equals(Attr(e, "name"), VariableGridName(args), StringComparison.OrdinalIgnoreCase));
+            && GridMatchesName(e, VariableGridName(args)));
 
         private static JObject ApplyVariableGridXml(XDocument document, JObject args, IList<GridColumn> columns)
         {
@@ -105,13 +116,15 @@ namespace GxMcp.Worker.Services
         internal static JObject VerifyVariableGrid(XDocument after, JObject args, IList<GridColumn> columns)
         {
             var containers = FindFormContainers(after, args["containerName"].ToString().Trim()).ToList();
-            var grids = containers.SelectMany(c => c.Elements().Where(e => Is(e, "grid") && Attr(e, "name").Equals(VariableGridName(args), StringComparison.OrdinalIgnoreCase))).ToList();
+            var grids = containers.SelectMany(c => c.Elements().Where(e => Is(e, "grid") && GridMatchesName(e, VariableGridName(args)))).ToList();
             if (containers.Count != 1 || grids.Count != 1 || !string.IsNullOrEmpty(Attr(grids[0], "SDTCollection")))
                 return Error("WwpGridNotPersisted", "The variable grid was not retained in the requested table.");
             var persisted = grids[0].Elements().Where(e => Is(e, "gridVariable")).ToList();
             if (grids[0].Elements().Count() != columns.Count || persisted.Count != columns.Count
                 || persisted.Any(e => !string.IsNullOrEmpty(Attr(e, "domain")) || !string.IsNullOrEmpty(Attr(e, "sdtItem")))
-                || persisted.Where((e, i) => columns[i].Variable.Attributes().Any(a => !string.Equals(Attr(e, a.Name.LocalName), a.Value, StringComparison.Ordinal))).Any())
+                || persisted.Where((e, i) => columns[i].Variable.Attributes().Any(a =>
+                    !(Attr(e, a.Name.LocalName).Length == 0 && IsPatternDefault(a.Name.LocalName, a.Value))
+                    && !string.Equals(Attr(e, a.Name.LocalName), a.Value, StringComparison.Ordinal))).Any())
                 return Error("WwpGridNotPersisted", "A variable column lost its identity, order, type, description or readOnly value.");
             return new JObject { ["confirmed"] = true };
         }

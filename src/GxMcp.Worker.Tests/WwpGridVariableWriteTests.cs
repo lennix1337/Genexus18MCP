@@ -174,6 +174,44 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(4, sameGrid.Children.Items.Count);
         }
 
+        [Fact]
+        public void UnnamedXmlGridMatchesNativeGridWithDefaultGridName()
+        {
+            const string unnamedXml =
+                "<instance><WPRoot><table name='TableMain'><table name='TableGridHeader'>" +
+                "<grid><gridVariable name='GridDummyVar' dataType='Basic' basicType='VarChar' basicCLength='6'/></grid>" +
+                "</table></table></WPRoot></instance>";
+            var part = new GridPart();
+            Element root = part.RootElement.Children.CreateChildElement("WPRoot");
+            part.RootElement.Children.Items.Add(root);
+            Element main = root.Children.CreateChildElement("table");
+            main.Attributes.SetPropertyValue("name", "TableMain");
+            root.Children.Items.Add(main);
+            Element header = main.Children.CreateChildElement("table");
+            header.Attributes.SetPropertyValue("name", "TableGridHeader");
+            main.Children.Items.Add(header);
+            Element grid = header.Children.CreateChildElement("grid");
+            grid.Attributes.SetPropertyValue("name", "Grid");
+            header.Children.Items.Add(grid);
+            Element dummy = grid.Children.CreateChildElement("gridVariable");
+            dummy.Attributes.SetPropertyValue("name", "GridDummyVar");
+            grid.Children.Items.Add(dummy);
+
+            JObject args = new JObject
+            {
+                ["gridPath"] = "Grid",
+                ["variable"] = "gOp",
+                ["basicType"] = "VarChar",
+                ["length"] = 20,
+                ["before"] = "GridDummyVar"
+            };
+            JObject result = WwpActionService.ApplyNativeAddGridVariable(part, XDocument.Parse(unnamedXml), args, Plan(args));
+
+            Assert.Null(result["error"]);
+            Assert.Equal(new[] { "gOp", "GridDummyVar" },
+                grid.Children.Items.Select(e => e.Attributes.GetPropertyValueString("name")));
+        }
+
         private static (XDocument Before, XDocument After, JObject Args, WwpActionService.GridVariablePlan Plan) Rewritten(
             Action<XElement> persist = null, string before = null)
         {

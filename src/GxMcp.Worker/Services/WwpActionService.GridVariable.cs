@@ -219,7 +219,7 @@ namespace GxMcp.Worker.Services
                 return null;
             }
             object grid = nativeGrids[ordinal];
-            if (!string.Equals(NativeAttribute(grid, "name") ?? string.Empty, Attr(xmlGrid, "name"), StringComparison.OrdinalIgnoreCase)
+            if (!string.Equals(NativeContainerLabel(grid), ContainerLabel(xmlGrid), StringComparison.OrdinalIgnoreCase)
                 || NativeChildren(grid).Count(IsNativeGridColumn) != xmlGrid.Elements().Count(e => Is(e, "gridAttribute") || Is(e, "gridVariable")))
             {
                 error = Error("WwpGridNotResolvable", "The native grid does not match the XML grid it was resolved from.");
