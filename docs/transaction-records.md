@@ -31,11 +31,15 @@ are always `planUnavailable` (syntax-only `EXPLAIN`), as on every other DBMS.
 
 The Worker is .NET and cannot load the JDBC driver the GeneXus datastore names.
 Executing a query needs an IBM ADO.NET provider registered by invariant name
-(`IBM.Data.DB2.iSeries`, `IBM.Data.DB2` or `IBM.Data.Db2`); without one the
-request fails with `DataStoreProviderUnavailable` naming what to install.
+(`IBM.Data.DB2.iSeries`, `IBM.Data.DB2` or `IBM.Data.Db2`), either via IBM i
+Access Client Solutions or by registering the `IBM.Data.DB2.iSeries` NuGet
+package in `DbProviderFactories` (`App.config`); without one the request fails
+with `DataStoreProviderUnavailable` naming what to install.
 
-When the GeneXus SDK does not expose connection metadata, `records_query` can
-select an explicit SQL Server `dataStoreAlias`. Configure the alias in the MCP profile under
+When the GeneXus SDK does not expose connection metadata (for example when the
+connection is configured in the runtime environment or JNDI datasource rather
+than in KB datastore properties), `records_query` can select an explicit
+SQL Server or DB2 `dataStoreAlias`. Configure the alias in the MCP profile under
 `Environment.DataStoreAliases` (or under the matching
 `Environment.KBs[].DataStoreAliases` entry):
 
@@ -61,11 +65,14 @@ environment variables with `userIdEnvironmentVariable` and
 `passwordEnvironmentVariable`. A `connectionStringEnvironmentVariable` is also
 accepted when the complete secret connection string is kept only in the Worker
 host environment. The value of a secret is never returned or logged by the MCP.
-Read-only profile aliases support SQL Server only. When the active datastore
+Read-only profile aliases support SQL Server and DB2 only (for DB2 on IBM i,
+`database` is optional and `integratedSecurity` defaults to `false`, so host
+`userIdEnvironmentVariable`/`passwordEnvironmentVariable` or
+`connectionStringEnvironmentVariable` must be provided). When the active datastore
 is PostgreSQL, Oracle, or MySQL and the SDK does not expose connection
 metadata, `records_query` fails closed with `DataStoreConnectionUnavailable`
-whose hint states the SQL Server-only alias limitation instead of suggesting a
-`dataStoreAlias` the service would reject with
+whose hint states the SQL Server and DB2-only alias limitation instead of
+suggesting a `dataStoreAlias` the service would reject with
 `DataStoreAliasProviderUnsupported`. No connection string is invented and no
 credential is exposed.
 The alias is available only to `records_query`; insert/update operations reject it

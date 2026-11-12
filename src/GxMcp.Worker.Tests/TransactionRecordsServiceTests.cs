@@ -83,24 +83,25 @@ namespace GxMcp.Worker.Tests
         [Theory]
         [InlineData("sqlserver")]
         [InlineData("mssql")]
-        public void ConnectionUnavailableHint_ForSqlServer_RecommendsAlias(string family)
+        [InlineData("db2")]
+        public void ConnectionUnavailableHint_ForAliasSupportedFamilies_RecommendsAlias(string family)
         {
             string hint = BuildConnectionUnavailableHint(family);
 
             Assert.Contains("dataStoreAlias", hint);
-            Assert.DoesNotContain("support SQL Server only", hint);
+            Assert.DoesNotContain("SQL Server and DB2 only", hint);
         }
 
         [Theory]
         [InlineData("postgres")]
         [InlineData("oracle")]
         [InlineData("mysql")]
-        public void ConnectionUnavailableHint_ForNonSqlServer_DoesNotRecommendAlias(string family)
+        public void ConnectionUnavailableHint_ForUnsupportedAliasFamilies_DoesNotRecommendAlias(string family)
         {
             string hint = BuildConnectionUnavailableHint(family);
 
             Assert.DoesNotContain("dataStoreAlias", hint);
-            Assert.Contains("support SQL Server only", hint);
+            Assert.Contains("SQL Server and DB2 only", hint);
             Assert.Contains(family, hint);
         }
 
@@ -120,17 +121,93 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("DataStoreAliasProviderUnsupported", ex.Code);
         }
 
-        [Fact]
-        public void ProfileAlias_ForSqlServerDatastore_PassesFamilyValidation()
+        [Theory]
+        [InlineData("sqlserver")]
+        [InlineData("db2")]
+        public void ProfileAlias_ForSupportedDatastore_PassesFamilyValidation(string family)
         {
             var alias = new TransactionRecordsService.ProfileDataStoreAlias
             {
                 Alias = "production",
                 DataStore = "Default",
-                Family = "sqlserver"
+                Family = family
             };
 
-            ValidateProfileAliasFamily("sqlserver", alias);
+            ValidateProfileAliasFamily(family, alias);
+        }
+
+        [Fact]
+        public void ProfileAlias_Db2DefaultsIntegratedSecurityToFalseAndAllowsOmittedDatabase()
+        {
+            var db2Alias = new TransactionRecordsService.ProfileDataStoreAlias
+            {
+                Alias = "iseries",
+                DataStore = "Default",
+                Family = "db2",
+                Server = "as400.example.local",
+                Schema = "DTALIB"
+            };
+            Assert.False(ResolveProfileIntegratedSecurity("db2", db2Alias));
+            Assert.True(ResolveProfileIntegratedSecurity("sqlserver", db2Alias));
+
+            string previous = Environment.GetEnvironmentVariable("GXMCP_PROFILE_CONFIG_PATH");
+            string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gxmcp-db2-alias-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(tempDir);
+            string profilePath = System.IO.Path.Combine(tempDir, "config.json");
+            string kbPath = System.IO.Path.Combine(tempDir, "KB");
+            try
+            {
+                System.IO.File.WriteAllText(profilePath, new JObject
+                {
+                    ["Environment"] = new JObject
+                    {
+                        ["KBPath"] = kbPath,
+                        ["DataStoreAliases"] = new JObject
+                        {
+                            ["iseries"] = new JObject
+                            {
+                                ["DataStore"] = "Default",
+                                ["Family"] = "db2",
+                                ["Server"] = "as400.example.local",
+                                ["Schema"] = "DTALIB",
+                                ["UserIdEnvironmentVariable"] = "DB2_USER",
+                                ["PasswordEnvironmentVariable"] = "DB2_PASS"
+                            },
+                            ["sqlMissingDb"] = new JObject
+                            {
+                                ["DataStore"] = "Default",
+                                ["Family"] = "sqlserver",
+                                ["Server"] = "sql.example.local"
+                            },
+                            ["noFamilyMissingDb"] = new JObject
+                            {
+                                ["DataStore"] = "Default",
+                                ["Server"] = "sql.example.local"
+                            }
+                        }
+                    }
+                }.ToString());
+                Environment.SetEnvironmentVariable("GXMCP_PROFILE_CONFIG_PATH", profilePath);
+
+                var resolved = ResolveProfileAlias("iseries", kbPath);
+                Assert.Equal("db2", resolved.Family);
+                Assert.Equal("as400.example.local", resolved.Server);
+                Assert.Equal("DTALIB", resolved.Schema);
+                Assert.Null(resolved.Database);
+
+                var ex = Assert.Throws<TransactionRecordsService.RecordOperationException>(
+                    () => ResolveProfileAlias("sqlMissingDb", kbPath));
+                Assert.Equal("DataStoreAliasInvalid", ex.Code);
+
+                var noFamily = Assert.Throws<TransactionRecordsService.RecordOperationException>(
+                    () => ResolveProfileAlias("noFamilyMissingDb", kbPath));
+                Assert.Equal("DataStoreAliasInvalid", noFamily.Code);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("GXMCP_PROFILE_CONFIG_PATH", previous);
+                try { System.IO.Directory.Delete(tempDir, recursive: true); } catch { }
+            }
         }
 
         [Fact]

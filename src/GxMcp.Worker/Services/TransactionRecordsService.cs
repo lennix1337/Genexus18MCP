@@ -855,6 +855,7 @@ namespace GxMcp.Worker.Services
                     case "oracle": return "oracle";
                     case "postgres": return "postgres";
                     case "mysql": return "mysql";
+                    case "db2": return "db2";
                 }
             }
             return string.IsNullOrWhiteSpace(provider) ? "unresolved" : "registered";
@@ -923,7 +924,7 @@ namespace GxMcp.Worker.Services
                 string password = profileAlias == null ? FirstDynamicProperty(selected, "USER_PASSWORD", "PASSWORD", "Password") : ReadProfileSecret(profileAlias.PasswordEnvironmentVariable);
                 bool integrated = profileAlias == null
                     ? ParseYesNo(FirstDynamicProperty(selected, "TRUSTED_CONNECTION", "INTEGRATED_SECURITY", "IntegratedSecurity"))
-                    : profileAlias.IntegratedSecurity ?? true;
+                    : ResolveProfileIntegratedSecurity(family, profileAlias);
                 if (profileAlias != null && !integrated && (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(password)))
                     throw new RecordOperationException("DataStoreAliasInvalid", "The selected connection alias requires host credentials that are not available.", "Set the referenced user/password environment variables on the Worker host; their values are never returned.", profileAlias.Alias);
                 if (string.IsNullOrWhiteSpace(server) || (RequiresDatabaseName(family) && string.IsNullOrWhiteSpace(database)))
@@ -1003,6 +1004,9 @@ namespace GxMcp.Worker.Services
         }
 
         private ProfileDataStoreAlias ResolveProfileAlias(string requestedAlias)
+            => ResolveProfileAlias(requestedAlias, _kbService?.GetKbPath());
+
+        internal static ProfileDataStoreAlias ResolveProfileAlias(string requestedAlias, string currentKb)
         {
             string profilePath = Environment.GetEnvironmentVariable("GXMCP_PROFILE_CONFIG_PATH");
             if (string.IsNullOrWhiteSpace(profilePath))
@@ -1017,7 +1021,6 @@ namespace GxMcp.Worker.Services
             var matches = new List<JObject>();
             JObject environment = document["Environment"] as JObject;
             JToken kbCatalog = environment?["KBs"];
-            string currentKb = _kbService?.GetKbPath();
             var profileDirectory = Path.GetDirectoryName(profilePath);
             var kbEntries = ReadProfileKbEntries(kbCatalog).ToList();
             if (kbEntries.Count > 0)
@@ -1058,9 +1061,11 @@ namespace GxMcp.Worker.Services
 
             var result = ProfileDataStoreAlias.From(requestedAlias, matches[0]);
             if (string.IsNullOrWhiteSpace(result.DataStore)) result.DataStore = "Default";
+            string aliasFamily = NormalizeFamily(result.Family);
+            bool requiresDatabase = string.IsNullOrWhiteSpace(aliasFamily) || RequiresDatabaseName(aliasFamily);
             if (string.IsNullOrWhiteSpace(result.ConnectionStringEnvironmentVariable)
-                && (string.IsNullOrWhiteSpace(result.Server) || string.IsNullOrWhiteSpace(result.Database)))
-                throw new RecordOperationException("DataStoreAliasInvalid", "The datastore alias does not define server and database metadata or a host connection-string reference.", "Configure server/database, or ConnectionStringEnvironmentVariable, without putting credentials in config.json.", requestedAlias);
+                && (string.IsNullOrWhiteSpace(result.Server) || (requiresDatabase && string.IsNullOrWhiteSpace(result.Database))))
+                throw new RecordOperationException("DataStoreAliasInvalid", "The datastore alias does not define server metadata or a host connection-string reference.", "Configure server (and database when required by the DBMS), or ConnectionStringEnvironmentVariable, without putting credentials in config.json.", requestedAlias);
             return result;
         }
 
@@ -1162,22 +1167,28 @@ namespace GxMcp.Worker.Services
             return null;
         }
 
+        internal static bool ResolveProfileIntegratedSecurity(string family, ProfileDataStoreAlias alias)
+            => alias?.IntegratedSecurity ?? string.Equals(family, "sqlserver", StringComparison.OrdinalIgnoreCase);
+
         internal static void ValidateProfileAliasFamily(string family, ProfileDataStoreAlias alias)
         {
             if (alias == null) return;
             string configuredFamily = NormalizeFamily(alias.Family);
             if (!string.IsNullOrWhiteSpace(alias.Family) && configuredFamily != family)
-                throw new RecordOperationException("DataStoreAliasFamilyMismatch", "The profile alias family does not match the active GeneXus datastore.", "Configure the alias for the same SQL Server datastore family reported by GeneXus.", alias.Alias);
-            if (family != "sqlserver")
-                throw new RecordOperationException("DataStoreAliasProviderUnsupported", "Read-only profile aliases currently support SQL Server only.", "Use a SQL Server active datastore or omit dataStoreAlias.", alias.Alias);
+                throw new RecordOperationException("DataStoreAliasFamilyMismatch", "The profile alias family does not match the active GeneXus datastore.", "Configure the alias for the same datastore family reported by GeneXus.", alias.Alias);
+            if (family != "sqlserver" && family != "db2")
+                throw new RecordOperationException("DataStoreAliasProviderUnsupported", "Read-only profile aliases currently support SQL Server and DB2 only.", "Use a SQL Server or DB2 active datastore or omit dataStoreAlias.", alias.Alias);
         }
 
         internal static string BuildConnectionUnavailableHint(string family)
         {
-            if (string.Equals(NormalizeFamily(family), "sqlserver", StringComparison.OrdinalIgnoreCase))
+            string normalized = NormalizeFamily(family);
+            if (string.Equals(normalized, "sqlserver", StringComparison.OrdinalIgnoreCase))
                 return "Configure server and database in the active datastore, or select a SQL Server dataStoreAlias; credentials and connection strings are never returned by this tool.";
+            if (string.Equals(normalized, "db2", StringComparison.OrdinalIgnoreCase))
+                return "Configure server and library/schema in the active datastore, or select a DB2 dataStoreAlias; credentials and connection strings are never returned by this tool.";
             string recognized = string.IsNullOrWhiteSpace(family) ? "unrecognized" : family.Trim();
-            return "The recognized '" + recognized + "' datastore does not expose enough connection metadata for a safe native record operation; read-only profile aliases currently support SQL Server only. Credentials and connection strings are never returned by this tool.";
+            return "The recognized '" + recognized + "' datastore does not expose enough connection metadata for a safe native record operation; read-only profile aliases currently support SQL Server and DB2 only. Credentials and connection strings are never returned by this tool.";
         }
 
         private static string NormalizeFamily(string family)
@@ -1258,7 +1269,7 @@ namespace GxMcp.Worker.Services
             }
             throw new RecordOperationException("DataStoreProviderUnavailable",
                 "No IBM DB2 ADO.NET provider is registered in the worker process, so the DB2 datastore cannot be queried.",
-                "Install the IBM i Access Client Solutions .NET provider (IBM.Data.DB2.iSeries) or the IBM Data Server provider (IBM.Data.DB2) on the Worker host. The JT400 JDBC driver used by the GeneXus datastore cannot be loaded by the .NET Worker; no connection was attempted.");
+                "Install the IBM i Access Client Solutions .NET provider, register the IBM.Data.DB2.iSeries NuGet package in DbProviderFactories (App.config), or install the IBM Data Server provider (IBM.Data.DB2) on the Worker host. The JT400 JDBC driver used by the GeneXus datastore cannot be loaded by the .NET Worker; no connection was attempted.");
         }
 
         internal static bool IsIbmIFactory(DbProviderFactory factory)
