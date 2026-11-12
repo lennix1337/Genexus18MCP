@@ -185,7 +185,7 @@ namespace GxMcp.Worker.Services
                             ["failureTrace"] = ExceptionRoot.FailureTrace(ex),
                             ["persisted"] = false,
                             ["saved"] = false,
-                            ["partialPersistenceDetected"] = persistenceStarted,
+                            ["partialPersistenceDetected"] = PartialPersistenceAfterRollback(persistenceStarted, rollback),
                             ["patternReReadConfirmed"] = false,
                             ["webFormProjectionConfirmed"] = false,
                             ["webFormProjection"] = projection,

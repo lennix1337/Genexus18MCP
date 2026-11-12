@@ -227,7 +227,7 @@ namespace GxMcp.Worker.Services
                             ["exceptionType"] = ExceptionRoot.Unwrap(ex)?.GetType().Name,
                             ["failureTrace"] = ExceptionRoot.FailureTrace(ex),
                             ["persisted"] = false,
-                            ["partialPersistenceDetected"] = persistenceStarted,
+                            ["partialPersistenceDetected"] = PartialPersistenceAfterRollback(persistenceStarted, rollback),
                             ["patternReReadConfirmed"] = false,
                             ["webFormProjectionConfirmed"] = false,
                             ["snapshot"] = snapshots.ToJson(),

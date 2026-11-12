@@ -222,7 +222,7 @@ namespace GxMcp.Worker.Services
                             ["failureTrace"] = ExceptionRoot.FailureTrace(ex),
                             ["persisted"] = false,
                             ["saved"] = false,
-                            ["partialPersistenceDetected"] = persistenceStarted,
+                            ["partialPersistenceDetected"] = PartialPersistenceAfterRollback(persistenceStarted, rollback),
                             ["patternReReadConfirmed"] = false,
                             ["webFormProjectionConfirmed"] = false,
                             ["rollback"] = rollback,
@@ -396,6 +396,11 @@ namespace GxMcp.Worker.Services
                 ["beforeAvailable"] = before != null
             };
         }
+
+        // A failed write that started persisting is partial only while its state is not restored: an exact
+        // rollback leaves the object as it was, and reporting partial persistence next to persisted:false misleads.
+        internal static bool PartialPersistenceAfterRollback(bool persistenceStarted, JObject rollback) =>
+            persistenceStarted && rollback?["exact"]?.Value<bool>() != true;
 
         private static JObject FormActionError(string code, string message) =>
             new JObject { ["code"] = code, ["error"] = message };
