@@ -95,6 +95,28 @@ ALTER TABLE [Customer] DROP COLUMN [Legacy];", true);
         }
 
         [Fact]
+        public void AssessVerdict_LocalTableTimestampAfterUtcMigration_StaysDdlUnavailable()
+        {
+            var tableUtc = new DateTime(2026, 11, 9, 20, 0, 0, DateTimeKind.Utc);
+            var tableLocal = tableUtc.ToLocalTime();
+            var earlierMigrationUtc = tableUtc.AddHours(-2);
+
+            JObject evidence = ReorgSqlPreview.AssessVerdict("ReorganizationNeeded", false, tableLocal, earlierMigrationUtc);
+
+            Assert.Equal("ReorganizationNeededDdlUnavailable", (string)evidence["state"]);
+        }
+
+        [Fact]
+        public void EffectiveLastReorg_LocalSdkTimestampNewerThanUtcMigration_KeepsSdkTimestampInUtc()
+        {
+            var sdkUtc = new DateTime(2026, 11, 9, 20, 0, 0, DateTimeKind.Utc);
+            var sdkLocal = sdkUtc.ToLocalTime();
+            var earlierMigrationUtc = sdkUtc.AddHours(-2);
+
+            Assert.Equal(sdkUtc, ReorgSqlPreview.EffectiveLastReorg(sdkLocal, earlierMigrationUtc));
+        }
+
+        [Fact]
         public void FindLatestMigration_PicksNewestScriptUnderMigrationsFolder()
         {
             string kb = Path.Combine(Path.GetTempPath(), "gxmcp-928-" + Guid.NewGuid().ToString("N"));

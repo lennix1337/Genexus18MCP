@@ -54,15 +54,22 @@ namespace GxMcp.Worker.Services
             catch { return null; }
         }
 
+        private static DateTime ToUtc(DateTime value)
+        {
+            if (value == default) return default;
+            return value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+        }
+
         /// <summary>
         /// Latest known reorganization: the SDK timestamp or the IDE migration
         /// history, whichever is newer.
         /// </summary>
         public static DateTime EffectiveLastReorg(DateTime sdkLastReorgUtc, DateTime? newestMigrationUtc)
         {
-            return newestMigrationUtc.HasValue && newestMigrationUtc.Value > sdkLastReorgUtc
-                ? newestMigrationUtc.Value
-                : sdkLastReorgUtc;
+            DateTime sdkUtc = ToUtc(sdkLastReorgUtc);
+            if (!newestMigrationUtc.HasValue) return sdkUtc;
+            DateTime migrationUtc = ToUtc(newestMigrationUtc.Value);
+            return migrationUtc > sdkUtc ? migrationUtc : sdkUtc;
         }
 
         /// <summary>
@@ -94,17 +101,19 @@ namespace GxMcp.Worker.Services
             }
             evidence["state"] = ddlEffective ? "ReorganizationConfirmedByDdl" : "ReorganizationNeededDdlUnavailable";
             evidence["confirmed"] = ddlEffective;
+            DateTime lastTableUtc = ToUtc(lastModifiedTableUtc);
+            DateTime? migrationUtc = newestMigrationUtc.HasValue ? ToUtc(newestMigrationUtc.Value) : (DateTime?)null;
             bool migratedAfterLastTableChange = !ddlEffective
-                && newestMigrationUtc.HasValue
-                && lastModifiedTableUtc != default
-                && newestMigrationUtc.Value >= lastModifiedTableUtc;
+                && migrationUtc.HasValue
+                && lastTableUtc != default
+                && migrationUtc.Value >= lastTableUtc;
             if (migratedAfterLastTableChange)
             {
                 evidence["state"] = "InSyncByMigrationHistory";
                 evidence["migrationHistory"] = new JObject
                 {
-                    ["newestMigrationUtc"] = newestMigrationUtc.Value.ToUniversalTime().ToString("o"),
-                    ["lastModifiedTableUtc"] = lastModifiedTableUtc.ToUniversalTime().ToString("o")
+                    ["newestMigrationUtc"] = migrationUtc.Value.ToString("o"),
+                    ["lastModifiedTableUtc"] = lastTableUtc.ToString("o")
                 };
                 evidence["note"] = "The SDK reported ReorganizationNeeded, but Impact Analysis produced no DDL and the IDE executed a reorganization (migrations\\V*__migration.sql) after the last table change. The database is very likely in sync. reorgNeeded keeps the SDK verdict (fail-safe); confirm with an IDE build before reorganizing.";
             }
