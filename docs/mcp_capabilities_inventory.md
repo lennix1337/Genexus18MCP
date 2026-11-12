@@ -159,6 +159,13 @@ caller's window expires. The flag changes when the handle arrives, never what th
 read returns, so the actions stay read-only. It is refused on the KB-mutating
 `genexus_versioning` actions, which keep the mutation path and its recovery fences.
 
+`genexus_edit` also takes a `contentPath` in place of `content` for a full-part write
+(`mode=full` or no mode): the fully qualified absolute path of a UTF-8 file, up to 1 MiB
+(a larger part goes through `genexus_io import_part`), read as it is and routed exactly
+as an inline `content` would be. It cannot be combined with `content`, `patch`,
+`operation`, `context`, `ops`, `targets`, `parts` or `changeSet`, nor sit inside a batch
+item, and with an `idempotencyKey` the file's SHA-256 is part of the request.
+
 This follow-up preserves the multi-action contract delivered in #131, the placement
 semantics documented in #65, and the homonym-routing behavior tracked in #34.
 

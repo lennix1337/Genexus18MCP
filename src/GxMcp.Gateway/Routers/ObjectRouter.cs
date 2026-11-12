@@ -249,6 +249,10 @@ namespace GxMcp.Gateway.Routers
                     // never be silently dropped while the call is normalized to context/content.
                     RejectProtectedOptionsUnlessAbbreviatedPatch(args);
 
+                    // `contentPath` stands for `content` when the text is too large for a command line: resolved
+                    // before any routing decision so the preview, the version check and the write all see the text.
+                    EditContentSource.Resolve(args);
+
                     if (args?["changeSet"] is JObject)
                     {
                         return new {
@@ -485,7 +489,7 @@ namespace GxMcp.Gateway.Routers
                         if (fullContent == null || fullContent.Type == JTokenType.Null)
                             throw new UsageException(
                                 "ContentRequired",
-                                "A full-part write needs `content` (use content=\"\" to clear the part on purpose). "
+                                "A full-part write needs `content` or `contentPath` (use content=\"\" to clear the part on purpose). "
                                 + "To edit part of the text send mode=patch with patch={find,replace}. No write was attempted.");
 
                         // issue #60 — forward validationMode/rollbackOnFailure so the worker's

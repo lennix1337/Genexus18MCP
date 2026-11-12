@@ -67,6 +67,12 @@ namespace GxMcp.Gateway
             if (evidenceArgs["environmentId"] == null && !string.IsNullOrWhiteSpace(_environmentScope))
                 evidenceArgs["environmentId"] = _environmentScope;
 
+            // `contentPath` stands for the text of a file, and the router reads it only after this hash is taken: the same
+            // key and path over a rewritten file is a different request, so the file's fingerprint joins the hash (the
+            // same key with different text is an IdempotencyConflict, exactly as it is for an inline `content`).
+            string? fileFingerprint = Routers.EditContentSource.TryFingerprintOfPathArgument(evidenceArgs);
+            if (fileFingerprint != null) evidenceArgs["contentFileSha256"] = fileFingerprint;
+
             var hash = HashPayload(evidenceArgs);
             var evidence = MutationOperationEvidence.FromArguments(evidenceArgs);
 

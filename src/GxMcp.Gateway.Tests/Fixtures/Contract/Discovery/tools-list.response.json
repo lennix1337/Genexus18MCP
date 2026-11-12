@@ -1396,6 +1396,10 @@
           "content": {
             "type": "string"
           },
+          "contentPath": {
+            "description": "mode=full, instead of content: absolute…",
+            "type": "string"
+          },
           "context": {
             "description": "Exact existing text to find (Replace)…",
             "type": "string"
