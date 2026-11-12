@@ -178,6 +178,11 @@ namespace GxMcp.Worker.Tests
                                 ["DataStore"] = "Default",
                                 ["Family"] = "sqlserver",
                                 ["Server"] = "sql.example.local"
+                            },
+                            ["noFamilyMissingDb"] = new JObject
+                            {
+                                ["DataStore"] = "Default",
+                                ["Server"] = "sql.example.local"
                             }
                         }
                     }
@@ -193,6 +198,10 @@ namespace GxMcp.Worker.Tests
                 var ex = Assert.Throws<TransactionRecordsService.RecordOperationException>(
                     () => ResolveProfileAlias("sqlMissingDb", kbPath));
                 Assert.Equal("DataStoreAliasInvalid", ex.Code);
+
+                var noFamily = Assert.Throws<TransactionRecordsService.RecordOperationException>(
+                    () => ResolveProfileAlias("noFamilyMissingDb", kbPath));
+                Assert.Equal("DataStoreAliasInvalid", noFamily.Code);
             }
             finally
             {

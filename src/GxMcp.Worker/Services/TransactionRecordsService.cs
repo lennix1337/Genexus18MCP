@@ -1062,7 +1062,7 @@ namespace GxMcp.Worker.Services
             var result = ProfileDataStoreAlias.From(requestedAlias, matches[0]);
             if (string.IsNullOrWhiteSpace(result.DataStore)) result.DataStore = "Default";
             string aliasFamily = NormalizeFamily(result.Family);
-            bool requiresDatabase = !string.IsNullOrWhiteSpace(aliasFamily) && RequiresDatabaseName(aliasFamily);
+            bool requiresDatabase = string.IsNullOrWhiteSpace(aliasFamily) || RequiresDatabaseName(aliasFamily);
             if (string.IsNullOrWhiteSpace(result.ConnectionStringEnvironmentVariable)
                 && (string.IsNullOrWhiteSpace(result.Server) || (requiresDatabase && string.IsNullOrWhiteSpace(result.Database))))
                 throw new RecordOperationException("DataStoreAliasInvalid", "The datastore alias does not define server metadata or a host connection-string reference.", "Configure server (and database when required by the DBMS), or ConnectionStringEnvironmentVariable, without putting credentials in config.json.", requestedAlias);
