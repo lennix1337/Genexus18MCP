@@ -819,7 +819,15 @@ namespace GxMcp.Worker.Services
             };
         }
 
-        private static DateTime SafeDate(Func<DateTime> f) { try { return f(); } catch { return default; } }
+        private static DateTime SafeDate(Func<DateTime> f)
+        {
+            try
+            {
+                DateTime d = f();
+                return d == default ? default : (d.Kind == DateTimeKind.Utc ? d : d.ToUniversalTime());
+            }
+            catch { return default; }
+        }
         private static JToken Iso(DateTime d) => d == default ? (JToken)JValue.CreateNull() : d.ToUniversalTime().ToString("o");
         private static string SafeString(Func<string> f) { try { return f(); } catch { return null; } }
         private static bool SafeBool(Func<bool> f, bool fallback) { try { return f(); } catch { return fallback; } }
