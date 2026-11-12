@@ -1233,6 +1233,10 @@ namespace GxMcp.Worker.Services
             };
             try { j["sourceStore"] = SourceStoreBackfillService.Instance.GetStateJson(); } catch { }
 
+            // issue #957: a KB that never opened leaves the index Cold; name the reason so the
+            // gateway can answer KbOpenFailed instead of an IndexNotReady that can never clear.
+            j["kbOpenFailure"] = (JToken)_kbService.LastOpenFailure ?? JValue.CreateNull();
+
             // Keep the warm-start decision explainable without forcing callers to
             // inspect worker logs. Integrity hashes are intentionally skipped here;
             // lifecycle status is a hot path and the full hash validation remains

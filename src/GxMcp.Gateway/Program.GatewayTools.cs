@@ -522,6 +522,22 @@ namespace GxMcp.Gateway
 
                             handleToOpen = ApplyKbOpenOverrides(handleToOpen, args);
                             var w = await _workerPool.AcquireAsync(handleToOpen, CancellationToken.None);
+                            // The Worker opens the KB on its own while it starts. When that open has
+                            // already failed, say so now instead of answering "opened" (issue #957).
+                            // The command waits for a Worker that is still starting, so the probe is
+                            // cancelled at a ceiling: a slow Worker must not slow down the open, and a
+                            // probe that is no longer wanted must not stay behind waiting or send later.
+                            // A new open supersedes the failure of an earlier attempt for this alias.
+                            MutateLastKnownIndexState(handleToOpen.NormalizedAlias, snapshot => snapshot.KbOpenFailure = null);
+                            using (var probeCts = new CancellationTokenSource(KbOpenFailureProbeCeilingMs))
+                            {
+                                if (await TryRefreshIndexStateFromWorkerAsync(1500, handleToOpen.NormalizedAlias, probeCts.Token))
+                                {
+                                    JObject? openFailed = BuildKbOpenFailedEnvelope(GetLastKnownIndexState(handleToOpen.NormalizedAlias));
+                                    if (openFailed != null)
+                                        return BuildToolTextResponse(idToken, openFailed, true, "genexus_kb", args, payloadOwned: true);
+                                }
+                            }
                             TriggerIndexBootstrapOnce(handleToOpen.NormalizedAlias);
                             // Opening a worker must not mutate the persisted default or
                             // another MCP session's selection. Use set_default to select

@@ -1047,9 +1047,21 @@ namespace GxMcp.Gateway
                 int effectiveTimeoutMs = pendingTimeoutMs;
                 if (noClientProgressToken && !string.IsNullOrWhiteSpace(operationId) && !lifecycleStatusWait)
                     effectiveTimeoutMs = ResolveNoProgressTimeoutMs(pendingTimeoutMs);
-                bool workerCompleted = await McpRouter.AwaitWithHeartbeat(
-                    pending.CompletionSource.Task, effectiveTimeoutMs, progressToken, heartbeat, toolName,
-                    cancellationToken: cancellationToken);
+                bool workerCompleted;
+                try
+                {
+                    workerCompleted = await McpRouter.AwaitWithHeartbeat(
+                        pending.CompletionSource.Task, effectiveTimeoutMs, progressToken, heartbeat, toolName,
+                        cancellationToken: cancellationToken);
+                }
+                catch (OperationCanceledException) when (!trackOperation)
+                {
+                    // The caller stopped waiting (client cancel, a probe ceiling). Nobody will read
+                    // this answer, so do not leave its pending entry behind. A tracked operation
+                    // keeps its entry: the Worker's completion still finishes the operation record.
+                    _pendingRequests.TryRemove(attemptRequestId, out _);
+                    throw;
+                }
                 if (workerCompleted)
                 {
                     var workerResponse = pending.ParsedResponse

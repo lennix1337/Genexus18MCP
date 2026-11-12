@@ -383,7 +383,55 @@ namespace GxMcp.Worker.Services
             catch { return false; }
         }
 
+        /// <summary>The last KB open failure (code, message, path, atUtc), or null when none is recorded.</summary>
+        public JObject LastOpenFailure
+        {
+            get { return (JObject)_lastOpenFailure?.DeepClone(); }
+        }
+
+        // Replaced whole and never mutated, so it needs no lock. The startup and background auto-open discard the open
+        // envelope, so this record is the only place a later request can learn why no KB is open.
+        private volatile JObject _lastOpenFailure;
+
+        internal void RecordOpenFailure(string path, string code, string message)
+        {
+            var failure = new JObject
+            {
+                ["code"] = code ?? "KbOpenFailed",
+                ["message"] = message ?? string.Empty,
+                ["path"] = path,
+                ["atUtc"] = DateTime.UtcNow.ToString("o")
+            };
+            _lastOpenFailure = failure;
+        }
+
+        // Keeps the failure of the last real open attempt: a success clears it, a refusal
+        // because another open is running says nothing about the KB and leaves it alone.
+        internal void RecordOpenOutcome(string path, string openEnvelope)
+        {
+            JObject env;
+            try { env = JObject.Parse(openEnvelope); }
+            catch { return; }
+
+            if (string.Equals(env["status"]?.ToString(), "ok", StringComparison.Ordinal))
+            {
+                _lastOpenFailure = null;
+                return;
+            }
+
+            string code = env["error"]?["code"]?.ToString() ?? env["code"]?.ToString();
+            if (string.Equals(code, "OpenInProgress", StringComparison.Ordinal)) return;
+            RecordOpenFailure(path, code, env["error"]?["message"]?.ToString() ?? env["message"]?.ToString());
+        }
+
         public string OpenKB(string path)
+        {
+            string envelope = OpenKBCore(path);
+            RecordOpenOutcome(path, envelope);
+            return envelope;
+        }
+
+        private string OpenKBCore(string path)
         {
             var destinationError = WriteDestinationGuard.CheckOpen(path);
             if (destinationError != null) return destinationError;

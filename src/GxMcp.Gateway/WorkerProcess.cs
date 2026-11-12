@@ -144,6 +144,9 @@ namespace GxMcp.Gateway
         private int _inFlightCommands;
         private int _queuedCommands;
         private ManualResetEventSlim? _commandWriterGateForTest;
+        // Test seam: answers each queued command in place of a real Worker process. Returns the
+        // JSON-RPC response to deliver, or null for a Worker that stays silent.
+        internal Func<JObject, JObject?>? FakeWorkerForTest { get; set; }
         private readonly TimeSpan _wedgedCommandTimeout;
         // A worker with an old in-flight command is only "wedged" if it has ALSO gone silent
         // (no stdout/stderr) this long. Below it, an old-but-chatty command is treated as
@@ -681,6 +684,16 @@ namespace GxMcp.Gateway
                             // orphaned worker) and bypassed the respawn-suppression path in Program.cs.
                             // If the process is not running, fail this command with a typed error
                             // so the gateway returns a clean JSON-RPC error instead of silently dropping it.
+                            var fakeWorker = FakeWorkerForTest;
+                            if (fakeWorker != null && cmd.Rpc != null)
+                            {
+                                MarkDeliveryStarted(cmd.Id ?? string.Empty);
+                                JObject? fakeResponse = fakeWorker(cmd.Rpc);
+                                if (fakeResponse != null)
+                                    RaiseRpcResponse(fakeResponse.ToString(Formatting.None), fakeResponse);
+                                continue;
+                            }
+
                             if (!IsTransportRunning())
                             {
                                 string failId = cmd.Id ?? (cmd.Rpc?["id"]?.ToString()) ?? "unknown";

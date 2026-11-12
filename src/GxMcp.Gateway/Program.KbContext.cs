@@ -113,6 +113,22 @@ namespace GxMcp.Gateway
             return _sessionKbContexts.TryGetSnapshot(sessionId, out snapshot);
         }
 
+        // Test seam: routes Worker responses to the pending requests, as StartWorker does for the
+        // real pool, so a fake Worker's answers complete the Gateway's calls.
+        internal static IDisposable AttachWorkerResponseRoutingForTest()
+        {
+            WorkerPool pool = _workerPool ?? throw new InvalidOperationException("WorkerPool not initialised.");
+            pool.OnRpcResponseWithContext += HandleWorkerResponse;
+            return new DelegateDisposable(() => pool.OnRpcResponseWithContext -= HandleWorkerResponse);
+        }
+
+        private sealed class DelegateDisposable : IDisposable
+        {
+            private Action? _dispose;
+            internal DelegateDisposable(Action dispose) { _dispose = dispose; }
+            public void Dispose() { System.Threading.Interlocked.Exchange(ref _dispose, null)?.Invoke(); }
+        }
+
         internal static IDisposable ConfigureRouteStateForTest(
             Configuration config,
             string configPath,

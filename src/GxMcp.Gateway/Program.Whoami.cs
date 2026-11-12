@@ -134,6 +134,9 @@ namespace GxMcp.Gateway
             // treat a provisional snapshot as UNKNOWN, never as evidence about the KB.
             // IsIndexUsableForReads still fails closed on it — this only governs advice.
             public bool Provisional;
+            // Why the Worker has no open KB (code, message, path, atUtc), as the Worker last
+            // recorded it; null once a later open succeeds.
+            public JObject? KbOpenFailure;
         }
         private static IndexStateSnapshot _lastKnownIndexState = new IndexStateSnapshot();
         private static readonly object _lastKnownIndexStateLock = new object();
@@ -642,6 +645,9 @@ namespace GxMcp.Gateway
                 ["sourceStore"] = snap.SourceStore != null
                     ? (JToken)snap.SourceStore.DeepClone()
                     : JValue.CreateNull(),
+                ["kbOpenFailure"] = snap.KbOpenFailure != null
+                    ? (JToken)snap.KbOpenFailure.DeepClone()
+                    : JValue.CreateNull(),
                 // v2.6.8: top-5 recently-changed objects — set only when the worker
                 // had populated lifecycle data to surface. Omitted otherwise so the
                 // whoami payload stays tight for cold/legacy KBs.
@@ -897,6 +903,9 @@ namespace GxMcp.Gateway
             UpdateLastKnownIndexDiagnostics(kbAlias, resumedFrom, checkpointActive,
                 checkpointCapturedAtUtc, cacheValidation);
             UpdateLastKnownSourceStore(kbAlias, state["sourceStore"] as JObject);
+            JObject? kbOpenFailure = state["kbOpenFailure"] as JObject;
+            MutateLastKnownIndexState(kbAlias, snapshot =>
+                snapshot.KbOpenFailure = (JObject?)kbOpenFailure?.DeepClone());
             return true;
         }
 

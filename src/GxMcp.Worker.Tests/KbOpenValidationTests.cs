@@ -48,5 +48,47 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("error", env["status"]?.ToString());
             Assert.Equal("KbInvalidPath", env["error"]?["code"]?.ToString() ?? env["code"]?.ToString());
         }
+
+        // issue #957: the open envelope used to be dropped by the startup/background
+        // auto-open, so a failed open left no trace a later request could read.
+        [Fact]
+        public void OpenKB_Failure_IsRecordedForLaterRequests()
+        {
+            var kb = NewKb();
+            string missing = Path.Combine(Path.GetTempPath(), "gxmcp-missing-" + Guid.NewGuid().ToString("N"));
+            Assert.Null(kb.LastOpenFailure);
+
+            string raw = kb.OpenKB(missing);
+
+            JObject failure = kb.LastOpenFailure;
+            Assert.NotNull(failure);
+            Assert.Equal("KbInvalidPath", failure["code"]?.ToString());
+            Assert.Equal(JObject.Parse(raw)["error"]?["message"]?.ToString(), failure["message"]?.ToString());
+            Assert.Equal(missing, failure["path"]?.ToString());
+            Assert.True(DateTime.TryParse(failure["atUtc"]?.ToString(), out _));
+        }
+
+        [Fact]
+        public void RecordOpenFailure_IsClearedByASuccessfulOpen()
+        {
+            var kb = NewKb();
+            kb.RecordOpenFailure("C:\\KBs\\x", "KbOpenFailed", "InvalidDirectory");
+            Assert.Equal("InvalidDirectory", kb.LastOpenFailure?["message"]?.ToString());
+
+            kb.RecordOpenOutcome("C:\\KBs\\x", Models.McpResponse.Ok(target: "C:\\KBs\\x", code: "KbOpened"));
+
+            Assert.Null(kb.LastOpenFailure);
+        }
+
+        [Fact]
+        public void OpenInProgress_DoesNotReplaceTheRecordedFailure()
+        {
+            var kb = NewKb();
+            kb.RecordOpenFailure("C:\\KBs\\x", "KbOpenFailed", "InvalidDirectory");
+
+            kb.RecordOpenOutcome("C:\\KBs\\x", Models.McpResponse.Err("OpenInProgress", "busy"));
+
+            Assert.Equal("KbOpenFailed", kb.LastOpenFailure?["code"]?.ToString());
+        }
     }
 }
