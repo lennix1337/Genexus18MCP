@@ -65,13 +65,15 @@ namespace GxMcp.Worker.Services
 
             DateTime lastTbl = SafeDate(() => info.GetLastModifiedTableTimestamp(model));
             DateTime lastReorg = SafeDate(() => info.GetLastReorgTimestamp(model));
-            bool likely = lastTbl != default && lastTbl > lastReorg;
+            DateTime? newestMigration = ReorgSqlPreview.FindLatestMigration(_kb.GetKbPath())?.LastWriteTimeUtc;
+            bool likely = lastTbl != default && lastTbl > ReorgSqlPreview.EffectiveLastReorg(lastReorg, newestMigration);
 
             bool preview = string.Equals(args?["action"]?.ToString(), "reorg_preview", StringComparison.OrdinalIgnoreCase);
             var result = new JObject
             {
                 ["lastModifiedTable"] = Iso(lastTbl),
                 ["lastReorg"] = Iso(lastReorg),
+                ["lastMigrationScript"] = newestMigration.HasValue ? Iso(newestMigration.Value) : null,
                 ["reorgLikelyNeeded"] = likely,
                 ["source"] = "sdk:IModelInformationService",
                 ["hint"] = preview
@@ -83,7 +85,7 @@ namespace GxMcp.Worker.Services
             DateTime impactStartedUtc = DateTime.UtcNow;
             ApplyDeepAnalysis(model, result, deep);
             if (preview)
-                AttachSqlPreview(result, deep, likely, impactStartedUtc, "preview");
+                AttachSqlPreview(result, deep, likely, impactStartedUtc, "preview", lastTbl, newestMigration);
 
             return McpResponse.Ok(code: preview ? "ReorgPreviewRetrieved" : "ReorgImpactRetrieved", result: result);
         }
@@ -202,11 +204,13 @@ namespace GxMcp.Worker.Services
                 () => new Artech.Packages.Genexus.BL.Services.ModelInformationService());
             bool? requiresReorg = null;
             string source = "sdk:IModelInformationService";
+            DateTime lastTbl = default;
+            DateTime? newestMigration = ReorgSqlPreview.FindLatestMigration(_kb.GetKbPath())?.LastWriteTimeUtc;
             if (info != null)
             {
-                DateTime lastTbl = SafeDate(() => info.GetLastModifiedTableTimestamp(model));
+                lastTbl = SafeDate(() => info.GetLastModifiedTableTimestamp(model));
                 DateTime lastReorg = SafeDate(() => info.GetLastReorgTimestamp(model));
-                requiresReorg = lastTbl != default && lastTbl > lastReorg;
+                requiresReorg = lastTbl != default && lastTbl > ReorgSqlPreview.EffectiveLastReorg(lastReorg, newestMigration);
             }
 
             bool deep = args?["deep"]?.ToObject<bool?>() ?? false;
@@ -263,7 +267,7 @@ namespace GxMcp.Worker.Services
             };
             if (deepBlock.Count > 0) result["deep"] = deepBlock;
             if (topWarnings.Count > 0) result["warnings"] = topWarnings;
-            AttachSqlPreview(result, deep, requiresReorg ?? false, impactStartedUtc, "sqlPreview");
+            AttachSqlPreview(result, deep, requiresReorg ?? false, impactStartedUtc, "sqlPreview", lastTbl, newestMigration);
             result["nonMutating"] = true;
             result["logicalPhysicalDivergence"] = requiresReorg ?? false;
 
@@ -759,7 +763,7 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private void AttachSqlPreview(JObject result, bool deep, bool likely, DateTime impactStartedUtc, string propertyName)
+        private void AttachSqlPreview(JObject result, bool deep, bool likely, DateTime impactStartedUtc, string propertyName, DateTime lastModifiedTableUtc, DateTime? newestMigrationUtc)
         {
             JObject plan;
             try
@@ -792,7 +796,7 @@ namespace GxMcp.Worker.Services
 
             result[propertyName] = plan;
             string deepVerdict = result["deepAnalysis"]?.ToString() ?? result["deep"]?["deepAnalysis"]?.ToString();
-            JObject verdictEvidence = deep ? ReorgSqlPreview.AssessVerdict(deepVerdict, plan["ddlEffective"]?.ToObject<bool?>() ?? false) : null;
+            JObject verdictEvidence = deep ? ReorgSqlPreview.AssessVerdict(deepVerdict, plan["ddlEffective"]?.ToObject<bool?>() ?? false, lastModifiedTableUtc, newestMigrationUtc) : null;
             if (verdictEvidence != null) result["verdictEvidence"] = verdictEvidence;
             if (string.Equals(propertyName, "preview", StringComparison.OrdinalIgnoreCase))
             {

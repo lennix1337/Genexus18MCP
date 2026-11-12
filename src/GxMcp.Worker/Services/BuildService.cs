@@ -620,7 +620,7 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private const string ReorgRefusalHint = "FailIfReorg=true prevented a silent schema change. Run genexus_lifecycle action=reorg_preview deep=true and inspect verdictEvidence and the DDL. ReorganizationNeededDdlUnavailable means the SDK reported reorganization but this preview has no effective DDL; it does not prove that no reorganization is needed. Investigate the selected environment and IDE impact output; only run action=reorg after explicit approval for the selected environment database.";
+        private const string ReorgRefusalHint = "FailIfReorg=true prevented a silent schema change. Run genexus_lifecycle action=reorg_preview deep=true and inspect verdictEvidence and the DDL. ReorganizationNeededDdlUnavailable means the SDK reported reorganization but this preview has no effective DDL; it does not prove that no reorganization is needed. InSyncByMigrationHistory means the IDE ran a reorganization after the last table change and no DDL was produced; the database is very likely in sync, confirm with an IDE build. Investigate the selected environment and IDE impact output; only run action=reorg after explicit approval for the selected environment database.";
 
         private static readonly HashSet<string> NoImplicitReorgActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
