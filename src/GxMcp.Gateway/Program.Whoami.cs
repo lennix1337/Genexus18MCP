@@ -1279,16 +1279,18 @@ namespace GxMcp.Gateway
                     var activeWorker = pool.TryGet(alias!);
                     if (activeWorker != null && !activeWorker.IsSdkReady)
                     {
-                        return new JObject
-                        {
-                            ["status"] = "starting",
-                            ["alias"] = alias,
-                            ["hint"] = "Worker process is alive but has not completed SDK readiness. Retry in a few seconds."
-                        };
+                        return BuildStartingHealth(alias!, activeWorker.SpawnedAtUtc, activeWorker.State.ToString(),
+                            activeWorker.LastFailureDiagnostic ?? activeWorker.StartupDiagnostic, DateTime.UtcNow);
                     }
 
-                    var sdk = WorkerSdkCompatibilityProbe.Check(_activeConfig?.GeneXus?.InstallationPath);
-                    if (sdk.IsRejected)
+                    // The SDK check belongs to the KB's own installation; a legacy driver
+                    // (com-gxpublic, dotnet-reflection) loads no .NET SDK at all (#965).
+                    KbHandle? aliasHandle = known.FirstOrDefault(h =>
+                        string.Equals(h.NormalizedAlias, alias, StringComparison.OrdinalIgnoreCase));
+                    var sdk = IsLegacyKbDriver(aliasHandle?.Driver)
+                        ? null
+                        : WorkerSdkCompatibilityProbe.Check(aliasHandle?.InstallationPath ?? _activeConfig?.GeneXus?.InstallationPath);
+                    if (sdk != null && sdk.IsRejected)
                     {
                         return new JObject
                         {
@@ -1385,6 +1387,144 @@ namespace GxMcp.Gateway
             }
         }
 
+        // A worker that never reaches SDK readiness is reported as stalled after this long,
+        // so an agent stops waiting and recovers it (#965: minutes in 'starting').
+        internal const int WorkerStartupStallSeconds = 120;
+
+        internal static bool IsLegacyKbDriver(string? driver)
+            => string.Equals(driver, "com-gxpublic", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(driver, "dotnet-reflection", StringComparison.OrdinalIgnoreCase);
+
+        internal static JObject BuildStartingHealth(
+            string alias, DateTime? spawnedAtUtc, string lifecycleState, string? diagnostic, DateTime nowUtc)
+        {
+            int? elapsed = spawnedAtUtc.HasValue
+                ? (int)Math.Max(0, (nowUtc - spawnedAtUtc.Value).TotalSeconds)
+                : (int?)null;
+            bool stalled = elapsed >= WorkerStartupStallSeconds;
+            string cause = string.IsNullOrWhiteSpace(diagnostic)
+                ? "the Worker reported no startup diagnostic"
+                : diagnostic!.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0];
+            var health = new JObject
+            {
+                ["status"] = "starting",
+                ["alias"] = alias,
+                ["lifecycleState"] = lifecycleState,
+                ["spawnedAtUtc"] = spawnedAtUtc?.ToString("o"),
+                ["elapsedSeconds"] = elapsed,
+                ["stalled"] = stalled
+            };
+            if (!string.IsNullOrWhiteSpace(diagnostic)) health["error"] = diagnostic;
+            health["hint"] = stalled
+                ? $"The Worker process has been alive for {elapsed}s without SDK readiness (state {lifecycleState}); last cause: {cause}. "
+                    + $"It will not become ready by waiting: run genexus_worker_reload mode=soft force=true kb={alias}, then genexus_doctor kb={alias}. "
+                    + "If it stalls again, attach result.issueReport to the issue."
+                : "Worker process is alive but has not completed SDK readiness. Retry in a few seconds.";
+            return health;
+        }
+
+        // The doctor's geneXus block describes the installation of the KB it targets. When the
+        // target KB declares its own installation (a GX9 KB next to a GX18 gateway), the
+        // gateway's default installation moves to gatewayDefault instead of being reported as
+        // the target's (#965).
+        internal static JObject BuildDoctorGeneXusBlock(JObject? gatewayBlock, KbHandle? target)
+        {
+            var gateway = gatewayBlock != null ? (JObject)gatewayBlock.DeepClone() : new JObject();
+            string? gatewayPath = gateway["installationPath"]?.Type == JTokenType.String
+                ? gateway["installationPath"]!.ToString()
+                : null;
+            if (target == null || string.IsNullOrWhiteSpace(target.InstallationPath)
+                || SamePath(target.InstallationPath, gatewayPath))
+            {
+                gateway["source"] = "gateway";
+                if (target?.Driver != null) gateway["driver"] = target.Driver;
+                return gateway;
+            }
+
+            string path = target.InstallationPath!;
+            string? version = DetectGeneXusVersion(path);
+            JObject sdk = IsLegacyKbDriver(target.Driver)
+                ? new JObject
+                {
+                    ["status"] = "not_applicable",
+                    ["diagnostic"] = $"Driver {target.Driver} reads the KB without the GeneXus .NET SDK."
+                }
+                : WorkerSdkCompatibilityProbe.Check(path).ToDiagnosticObject();
+            return new JObject
+            {
+                ["source"] = "kb",
+                ["installationPath"] = path,
+                ["version"] = version,
+                ["major"] = target.Major ?? GeneXusVersionCatalog.GetMatchingMajor(version),
+                ["driver"] = target.Driver,
+                ["versionMatches"] = sdk["status"]?.ToString() is "compatible" or "not_applicable",
+                ["sdkCompatibility"] = sdk,
+                ["gatewayDefault"] = new JObject
+                {
+                    ["installationPath"] = gateway["installationPath"],
+                    ["version"] = gateway["version"],
+                    ["sdkCompatibility"] = gateway["sdkCompatibility"]?["status"]
+                },
+                ["catalog"] = gateway["catalog"]
+            };
+        }
+
+        private static bool SamePath(string? a, string? b)
+        {
+            if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return false;
+            return string.Equals(
+                a!.Trim().TrimEnd('\\', '/'), b!.Trim().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex DoctorPathPattern =
+            new System.Text.RegularExpressions.Regex(@"(?:[A-Za-z]:\\|\\\\)[^\s""'<>|]*",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // Drive and UNC paths name users, clients and KBs: an issue gets <path> instead.
+        internal static string RedactForIssue(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+            return DoctorPathPattern.Replace(LogRedaction.Redact(text!), "<path>");
+        }
+
+        // A PII-free summary a user can paste into a GitHub issue: versions, driver, worker
+        // state and causes, never paths, aliases, KB names or credentials.
+        internal static JObject BuildDoctorIssueReport(JObject doctorResult, KbHandle? target, string? gatewayInstallationPath)
+        {
+            var geneXus = doctorResult["geneXus"] as JObject ?? new JObject();
+            var health = doctorResult["workerHealth"] as JObject ?? new JObject();
+            var warnings = new JArray();
+            foreach (var w in (doctorResult["warnings"] as JArray) ?? new JArray())
+                warnings.Add(RedactForIssue(w?.ToString()));
+            return new JObject
+            {
+                ["mcpVersion"] = McpRouter.ServerVersion,
+                ["os"] = Environment.OSVersion.VersionString,
+                ["is64BitProcess"] = Environment.Is64BitProcess,
+                ["target"] = new JObject
+                {
+                    ["geneXusVersion"] = geneXus["version"],
+                    ["major"] = geneXus["major"] ?? geneXus["matchedMajor"],
+                    ["driver"] = target?.Driver ?? geneXus["driver"],
+                    ["installationSource"] = geneXus["source"],
+                    ["sameInstallationAsGateway"] = target?.InstallationPath == null
+                        || SamePath(target.InstallationPath, gatewayInstallationPath),
+                    ["sdkCompatibility"] = geneXus["sdkCompatibility"]?["status"]
+                },
+                ["gatewayGeneXusVersion"] = geneXus["gatewayDefault"]?["version"] ?? geneXus["version"],
+                ["worker"] = new JObject
+                {
+                    ["status"] = health["status"],
+                    ["code"] = health["code"],
+                    ["lifecycleState"] = health["lifecycleState"],
+                    ["elapsedSeconds"] = health["elapsedSeconds"],
+                    ["stalled"] = health["stalled"],
+                    ["error"] = RedactForIssue(health["error"]?.ToString())
+                },
+                ["warnings"] = warnings
+            };
+        }
+
         private static JObject BuildStartupFailureHealth(string alias, WorkerStartupFailure failure)
         {
             bool sdkFailure = SdkDiagnosticClassifier.IsFatalCode(failure.Code);
@@ -1406,10 +1546,13 @@ namespace GxMcp.Gateway
         internal static JObject BuildGatewayDoctorEnvelope(
             string? sessionId = null, JObject? wwpTemplates = null, JObject? sharedHost = null)
         {
-            var whoami = BuildWhoamiPayload(false, sessionId);
-            var geneXus = whoami["geneXus"] is JObject gx
-                ? (JObject)gx.DeepClone()
-                : new JObject();
+            // The KB this call targets (kb=<alias>, else the session/default KB). Every block
+            // below describes it; gateway-wide defaults stay visible only under
+            // geneXus.gatewayDefault (#965: a GX9 alias was reported with GX18 and another KB).
+            KbHandle? target = _currentKb.Value;
+            bool explicitTarget = _currentExplicitKb.Value && target != null;
+            var whoami = BuildWhoamiPayload(false, sessionId, explicitTarget ? target!.Alias : null);
+            var geneXus = BuildDoctorGeneXusBlock(whoami["geneXus"] as JObject, target);
             var kb = whoami["kb"] is JObject kbObject
                 ? (JObject)kbObject.DeepClone()
                 : new JObject();
@@ -1420,6 +1563,7 @@ namespace GxMcp.Gateway
             var warnings = new JArray();
 
             string sdkStatus = geneXus["sdkCompatibility"]?["status"]?.ToString() ?? "unavailable";
+            if (sdkStatus == "not_applicable") sdkStatus = "compatible";
             if (sdkStatus == "incompatible")
                 warnings.Add("CRITICAL: " + (geneXus["sdkCompatibility"]?["diagnostic"]?.ToString() ?? "GeneXus SDK major is incompatible."));
             else if (sdkStatus == "unavailable")
@@ -1479,6 +1623,14 @@ namespace GxMcp.Gateway
                     ["current"] = McpRouter.ServerVersion,
                     ["source"] = "gateway"
                 },
+                ["target"] = new JObject
+                {
+                    ["alias"] = health["alias"] ?? kb["active"],
+                    ["source"] = explicitTarget ? "kb argument" : kb["selectionSource"],
+                    ["workerStatus"] = workerStatus,
+                    ["usable"] = workerStatus == "running",
+                    ["nextAction"] = workerStatus == "running" ? JValue.CreateNull() : health["hint"]
+                },
                 ["geneXus"] = geneXus,
                 ["kb"] = kb,
                 ["worker"] = worker,
@@ -1497,6 +1649,7 @@ namespace GxMcp.Gateway
                 ["hint"] = warnings.Count > 0 ? warnings[0] : JValue.CreateNull()
             };
             if (sharedHost != null) result["sharedHost"] = sharedHost;
+            result["issueReport"] = BuildDoctorIssueReport(result, target, _activeConfig?.GeneXus?.InstallationPath);
 
             return new JObject
             {
@@ -1579,7 +1732,9 @@ namespace GxMcp.Gateway
         internal static JObject BuildWhoamiPayload(bool verbose)
             => BuildWhoamiPayload(verbose, null);
 
-        internal static JObject BuildWhoamiPayload(bool verbose, string? sessionId)
+        // kbArg: the alias a caller named explicitly (genexus_doctor kb=<alias>), so the kb
+        // block describes that KB and not the session default (#965).
+        internal static JObject BuildWhoamiPayload(bool verbose, string? sessionId, string? kbArg = null)
         {
             var cfg = _activeConfig;
             string? gxPath = cfg?.GeneXus?.InstallationPath;
@@ -1628,11 +1783,11 @@ namespace GxMcp.Gateway
                 // the next call does, which is the only reason it exists.
                 //
                 // `contextRequired` is the resolver's verdict, tightened by the lease: a
-                // resolved *session* selection (kbArg is always null here, so a resolved
+                // resolved *session* selection (without kbArg, a resolved
                 // selection is a session selection) still needs an active lease to be
                 // usable without a per-call `kb`.
                 var selection = new KbResolver(cfg ?? EmptyKbSelectionConfig).Describe(
-                    kbArg: null,
+                    kbArg: kbArg,
                     openKbs: openKbs,
                     knownKbs: knownKbs,
                     sessionDefaultAlias: sessionSelected);
@@ -1642,6 +1797,7 @@ namespace GxMcp.Gateway
                 selectionErrorCode = selection.ErrorCode;
                 contextRequired = selection.ContextRequired
                     || (selection.IsResolved && !leaseActive
+                        && string.IsNullOrWhiteSpace(kbArg)
                         && !string.IsNullOrWhiteSpace(sessionSelected));
 
                 if (selection.Handle != null)
