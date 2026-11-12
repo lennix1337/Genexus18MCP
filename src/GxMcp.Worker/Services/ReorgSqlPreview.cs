@@ -35,6 +35,37 @@ namespace GxMcp.Worker.Services
         }
 
         /// <summary>
+        /// Newest reorganization the IDE executed, from its Flyway-style history
+        /// (&lt;KB&gt;\&lt;Environment&gt;\migrations\default\V&lt;stamp&gt;__migration.sql). The SDK's
+        /// GetLastReorgTimestamp can stay years behind it (issue #928).
+        /// </summary>
+        public static FileInfo FindLatestMigration(string kbPath)
+        {
+            if (string.IsNullOrWhiteSpace(kbPath) || !Directory.Exists(kbPath)) return null;
+            try
+            {
+                return Directory.EnumerateFiles(kbPath, "V*__migration.sql", SearchOption.AllDirectories)
+                    .Take(10000)
+                    .Where(p => p.IndexOf(Path.DirectorySeparatorChar + "migrations" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .Select(p => new FileInfo(p))
+                    .OrderByDescending(f => f.LastWriteTimeUtc)
+                    .FirstOrDefault();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// Latest known reorganization: the SDK timestamp or the IDE migration
+        /// history, whichever is newer.
+        /// </summary>
+        public static DateTime EffectiveLastReorg(DateTime sdkLastReorgUtc, DateTime? newestMigrationUtc)
+        {
+            return newestMigrationUtc.HasValue && newestMigrationUtc.Value > sdkLastReorgUtc
+                ? newestMigrationUtc.Value
+                : sdkLastReorgUtc;
+        }
+
+        /// <summary>
         /// Qualifies the SDK Impact Analysis verdict with what this run could prove.
         /// The verdict itself is never downgraded (a false negative would let a build
         /// run against a database that needs a reorg); a "needed" verdict without any
@@ -42,6 +73,11 @@ namespace GxMcp.Worker.Services
         /// from a confirmed reorganization (issue #928).
         /// </summary>
         public static JObject AssessVerdict(string deepAnalysis, bool ddlEffective)
+            => AssessVerdict(deepAnalysis, ddlEffective, default, null);
+
+        /// <param name="lastModifiedTableUtc">SDK GetLastModifiedTableTimestamp.</param>
+        /// <param name="newestMigrationUtc">Newest IDE migration script, if any.</param>
+        public static JObject AssessVerdict(string deepAnalysis, bool ddlEffective, DateTime lastModifiedTableUtc, DateTime? newestMigrationUtc)
         {
             if (string.IsNullOrWhiteSpace(deepAnalysis)) return null;
             bool needed = string.Equals(deepAnalysis, "ReorganizationNeeded", StringComparison.OrdinalIgnoreCase);
@@ -58,7 +94,21 @@ namespace GxMcp.Worker.Services
             }
             evidence["state"] = ddlEffective ? "ReorganizationConfirmedByDdl" : "ReorganizationNeededDdlUnavailable";
             evidence["confirmed"] = ddlEffective;
-            if (!ddlEffective)
+            bool migratedAfterLastTableChange = !ddlEffective
+                && newestMigrationUtc.HasValue
+                && lastModifiedTableUtc != default
+                && newestMigrationUtc.Value >= lastModifiedTableUtc;
+            if (migratedAfterLastTableChange)
+            {
+                evidence["state"] = "InSyncByMigrationHistory";
+                evidence["migrationHistory"] = new JObject
+                {
+                    ["newestMigrationUtc"] = newestMigrationUtc.Value.ToUniversalTime().ToString("o"),
+                    ["lastModifiedTableUtc"] = lastModifiedTableUtc.ToUniversalTime().ToString("o")
+                };
+                evidence["note"] = "The SDK reported ReorganizationNeeded, but Impact Analysis produced no DDL and the IDE executed a reorganization (migrations\\V*__migration.sql) after the last table change. The database is very likely in sync. reorgNeeded keeps the SDK verdict (fail-safe); confirm with an IDE build before reorganizing.";
+            }
+            else if (!ddlEffective)
                 evidence["note"] = "The SDK reported ReorganizationNeeded but Impact Analysis produced no DDL in this run, so the verdict is not corroborated. It is kept as needed (fail-safe). The timestamp heuristic (lastModifiedTable > lastReorg) is not evidence: IDE builds that need no reorg do not update lastReorg. Compare with the IDE's Impact Analysis before treating it as a false positive.";
             return evidence;
         }
