@@ -54,6 +54,24 @@ namespace GxMcp.Worker.Tests
             Assert.False(PatternSemanticAttributeWriter.ResetSemanticAttribute(element, " ", string.Empty));
         }
 
+        [Fact]
+        public void ApplySemanticAttribute_ConvertsTypedPropertyViaStringStorageWhenAvailable()
+        {
+            var element = new FakeElement("textBlock", "Lbl");
+
+            Assert.True(PatternSemanticAttributeWriter.ApplySemanticAttribute(element, "themeClass", "TextBlockTitle"));
+
+            FakeDropDownOption stored = Assert.IsType<FakeDropDownOption>(element.Attributes.GetPropertyValue("themeClass"));
+            Assert.Equal("TextBlockTitle", stored.Value);
+        }
+
+        private sealed class FakeDropDownOption
+        {
+            public FakeDropDownOption(string value) { Value = value; }
+            public string Value { get; }
+            public override string ToString() => Value;
+        }
+
         private sealed class FakePart
         {
             public FakePart(FakeElement root) { RootElement = root; }
@@ -76,21 +94,28 @@ namespace GxMcp.Worker.Tests
 
         private sealed class FakeAttributes
         {
-            private readonly Dictionary<string, string> _values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, object> _values = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
 
             public object GetPropertyValue(string name)
             {
-                return GetPropertyValueString(name);
+                return _values.TryGetValue(name, out object value) ? value : null;
             }
 
             public string GetPropertyValueString(string name)
             {
-                return _values.TryGetValue(name, out string value) ? value : null;
+                return _values.TryGetValue(name, out object value) ? value?.ToString() : null;
             }
 
             public void SetPropertyValue(string name, object value)
             {
-                _values[name] = value?.ToString();
+                _values[name] = value;
+            }
+
+            public object ConvertPropertyValueFromString<TStorage>(string name, string value)
+            {
+                if (string.Equals(name, "themeClass", StringComparison.OrdinalIgnoreCase))
+                    return new FakeDropDownOption(value);
+                return value;
             }
         }
     }
