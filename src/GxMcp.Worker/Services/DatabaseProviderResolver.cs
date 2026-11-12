@@ -68,7 +68,7 @@ namespace GxMcp.Worker.Services
             if (ContainsAny(text, "oracle")) return "oracle";
             if (ContainsAny(text, "sqlclient", "sql server", "sqlserver", "mssql")) return "sqlserver";
             if (ContainsAny(text, "mysql", "mariadb")) return "mysql";
-            if (ContainsAny(text, "db2", "as400")) return "db2";
+            if (ContainsAny(text, "db2", "as400", "jt400", "iseries")) return "db2";
             if (ContainsAny(text, "informix")) return "informix";
             if (ContainsAny(text, "saphana", "sap hana", "hana")) return "saphana";
             return "unknown";
