@@ -93,8 +93,10 @@ namespace GxMcp.Worker.Parsers
                     depth = 0;
                     var joined = pending.ToString();
                     pending.Clear();
+                    // Only the end is trimmed: the leading indentation is what places an
+                    // attribute inside its level (issue #955).
                     if (!string.IsNullOrWhiteSpace(joined))
-                        lines.Add(joined.Trim());
+                        lines.Add(joined.TrimEnd());
                 }
             }
 
@@ -102,7 +104,7 @@ namespace GxMcp.Worker.Parsers
             // real syntax error instead of the text silently vanishing.
             if (pending.Length > 0 && !string.IsNullOrWhiteSpace(pending.ToString()))
             {
-                var joined = pending.ToString().Trim();
+                var joined = pending.ToString().TrimEnd();
                 if (!string.IsNullOrWhiteSpace(joined)) lines.Add(joined);
             }
 

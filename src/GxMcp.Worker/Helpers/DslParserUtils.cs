@@ -21,14 +21,17 @@ namespace GxMcp.Worker.Helpers
         public static List<ParsedNode> ParseLinesIntoNodes(List<string> lines)
         {
             var rootNodes = new List<ParsedNode>();
-            var stack = new Stack<(ParsedNode Node, int Indent)>();
+            // A compound node is "braced" once its opening brace is seen: from then on only its
+            // closing brace ends it, whatever the indentation of the lines in between. Before
+            // the brace (or without one) the indentation decides, as it always did.
+            var stack = new List<(ParsedNode Node, int Indent, bool Braced)>();
 
             for (int i = 0; i < lines.Count; i++)
             {
                 string line = lines[i];
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 
-                int indent = line.TakeWhile(c => c == ' ').Count();
+                int indent = IndentWidth(line);
                 string trimmed = line.Trim();
                 var node = new ParsedNode();
                 
@@ -40,8 +43,18 @@ namespace GxMcp.Worker.Helpers
                 }
                 if (string.IsNullOrEmpty(trimmed)) continue;
                 
-                if (trimmed == "{" || trimmed == "}") {
-                    if (trimmed == "}" && stack.Count > 0) stack.Pop();
+                if (trimmed == "{") {
+                    if (stack.Count > 0 && !stack[stack.Count - 1].Braced)
+                    {
+                        var top = stack[stack.Count - 1];
+                        stack[stack.Count - 1] = (top.Node, top.Indent, true);
+                    }
+                    continue;
+                }
+                if (trimmed == "}") {
+                    int open = stack.FindLastIndex(e => e.Braced);
+                    if (open >= 0) stack.RemoveRange(open, stack.Count - open);
+                    else if (stack.Count > 0) stack.RemoveAt(stack.Count - 1);
                     continue;
                 }
 
@@ -95,12 +108,26 @@ namespace GxMcp.Worker.Helpers
                     node.Name = node.Name.Substring(1).TrimStart();
                 }
 
-                while (stack.Count > 0 && stack.Peek().Indent >= indent) stack.Pop();
+                while (stack.Count > 0 && !stack[stack.Count - 1].Braced && stack[stack.Count - 1].Indent >= indent)
+                    stack.RemoveAt(stack.Count - 1);
                 if (stack.Count == 0) rootNodes.Add(node);
-                else stack.Peek().Node.Children.Add(node);
-                if (node.IsCompound) stack.Push((node, indent));
+                else stack[stack.Count - 1].Node.Children.Add(node);
+                if (node.IsCompound) stack.Add((node, indent, false));
             }
             return rootNodes;
+        }
+
+        // Leading whitespace width; a tab counts as four spaces.
+        private static int IndentWidth(string line)
+        {
+            int width = 0;
+            foreach (char c in line)
+            {
+                if (c == ' ') width++;
+                else if (c == '	') width += 4;
+                else break;
+            }
+            return width;
         }
 
         private static void ParseCommentMetadata(string comment, ParsedNode node)
