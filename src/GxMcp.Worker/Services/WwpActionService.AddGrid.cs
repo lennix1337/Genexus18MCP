@@ -5,6 +5,8 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Artech.Architecture.Common.Objects;
+using Artech.Common.Properties;
+using Artech.Packages.Patterns.Objects;
 using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
 using Newtonsoft.Json.Linq;
@@ -209,16 +211,39 @@ namespace GxMcp.Worker.Services
         // Several grid attributes are typed, and writing their displayed text fails when the
         // instance is loaded with InvalidCastException: domain is a KBObject, cellThemeClass and
         // imageClass are DropDownValueOptionCustomType { Value }. They are written with their type.
-        private static void SetNativeDropDown(object element, string attribute, string value)
+        internal static void SetNativeDropDown(object element, string attribute, string value)
         {
-            Type optionType = element.GetType().Assembly.GetTypes().FirstOrDefault(t => t.Name == "DropDownValueOptionCustomType");
-            object option = optionType == null ? null : Activator.CreateInstance(optionType, true);
-            PropertyInfo valueProperty = optionType?.GetProperty("Value", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            if (option == null || valueProperty == null || !valueProperty.CanWrite)
-                throw new WwpTabException("WwpAttributeRejected", "The WorkWithPlus package does not expose DropDownValueOptionCustomType for '" + attribute + "'.");
-            valueProperty.SetValue(option, value, null);
+            object option = null;
+            if (element is PatternInstanceElement patternElement)
+            {
+                try { option = patternElement.Attributes.ConvertPropertyValueFromString<StringStorage>(attribute, value); }
+                catch { option = null; }
+            }
+            if (option == null)
+            {
+                Type optionType = FindLoadedType(element.GetType().Assembly, "DropDownValueOptionCustomType");
+                option = optionType == null ? null : Activator.CreateInstance(optionType, true);
+                PropertyInfo valueProperty = optionType?.GetProperty("Value", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (option == null || valueProperty == null || !valueProperty.CanWrite)
+                    throw new WwpTabException("WwpAttributeRejected", "The WorkWithPlus package does not expose DropDownValueOptionCustomType for '" + attribute + "'.");
+                valueProperty.SetValue(option, value, null);
+            }
             if (!PatternSemanticAttributeWriter.ApplySemanticAttributeObject(element, attribute, option))
                 throw new WwpTabException("WwpAttributeRejected", "WorkWithPlus rejected typed attribute '" + attribute + "'.");
+        }
+
+        private static Type FindLoadedType(Assembly preferredAssembly, string typeName)
+        {
+            foreach (Assembly assembly in new[] { preferredAssembly }.Concat(AppDomain.CurrentDomain.GetAssemblies()).Where(a => a != null).Distinct())
+            {
+                Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (ReflectionTypeLoadException ex) { types = ex.Types; }
+                catch { continue; }
+                Type match = types?.FirstOrDefault(t => t != null && t.Name == typeName);
+                if (match != null) return match;
+            }
+            return null;
         }
 
         private static JObject ApplyNativeAddGrid(KBObjectPart part, JObject args, KBObject sdt)

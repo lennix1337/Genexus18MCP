@@ -141,5 +141,27 @@ namespace GxMcp.Worker.Tests
             grid.Elements().First().SetAttributeValue("sdtItem", "Other");
             Assert.NotNull(WwpActionService.VerifyVariableGrid(doc, args, columns)["error"]);
         }
+
+        [Fact]
+        public void UnnamedDefaultGridAndOmittedDefaultColumnAttributesAreConfirmedOnReread()
+        {
+            var doc = XDocument.Parse(
+                "<instance><table name='TableContent'><grid>" +
+                "<gridVariable name='Op' description='Select' dataType='Basic' readOnly='True'/>" +
+                "<gridVariable name='Sit' description='Sit' dataType='Basic' basicType='VarChar' basicCLength='12' readOnly='True'/>" +
+                "</grid></table></instance>");
+            var args = JObject.Parse(
+                "{containerName:'TableContent',gridName:'Grid',columns:[" +
+                "{variable:'Op',basicType:'Numeric',length:4,decimals:0,description:'Select'}," +
+                "{variable:'Sit',basicType:'VarChar',length:12}]}");
+            WwpActionService.ValidateVariableGridArgs(args, out var columns);
+
+            Assert.True((bool)WwpActionService.VerifyVariableGrid(doc, args, columns)["confirmed"]!);
+            Assert.Equal("GridAlreadyExists", WwpActionService.ApplyAddGridXml(doc, args)["code"]!.ToString());
+
+            var otherName = JObject.Parse(args.ToString());
+            otherName["gridName"] = "Results";
+            Assert.Equal("WwpGridNotPersisted", WwpActionService.VerifyVariableGrid(doc, otherName, columns)["code"]!.ToString());
+        }
     }
 }
