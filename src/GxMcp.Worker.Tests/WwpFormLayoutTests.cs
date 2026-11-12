@@ -390,6 +390,51 @@ namespace GxMcp.Worker.Tests
             Assert.False((bool)WwpActionService.VerifyAddedTableProjection("", plan)["confirmed"]);
         }
 
+        [Fact]
+        public void VerifyAddedTableProjection_ExtraSelectionInTransactionInstance_DoesNotRequireTableInTransactionWebForm()
+        {
+            const string trnWithExtraSelection =
+                "<instance transaction='00000000-0000-0000-0000-000000000001-DepMun'>" +
+                "<level><transaction><table name='TableMain'/></transaction>" +
+                "<extraSelection name='Sel'><table name='TableMain' childrenOrderedList=''><grid/></table></extraSelection>" +
+                "</level></instance>";
+            var doc = XDocument.Parse(trnWithExtraSelection);
+            JObject plan = WwpActionService.PlanAddTableXml(doc, JObject.Parse(
+                "{tableName:'TableBateria890',numberOfColumns:2,containerName:'Sel/TableMain'}"));
+
+            Assert.True(plan["error"] == null, plan.ToString());
+            Assert.False((bool)plan["projectsOntoParentWebForm"]);
+
+            JObject projection = WwpActionService.VerifyAddedTableProjection(
+                "<form><table ControlName='TableMain'/></form>", plan);
+            Assert.True((bool)projection["confirmed"]);
+            Assert.True((bool)projection["derivedProjectionPending"]);
+            Assert.False((bool)projection["targetPresent"]);
+        }
+
+        [Fact]
+        public void VerifyMovedControlProjection_ExtraSelectionInTransactionInstance_DoesNotRequireTextBlockInTransactionWebForm()
+        {
+            const string trnWithExtraSelection =
+                "<instance transaction='00000000-0000-0000-0000-000000000001-DepMun'>" +
+                "<level><transaction><table name='TableMain'/></transaction>" +
+                "<extraSelection name='Sel'><table name='TableMain' childrenOrderedList='2;01;Target-2;27;Lbl'>" +
+                "<table name='Target'/><textBlock controlName='Lbl' caption='Hi'/>" +
+                "</table></extraSelection>" +
+                "</level></instance>";
+            var doc = XDocument.Parse(trnWithExtraSelection);
+            JObject plan = WwpActionService.PlanMoveControlXml(doc, JObject.Parse(
+                "{controlName:'Lbl',tableName:'Sel/TableMain/Target'}"));
+
+            Assert.True(plan["error"] == null, plan.ToString());
+            Assert.False((bool)plan["projectsOntoParentWebForm"]);
+
+            JObject projection = WwpActionService.VerifyMovedControlProjection(
+                "<form><table ControlName='TableMain'/></form>", plan);
+            Assert.True((bool)projection["confirmed"]);
+            Assert.True((bool)projection["derivedProjectionPending"]);
+        }
+
         // ---- move_control ----------------------------------------------------------------
 
         private const string WithTarget =

@@ -163,6 +163,7 @@ namespace GxMcp.Worker.Services
             {
                 ["changed"] = true,
                 ["control"] = control,
+                ["projectsOntoParentWebForm"] = ProjectsOntoParentWebForm(target),
                 ["movedControls"] = new JArray(control.DeepClone()),
                 ["typedDiff"] = new JObject
                 {
@@ -321,6 +322,16 @@ namespace GxMcp.Worker.Services
             if (control["type"]?.ToString() == "attribute" && identity != null && identity.LastIndexOf('-') >= 0)
                 identity = identity.Substring(identity.LastIndexOf('-') + 1);
             bool present = FindWebFormNamedElement(document, identity) != null;
+            if (plan?["projectsOntoParentWebForm"]?.ToObject<bool?>() == false)
+            {
+                return new JObject
+                {
+                    ["confirmed"] = true,
+                    ["targetPresent"] = present,
+                    ["derivedProjectionPending"] = true,
+                    ["message"] = "The target container belongs to a derived WorkWithPlus object rather than the parent's own WebForm; PatternInstance persistence was verified and the parent WebForm remained valid. Run genexus_wwp action=regenerate_derived to update derived WebPanels."
+                };
+            }
             // A text block keeps its controlName in the WebForm; a variable or attribute may
             // render under a customised control name, so its presence is reported, not required.
             bool required = control["type"]?.ToString() == "textBlock";

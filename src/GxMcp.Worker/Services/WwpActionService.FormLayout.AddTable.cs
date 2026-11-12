@@ -149,6 +149,7 @@ namespace GxMcp.Worker.Services
                 ["tableName"] = request.TableName,
                 ["containerPath"] = containerPath,
                 ["position"] = index,
+                ["projectsOntoParentWebForm"] = ProjectsOntoParentWebForm(container),
                 ["typedDiff"] = new JObject
                 {
                     ["operation"] = AddTableOperation,
@@ -450,6 +451,17 @@ namespace GxMcp.Worker.Services
             catch (XmlException) { return NotConfirmed("The projected WebForm is not valid XML."); }
             string tableName = plan["tableName"]?.ToString();
             bool targetPresent = FindWebFormNamedElement(document, tableName) != null;
+            if (plan["projectsOntoParentWebForm"]?.ToObject<bool?>() == false)
+            {
+                return new JObject
+                {
+                    ["confirmed"] = true,
+                    ["targetPresent"] = targetPresent,
+                    ["derivedProjectionPending"] = true,
+                    ["missingControls"] = new JArray(),
+                    ["message"] = "The target container belongs to a derived WorkWithPlus object (such as selection, extraSelection or view) rather than the parent's own WebForm; PatternInstance persistence was verified and the parent WebForm remained valid. Run genexus_wwp action=regenerate_derived to update derived WebPanels."
+                };
+            }
             List<string> missing = (plan["children"] as JArray)?.OfType<JObject>()
                 .Where(c => string.Equals(c["type"]?.ToString(), "textBlock", StringComparison.OrdinalIgnoreCase))
                 .Select(c => c["controlName"]?.ToString())
