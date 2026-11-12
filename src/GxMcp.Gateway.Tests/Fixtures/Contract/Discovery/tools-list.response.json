@@ -1296,7 +1296,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Health check: GX install, KB state, worker, cache age, recent telemetry. Paste output for triage when something feels off. When more than one KB is open, pass kb=<alias> to pick which one to diagnose. Full guidance: genexus://kb/tool-help/genexus_doctor",
+      "description": "Health check: GX install, KB state, worker, cache age, recent telemetry. For issues, paste result.issueReport (PII-free). When more than one KB is open, pass kb=<alias> to pick which one to diagnose. Full guidance: genexus://kb/tool-help/genexus_doctor",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
