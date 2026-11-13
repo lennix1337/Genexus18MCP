@@ -44,9 +44,10 @@ namespace GxMcp.Gateway.Tests
 
             // Measure Payload Byte Size:
             // 1. With structuredContent
-            Program.InvalidateEnvProbeCache();
             Environment.SetEnvironmentVariable("GXMCP_NO_STRUCTURED_CONTENT", null);
+            Environment.SetEnvironmentVariable("GXMCP_EMIT_STRUCTURED_CONTENT", "1");
             Environment.SetEnvironmentVariable("GXMCP_TERSE", null);
+            Program.InvalidateEnvProbeCache();
             var respWithStructured = Program.BuildToolTextResponse(new JValue("1"), payload, false, "genexus_query");
             string jsonWithStructured = respWithStructured.ToString(Formatting.None);
             int bytesWithStructured = Encoding.UTF8.GetByteCount(jsonWithStructured);
@@ -67,6 +68,7 @@ namespace GxMcp.Gateway.Tests
 
             // Reset env
             Environment.SetEnvironmentVariable("GXMCP_NO_STRUCTURED_CONTENT", null);
+            Environment.SetEnvironmentVariable("GXMCP_EMIT_STRUCTURED_CONTENT", null);
             Environment.SetEnvironmentVariable("GXMCP_TERSE", null);
             Program.InvalidateEnvProbeCache();
 
