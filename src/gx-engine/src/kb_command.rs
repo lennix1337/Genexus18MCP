@@ -65,6 +65,10 @@ pub enum KbOperation {
     Environment {
         kb_path: String,
     },
+    Diagnose {
+        kb_path: String,
+        name: String,
+    },
     VersionList {
         kb_path: String,
     },
@@ -182,6 +186,13 @@ impl KbArgs {
                 kb_path: self.admit_scope_only("kb-versions")?,
             }),
             "kb-inspect" => self.admit_inspect(),
+            "kb-diagnose" => {
+                let [kb_path, name] = self.admit_scope_only_positional(
+                    "kb-diagnose",
+                    "kb-diagnose requires <kb-path> <object-name>",
+                )?;
+                Ok(KbOperation::Diagnose { kb_path, name })
+            }
             "kb-list-procedures" => self.admit_procedure_list(),
             "kb-list-objects" => self.admit_object_list(),
             _ => unreachable!("kb_command is only used for native KB operations"),
@@ -479,6 +490,26 @@ mod tests {
         }
         assert!(admitted("kb-inspect", &["kb"]).is_err());
         assert!(admitted("kb-inspect", &["kb", "Proc", "extra"]).is_err());
+    }
+
+    #[test]
+    fn diagnose_admits_path_name_and_explicit_scope_flags_only() {
+        assert!(
+            matches!(admitted("kb-diagnose", &["kb", "Proc", "--design-model", "1", "--kb-version", "0"]).unwrap(),
+            KbOperation::Diagnose { kb_path, name } if kb_path == "kb" && name == "Proc")
+        );
+        for flag in VALUE_FLAGS
+            .into_iter()
+            .filter(|flag| !matches!(*flag, "--design-model" | "--kb-version"))
+        {
+            assert!(
+                admitted("kb-diagnose", &["kb", "Proc", flag, "1"]).is_err(),
+                "{flag}"
+            );
+        }
+        assert!(admitted("kb-diagnose", &["kb", "Proc", "--page"]).is_err());
+        assert!(admitted("kb-diagnose", &["kb"]).is_err());
+        assert!(admitted("kb-diagnose", &["kb", "Proc", "extra"]).is_err());
     }
 
     #[test]

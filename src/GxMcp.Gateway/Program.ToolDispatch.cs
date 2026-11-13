@@ -460,6 +460,10 @@ namespace GxMcp.Gateway
             // apply_pattern { validate: true }: post-apply validation build (no-op for other tools).
             await ValidateAppliedPatternAsync(innerResult, tName, tArgs);
 
+            // genexus_edit { validationMode: "native" }: opt-in, budgeted, fail-soft engine diagnostics
+            // of the saved object. Returns at once when the call did not ask for it.
+            await AttachNativeDiagnosticsAsync(innerResult, tName, tArgs, transportCancellation);
+
             return innerResult ??BuildToolResultContent(
                 new JObject { ["error"] = "Tool did not produce a result." },
                 isError: true,

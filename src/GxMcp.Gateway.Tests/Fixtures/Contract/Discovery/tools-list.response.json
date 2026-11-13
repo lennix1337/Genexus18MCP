@@ -1620,9 +1620,10 @@
             "type": "string"
           },
           "validationMode": {
-            "description": "Issue #60: run the inline Specify pass…",
+            "description": "specify (Issue #60): run the inline…",
             "enum": [
-              "specify"
+              "specify",
+              "native"
             ],
             "type": "string"
           },
