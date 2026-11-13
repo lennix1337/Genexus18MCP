@@ -736,6 +736,13 @@ namespace GxMcp.Worker.Services
             catch { return false; }
         }
 
+        // Does the form the KB holds after the import carry what the package's form said? The SDK exports a form without the
+        // ids of its layout containers (a Web Master Panel is exported this way) and generates them when it stores the
+        // imported form, so an id on the imported side where the package has none is not a difference; every other
+        // difference still is (see XmlEquivalenceOptions.ImportedForm).
+        internal static bool ImportedWebFormMatches(string expectedXml, string actualXml, out string diff)
+            => XmlEquivalence.AreEquivalent(expectedXml, actualXml, XmlEquivalenceOptions.ImportedForm, out diff);
+
         private ImportFidelityResult VerifyImportedWebForms(ImportFidelityPlan plan)
         {
             var mismatches = new JArray();
@@ -748,7 +755,7 @@ namespace GxMcp.Worker.Services
                 var current = _objects?.FindObjectFresh(expected.Name, expected.TypeFilter);
                 string actualXml = current == null ? string.Empty : WebFormXmlHelper.ReadEditableXml(current);
                 string diff;
-                if (XmlEquivalence.AreEquivalent(expected.ExpectedXml, actualXml, out diff)) continue;
+                if (ImportedWebFormMatches(expected.ExpectedXml, actualXml, out diff)) continue;
 
                 var mismatch = new JObject
                 {
@@ -780,7 +787,7 @@ namespace GxMcp.Worker.Services
                         var repairedObject = _objects?.FindObjectFresh(expected.Name, expected.TypeFilter);
                         string repairedXml = repairedObject == null ? string.Empty : WebFormXmlHelper.ReadEditableXml(repairedObject);
                         string repairedDiff;
-                        repairedHere = XmlEquivalence.AreEquivalent(expected.ExpectedXml, repairedXml, out repairedDiff);
+                        repairedHere = ImportedWebFormMatches(expected.ExpectedXml, repairedXml, out repairedDiff);
                         if (!repairedHere) mismatch["repairDiff"] = repairedDiff ?? "n/a";
                     }
                 }
