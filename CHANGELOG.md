@@ -19,6 +19,7 @@
 - **Release builds require the engine binaries.** `build.ps1 -RequireEngineBinaries` (used by `release.ps1`) fails when `gx-engine.exe` or `gxwire.exe` is not produced, and the release manifest, `verify-release-manifest.py` and `verify-install.js` require both for versions above 4.6.0. Older releases still verify.
 - **gxwire release builds use `opt-level = 3`.** Search and pack queries are about 1.5-2x faster on a 50k-node benchmark; the binary grows from 1.2 MB to 1.7 MB.
 - **The npm package no longer ships CLI tests.** `cli/**/*.test.js` and `cli/test-support` are excluded, and CI runs `scripts/check-pack.js` to keep them out.
+- **Tool results no longer carry a duplicate `structuredContent` by default.** `Server.EmitStructuredContent` now defaults to `false` (configs written by `genexus-mcp init` already set it), cutting every tool response by 28-49% in bytes (about 46% for typical query/read/build payloads). Tools that declare an `outputSchema` (`genexus_lifecycle`) still carry it, as the MCP spec requires. Opt back in with `Server.EmitStructuredContent: true` or `GXMCP_EMIT_STRUCTURED_CONTENT=1` (the latter was ignored on the response path and now works; `GXMCP_NO_STRUCTURED_CONTENT=1` still wins). Clients that read only `structuredContent` must set the option or read `content[0].text`; the gx-engine evidence validators now read either.
 - **Release builds of the Gateway, its tests and the benchmarks treat warnings as errors.**
 
 ### Fixed

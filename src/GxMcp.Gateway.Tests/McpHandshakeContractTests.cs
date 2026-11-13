@@ -272,24 +272,33 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
-        public void ToolResult_ShouldExposeStructuredContentAlongsideText()
+        public void ToolResult_ShouldExposeStructuredContentAlongsideText_WhenEnabled()
         {
-            // PERF round 3: sibling tests flip GXMCP_NO_STRUCTURED_CONTENT and the probe
-            // result is TTL-cached — reset so this test sees the default (enabled).
+            // structuredContent is off by default; this test opts in explicitly.
+            // The env probe is TTL-cached, so reset it around the change.
             Environment.SetEnvironmentVariable("GXMCP_NO_STRUCTURED_CONTENT", null);
+            Environment.SetEnvironmentVariable("GXMCP_EMIT_STRUCTURED_CONTENT", "1");
             Program.InvalidateEnvProbeCache();
-            var response = Program.BuildToolTextResponse(
-                new JValue("1"),
-                new JObject { ["status"] = "ok", ["count"] = 1 },
-                isError: false,
-                toolName: "genexus_read");
+            try
+            {
+                var response = Program.BuildToolTextResponse(
+                    new JValue("1"),
+                    new JObject { ["status"] = "ok", ["count"] = 1 },
+                    isError: false,
+                    toolName: "genexus_read");
 
-            var result = response["result"] as JObject;
-            Assert.NotNull(result);
-            Assert.Equal("complete", result!["resultType"]?.ToString());
-            Assert.Equal("ok", result["structuredContent"]?["status"]?.ToString());
-            Assert.Equal("{\"status\":\"ok\",\"count\":1}",
-                result["content"]?[0]?["text"]?.ToString());
+                var result = response["result"] as JObject;
+                Assert.NotNull(result);
+                Assert.Equal("complete", result!["resultType"]?.ToString());
+                Assert.Equal("ok", result["structuredContent"]?["status"]?.ToString());
+                Assert.Equal("{\"status\":\"ok\",\"count\":1}",
+                    result["content"]?[0]?["text"]?.ToString());
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("GXMCP_EMIT_STRUCTURED_CONTENT", null);
+                Program.InvalidateEnvProbeCache();
+            }
         }
 
         [Fact]

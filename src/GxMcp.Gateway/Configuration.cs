@@ -754,11 +754,12 @@ namespace GxMcp.Gateway
         /// the entire JSON payload already serialized in `content[0].text`, roughly
         /// doubling every tool response's byte size (measured: +54-60% across tools).
         /// LLM clients read `content[0].text`; only structured-output consumers need this.
-        /// Default: true (protocol-compliant). Set false for lean responses — the biggest
-        /// single per-turn token/latency win available in the gateway. Can be forced via
-        /// GXMCP_NO_STRUCTURED_CONTENT=1 without touching config files.
+        /// Default: false (lean — the biggest single per-turn token/latency win available
+        /// in the gateway). Tools that declare an outputSchema (genexus_lifecycle) always
+        /// carry it, as the MCP spec requires. Set true, or GXMCP_EMIT_STRUCTURED_CONTENT=1,
+        /// for clients that consume structuredContent; GXMCP_NO_STRUCTURED_CONTENT=1 forces it off.
         /// </summary>
-        public bool EmitStructuredContent { get; set; } = true;
+        public bool EmitStructuredContent { get; set; } = false;
         /// <summary>
         /// Terse mode: strip the per-response UX sugar the LLM does not strictly need —
         /// `next_legal_actions`, `_meta.tokens` (the used/limit block), and SQL-dialect
