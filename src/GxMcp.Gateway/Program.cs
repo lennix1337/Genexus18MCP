@@ -351,6 +351,7 @@ namespace GxMcp.Gateway
         private static void OnHttpSessionRemoved(string sessionId)
         {
             _sessionKbContexts.Clear(sessionId);
+            AdaptiveToolSessions.Forget(sessionId);
             if (_sseChannels.TryRemove(sessionId, out var channel)) channel.Writer.TryComplete();
         }
         private static IdempotencyCache _idempotencyCache = new IdempotencyCache(

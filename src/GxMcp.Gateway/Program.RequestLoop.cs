@@ -123,6 +123,14 @@ namespace GxMcp.Gateway
             // Protocol-level methods and gateway-owned resources must not depend on
             // KB resolution. This keeps initialize/discovery usable before any KB
             // is opened and avoids turning a static resource read into KB_AMBIGUOUS.
+            if (method == "tools/list"
+                && AdaptiveTools.IsAdaptive(ToolProfileFilter.ResolveActiveProfile(_activeConfig?.Server?.ToolProfile)))
+            {
+                var adaptiveList = McpRouter.BuildAdaptiveToolsList(
+                    sessionContextEnabled ? AdaptiveToolSessions.EnabledGroups(sessionId) : Array.Empty<string>());
+                return new JObject { ["jsonrpc"] = "2.0", ["id"] = idToken?.DeepClone(), ["result"] = adaptiveList };
+            }
+
             var mcpResponse = McpRouter.Handle(request);
             if (mcpResponse is McpRouterError routerError)
             {
@@ -146,6 +154,7 @@ namespace GxMcp.Gateway
                     && sessionContextEnabled)
                 {
                     InitializeSessionKbContext(sessionId);
+                    AdaptiveToolSessions.Forget(sessionId);
                     TriggerWorkerWarmupOnce();
                     TriggerIndexBootstrapOnce();
                     UpdateNotifier.TriggerOnce();
@@ -484,6 +493,15 @@ namespace GxMcp.Gateway
                 if (!string.IsNullOrEmpty(toolName))
                 {
                     string activeToolProfile = ToolProfileFilter.ResolveActiveProfile(_activeConfig?.Server?.ToolProfile);
+                    bool adaptiveProfile = AdaptiveTools.IsAdaptive(activeToolProfile);
+                    if (AdaptiveTools.IsMetaTool(toolName))
+                    {
+                        var metaPayload = HandleAdaptiveMetaTool(args, sessionId, sessionContextEnabled, adaptiveProfile);
+                        return BuildToolTextResponse(idToken, metaPayload,
+                            isError: metaPayload["status"]?.ToString() == "error",
+                            toolName: toolName, toolArgs: args, payloadOwned: true);
+                    }
+                    if (adaptiveProfile) AutoEnableAdaptiveGroup(sessionId, sessionContextEnabled, toolName);
                     JObject? profileError = ToolProfileFilter.GetToolNotInProfileError(activeToolProfile, toolName);
                     if (profileError != null)
                     {
