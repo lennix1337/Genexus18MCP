@@ -28,20 +28,39 @@ namespace GxMcp.Worker.Helpers
 
     public sealed class XmlEquivalenceOptions
     {
-        public static readonly XmlEquivalenceOptions Strict = new XmlEquivalenceOptions(ignoreControlIds: false);
+        public static readonly XmlEquivalenceOptions Strict = new XmlEquivalenceOptions(ignoreControlIds: false, allowIdsOnlyInSecondDocument: false, allowResolvedReferencesInSecondDocument: false);
 
         // Issue #544: WebForm/Report layout projections only. The SDK strips leaf
         // control ids and regenerates the rest on persist, so `id` carries no
-        // requested content there. Pattern instances, transfers and no-change
-        // detection keep `id` significant.
-        public static readonly XmlEquivalenceOptions Layout = new XmlEquivalenceOptions(ignoreControlIds: true);
+        // requested content there. Pattern instances and no-change detection keep
+        // `id` significant.
+        public static readonly XmlEquivalenceOptions Layout = new XmlEquivalenceOptions(ignoreControlIds: true, allowIdsOnlyInSecondDocument: false, allowResolvedReferencesInSecondDocument: false);
 
-        private XmlEquivalenceOptions(bool ignoreControlIds)
+        // XPZ import fidelity, called as (the package's form, the form the KB holds after the import): the SECOND document is
+        // the one the SDK stored. The SDK exports a form without the ids of its layout containers and with the references to
+        // other objects by name, and it generates the ids and resolves the references to local keys when it stores the
+        // imported form. So an `id` the stored form carries where the package's form has none, an image named in the package
+        // and held by key ("<guid>-<Module.Name>" against "<guid>-<int>"), and a variable named in a custom property and held
+        // as "var:N" are that normalization, not a difference. Where both documents carry an id the two must still match, an
+        // id only the first document has is still a difference, and so is every other attribute, control or text. A Web Master
+        // Panel is exported this way, which made every import of one look unfaithful.
+        public static readonly XmlEquivalenceOptions ImportedForm = new XmlEquivalenceOptions(ignoreControlIds: false, allowIdsOnlyInSecondDocument: true, allowResolvedReferencesInSecondDocument: true);
+
+        private XmlEquivalenceOptions(bool ignoreControlIds, bool allowIdsOnlyInSecondDocument, bool allowResolvedReferencesInSecondDocument)
         {
             IgnoreControlIds = ignoreControlIds;
+            AllowIdsOnlyInSecondDocument = allowIdsOnlyInSecondDocument;
+            AllowResolvedReferencesInSecondDocument = allowResolvedReferencesInSecondDocument;
         }
 
         public bool IgnoreControlIds { get; }
+
+        // The SECOND document of the comparison may carry an `id` on an element whose first document has none.
+        public bool AllowIdsOnlyInSecondDocument { get; }
+
+        // The SECOND document may hold, as the local key, a reference the first document names: an image attribute
+        // ("<guid>-<Module.Name>" against "<guid>-<int>") and a variable in a custom property ("&name" against "var:N").
+        public bool AllowResolvedReferencesInSecondDocument { get; }
     }
 
     public static class XmlEquivalence
@@ -87,13 +106,13 @@ namespace GxMcp.Worker.Helpers
                 StripControlIds(db.Root);
             }
 
-            var ok = ElementsEqual(da.Root, db.Root, "/", out diffSummary, out structuredDiff);
+            var ok = ElementsEqual(da.Root, db.Root, "/", options, out diffSummary, out structuredDiff);
             // WorkWithPlus materializes an empty Parameters node for a
             // WebComponent control even when the author omitted it. This is a
             // canonical SDK projection, not a rejected authored child. Accept
             // only that exact normalization; substantive children and all
             // other structure remain strict.
-            if (!ok && WwpEmptyWebComponentParametersEquivalent(da.Root, db.Root))
+            if (!ok && WwpEmptyWebComponentParametersEquivalent(da.Root, db.Root, options))
             {
                 diffSummary = null;
                 structuredDiff = null;
@@ -125,7 +144,7 @@ namespace GxMcp.Worker.Helpers
             }
         }
 
-        private static bool WwpEmptyWebComponentParametersEquivalent(XElement persisted, XElement requested)
+        private static bool WwpEmptyWebComponentParametersEquivalent(XElement persisted, XElement requested, XmlEquivalenceOptions options)
         {
             if (persisted == null || requested == null) return false;
             var persistedCopy = new XElement(persisted);
@@ -138,7 +157,7 @@ namespace GxMcp.Worker.Helpers
             bool removed = RemoveImplicitParameters(persistedCopy) | RemoveImplicitParameters(requestedCopy);
             if (!removed) return false;
 
-            return ElementsEqual(persistedCopy, requestedCopy, "/", out _, out _);
+            return ElementsEqual(persistedCopy, requestedCopy, "/", options, out _, out _);
         }
 
         private static bool RemoveImplicitParameters(XElement root)
@@ -243,7 +262,10 @@ namespace GxMcp.Worker.Helpers
                 ? d.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : v;
 
-        private static bool ElementsEqual(XElement x, XElement y, string path, out string diff, out XmlEquivalenceDiff structured)
+        private static bool IsIdAttribute(XAttribute attribute)
+            => string.Equals(attribute.Name.LocalName, "id", StringComparison.OrdinalIgnoreCase);
+
+        private static bool ElementsEqual(XElement x, XElement y, string path, XmlEquivalenceOptions options, out string diff, out XmlEquivalenceDiff structured)
         {
             diff = null;
             structured = null;
@@ -253,6 +275,9 @@ namespace GxMcp.Worker.Helpers
 
             var ax = x.Attributes().OrderBy(a => a.Name.ToString(), StringComparer.Ordinal).ToList();
             var ay = y.Attributes().OrderBy(a => a.Name.ToString(), StringComparer.Ordinal).ToList();
+            // The persisted side generated an id the expected side never had (see XmlEquivalenceOptions.ImportedForm).
+            if (options.AllowIdsOnlyInSecondDocument && !ax.Any(IsIdAttribute))
+                ay = ay.Where(a => !IsIdAttribute(a)).ToList();
             var lNames = ax.Select(a => a.Name.LocalName).ToArray();
             var rNames = ay.Select(a => a.Name.LocalName).ToArray();
             if (ax.Count != ay.Count)
@@ -315,6 +340,13 @@ namespace GxMcp.Worker.Helpers
                     {
                         continue;
                     }
+                    // XPZ import only: the package names an image and the SDK stores the key of the image it resolved.
+                    if (options.AllowResolvedReferencesInSecondDocument &&
+                        string.Equals(ax[i].Name.LocalName, "image", StringComparison.OrdinalIgnoreCase) &&
+                        IsNamedVsKeyedReferencePair(ax[i].Value, ay[i].Value))
+                    {
+                        continue;
+                    }
                     // Report controls: tolerate ControlName or Name differences when matching referenced attribute or variable
                     if (IsControlNameReferencedNameMatch(ax[i].Name.LocalName, ax[i].Value, ay[i].Value, x, y))
                     {
@@ -325,7 +357,7 @@ namespace GxMcp.Worker.Helpers
                     // payloads with the same properties and values are the same payload. Raw
                     // string comparison read that reordering as a lost write.
                     if (string.Equals(ax[i].Name.LocalName, CustomPropertiesPayload.AttributeName, StringComparison.Ordinal) &&
-                        CustomPropertiesPayload.SemanticallyEqual(ax[i].Value, ay[i].Value))
+                        CustomPropertiesPayload.SemanticallyEqual(ax[i].Value, ay[i].Value, options.AllowResolvedReferencesInSecondDocument))
                     {
                         continue;
                     }
@@ -382,7 +414,7 @@ namespace GxMcp.Worker.Helpers
 
                 if (nx is XElement ex2 && ny is XElement ey2)
                 {
-                    if (!ElementsEqual(ex2, ey2, path + x.Name + "/", out diff, out structured)) return false;
+                    if (!ElementsEqual(ex2, ey2, path + x.Name + "/", options, out diff, out structured)) return false;
                 }
                 else if (nx is XText tx && ny is XText ty)
                 {
@@ -536,6 +568,47 @@ namespace GxMcp.Worker.Helpers
             bool leftNum = VarNumericRefRx.IsMatch(left);
             bool rightNum = VarNumericRefRx.IsMatch(right);
             return (leftAmp && rightNum) || (leftNum && rightAmp);
+        }
+
+        /// <summary>
+        /// True when <paramref name="named"/> (the first document) names a variable ("&amp;Choice") and <paramref name="keyed"/> (the
+        /// second) holds the key the SDK resolved it to ("var:5"). One direction only, unlike the attribute rule above: a name in
+        /// the second document would be a variable the SDK did not resolve.
+        /// </summary>
+        internal static bool IsVariableNamedVsKeyed(string named, string keyed)
+            => !string.IsNullOrEmpty(named) && !string.IsNullOrEmpty(keyed) && AmpVarRefRx.IsMatch(named) && VariableKeyRx.IsMatch(keyed);
+
+        // The key of a variable only: "&name" never resolves to an attribute ("att:N").
+        private static readonly System.Text.RegularExpressions.Regex VariableKeyRx =
+            new System.Text.RegularExpressions.Regex(@"^var:\d+$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // A reference to an object by its type and key: "<guid>-<rest>". The package names the object ("<guid>-SynthModule.synth_logo",
+        // module-qualified) and the SDK stores the key it resolved ("<guid>-74").
+        private static readonly System.Text.RegularExpressions.Regex KeyedReferenceRx =
+            new System.Text.RegularExpressions.Regex(
+                @"^(?<guid>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})-(?<rest>[A-Za-z0-9_.]+)$",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly System.Text.RegularExpressions.Regex ObjectNameRx =
+            new System.Text.RegularExpressions.Regex(
+                @"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        /// <summary>
+        /// True when <paramref name="named"/> (the first document: the reference by name) and <paramref name="keyed"/> (the second:
+        /// the key the SDK resolved) point at the same object type and the second holds a number where the first holds an object
+        /// name. Only that direction: a name in the second document would be a reference the SDK did not resolve.
+        /// </summary>
+        internal static bool IsNamedVsKeyedReferencePair(string named, string keyed)
+        {
+            if (string.IsNullOrEmpty(named) || string.IsNullOrEmpty(keyed)) return false;
+            var first = KeyedReferenceRx.Match(named);
+            var second = KeyedReferenceRx.Match(keyed);
+            if (!first.Success || !second.Success) return false;
+            if (!string.Equals(first.Groups["guid"].Value, second.Groups["guid"].Value, StringComparison.OrdinalIgnoreCase)) return false;
+            string name = first.Groups["rest"].Value;
+            string key = second.Groups["rest"].Value;
+            return key.All(char.IsDigit) && ObjectNameRx.IsMatch(name);
         }
 
         private static bool IsControlNameReferencedNameMatch(string attrName, string leftVal, string rightVal, XElement leftElem, XElement rightElem)

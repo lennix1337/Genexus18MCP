@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- **`genexus_transfer` `import` of a Web Master Panel no longer ends in `TransferImportFidelityFailed` with the object deleted.** The SDK exports a form without the ids of its layout containers and with the images and variables of its controls by name, and it generates the ids and resolves those names to local keys when it stores the imported form. The check that follows the import found those differences on every master, read them as a lost write and removed the object it had just imported (the SDK itself reported the import as successful). An `id` that the imported form carries where the package's form has none, an image named in the package and held by key (`<guid>-<Module.Name>` against `<guid>-<int>`) and a variable named in a custom property and held as `var:N` are no longer differences; a different `id`, an `id` the import dropped, a name the SDK did not resolve and every other attribute, control or text still are.
+
 ### Internal
 
 ## v4.6.0 - 2026-11-13
