@@ -120,6 +120,13 @@ namespace GxMcp.Gateway
             var subscriptionResponse = McpSubscriptionProtocol.Handle(request, sessionId, _httpSessions, GetCurrentOwnership(sessionId));
             if (subscriptionResponse != null) return subscriptionResponse;
 
+            // genexus://kb/changes is served from the gateway's own change record, not the Worker.
+            if (string.Equals(method, "resources/read", StringComparison.Ordinal))
+            {
+                var changesResponse = _resourceChanges.HandleRead(request, _sessionKbContexts.Get(sessionId));
+                if (changesResponse != null) return changesResponse;
+            }
+
             // Protocol-level methods and gateway-owned resources must not depend on
             // KB resolution. This keeps initialize/discovery usable before any KB
             // is opened and avoids turning a static resource read into KB_AMBIGUOUS.
@@ -155,6 +162,7 @@ namespace GxMcp.Gateway
                 {
                     InitializeSessionKbContext(sessionId);
                     AdaptiveToolSessions.Forget(sessionId);
+                    McpSubscriptionProtocol.ClearSession(sessionId, _httpSessions);
                     TriggerWorkerWarmupOnce();
                     TriggerIndexBootstrapOnce();
                     UpdateNotifier.TriggerOnce();
