@@ -170,6 +170,20 @@ namespace GxMcp.Worker.Tests
             Assert.Equal(1, document.Descendants("gridVariable").Count(e => (string)e.Attribute("name") == "Added"));
         }
 
+        // Issue #961: a client writes "<Container>/<Grid>"; the last segment names the grid, so it resolves when unique.
+        [Fact]
+        public void AContainerPrefixedGridNameResolvesByItsLastSegment()
+        {
+            var document = XDocument.Parse(NamedGrids);
+            var result = WwpActionService.ApplyAddGridVariableXml(document, new JObject
+            {
+                ["gridPath"] = "TableMain/Totals", ["variable"] = "Added", ["basicType"] = "VarChar", ["length"] = 3
+            });
+
+            Assert.Null(result["error"]);
+            Assert.Equal(1, document.Descendants("gridVariable").Count(e => (string)e.Attribute("name") == "Added"));
+        }
+
         [Fact]
         public void AnUnknownGridNameListsTheNamedGridsAndAnAmbiguousOneIsRefused()
         {

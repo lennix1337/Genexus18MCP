@@ -427,6 +427,16 @@ namespace GxMcp.Worker.Services
             grid = null;
             var grids = document.Descendants().Where(e => Is(e, "grid")).ToList();
             if (grids.Count == 0) return Error("GridNotFound", "The PatternInstance has no grid.");
+            if (!string.IsNullOrWhiteSpace(gridPath) && !gridPath.TrimStart().StartsWith("/") && gridPath.Contains("/"))
+            {
+                // "<Container>/<Grid>" (#961): when the last segment names exactly one grid, it is that grid.
+                var lastSegment = gridPath.Trim().Split('/').Last();
+                if (Regex.IsMatch(lastSegment, "^[A-Za-z_][A-Za-z0-9_]*$"))
+                {
+                    var byLastSegment = grids.Where(g => GridMatchesName(g, lastSegment)).ToList();
+                    if (byLastSegment.Count == 1) { grid = byLastSegment[0]; return null; }
+                }
+            }
             if (!string.IsNullOrWhiteSpace(gridPath) && Regex.IsMatch(gridPath.Trim(), "^[A-Za-z_][A-Za-z0-9_]*$"))
             {
                 // A grid is also addressed by the name it was given (add_grid's gridName, or its controlName), which is how
