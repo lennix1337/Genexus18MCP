@@ -57,14 +57,83 @@ python scripts/run-agent-model-eval.py --dry-run                 # request sizes
 $env:ANTHROPIC_API_KEY = "<key>"                                  # opt-in; never read by CI
 python scripts/run-agent-model-eval.py --out artifacts/first-tool-eval.json
 python scripts/run-agent-model-eval.py --scenario E03 --model <model-id> --limit 1
+python scripts/run-agent-model-eval.py --profile core --strict --markdown docs/agent-eval-scoreboard.md
 ```
 
 The report holds per-scenario results and totals (first-call accuracy,
 required-args validity, input tokens). HTTP and network errors are recorded per
-scenario without aborting the run. Cost: one request per scenario, each about
-105 KB of request body (the full catalog), so a full run is 8 large requests;
-set a budget before running.
+scenario without aborting the run.
+
+### Profiles
+
+The Gateway serves a different, compacted `tools/list` per tool profile
+(`ToolProfileFilter`). `--profile all|core|standard|authoring|devops|ui|db`
+offers the model exactly that list, read from
+`src/GxMcp.Gateway.Tests/Fixtures/Contract/Discovery/tools-list.<profile>.response.json`
+(`all` is `tools-list.response.json`). The profile fixtures are written and
+verified by `ToolProfileListFixtureTests` (regenerate with
+`GXMCP_UPDATE_GOLDEN=1`, like the other discovery fixtures), so no Gateway is
+needed to run the harness. They hold only `name`, `description` and `inputSchema`,
+which is all the harness sends. A scenario none of whose expected tools is
+served under the chosen profile (for example `genexus_refactor` under `core`) is
+reported as `skipped`, not scored as a model failure, and sends no request.
+
+### Strict and lenient scoring
+
+By default `genexus_whoami` is accepted as a first call for every scenario
+(`alwaysAcceptable`), which is lenient. Every run computes both numbers; they
+are reported separately in `totals` (`lenientFirstCallAccuracy`,
+`strictFirstCallAccuracy`) and in the scoreboard. `--strict` makes the strict
+number the headline (`firstCallAccuracy`, PASS/FAIL column).
+
+Only E02, E03, E05, E06, E07, E08, E10 and E15 have a first-tool expectation.
+The other seven are listed under `omittedScenarios` in
+`tests/agent-evals/first-tool-expectations.json`, each with its reason: E01 (the
+first step is the protocol method `tools/list`), E04 (several equally valid read
+tools), E09 (no dedicated translation tool, so the first tool is ambiguous),
+E11-E14 (transport, recovery, load and installer scenarios, not tool choices). A
+test keeps `scenarios` plus `omittedScenarios` equal to the corpus.
+
+### Scoreboard
+
+`--markdown <path>` adds or replaces the row for the run's (model, profile) in a
+compact table: model, profile, scenarios answered/planned, lenient and strict
+first-call accuracy, required-args validity, average input tokens per request,
+date (UTC) and harness version. The tracked file is
+[agent-eval-scoreboard.md](agent-eval-scoreboard.md). It is empty, and says so,
+until someone records a real run; rows are never written by dry runs or by runs
+in which no scenario was answered. A partial run (`--limit`, `--scenario`)
+shows its smaller `answered/planned` count and replaces the previous row for
+that model and profile.
+
+### Manual workflow and cost
+
+`.github/workflows/agent-evals.yml` is `workflow_dispatch` only (Actions tab,
+"Agent evals (manual)", inputs `model` and `profile`). It reads the key from the
+repository secret `ANTHROPIC_API_KEY`, runs the harness, prints the table in the
+job summary and uploads the JSON report and markdown as the `agent-eval-report`
+artifact. It commits nothing and runs on no other trigger; copy a row into the
+scoreboard by hand.
+
+Cost is one request per applicable scenario, each carrying the whole tool list
+and the server instructions. Measured with `--dry-run` on the current corpus
+(request bodies, in bytes; roughly one character each for this mostly-ASCII
+payload):
+
+| profile | tools | requests | bytes per request | bytes total |
+| --- | --- | --- | --- | --- |
+| all | 60 | 8 | about 104,900 | 838,962 |
+| authoring | 35 | 7 | about 74,300 | 520,213 |
+| ui | 23 | 6 | about 53,100 | 318,607 |
+| devops | 37 | 5 | about 53,400 | 267,043 |
+| standard | 20 | 5 | about 46,500 | 232,648 |
+| db | 19 | 6 | about 36,500 | 219,104 |
+| core | 15 | 5 | about 28,500 | 142,278 |
+
+Re-run `--dry-run --profile <p>` for current numbers; they change with the tool
+catalog. Output is capped by `--max-tokens` (default 1024) per request. Set a
+spend budget before running.
 
 Status: the harness has been unit-tested offline against a fake transport only.
-It has not been executed against the live API; the request format and the
-resulting numbers are unverified.
+It has not been executed against the live API, so the request format and any
+resulting numbers are unverified, and the scoreboard has no rows.

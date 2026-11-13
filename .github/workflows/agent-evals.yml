@@ -1,0 +1,67 @@
+name: Agent evals (manual)
+
+# Opt-in model evaluation of first-call tool selection (docs/agent-evals.md).
+# Manual only: it spends API credits, so it never runs on pull requests, pushes or a schedule,
+# and it never commits anything. Results are an artifact plus the job summary; to publish a row,
+# copy it into docs/agent-eval-scoreboard.md by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Anthropic model id
+        required: true
+        default: claude-sonnet-5-5
+      profile:
+        description: Tool profile whose tools/list is offered to the model
+        required: true
+        type: choice
+        default: all
+        options: [all, core, standard, authoring, devops, ui, db]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-evals
+  cancel-in-progress: false
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run first-call harness
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_MODEL: ${{ inputs.model }}
+          EVAL_PROFILE: ${{ inputs.profile }}
+        run: |
+          mkdir -p artifacts
+          python3 scripts/run-agent-model-eval.py \
+            --model "$EVAL_MODEL" --profile "$EVAL_PROFILE" \
+            --out artifacts/first-tool-eval.json --markdown artifacts/first-tool-eval.md
+
+      - name: Print scoreboard to the job summary
+        if: always()
+        run: |
+          if [ -f artifacts/first-tool-eval.md ]; then
+            cat artifacts/first-tool-eval.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No scenario was answered; see the JSON report in the artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-eval-report
+          path: artifacts/
+          if-no-files-found: ignore
+
+      - name: Fail when nothing was scored
+        run: test -f artifacts/first-tool-eval.md
