@@ -4,6 +4,7 @@ using Xunit;
 
 namespace GxMcp.Gateway.Tests
 {
+    [Collection("stdio-subscriptions")]
     public class McpSubscriptionContractTests
     {
         [Fact]

@@ -67,6 +67,16 @@ namespace GxMcp.Gateway
             }
         }
 
+        /// <summary>Cheap "is anyone listening" check; does not sweep expired sessions.</summary>
+        internal bool AnySessionHasResourceSubscriptions()
+        {
+            foreach (var session in _sessions.Values)
+            {
+                if (session.HasResourceSubscriptions) return true;
+            }
+            return false;
+        }
+
         public void Enqueue(HttpSessionState session, string payload)
         {
             lock (session.PendingMessages)
@@ -143,6 +153,26 @@ namespace GxMcp.Gateway
             lock (_subscriptionLock)
                 return _subscribedResources.TryGetValue(uri.Trim(), out var fence)
                     && (ownership == null || fence.Matches(ownership));
+        }
+
+        public bool HasResourceSubscriptions
+        {
+            get { lock (_subscriptionLock) return _subscribedResources.Count > 0; }
+        }
+
+        public void ClearResourceSubscriptions()
+        {
+            lock (_subscriptionLock) _subscribedResources.Clear();
+        }
+
+        internal ResourceSubscription[] SnapshotResourceSubscriptions()
+        {
+            lock (_subscriptionLock)
+            {
+                return _subscribedResources
+                    .Select(pair => new ResourceSubscription(pair.Key, pair.Value.KbId))
+                    .ToArray();
+            }
         }
 
         public IReadOnlyCollection<string> SubscribedResources

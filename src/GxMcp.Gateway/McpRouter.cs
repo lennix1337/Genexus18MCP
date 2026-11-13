@@ -696,6 +696,7 @@ namespace GxMcp.Gateway
                 new { uri = "genexus://kb/capabilities", name = "GeneXus SDK Capabilities", description = "Capability evidence for the active KB and installed GeneXus SDK; availability is queried explicitly and is not hidden in tools/list." },
                 new { uri = "genexus://kb/agent-playbook", name = "GeneXus Agent Playbook", description = "Recommended MCP workflow to operate this GeneXus server in an agent-native, Git-friendly way." },
                 new { uri = "genexus://kb/llm-playbook", name = "LLM CLI+MCP Playbook", description = "Protocol-first guide for choosing CLI vs MCP, token-efficient calls, and timeout/lifecycle handling." },
+                new { uri = "genexus://kb/changes", name = "KB External Changes", description = "Recent object changes made outside this session (for example saved in the GeneXus IDE), detected by polling about every 5 s. Subscribe to be notified; the KB-scoped form is genexus://kb/{alias}/kb/changes." },
                 new { uri = "genexus://objects", name = "GeneXus Objects Index", description = "Browsable index of all objects in the KB." },
                 new { uri = "genexus://attributes", name = "GeneXus Attributes", description = "Browsable list of all attributes." }
             };

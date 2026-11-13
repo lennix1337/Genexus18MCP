@@ -31,6 +31,15 @@ suite when a variable read under `src/` is missing from this page, so a new
 See [K2B IDE Designer bridge](k2b-ide-bridge.md) for installation and the
 read-preview-save workflow.
 
+## KB change history (git shadow repository)
+
+**Operator-facing**, Gateway only, opt-in. Off unless `GXMCP_KB_HISTORY` is set, in which case the feature adds no work at all. See [KB change history](kb-history.md).
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_KB_HISTORY` | Set to `1` (or `true`) to record every confirmed `genexus_edit` single-part write and `genexus_delete_object` deletion as a commit in a local shadow git repository. Needs `git` on `PATH`; if it is missing or the repository cannot be created the feature switches itself off for the process with one log line. | off |
+| `GXMCP_KB_HISTORY_DIR` | Parent folder of the per-KB shadow repositories. Must not be inside a Knowledge Base folder (the feature disables itself if it is). | `%LOCALAPPDATA%\GxMcp\history` |
+
 ## Update / self-update
 
 | Variable | Purpose | Default |
@@ -288,6 +297,8 @@ See [Human-in-the-loop elicitation](elicitation.md).
 | `GXMCP_SOURCE_STORE_BACKFILL` | Worker override for `Server.SourceStoreBackfill` (`off`, `false`, or `0` disables it). | inherited config / `auto` |
 | `Server.SourceStoreMaxMB` | Maximum compressed source-store size in MB. | `512` |
 | `GXMCP_SOURCE_STORE_MAX_MB` | Worker override for `Server.SourceStoreMaxMB`. | inherited config / `512` |
+| `GXMCP_SOURCE_STORE_READS` | Experimental, opt-in. Set to `1` to let an MCP `genexus_read` of `Procedure.Source` or `WebPanel`/`Transaction` `Events` (not minimized, not `refresh=true`) be answered from the source store instead of reading the part text through the SDK. Served only when the record's stored version token equals the token the resolved SDK object yields for the stored text (same `LastUpdate`, parent and SHA-256 of the text) and the object and part report a clean `Dirty`/`IsDirty` flag; everything else falls back to the SDK. The payload is identical except `readFreshness.origin` = `worker-source-store` (`textSource` = `unknown`). Still runs on the STA thread (the object is resolved and its version read through the SDK). Worker log lines: `[STORE-READ] served` / `[STORE-READ] refused <name> (<part>): <reason>`. | off |
+| `GXMCP_SOURCE_SEARCH_TRIGRAM_PRUNE` | Experimental, opt-in. Set to `1` to let `search_source` skip a candidate part only when the store record is stored-and-fresh and its trigram postings prove the pattern cannot occur. Applies to plain literal patterns (`[A-Za-z0-9_]`, three or more characters, no `callee`/argument matchers; case-insensitive pruning is disabled under Turkish/Azerbaijani cultures). Hits, counts and cursors are the same as with the flag off. `partExecution.storeProbe` reports `executed`, `candidates` (parts evaluated) and `hits` (parts skipped). | off |
 
 Backfill progress is exposed under `index.sourceStore` (and lifecycle status) as stored/stale/total counts, cursor state and ETA. Each SDK slice is bounded to roughly 50 objects or 250 ms; the Worker never holds the STA while waiting for the next slice.
 
