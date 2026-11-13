@@ -233,8 +233,19 @@ read cannot silently reuse a cached pattern object.
   KB; tools/list remains deterministic and never hides tools per session.
 - Legacy HTTP sessions may subscribe to a resource URI. Subscription state is
   private to the creating session and `notifications/resources/updated` is
-  filtered before entering its SSE queue; the sessionless 2026 transport does
-  not accept the legacy subscription methods without a negotiated stream.
+  sent only to sessions that subscribed (the stdio process counts as one
+  session); the sessionless 2026 transport does not accept the legacy
+  subscription methods without a negotiated stream.
+- External-change path: the Worker's `KbWatcherService` polls every ~5 s and
+  emits `notifications/resources/updated` on its stdout protocol; the Gateway
+  (`HandleWorkerResponse`) invalidates the KB's cache scope, then
+  `ResourceChangeFeed` records the change (bounded ring served by
+  `genexus://kb/changes`) and, only if some session has a subscription,
+  coalesces it for 0.5 s (one notification per subscribed URI per window, at
+  most 50 distinct objects per window) and delivers it to matching
+  subscribers. Subscriptions are matched by object name and by KB (the URI's
+  alias, else the KB the session had selected when it subscribed). With no
+  subscriber an event costs one ring write; nothing runs on a tool-call path.
 - Task-handle projection over the session-scoped background job registry
 - Additive response normalization for `tools/call` payloads (`mcp-axi/2` metadata under `_meta` and lightweight aggregates)
 - Canonical operation policy for cache/idempotency decisions: published

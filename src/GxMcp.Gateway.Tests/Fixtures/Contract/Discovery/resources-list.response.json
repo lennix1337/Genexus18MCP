@@ -17,6 +17,11 @@
       "uri": "genexus://kb/capabilities"
     },
     {
+      "description": "Recent object changes made outside this session (for example saved in the GeneXus IDE), detected by polling about every 5 s. Subscribe to be notified; the KB-scoped form is genexus://kb/{alias}/kb/changes.",
+      "name": "KB External Changes",
+      "uri": "genexus://kb/changes"
+    },
+    {
       "description": "Health report for the GeneXus MCP worker and gateway.",
       "name": "Gateway Health Report",
       "uri": "genexus://kb/health"
