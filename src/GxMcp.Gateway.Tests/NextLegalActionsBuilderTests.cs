@@ -172,6 +172,22 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal("genexus_edit", first["tool"]?.ToString());
         }
 
+        [Theory]
+        [InlineData("MasterPage", "WebForm")]
+        [InlineData("WebPanel", "WebForm")]
+        [InlineData("Procedure", "Source")]
+        public void CanonicalCreate_ActionObject_SuggestsEditingThePartThatHoldsTheContentOfTheType(string type, string part)
+        {
+            var args = new JObject { ["action"] = "object", ["type"] = type, ["name"] = "Foo" };
+            var payload = new JObject { ["status"] = "Success", ["name"] = "Foo", ["type"] = type };
+            var result = NextLegalActionsBuilder.BuildFor("genexus_create", args, payload, isError: false);
+
+            Assert.NotNull(result);
+            var first = (JObject)result![0];
+            Assert.Equal("genexus_edit", first["tool"]?.ToString());
+            Assert.Equal(part, first["args"]?["part"]?.ToString());
+        }
+
         [Fact]
         public void CanonicalCreate_ActionPopup_SuggestsEditAndBuild()
         {

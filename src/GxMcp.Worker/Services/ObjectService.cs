@@ -526,12 +526,18 @@ namespace GxMcp.Worker.Services
 
                 Logger.Info(string.Format("Creating Object: {0} ({1})", name, type));
 
+                // A Master Page is a WebPanel with WEB_COMP=Master and a form holding a content place holder: the SDK builds it
+                // from the WebPanel type (same entity type GUID), so every step below that talks to the SDK uses createType.
+                bool masterPage = ObjectCreateTypes.IsMasterPage(type);
+                string createType = masterPage ? ObjectCreateTypes.MasterPageBaseType : type;
+                if (masterPage) type = ObjectCreateTypes.MasterPageType;
+
                 // Map string type to Guid. First try the well-known descriptor table (covers
                 // every type with a concrete wrapper class), then fall back to ObjClass.<Name>
                 // reflection so types without a public wrapper (SDPanel, Dashboard, Query,
                 // WorkflowDiagram, ConversationalFlows, TestSuite, WikiPage, WorkWithWeb,
                 // WorkWithDevices, etc.) are still creatable by name.
-                Guid typeGuid = ResolveObjectTypeGuid(type);
+                Guid typeGuid = ResolveObjectTypeGuid(createType);
                 if (typeGuid == Guid.Empty)
                 {
                     return McpResponse.Err(
@@ -611,6 +617,9 @@ namespace GxMcp.Worker.Services
                         ["name"] = name,
                         ["hint"] = "Re-run without dryRun to call Save()."
                     };
+                    if (masterPage)
+                        planned["creates"] = "A WebPanel with WEB_COMP=" + ObjectCreateTypes.MasterPageWebComp
+                            + " and a form holding a content place holder (ContentHolder), saved once.";
                     string optDesc = (options?["description"] ?? options?["Description"])?.ToString();
                     if (!string.IsNullOrWhiteSpace(optDesc)) planned["description"] = optDesc;
 
@@ -638,9 +647,18 @@ namespace GxMcp.Worker.Services
                     return McpResponse.Ok(target: name, code: "DryRun", result: planned);
                 }
 
-                KBObject newObj = CreateObjectInstance(type, name, options, out string seededDescription, out JObject typedMeta);
+                KBObject newObj = CreateObjectInstance(createType, name, options, out string seededDescription, out JObject typedMeta);
+                if (masterPage) ApplyMasterPageDefinition(newObj);
 
                 newObj.Save();
+
+                // A Master Page is proved by a fresh read before anything else is done with it; one that came out as something
+                // else is deleted again instead of being left behind as a plain WebPanel.
+                if (masterPage)
+                {
+                    string notPersisted = VerifyMasterPagePersisted(newObj);
+                    if (notPersisted != null) return RemoveUnverifiedMasterPage(newObj, name, notPersisted);
+                }
 
                 // Best-effort: refresh search index so subsequent list/query calls see this object
                 // without waiting for a full reindex.
@@ -673,6 +691,7 @@ namespace GxMcp.Worker.Services
                 // object. If the move fails the object still exists in Root Module, so we
                 // surface a partial-success payload rather than throwing away the creation.
                 JObject placementMeta = null;
+                string placementWarning = null;
                 if (requestedPlacement != null)
                 {
                     string moveJson = MoveObject(name, requestedPlacement, typeFilter: type, destKind: requestedPlacementKind,
@@ -688,8 +707,11 @@ namespace GxMcp.Worker.Services
                         ["detail"] = moveResp ?? (JToken)moveJson
                     };
                     if (!moveOk)
+                    {
                         placementMeta["note"] = "Object created in Root Module but the move into '" + requestedPlacement +
                             "' did not complete. See detail; move it with genexus_properties action=move, or in the IDE.";
+                        placementWarning = ObjectCreateTypes.BuildPlacementWarning(requestedPlacement, requestedPlacementKind, moveResp);
+                    }
                 }
 
                 string idStr = "";
@@ -701,6 +723,12 @@ namespace GxMcp.Worker.Services
                     ["id"] = idStr
                 };
                 if (placementMeta != null) responsePayload["placement"] = placementMeta;
+                if (placementWarning != null)
+                {
+                    // The object exists but not where it was asked to be: said at the top of the result, not only inside placement.
+                    responsePayload["placementApplied"] = false;
+                    responsePayload["warnings"] = new JArray(placementWarning);
+                }
 
                 // Issue #692: an ObjectCreated that cannot say whether the store holds the object leaves the
                 // caller guessing. Only a cache-invalidated reload by identity counts as verified; an Attribute
@@ -1057,6 +1085,86 @@ namespace GxMcp.Worker.Services
                     obj.SetPropertyValue(propName, value);
             }
             catch (Exception ex) { Logger.Debug("[CREATE] TrySetPropertyString(" + propName + "='" + value + "') failed: " + ex.Message); }
+        }
+
+        // A Master Page is born whole: WEB_COMP=Master and the form with its content place holder go into the object in memory,
+        // before its first save, so the SDK validates one valid object. Applied one at a time to a saved WebPanel each of them
+        // is refused (a Master Page needs the place holder; the place holder is allowed only in a Master Page).
+        private static void ApplyMasterPageDefinition(KBObject obj)
+        {
+            // The write genexus_properties set makes (typed value first, then the SDK's string setter), so the value lands the same way.
+            string failure = null;
+            try { PropertyService.ApplyPropertyValue(obj, "WEB_COMP", ObjectCreateTypes.MasterPageWebComp, null, obj); }
+            catch (Exception ex) { failure = ex.Message; }
+            string webComp = ReadWebComp(obj);
+            if (!ObjectCreateTypes.IsMasterWebComp(webComp))
+                throw new InvalidOperationException("The SDK did not accept WEB_COMP=" + ObjectCreateTypes.MasterPageWebComp
+                    + " on the new object (it holds '" + (webComp ?? "<null>") + "')" + (failure == null ? "." : ": " + failure));
+
+            var form = WebFormXmlHelper.GetWebFormPart(obj);
+            if (form == null) throw new InvalidOperationException("The new Master Page has no WebForm part.");
+            WebFormXmlHelper.ApplyEditableXml(form, ObjectCreateTypes.MasterPageMinimalForm);
+        }
+
+        private static string ReadWebComp(KBObject obj) => PropertyService.ReadPropertyString(obj, "WEB_COMP", obj?.Model);
+
+        // What is wrong with the saved object, when a fresh read PROVES that it is not the Master Page that was asked for (not a
+        // Master Page, or without its content place holder); otherwise null. A read that cannot be made proves nothing, so it
+        // never deletes an object that the SDK has just validated and saved: the create then answers like any other type, with
+        // the persistence unverified.
+        private string VerifyMasterPagePersisted(KBObject saved)
+        {
+            try
+            {
+                KBObject fresh = FindObjectFreshByIdentity(saved);
+                if (fresh == null)
+                {
+                    Logger.Warn("[CREATE] The saved Master Page '" + saved?.Name + "' could not be read back; it is left in place unverified.");
+                    return null;
+                }
+
+                if (!ObjectCreateTypes.IsMasterWebComp(ReadWebComp(fresh)))
+                    return "The saved object is a " + (fresh.TypeDescriptor?.Name ?? "WebPanel") + ", not a Master Page.";
+
+                string form = WebFormXmlHelper.ReadEditableXml(fresh);
+                if (form == null || form.IndexOf("<contentholder", StringComparison.OrdinalIgnoreCase) < 0)
+                    return "The saved Master Page does not hold the form's content place holder.";
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[CREATE] The saved Master Page '" + saved?.Name + "' could not be verified (" + ex.Message + "); it is left in place unverified.");
+                return null;
+            }
+        }
+
+        // The object was saved but a fresh read proved that it is not the Master Page that was asked for: delete it again, so that
+        // no plain WebPanel is left behind under the name, and say whether that worked. The delete is bound to the GUID of the
+        // saved object, so a same-named object of another module is never the one removed.
+        private string RemoveUnverifiedMasterPage(KBObject saved, string name, string reason)
+        {
+            bool deleted = false;
+            string deleteError = null;
+            try
+            {
+                string typeName = null;
+                try { typeName = FindObjectFreshByIdentity(saved)?.TypeDescriptor?.Name; } catch { }
+                var response = JObject.Parse(DeleteObject(name, typeName ?? ObjectCreateTypes.MasterPageBaseType, confirm: true,
+                    expectedGuid: saved.Guid.ToString("D")));
+                deleted = string.Equals(response["status"]?.ToString(), "ok", StringComparison.OrdinalIgnoreCase);
+                if (!deleted) deleteError = response["error"]?["message"]?.ToString();
+            }
+            catch (Exception ex) { deleteError = ex.Message; }
+
+            return McpResponse.Err(
+                code: "MasterPageNotPersisted",
+                message: reason,
+                target: name,
+                hint: deleted
+                    ? "The object was deleted again, so nothing was left behind. Create the Master Page in the GeneXus IDE, or create a WebPanel and give it the form and WEB_COMP=Master in the IDE."
+                    : "Delete the object with genexus_delete_object before trying again: it exists but is not a Master Page.",
+                errorExtra: new JObject { ["persisted"] = !deleted, ["compensation"] = new JObject { ["deleted"] = deleted, ["error"] = deleteError } },
+                extra: new JObject { ["type"] = ObjectCreateTypes.MasterPageType, ["name"] = name, ["persisted"] = !deleted });
         }
 
         // Item 32: objectFilter added. sinceMode now also accepts an ISO-8601 timestamp;

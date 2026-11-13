@@ -36,6 +36,21 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void Help_DescribesTheMasterPageCreateAndTheWarningOfAPlacementThatWasNotApplied()
+        {
+            string? help = ToolHelpCatalog.Get("genexus_create");
+
+            Assert.NotNull(help);
+            Assert.Contains("`MasterPage`", help);
+            Assert.Contains("WEB_COMP=Master", help);
+            Assert.Contains("ContentHolder", help);
+            Assert.Contains("MasterPageNotPersisted", help);
+            Assert.Contains("`object_atomic` does not create a Master Page", help);
+            Assert.Contains("placementApplied: false", help);
+            Assert.Contains("`warnings`", help);
+        }
+
+        [Fact]
         public void Help_RefusesWorkWithPlusTemplatesInEveryModeWithTheirErrorCodesAndTheIde()
         {
             string? help = ToolHelpCatalog.Get("genexus_create");
