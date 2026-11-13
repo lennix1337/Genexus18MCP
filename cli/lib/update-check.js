@@ -1,7 +1,6 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const https = require('https');
 const { spawn } = require('child_process');
 const {
     getGatewayExePath,
@@ -107,6 +106,8 @@ function validateChannel(channel) {
 }
 
 function httpGetJson(url) {
+    // Loaded here, not at the top: TLS setup is ~10 ms and the launcher only needs it for a network check.
+    const https = require('https');
     return new Promise((resolve) => {
         let req;
         try {
@@ -241,6 +242,16 @@ function detectClientExeDrift() {
     }
 }
 
+// `npx -y genexus-mcp@4.6.0` (an exact version) is a pinned launcher; `@latest`, a
+// dist-tag such as `@next`, or no tag follow the registry on each start.
+function isPinnedNpxArgs(args) {
+    const prefix = `${NPM_PACKAGE}@`;
+    return Array.isArray(args) && args.some((arg) => {
+        const spec = typeof arg === 'string' ? arg.trim() : '';
+        return spec.toLowerCase().startsWith(prefix) && parseSemver(spec.slice(prefix.length)) !== null;
+    });
+}
+
 // How is the gateway actually launched by the registered clients? That decides
 // the right upgrade action (npx@latest auto-updates on restart; npm-global needs
 // `npm i -g`; a fixed exe path needs the installer). Returns the dominant method
@@ -250,20 +261,20 @@ function detectInstallMethod() {
     if (process.env.GENEXUS_MCP_GATEWAY_EXE) {
         return { method: 'fixed-path', detail: process.env.GENEXUS_MCP_GATEWAY_EXE, evidence: [] };
     }
-    const counts = { 'npx-latest': 0, 'npm-global': 0, 'fixed-path': 0, 'package-direct': 0 };
+    const counts = { 'npx-latest': 0, 'npx-pinned': 0, 'npm-global': 0, 'fixed-path': 0, 'package-direct': 0 };
     const evidence = [];
     try {
         for (const c of clientsStatus()) {
             if (!c.registered || !c.command) continue;
             const cmd = String(c.command);
             let m;
-            if (/(^|[\\/])npx(\.cmd)?$/i.test(cmd)) m = 'npx-latest';
+            if (/(^|[\\/])npx(\.cmd)?$/i.test(cmd)) m = isPinnedNpxArgs(c.args) ? 'npx-pinned' : 'npx-latest';
             else if (/(^|[\\/])genexus-mcp(\.cmd)?$/i.test(cmd)) m = 'npm-global';
             else if (c.id === 'antigravity' && /GxMcp\.Gateway\.exe$/i.test(cmd)) m = 'package-direct';
             else if (/[\\/]/.test(cmd)) m = 'fixed-path';
             else m = 'npm-global';
             counts[m] = (counts[m] || 0) + 1;
-            evidence.push({ client: c.name, method: m, command: cmd });
+            evidence.push({ client: c.name, clientId: c.id, method: m, command: cmd });
         }
     } catch { /* ignore */ }
     // Pick the most common; default to npx-latest (the recommended/auto path).
@@ -278,7 +289,7 @@ function detectInstallMethod() {
 
 // The method-appropriate upgrade plan. `auto` means no manual install step is
 // needed (the npx launcher fetches @latest on the next client start).
-function upgradePlanFor(method, channel) {
+function upgradePlanFor(method, channel, evidence = []) {
     const resolvedChannel = channel || 'latest';
     const tag = resolvedChannel !== 'latest' ? `@${resolvedChannel}` : '@latest';
     if (method === 'npx-latest') {
@@ -289,6 +300,23 @@ function upgradePlanFor(method, channel) {
             steps: [
                 `Your clients launch via \`npx ${NPM_PACKAGE}${tag}\`, which fetches the newest ${resolvedChannel} version on each start.`,
                 'Just fully restart your AI client — it will pick up the selected channel automatically.'
+            ],
+            applyCommand: null,
+            restartRequired: true
+        };
+    }
+    if (method === 'npx-pinned') {
+        const ids = [...new Set((Array.isArray(evidence) ? evidence : [])
+            .filter((entry) => entry && entry.method === 'npx-pinned' && entry.clientId)
+            .map((entry) => entry.clientId))];
+        return {
+            method,
+            channel: resolvedChannel,
+            auto: false,
+            steps: [
+                `Your clients launch a pinned version (npx ${NPM_PACKAGE}@<exact version>): restarting the client does not update it.`,
+                `Re-pin to the ${resolvedChannel} release with: npx -y ${NPM_PACKAGE}${tag} clients add --clients ${ids.length ? ids.join(',') : '<ids>'} --force --pin`,
+                'Then fully restart your AI client. To follow releases automatically again, register without --pin.'
             ],
             applyCommand: null,
             restartRequired: true
@@ -398,7 +426,7 @@ async function handleUpdate(options, ctx) {
         return { exitCode: ctx.EXIT_CODES.OK, envelope: { ok: { current, latest: result.latestVersion, channel, updateAvailable: false, invalidVersion: true }, help: ['Could not compare versions because the installed or published version is invalid semver.'] } };
     }
     const updateAvailable = compareSemver(result.latestVersion, current || '0.0.0') > 0;
-    const plan = upgradePlanFor(install.method, channel);
+    const plan = upgradePlanFor(install.method, channel, install.evidence);
 
     // --apply: actually perform the method-appropriate upgrade.
     let applied = null;
@@ -481,6 +509,7 @@ module.exports = {
     parseSemver,
     getPackageVersion,
     detectInstallMethod,
+    isPinnedNpxArgs,
     upgradePlanFor,
     fetchLatestRelease,
     validateChannel,

@@ -12,28 +12,30 @@ const {
     renderOutput,
     formatToonObject
 } = require('./lib/output');
-const {
-    handleStatus,
-    handleDoctor,
-    handleToolsList,
-    handleConfigShow,
-    handleConfigCreate,
-    handleConfigMigrate,
-    handleInit,
-    handleWhoami,
-    handleUninstall,
-    handleKb,
-    handleClients,
-    handleHome,
-    handleLlmHelp,
-    handleLayout,
-    handleHelp,
-    handleVersion,
-    usageEnvelope,
-    commandHelpMap
-} = require('./commands/axi');
+// Loading the AXI handlers costs ~25 ms and forwarding stdio to the Gateway never
+// needs them, so they load on first use.
+const lazyAxi = (name) => (...args) => require('./commands/axi')[name](...args);
+const handleStatus = lazyAxi('handleStatus');
+const handleDoctor = lazyAxi('handleDoctor');
+const handleToolsList = lazyAxi('handleToolsList');
+const handleConfigShow = lazyAxi('handleConfigShow');
+const handleConfigCreate = lazyAxi('handleConfigCreate');
+const handleConfigMigrate = lazyAxi('handleConfigMigrate');
+const handleInit = lazyAxi('handleInit');
+const handleWhoami = lazyAxi('handleWhoami');
+const handleUninstall = lazyAxi('handleUninstall');
+const handleKb = lazyAxi('handleKb');
+const handleClients = lazyAxi('handleClients');
+const handleHome = lazyAxi('handleHome');
+const handleLlmHelp = lazyAxi('handleLlmHelp');
+const handleLayout = lazyAxi('handleLayout');
+const handleHelp = lazyAxi('handleHelp');
+const handleVersion = lazyAxi('handleVersion');
+const usageEnvelope = lazyAxi('usageEnvelope');
+const commandHelpMap = lazyAxi('commandHelpMap');
 const { startBackgroundUpdateCheck, handleUpdate } = require('./lib/update-check');
 const { createStderrTail, writeLastStdioError } = require('./lib/stdio-diagnostics');
+const startupTiming = require('./lib/startup-timing');
 
 const EXIT_CODES = {
     OK: 0,
@@ -51,6 +53,7 @@ const GLOBAL_DEFAULTS = {
     allClients: false,
     serverName: null,
     force: false,
+    pin: false,
     mcpSmoke: false,
     dump: false,
     noSmoke: false,
@@ -371,6 +374,9 @@ function parseArgs(argv) {
             case 'no-write-clients':
                 result.options.noWriteClients = true;
                 break;
+            case 'pin':
+                result.options.pin = true;
+                break;
             case 'mcp-smoke':
                 result.options.mcpSmoke = true;
                 break;
@@ -486,17 +492,13 @@ async function launchGateway(passthroughArgs, options) {
         quiet: options.quiet
     });
 
+    startupTiming.mark('config:resolved');
     if (!setup.ok) {
         recordStdioFailure({ gatewayExePath: getGatewayExePath(), exitCode: EXIT_CODES.ERROR, error: 'Launcher setup failed.' });
         return EXIT_CODES.ERROR;
     }
 
-    let gatewayExePath = getGatewayExePath();
-    try {
-        const { ensureStagedGateway } = require('./lib/runtime-stager');
-        const staged = ensureStagedGateway();
-        gatewayExePath = staged.gatewayExePath;
-        const cleanup = staged.cleanup;
+    const reportCleanup = (cleanup) => {
         if (cleanup && (cleanup.skipped?.length || cleanup.failed?.length || cleanup.processProbeAvailable === false)) {
             const summary = [
                 cleanup.processProbeAvailable === false ? 'process probe unavailable' : null,
@@ -505,11 +507,27 @@ async function launchGateway(passthroughArgs, options) {
             ].filter(Boolean).join(', ');
             if (!options.quiet) launcherStderr.write(`[genexus-mcp] Runtime cleanup incomplete: ${summary}.\n`);
         }
+    };
+
+    let gatewayExePath = getGatewayExePath();
+    let staged = null;
+    try {
+        const { ensureStagedGateway } = require('./lib/runtime-stager');
+        staged = ensureStagedGateway({
+            deferCleanup: true,
+            // First start of a version copies the whole publish tree: say so on stderr.
+            onStaging: (targetDir) => {
+                if (!options.quiet) launcherStderr.write(`[genexus-mcp] First start of this version: staging the runtime to ${targetDir} (one time).\n`);
+            }
+        });
+        gatewayExePath = staged.gatewayExePath;
+        reportCleanup(staged.cleanup);
     } catch (stageErr) {
         if (!options.quiet) {
             launcherStderr.write(`[genexus-mcp] Warning: Runtime staging failed (${stageErr.message}), falling back to direct binary.\n`);
         }
     }
+    startupTiming.mark('runtime:staged');
     if (!require('fs').existsSync(gatewayExePath)) {
         const message = `[genexus-mcp] ERROR: Gateway executable not found at ${gatewayExePath}`;
         launcherStderr.write(`${message}\n`);
@@ -550,6 +568,14 @@ async function launchGateway(passthroughArgs, options) {
             return;
         }
 
+        startupTiming.mark('gateway:spawned');
+        startupTiming.flush();
+        // Off the critical path: the Gateway is already starting.
+        if (staged) {
+            require('./lib/runtime-stager').startRuntimeCleanupInBackground(staged, {
+                onResult: (outcome) => reportCleanup(outcome && outcome.cleanup)
+            });
+        }
         if (child.stderr) {
             child.stderr.on('data', (chunk) => {
                 stderrTail.append(chunk);

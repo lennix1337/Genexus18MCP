@@ -42,6 +42,7 @@ pub mod kb_ops;
 pub mod locks;
 pub mod model;
 pub mod module;
+pub mod native_diagnostics;
 pub mod navigation;
 pub mod output_channel;
 pub mod reachability;

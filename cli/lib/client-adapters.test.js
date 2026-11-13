@@ -205,10 +205,11 @@ test('applyLauncherConfigOrExit creates neutral config outside a KB', () => {
 
     try {
         const stderr = { write: () => {} };
-        const result = applyLauncherConfigOrExit({ cwd: tmpDir, stderr, quiet: true });
+        const fakeHome = path.join(tmpDir, 'home');
+        const result = applyLauncherConfigOrExit({ cwd: tmpDir, stderr, quiet: true }, { homedir: () => fakeHome });
 
         assert.equal(result.ok, true);
-        assert.ok(process.env.GX_CONFIG_PATH);
+        assert.equal(process.env.GX_CONFIG_PATH, path.join(fakeHome, '.genexus-mcp', 'config.json'), 'the neutral config must be written under the injected home, never the real one');
         assert.ok(fs.existsSync(process.env.GX_CONFIG_PATH));
         const content = JSON.parse(fs.readFileSync(process.env.GX_CONFIG_PATH, 'utf8'));
         assert.equal(content.Environment?.KBs, undefined);
