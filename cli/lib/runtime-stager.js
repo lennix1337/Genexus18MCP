@@ -473,14 +473,17 @@ function ensureStagedGateway(options = {}) {
     const targetDir = path.join(runtimeRoot, `${version}-${sha8}`);
     const stagedGatewayExe = path.join(targetDir, 'GxMcp.Gateway.exe');
 
+    // A staged directory only exists after its copy was verified and renamed into
+    // place, so its presence is the whole warm-start check: nothing is re-copied.
     if (fs.existsSync(stagedGatewayExe)) {
-        const cleanup = cleanOldRuntimes(runtimeRoot, targetDir, 2, options);
         return {
             staged: true,
             gatewayExePath: stagedGatewayExe,
             runtimeDir: targetDir,
+            runtimeRoot,
             fresh: false,
-            cleanup
+            cleanupDeferred: Boolean(options.deferCleanup),
+            cleanup: options.deferCleanup ? null : cleanOldRuntimes(runtimeRoot, targetDir, 2, options)
         };
     }
 
@@ -488,6 +491,7 @@ function ensureStagedGateway(options = {}) {
         throw new Error(`Cannot stage runtime: publish directory not found at ${publishDir}`);
     }
 
+    if (typeof options.onStaging === 'function') options.onStaging(targetDir);
     fs.mkdirSync(runtimeRoot, { recursive: true });
     const tmpDir = `${targetDir}.tmp-${process.pid}-${Date.now()}`;
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -531,18 +535,79 @@ function ensureStagedGateway(options = {}) {
         throw failure;
     }
 
-    const cleanup = mergeRuntimeCleanupResults(
-        cleanOldRuntimes(runtimeRoot, targetDir, 2, options),
-        temporaryCleanup
-    );
+    const cleanup = options.deferCleanup
+        ? temporaryCleanup
+        : mergeRuntimeCleanupResults(cleanOldRuntimes(runtimeRoot, targetDir, 2, options), temporaryCleanup);
 
     return {
         staged: true,
         gatewayExePath: stagedGatewayExe,
         runtimeDir: targetDir,
+        runtimeRoot,
         fresh: true,
+        cleanupDeferred: Boolean(options.deferCleanup),
         cleanup
     };
+}
+
+// Old-runtime garbage collection is not needed to start the Gateway, and when an
+// older runtime is still used by another client's Gateway it asks Windows for the
+// process list (a ~1 s powershell call) several times. The launcher therefore
+// spawns first and runs it afterwards in a worker thread (the probe blocks its
+// thread, not the launcher), at most once per interval; a freshly staged version
+// always collects. The delete safety is unchanged: cleanOldRuntimes still fails
+// closed on any process it cannot rule out, and a worker killed mid-delete leaves
+// a `.deleting-` tombstone that the next collection finishes.
+const RUNTIME_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const RUNTIME_CLEANUP_STAMP = '.cleanup-stamp';
+
+function isRuntimeCleanupDue(runtimeRoot, { fresh = false, now = Date.now(), intervalMs = RUNTIME_CLEANUP_INTERVAL_MS } = {}) {
+    if (fresh) return true;
+    try {
+        const age = now - fs.statSync(path.join(runtimeRoot, RUNTIME_CLEANUP_STAMP)).mtimeMs;
+        // A stamp slightly in the future (filesystem timestamp granularity) still counts; a far-future one (clock change) does not.
+        return !(age > -5 * 60 * 1000 && age < intervalMs);
+    } catch {
+        return true;
+    }
+}
+
+function runRuntimeCleanup({ runtimeRoot, runtimeDir, fresh = false }, options = {}) {
+    if (!isRuntimeCleanupDue(runtimeRoot, { fresh, now: options.now, intervalMs: options.intervalMs })) {
+        return { ran: false, cleanup: null };
+    }
+    // Claim the interval before collecting, so a launcher that exits mid-collection
+    // (the worker dies with it) still counts as an attempt and the probe is not
+    // repeated on every short session. A killed run is finished by a later one.
+    try {
+        fs.writeFileSync(path.join(runtimeRoot, RUNTIME_CLEANUP_STAMP), String(Date.now()));
+    } catch {
+        // Best effort: without the stamp the next launch simply collects again.
+    }
+    const cleanup = cleanOldRuntimes(runtimeRoot, runtimeDir, 2, options);
+    return { ran: true, cleanup };
+}
+
+// Returns the worker, or null when nothing is due. `onResult` receives
+// `{ ran, cleanup }` or `{ ran: false, error }`.
+function startRuntimeCleanupInBackground(staged, { onResult, createWorker } = {}) {
+    if (!staged || !staged.cleanupDeferred || !staged.runtimeRoot) return null;
+    if (!isRuntimeCleanupDue(staged.runtimeRoot, { fresh: staged.fresh })) return null;
+    const report = typeof onResult === 'function' ? onResult : () => {};
+    try {
+        const spawnWorker = createWorker || ((data) => {
+            const { Worker } = require('worker_threads');
+            return new Worker(path.join(__dirname, 'runtime-cleanup-worker.js'), { workerData: data });
+        });
+        const worker = spawnWorker({ runtimeRoot: staged.runtimeRoot, runtimeDir: staged.runtimeDir, fresh: Boolean(staged.fresh) });
+        worker.unref();
+        worker.once('message', report);
+        worker.once('error', (err) => report({ ran: false, error: err && err.message ? err.message : String(err) }));
+        return worker;
+    } catch (err) {
+        report({ ran: false, error: err && err.message ? err.message : String(err) });
+        return null;
+    }
 }
 
 function listStagedRuntimes(runtimeRoot = resolveDefaultRuntimeRoot()) {
@@ -636,6 +701,9 @@ module.exports = {
     computePublishFingerprint,
     verifyManifest,
     cleanOldRuntimes,
+    isRuntimeCleanupDue,
+    runRuntimeCleanup,
+    startRuntimeCleanupInBackground,
     ensureStagedGateway,
     listStagedRuntimes,
     getRunningGxMcpProcesses,

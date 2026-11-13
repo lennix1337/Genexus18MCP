@@ -3448,3 +3448,181 @@ test('launcher config: an unrelated or unparsable config.json in the working dir
         });
     }
 });
+
+// Installed-package fixture for launcher startup tests: a copy of cli/ with a publish/ tree whose
+// GxMcp.Gateway.exe is cmd.exe, so the launcher really stages and spawns it. cmd is driven through
+// passthrough args (`/d /q /c exit 0`) and prints nothing, so stdout hygiene is observable.
+function makeInstalledPackageFixture() {
+    const root = fs.mkdtempSync(path.join(cliHome, 'installed-'));
+    const pkgRoot = path.join(root, 'pkg');
+    fs.cpSync(__dirname, path.join(pkgRoot, 'cli'), {
+        recursive: true,
+        filter: (src) => !src.endsWith('.test.js') && path.basename(src) !== 'test-support'
+    });
+    fs.mkdirSync(path.join(pkgRoot, 'config'), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, '..', 'package.json'), path.join(pkgRoot, 'package.json'));
+    fs.copyFileSync(path.join(__dirname, '..', 'config', 'gx-versions.json'), path.join(pkgRoot, 'config', 'gx-versions.json'));
+    fs.mkdirSync(path.join(pkgRoot, 'publish'), { recursive: true });
+    fs.copyFileSync(process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', path.join(pkgRoot, 'publish', 'GxMcp.Gateway.exe'));
+    const home = path.join(root, 'home');
+    fs.mkdirSync(path.join(home, '.genexus-mcp'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.genexus-mcp', 'config.json'), JSON.stringify({ GeneXus: {} }));
+    const runtimeRoot = path.join(root, 'runtime');
+    const launch = (extraEnv = {}) => spawnSync(
+        process.execPath,
+        ['--require', path.join(__dirname, 'test-support/home-write-guard.js'), path.join(pkgRoot, 'cli', 'run.js'), '/d', '/q', '/c', 'exit', '0'],
+        {
+            encoding: 'utf8',
+            // Not `root`: a detached cleanup probe may outlive the launcher briefly and would hold its cwd.
+            cwd: cliHome,
+            env: {
+                ...process.env, ...sandboxHomeEnv(home),
+                GX_CONFIG_PATH: '', GENEXUS_MCP_GATEWAY_EXE: '', GENEXUS_MCP_NO_STAGING: '', GENEXUS_MCP_FORCE_STAGING: '',
+                GENEXUS_HOME: '', NODE_OPTIONS: '', GENEXUS_MCP_NO_UPDATE_CHECK: '1', GENEXUS_MCP_TRACE_STARTUP: '',
+                GENEXUS_MCP_RUNTIME_DIR: runtimeRoot,
+                GXMCP_TEST_PROTECTED_ROOTS: JSON.stringify(protectedRoots),
+                ...extraEnv
+            }
+        }
+    );
+    return { root, runtimeRoot, launch };
+}
+
+function parseStartupTiming(stderr) {
+    const lines = stderr.split(/\r?\n/).filter((line) => line.includes('startup-timing'));
+    return { count: lines.length, phases: lines.length ? JSON.parse(/startup-timing (\{.*\})/.exec(lines[0])[1]) : null };
+}
+
+test('launcher stages once, spawns before collecting old runtimes, and keeps stdout clean', { skip: process.platform !== 'win32' }, () => {
+    const fixture = makeInstalledPackageFixture();
+    try {
+        const cold = fixture.launch({ GENEXUS_MCP_TRACE_STARTUP: '1' });
+        assert.equal(cold.status, 0, cold.stderr);
+        assert.equal(cold.stdout, '', 'passthrough mode must write nothing to stdout');
+        assert.equal(cold.stderr.split('First start of this version: staging the runtime').length - 1, 1, 'the one-time copy is announced on stderr');
+        const coldTiming = parseStartupTiming(cold.stderr);
+        assert.equal(coldTiming.count, 1);
+        const order = ['run.js:start', 'run.js:modules-loaded', 'config:resolved', 'runtime:staged', 'gateway:spawned'];
+        assert.deepEqual(Object.keys(coldTiming.phases), order);
+        for (let i = 1; i < order.length; i += 1) assert.ok(coldTiming.phases[order[i]] >= coldTiming.phases[order[i - 1]], `${order[i]} must not precede ${order[i - 1]}`);
+
+        // Four older runtimes: collecting them needs the (slow) process probe.
+        for (const [index, name] of ['0.0.1-aaaaaaaa', '0.0.2-bbbbbbbb', '0.0.3-cccccccc', '0.0.4-dddddddd'].entries()) {
+            const dir = path.join(fixture.runtimeRoot, name);
+            fs.mkdirSync(dir);
+            fs.utimesSync(dir, 1000 + index, 1000 + index);
+        }
+        const warm = fixture.launch({ GENEXUS_MCP_TRACE_STARTUP: '1' });
+        assert.equal(warm.status, 0, warm.stderr);
+        assert.equal(warm.stdout, '');
+        assert.doesNotMatch(warm.stderr, /First start of this version/, 'an already staged runtime is not copied or announced again');
+        const { phases } = parseStartupTiming(warm.stderr);
+        assert.ok(phases['runtime:staged'] - phases['config:resolved'] < 500,
+            `runtime resolution must not wait for old-runtime collection (took ${phases['runtime:staged'] - phases['config:resolved']} ms)`);
+
+        const quiet = fixture.launch();
+        assert.equal(quiet.status, 0, quiet.stderr);
+        assert.equal(quiet.stdout, '');
+        assert.equal(parseStartupTiming(quiet.stderr).count, 0, 'timing is printed only when GENEXUS_MCP_TRACE_STARTUP=1');
+    } finally {
+        try { removeTempPath(fixture.root, { recursive: true, force: true }); } catch { /* a late probe may still hold a handle; cliHome teardown retries */ }
+    }
+});
+
+test('loading the launcher entry leaves the AXI handlers and TLS stack for first use', () => {
+    const script = `require(${JSON.stringify(path.join(__dirname, 'index.js'))});
+        process.stdout.write(JSON.stringify({
+            axi: Object.keys(require.cache).some((file) => file.includes('commands') && file.endsWith('axi.js')),
+            https: process.moduleLoadList.includes('NativeModule https')
+        }));`;
+    const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { axi: false, https: false });
+});
+
+test('--pin registers a version-pinned npx launcher and the default stays @latest', () => {
+    const { version } = require('../package.json');
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-pin-'));
+    try {
+        const env = { ...sandboxHomeEnv(tempRoot), GX_CONFIG_PATH: path.join(tempRoot, 'config.json'), GENEXUS_MCP_GATEWAY_EXE: '' };
+        fs.writeFileSync(env.GX_CONFIG_PATH, JSON.stringify({ Environment: { KBPath: tempRoot } }));
+        const cursorConfig = path.join(tempRoot, '.cursor', 'mcp.json');
+        const registered = () => JSON.parse(fs.readFileSync(cursorConfig, 'utf8')).mcpServers.genexus18mcp.args;
+
+        const unpinned = runCli(['clients', 'add', '--clients', 'cursor', '--format', 'json'], { env });
+        assert.equal(unpinned.status, 0, unpinned.stderr + unpinned.stdout);
+        assert.deepEqual(registered(), ['-y', 'genexus-mcp@latest']);
+
+        const pinned = runCli(['clients', 'add', '--clients', 'cursor', '--force', '--pin', '--format', 'json'], { env });
+        assert.equal(pinned.status, 0, pinned.stderr + pinned.stdout);
+        assert.deepEqual(registered(), ['-y', `genexus-mcp@${version}`]);
+        const verified = JSON.parse(pinned.stdout).ok.verified || [];
+        assert.ok(verified.every((entry) => entry.launcherSemanticState === 'valid'), 'the pinned launcher passes post-write verification');
+    } finally {
+        removeTempPath(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('getLauncher pins the package version only on request and never overrides a fixed gateway path', () => {
+    const { version } = require('../package.json');
+    const previous = process.env.GENEXUS_MCP_GATEWAY_EXE;
+    delete process.env.GENEXUS_MCP_GATEWAY_EXE;
+    try {
+        const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+        assert.deepEqual(getLauncher(null, undefined, { pin: true }), { command: npx, args: ['-y', `genexus-mcp@${version}`] });
+        assert.deepEqual(getLauncher(null, undefined, { pin: false }), { command: npx, args: ['-y', 'genexus-mcp@latest'] });
+        assert.match(require('./lib/config').getPinnedPackageSpec(), /^genexus-mcp@\d+\.\d+\.\d+/);
+        process.env.GENEXUS_MCP_GATEWAY_EXE = 'C:\\Tools\\GxMcp.Gateway.exe';
+        assert.deepEqual(getLauncher(null, undefined, { pin: true }), { command: 'C:\\Tools\\GxMcp.Gateway.exe', args: [] });
+    } finally {
+        if (previous === undefined) delete process.env.GENEXUS_MCP_GATEWAY_EXE;
+        else process.env.GENEXUS_MCP_GATEWAY_EXE = previous;
+    }
+});
+
+test('parseArgs accepts --pin as a boolean flag', () => {
+    const { parseArgs } = require('./index');
+    assert.equal(parseArgs(['init', '--pin']).options.pin, true);
+    assert.equal(parseArgs(['clients', 'add', '--clients', 'cursor', '--pin']).options.pin, true);
+    assert.equal(parseArgs(['init']).options.pin, false);
+    assert.deepEqual(parseArgs(['init', '--pin']).unknownFlags, []);
+});
+
+test('update recognises a pinned npx launcher and tells the operator to re-pin', () => {
+    const { isPinnedNpxArgs } = require('./lib/update-check');
+    assert.equal(isPinnedNpxArgs(['-y', 'genexus-mcp@4.6.0']), true);
+    assert.equal(isPinnedNpxArgs(['-y', 'genexus-mcp@4.7.0-rc.1']), true);
+    assert.equal(isPinnedNpxArgs(['-y', 'genexus-mcp@latest']), false);
+    assert.equal(isPinnedNpxArgs(['-y', 'genexus-mcp@next']), false);
+    assert.equal(isPinnedNpxArgs(['-y', 'genexus-mcp']), false);
+    assert.equal(isPinnedNpxArgs(undefined), false);
+
+    const plan = upgradePlanFor('npx-pinned', 'latest', [
+        { method: 'npx-pinned', clientId: 'cursor' },
+        { method: 'npx-pinned', clientId: 'claude-code' },
+        { method: 'npx-latest', clientId: 'vscode' }
+    ]);
+    assert.equal(plan.auto, false);
+    assert.equal(plan.applyCommand, null);
+    assert.ok(plan.steps.some((step) => step.includes('clients add --clients cursor,claude-code --force --pin')), plan.steps.join('\n'));
+});
+
+test('init --pin registers the pinned launcher through the init flow too', () => {
+    const { version } = require('../package.json');
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-init-pin-'));
+    try {
+        const kbDir = path.join(tempRoot, 'kb');
+        fs.mkdirSync(kbDir, { recursive: true });
+        const home = path.join(tempRoot, 'home');
+        const result = runCli(['init', '--kb', kbDir, '--gx', testGxPath, '--no-smoke', '--clients', 'cursor', '--all-clients', '--pin', '--format', 'json'], {
+            cwd: kbDir,
+            env: { ...sandboxHomeEnv(home), GENEXUS_MCP_GATEWAY_EXE: '' }
+        });
+        // Exit status also reflects the post-init doctor verification, which is not what this checks.
+        assert.equal(JSON.parse(result.stdout).ok.clientsPatchedCount, 1, result.stderr + result.stdout);
+        const cursorConfig = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+        assert.deepEqual(cursorConfig.mcpServers.genexus18mcp.args, ['-y', `genexus-mcp@${version}`]);
+    } finally {
+        removeTempPath(tempRoot, { recursive: true, force: true });
+    }
+});

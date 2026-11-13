@@ -756,7 +756,27 @@ function createConfigFile(kbPath, gxPath) {
     };
 }
 
-function getLauncher(client = null, gatewayExePath = getGatewayExePath()) {
+// `npx -y genexus-mcp@latest` follows the registry on every client start, so the
+// first start after a release downloads the whole package while the client waits
+// for `initialize`. A pinned spec (`genexus-mcp@<exact version>`) is an explicit
+// opt-in that cannot change version under a starting client; it also never updates
+// by itself (see docs/llm_cli_mcp_playbook.md).
+function getPinnedPackageSpec() {
+    const { version } = require('../../package.json');
+    if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+        throw new Error(`Cannot pin the launcher: package version '${version}' is not an exact semver.`);
+    }
+    return `genexus-mcp@${version}`;
+}
+
+function npxLauncher(pin) {
+    return {
+        command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
+        args: ['-y', pin ? getPinnedPackageSpec() : 'genexus-mcp@latest']
+    };
+}
+
+function getLauncher(client = null, gatewayExePath = getGatewayExePath(), { pin = false } = {}) {
     // Set by scripts/install.ps1 for fixed-path corporate installs — clients
     // launch the gateway exe directly instead of resolving via the npx cache.
     const directExe = process.env.GENEXUS_MCP_GATEWAY_EXE;
@@ -770,7 +790,7 @@ function getLauncher(client = null, gatewayExePath = getGatewayExePath()) {
         return { command: gatewayExePath, args: [] };
     }
 
-    return { command: process.platform === 'win32' ? 'npx.cmd' : 'npx', args: ['-y', 'genexus-mcp@latest'] };
+    return npxLauncher(pin);
 }
 
 const DEFAULT_MCP_SERVER_NAME = 'genexus18mcp';
@@ -1251,14 +1271,13 @@ function clientCommandHealth(entry, client = null, { fs: fileSystem = fs } = {})
         semanticReason: 'launcher command cannot be classified without a known local command shape'
     };
 }
-function buildManualClientSetup(client, targetConfigPath = null) {
+function buildManualClientSetup(client, targetConfigPath = null, { pin = false } = {}) {
     return {
         mode: 'manual',
         managedConfigPath: client.path,
         serverName: DEFAULT_MCP_SERVER_NAME,
         transport: 'local',
-        command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
-        args: ['-y', 'genexus-mcp@latest'],
+        ...npxLauncher(pin),
         environment: {
             GX_CONFIG_PATH: targetConfigPath || '<config.json path printed by genexus-mcp init>'
         },
@@ -1376,7 +1395,7 @@ function patchClientConfig(targetConfigPath, opts = {}) {
                 registrationMode: 'manual',
                 installed: detection.installed,
                 detectedAt: detection.markerHit || (detection.hasConfig ? client.path : null),
-                manualSetup: buildManualClientSetup(client, targetConfigPath)
+                manualSetup: buildManualClientSetup(client, targetConfigPath, { pin: Boolean(opts.pin) })
             });
             continue;
         }
@@ -1389,7 +1408,7 @@ function patchClientConfig(targetConfigPath, opts = {}) {
         }
         try {
             fileSystem.mkdirSync(path.dirname(client.path), { recursive: true });
-            const launcher = getLauncher(client);
+            const launcher = getLauncher(client, undefined, { pin: Boolean(opts.pin) });
             applyClientEntry(client, launcher, targetConfigPath, {
                 serverName,
                 force,
@@ -2433,6 +2452,7 @@ function applyLauncherConfigOrExit({ cwd, stderr, quiet }, deps = {}) {
 }
 
 module.exports = {
+    getPinnedPackageSpec,
     generateConfig,
     generateNeutralConfig,
     getGatewayExePath,

@@ -14,8 +14,12 @@ const {
     cleanOldRuntimes,
     verifyManifest,
     classifyProcessRuntime,
-    getRuntimeProcessUsage
+    getRuntimeProcessUsage,
+    isRuntimeCleanupDue,
+    runRuntimeCleanup,
+    startRuntimeCleanupInBackground
 } = require('./runtime-stager');
+const { EventEmitter } = require('events');
 
 function sha256(content) {
     return crypto.createHash('sha256').update(content).digest('hex');
@@ -504,4 +508,144 @@ test('runtime-stager: getRuntimeProcessUsage maps Gateway, broker, and Worker PI
     const siblingUsage = usage.find((entry) => entry.name === '3.8.0-old-suffix');
     assert.deepEqual(oldUsage.pids, [10, 11]);
     assert.deepEqual(siblingUsage.pids, [12]);
+});
+
+function makeStagedPackage(tmpRoot, version = '3.9.0') {
+    const pkg = path.join(tmpRoot, 'package');
+    const publish = path.join(pkg, 'publish');
+    fs.mkdirSync(publish, { recursive: true });
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ version }));
+    fs.writeFileSync(path.join(publish, 'GxMcp.Gateway.exe'), 'fake gateway binary');
+    return { packageRoot: pkg, publishDir: publish, runtimeRoot: path.join(tmpRoot, 'runtime'), forceStaging: true };
+}
+
+function makeOldRuntimes(runtimeRoot, names) {
+    names.forEach((name, index) => {
+        const dir = path.join(runtimeRoot, name);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.utimesSync(dir, 1000 + index, 1000 + index);
+    });
+}
+
+test('runtime-stager: deferCleanup starts a warm runtime without probing processes or touching old runtimes', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-defer-test-'));
+    t.after(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ } });
+    const options = makeStagedPackage(tmpRoot);
+    const first = ensureStagedGateway({ ...options, getRunningProcesses: () => [] });
+    makeOldRuntimes(options.runtimeRoot, ['3.5.0-aaaa1111', '3.6.0-bbbb2222', '3.7.0-cccc3333', '3.8.0-dddd4444']);
+
+    let probes = 0;
+    const warm = ensureStagedGateway({
+        ...options,
+        deferCleanup: true,
+        getRunningProcesses: () => { probes += 1; return []; }
+    });
+
+    assert.equal(warm.fresh, false);
+    assert.equal(warm.gatewayExePath, first.gatewayExePath);
+    assert.equal(warm.cleanupDeferred, true);
+    assert.equal(warm.cleanup, null);
+    assert.equal(probes, 0, 'the process probe must not run before the Gateway is spawned');
+    assert.equal(fs.existsSync(path.join(options.runtimeRoot, '3.5.0-aaaa1111')), true, 'collection is deferred, not performed');
+});
+
+test('runtime-stager: onStaging fires once for the copy and never for a warm start', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-onstaging-test-'));
+    t.after(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ } });
+    const options = makeStagedPackage(tmpRoot);
+    const staged = [];
+    const onStaging = (dir) => staged.push(dir);
+
+    const cold = ensureStagedGateway({ ...options, deferCleanup: true, onStaging });
+    const warm = ensureStagedGateway({ ...options, deferCleanup: true, onStaging });
+
+    assert.equal(cold.fresh, true);
+    assert.equal(warm.fresh, false);
+    assert.deepEqual(staged, [cold.runtimeDir]);
+});
+
+test('runtime-stager: isRuntimeCleanupDue honours the interval, the stamp and fresh staging', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-due-test-'));
+    t.after(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ } });
+    const hour = 60 * 60 * 1000;
+    assert.equal(isRuntimeCleanupDue(tmpRoot), true, 'no stamp yet');
+    const stamp = path.join(tmpRoot, '.cleanup-stamp');
+    fs.writeFileSync(stamp, 'x');
+    const stampedAt = fs.statSync(stamp).mtimeMs;
+    assert.equal(isRuntimeCleanupDue(tmpRoot, { now: stampedAt + hour, intervalMs: 6 * hour }), false);
+    assert.equal(isRuntimeCleanupDue(tmpRoot, { now: stampedAt + 7 * hour, intervalMs: 6 * hour }), true);
+    assert.equal(isRuntimeCleanupDue(tmpRoot, { now: stampedAt + hour, intervalMs: 6 * hour, fresh: true }), true, 'a newly staged version always collects');
+});
+
+test('runtime-stager: runRuntimeCleanup probes once per interval and keeps a runtime that is still in use', (t) => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-gc-interval-test-'));
+    t.after(() => { try { fs.rmSync(runtimeRoot, { recursive: true, force: true }); } catch { /* ignore */ } });
+    const oldest = path.join(runtimeRoot, '3.5.0-aaaa1111');
+    makeOldRuntimes(runtimeRoot, ['3.5.0-aaaa1111', '3.6.0-bbbb2222', '3.7.0-cccc3333', '3.8.0-dddd4444']);
+    const current = path.join(runtimeRoot, '3.9.0-eeee5555');
+    fs.mkdirSync(current);
+    let probes = 0;
+    const inUse = () => { probes += 1; return [{ pid: 4242, exePath: path.join(oldest, 'GxMcp.Gateway.exe') }]; };
+
+    const first = runRuntimeCleanup({ runtimeRoot, runtimeDir: current }, { getRunningProcesses: inUse });
+    assert.equal(first.ran, true);
+    assert.equal(first.cleanup.skipped.some((entry) => entry.reason === 'in-use' && entry.path === oldest), true);
+    assert.equal(fs.existsSync(oldest), true, 'a runtime used by a running Gateway is never deleted');
+    const probesAfterFirst = probes;
+    assert.ok(probesAfterFirst > 0);
+
+    const second = runRuntimeCleanup({ runtimeRoot, runtimeDir: current }, { getRunningProcesses: inUse });
+    assert.equal(second.ran, false);
+    assert.equal(probes, probesAfterFirst, 'no process probe inside the interval');
+
+    const afterFresh = runRuntimeCleanup({ runtimeRoot, runtimeDir: current, fresh: true }, { getRunningProcesses: () => [] });
+    assert.equal(afterFresh.ran, true);
+    assert.equal(fs.existsSync(oldest), false, 'once nothing uses it, the older runtime is collected');
+});
+
+test('runtime-stager: startRuntimeCleanupInBackground only schedules deferred, due work and reports worker failures', (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-bg-test-'));
+    t.after(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ } });
+    const calls = [];
+    const fakeWorker = () => {
+        const worker = new EventEmitter();
+        worker.unref = () => {};
+        return worker;
+    };
+    const staged = { staged: true, cleanupDeferred: true, runtimeRoot: tmpRoot, runtimeDir: path.join(tmpRoot, 'v'), fresh: false };
+    assert.equal(startRuntimeCleanupInBackground({ ...staged, cleanupDeferred: false }, { createWorker: () => { calls.push('x'); return fakeWorker(); } }), null);
+    assert.equal(startRuntimeCleanupInBackground(null, { createWorker: () => { calls.push('x'); return fakeWorker(); } }), null);
+    assert.equal(calls.length, 0);
+
+    const results = [];
+    let worker;
+    const started = startRuntimeCleanupInBackground(staged, {
+        onResult: (outcome) => results.push(outcome),
+        createWorker: (data) => { calls.push(data); worker = fakeWorker(); return worker; }
+    });
+    assert.equal(started, worker);
+    assert.deepEqual(calls, [{ runtimeRoot: tmpRoot, runtimeDir: staged.runtimeDir, fresh: false }]);
+    worker.emit('error', new Error('boom'));
+    assert.deepEqual(results, [{ ran: false, error: 'boom' }]);
+
+    fs.writeFileSync(path.join(tmpRoot, '.cleanup-stamp'), 'x');
+    assert.equal(startRuntimeCleanupInBackground(staged, { createWorker: () => { calls.push('late'); return fakeWorker(); } }), null, 'stamped inside the interval');
+    assert.equal(calls.length, 1);
+});
+
+test('runtime-stager: the real cleanup worker runs and reports its result', { timeout: 60000 }, async (t) => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-worker-test-'));
+    t.after(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ } });
+    const current = path.join(tmpRoot, '3.9.0-eeee5555');
+    fs.mkdirSync(current);
+    const outcome = await new Promise((resolve, reject) => {
+        const worker = startRuntimeCleanupInBackground(
+            { staged: true, cleanupDeferred: true, runtimeRoot: tmpRoot, runtimeDir: current, fresh: true },
+            { onResult: resolve }
+        );
+        if (!worker) reject(new Error('worker was not started'));
+    });
+    assert.equal(outcome.ran, true);
+    assert.ok(outcome.cleanup && Array.isArray(outcome.cleanup.deleted));
+    assert.equal(fs.existsSync(path.join(tmpRoot, '.cleanup-stamp')), true);
 });

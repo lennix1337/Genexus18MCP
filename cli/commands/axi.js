@@ -1931,7 +1931,7 @@ async function runInteractiveInit(ctx) {
         const serverName = ctx.options && ctx.options.serverName ? ctx.options.serverName : DEFAULT_MCP_SERVER_NAME;
         const force = Boolean(ctx.options && ctx.options.force);
         const patchResult = selectedIds.length
-            ? patchClientConfig(created.targetConfigPath, { ids: selectedIds, onlyExisting: false, serverName, force })
+            ? patchClientConfig(created.targetConfigPath, { ids: selectedIds, onlyExisting: false, serverName, force, pin: Boolean(ctx.options && ctx.options.pin) })
             : { patched: [], failed: [], skipped: [] };
 
         return {
@@ -2190,7 +2190,8 @@ async function handleInit(options, ctx) {
                 onlyExisting: !options.allClients,
                 serverName: options.serverName || DEFAULT_MCP_SERVER_NAME,
                 force: options.force,
-                globalConfig: Boolean(options.globalConfig)
+                globalConfig: Boolean(options.globalConfig),
+                pin: Boolean(options.pin)
             });
         }
 
@@ -2654,7 +2655,8 @@ async function handleClients(subcommand, options, ctx) {
                     onlyExisting: false,
                     serverName,
                     force: options.force,
-                    globalConfig: Boolean(options.globalConfig)
+                    globalConfig: Boolean(options.globalConfig),
+                    pin: Boolean(options.pin)
                 });
             } catch (err) {
                 return {
@@ -2871,7 +2873,7 @@ function commandHelpMap() {
             examples: ['genexus-mcp config show', 'genexus-mcp config create --config-scope neutral --output ./config.json --gx <path> --worker <path> --gateway-mode stdio-isolated --resolution-policy strict', 'genexus-mcp config migrate --from ./config.json --output ./.genexus-mcp/config.json']
         },
         init: {
-            usage: 'genexus-mcp init [--kb <path>] [--gx <path>] [--server-name <name>] [--force] [--no-write-clients] [--clients <csv>] [--all-clients] [--no-smoke] [--warm] [--format ...] OR genexus-mcp init --interactive',
+            usage: 'genexus-mcp init [--kb <path>] [--gx <path>] [--server-name <name>] [--force] [--no-write-clients] [--clients <csv>] [--all-clients] [--pin] [--no-smoke] [--warm] [--format ...] OR genexus-mcp init --interactive',
             examples: [
                 'genexus-mcp init   # zero-config: auto-discovers GX + KB, and registers detected AI clients',
                 'genexus-mcp init --kb "C:\\KBs\\MyKB" --gx "C:\\Program Files (x86)\\GeneXus\\GeneXus18"',
@@ -2879,7 +2881,8 @@ function commandHelpMap() {
                 'genexus-mcp init --interactive   # prompts per detected agent (Claude Desktop/Code, Gemini CLI, Cursor, Codex CLI, OpenCode, ...)',
                 'genexus-mcp init --kb <path> --gx <path> --clients claude-code,gemini-cli,cursor   # register only these',
                 'genexus-mcp init --kb <path> --gx <path> --no-write-clients   # write config.json only; register clients yourself',
-                'genexus-mcp init --kb <path> --gx <path> --all-clients   # register every known client, installed or not'
+                'genexus-mcp init --kb <path> --gx <path> --all-clients   # register every known client, installed or not',
+                'genexus-mcp init --pin   # register npx genexus-mcp@<this exact version>: the version never changes under a starting client, but it is not updated automatically'
             ]
         },
         whoami: {
@@ -2901,7 +2904,7 @@ function commandHelpMap() {
             ]
         },
         clients: {
-            usage: 'genexus-mcp clients [list] [--server-name <name>] [--format ...] OR genexus-mcp clients add --clients <csv> [--server-name <name>] [--force] OR genexus-mcp clients remove [--clients <csv>] [--server-name <name>]',
+            usage: 'genexus-mcp clients [list] [--server-name <name>] [--format ...] OR genexus-mcp clients add --clients <csv> [--server-name <name>] [--force] [--pin] OR genexus-mcp clients remove [--clients <csv>] [--server-name <name>]',
             examples: [
                 'genexus-mcp clients              # show every AI agent: installed? registered? where?',
                 'genexus-mcp clients --format json',
