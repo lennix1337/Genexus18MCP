@@ -292,6 +292,10 @@
             "type": "integer",
             "description": "preview only."
           },
+          "inlineImage": {
+            "type": "boolean",
+            "description": "preview+capture screenshot: also return…"
+          },
           "diffBaseline": {
             "type": "boolean",
             "description": "preview only."
