@@ -266,7 +266,9 @@ namespace GxMcp.Gateway.Tests
             // genexus_edit `contentPath` (the text of a full-part write taken from a file, for text too large for a
             // command line) and genexus_transfer `async` (accept-then-poll for a long export or inspect): 40400 -> 40600
             // for the two inputs and their descriptions. Measured ~40482 tokens; ~118 headroom.
-            Assert.True(approxTokens < 40600, $"tool_definitions.json is ~{approxTokens} tokens; budget 40600.");
+            // genexus_impact `whatIf` (#1001) and genexus_edit validation mode `native` (#998): 40600 -> 40700 for the
+            // input, the mode value and their descriptions. Measured ~40632 tokens; ~68 headroom.
+            Assert.True(approxTokens < 40700, $"tool_definitions.json is ~{approxTokens} tokens; budget 40700.");
         }
 
         [Theory]
