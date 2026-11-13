@@ -199,8 +199,9 @@ namespace GxMcp.Gateway
 
         private static bool ShouldForwardNotificationToStdio(string method, object? payload)
         {
+            // notifications/resources/updated is deliberately absent: it reaches stdio only through
+            // _resourceChanges, and only when the client subscribed.
             if (method == "notifications/progress" ||
-                method == "notifications/resources/updated" ||
                 method == "notifications/resources/list_changed" ||
                 method == "notifications/tools/list_changed")
             {
@@ -295,16 +296,34 @@ namespace GxMcp.Gateway
                 BuildScopedNotificationPayload(reason, kbAlias, cacheRevision, uri: null));
         }
 
+        // External-change events for legacy (stdio / HTTP session) subscribers. Window and cap bound
+        // the work a burst can cause; see ResourceChangeFeed.
+        private static readonly ResourceChangeFeed _resourceChanges = new ResourceChangeFeed(
+            TimeSpan.FromMilliseconds(500),
+            maxObjectsPerWindow: 50,
+            anySubscribers: () => McpSubscriptionProtocol.HasSubscribers(_httpSessions),
+            subscribers: () => McpSubscriptionProtocol.SnapshotSubscribers(
+                _httpSessions, EmitStdioNotification, QueueSessionMessage));
+
+        /// <summary>
+        /// Resource-updated delivery to modern <c>subscriptions/listen</c> streams, each of which applies
+        /// its own URI filter. Legacy stdio/HTTP subscribers are served by <see cref="_resourceChanges"/>,
+        /// which only ever sends to the session that subscribed.
+        /// </summary>
         private static void BroadcastResourceUpdated(
             string uri,
             string reason,
             string? kbAlias = null,
             long? cacheRevision = null)
         {
+            if (_modernSubscriptions.Count == 0) return;
+
             kbAlias ??= GetCurrentKb()?.NormalizedAlias;
-            BroadcastNotification(
-                "notifications/resources/updated",
-                BuildScopedNotificationPayload(reason, kbAlias, cacheRevision, uri));
+            var payload = BuildScopedNotificationPayload(reason, kbAlias, cacheRevision, uri);
+            foreach (var subscription in _modernSubscriptions.Active)
+            {
+                subscription.TryQueue("notifications/resources/updated", payload);
+            }
         }
 
         /// <summary>

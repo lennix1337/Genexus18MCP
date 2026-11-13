@@ -482,6 +482,16 @@ namespace GxMcp.Gateway
                             "external_kb_change",
                             workerAlias,
                             string.IsNullOrWhiteSpace(workerAlias) ? (long?)null : updatedRevision);
+
+                        // Legacy stdio/HTTP subscribers: coalesced, subscription-matched, and a
+                        // no-op beyond one ring write when nobody subscribed.
+                        _resourceChanges.Enqueue(new ResourceChange(
+                            string.IsNullOrWhiteSpace(workerAlias) ? null : workerAlias.Trim().ToLowerInvariant(),
+                            name,
+                            p?["type"]?.ToString(),
+                            p?["deleted"]?.Value<bool?>() == true,
+                            string.IsNullOrWhiteSpace(workerAlias) ? (long?)null : updatedRevision,
+                            DateTime.UtcNow));
                     }
                     else if (method == "notifications/progress" || method == "notifications/message")
                     {
