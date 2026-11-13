@@ -194,6 +194,7 @@ namespace GxMcp.Gateway
 
             string defaultPart = string.Equals(type, "Transaction", StringComparison.OrdinalIgnoreCase) ? "Structure"
                 : string.Equals(type, "WebPanel", StringComparison.OrdinalIgnoreCase) ? "WebForm"
+                : string.Equals(type, "MasterPage", StringComparison.OrdinalIgnoreCase) ? "WebForm"
                 : string.Equals(type, "Procedure", StringComparison.OrdinalIgnoreCase) ? "Source"
                 : "Source";
 

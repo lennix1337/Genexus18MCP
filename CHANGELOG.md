@@ -7,9 +7,13 @@
 
 ### Added
 
+- **`genexus_create` creates a Master Page (`type=MasterPage`).** The type answered `UnsupportedObjectType`. A Master Page is a WebPanel with `WEB_COMP=Master` whose form holds a `ContentHolder`, and the SDK refuses `WEB_COMP=Master` on a WebPanel whose form has no place holder, so building one through the MCP took two calls in a fixed order and left a WebPanel that the SDK does not accept in between. The Master Page is now created whole: `WEB_COMP=Master` and a form holding a `ContentHolder` go into the object together before its single save, and a fresh read confirms the result (an object proved not to be a Master Page is deleted again and answers `MasterPageNotPersisted`; one that cannot be read back is kept, with its persistence unverified). `folder`/`module` place it as for any other type, `dryRun` shows the plan, and `Master Page` and `Web Master Panel` are accepted spellings. `object_atomic` still does not create a Master Page (`UnsupportedObjectType`, also for a dry run) but updates an existing one, and `action=save_as` of a Master Page, which stopped at its first step (`PartialFailure`), now clones it with its form and parts.
+
 ### Changed
 
 ### Fixed
+
+- **`genexus_create` says at the top of the result when the object was not placed where it was asked.** With `module=` naming a Folder (or `folder=` naming a Module) the object was created in the Root Module and the answer was a plain `ObjectCreated`; the refusal (`DestinationKindMismatch`) was only inside `placement.detail`, with a hint about a `destKind` argument the caller does not have. The result now also carries `placementApplied: false` and a `warnings` entry that says where the object really is and, for a kind mismatch, names the parameter to use (`folder=` or `module=`). A move that fails for any other reason gets the same entry with the SDK's reason.
 
 ### Internal
 
