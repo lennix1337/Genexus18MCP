@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Gateway
@@ -12,8 +14,48 @@ namespace GxMcp.Gateway
     /// </summary>
     internal static class McpSubscriptionProtocol
     {
-        private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> ProcessSubscriptions =
-            new ConcurrentDictionary<string, ConcurrentDictionary<string, byte>>(StringComparer.Ordinal);
+        // The stdio transport is one client per process, so its subscriptions live for the process
+        // (cleared again by `initialize`). The value is the fence taken at subscribe time.
+        private static readonly ConcurrentDictionary<string, OwnershipFence> StdioSubscriptions =
+            new ConcurrentDictionary<string, OwnershipFence>(StringComparer.Ordinal);
+
+        internal static void ClearSession(string sessionId, HttpSessionRegistry registry)
+        {
+            if (string.Equals(sessionId, "stdio", StringComparison.OrdinalIgnoreCase))
+                StdioSubscriptions.Clear();
+            else if (registry.TryGet(sessionId, out var session) && session != null)
+                session.ClearResourceSubscriptions();
+        }
+
+        internal static bool HasSubscribers(HttpSessionRegistry registry)
+            => !StdioSubscriptions.IsEmpty || registry.AnySessionHasResourceSubscriptions();
+
+        /// <summary>
+        /// Every subscriber with at least one subscription. <paramref name="stdioSend"/> reaches the stdio
+        /// client; <paramref name="httpSend"/> reaches one HTTP session only.
+        /// </summary>
+        internal static IReadOnlyList<ResourceSubscriber> SnapshotSubscribers(
+            HttpSessionRegistry registry, Action<string> stdioSend, Action<HttpSessionState, string> httpSend)
+        {
+            var subscribers = new List<ResourceSubscriber>();
+            if (!StdioSubscriptions.IsEmpty)
+            {
+                subscribers.Add(new ResourceSubscriber(
+                    StdioSubscriptions.Select(pair => new ResourceSubscription(pair.Key, pair.Value.KbId)).ToArray(),
+                    stdioSend));
+            }
+
+            foreach (var session in registry.ActiveSessions)
+            {
+                var subscriptions = session.SnapshotResourceSubscriptions();
+                if (subscriptions.Length == 0) continue;
+                var target = session;
+                subscribers.Add(new ResourceSubscriber(subscriptions, json => httpSend(target, json)));
+            }
+            return subscribers;
+        }
+
+        internal static void ResetStdioForTest() => StdioSubscriptions.Clear();
 
         internal static JObject? Handle(JObject request, string sessionId, HttpSessionRegistry registry, OwnershipFence? ownership = null)
         {
@@ -44,13 +86,18 @@ namespace GxMcp.Gateway
                     new JObject { ["field"] = "uri" });
             }
 
+            if (!ResourceUris.TryParse(uri, out _, out _, out _))
+            {
+                return Error(id, -32602,
+                    "Resource subscription requires a genexus:// resource URI this server serves (genexus://objects/{name}, genexus://kb/changes, or their KB-scoped genexus://kb/{alias}/... forms).",
+                    new JObject { ["field"] = "uri", ["uri"] = uri });
+            }
+
             if (string.Equals(sessionId, "stdio", StringComparison.OrdinalIgnoreCase))
             {
-                var subscriptions = ProcessSubscriptions.GetOrAdd(sessionId,
-                    _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal));
                 bool changedStdio = string.Equals(method, "resources/subscribe", StringComparison.Ordinal)
-                    ? subscriptions.TryAdd(uri, 0)
-                    : subscriptions.TryRemove(uri, out _);
+                    ? StdioSubscriptions.TryAdd(uri, ownership ?? new OwnershipFence(sessionId, string.Empty, 0))
+                    : StdioSubscriptions.TryRemove(uri, out _);
                 return BuildSuccess(id, method, uri, changedStdio);
             }
 

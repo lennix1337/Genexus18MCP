@@ -124,13 +124,17 @@ namespace GxMcp.Gateway
                     Log($"[IndexGate] closed tool={tName} status={idxSnap?.Status ?? "<null>"} "
                         + $"freshness={idxSnap?.Freshness ?? "<null>"} "
                         + $"opState={idxSnap?.OperationState ?? "<null>"} mirrorAgeMs={mirrorAgeMs}");
-                    return BuildToolResultContent(
-                        BuildIndexNotReadyEnvelope(
-                            idxSnap?.Status, idxSnap?.Freshness, idxSnap?.TotalObjects ?? 0,
-                            idxSnap?.Progress, idxSnap?.EtaMs, idxSnap?.OperationId,
-                            idxSnap?.OperationState, idxSnap?.WorkerAlive,
-                            idxSnap?.Recoverable, idxSnap?.Stalled),
-                        false, tName, tArgs);
+                    JObject notReady = BuildIndexNotReadyEnvelope(
+                        idxSnap?.Status, idxSnap?.Freshness, idxSnap?.TotalObjects ?? 0,
+                        idxSnap?.Progress, idxSnap?.EtaMs, idxSnap?.OperationId,
+                        idxSnap?.OperationState, idxSnap?.WorkerAlive,
+                        idxSnap?.Recoverable, idxSnap?.Stalled);
+                    // Refusal path only: tell the agent which gated reads gx-engine answers right now
+                    // (native routing already declined THIS call, e.g. outside the admitted shape).
+                    JArray? nativeReads = BuildNativeReadsAvailableDuringIndexing(
+                        EngineBackendSettings.Resolve(ActiveConfig), GxEngineLocator.Locate);
+                    if (nativeReads != null) notReady["nativeReads"] = nativeReads;
+                    return BuildToolResultContent(notReady, false, tName, tArgs);
                 }
             }
 
