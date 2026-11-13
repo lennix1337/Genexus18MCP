@@ -133,8 +133,20 @@ namespace GxMcp.Gateway
             return Compact(selected);
         }
 
+        /// <summary>Core tools plus those of the enabled adaptive groups, then the meta tool.</summary>
+        internal static JArray FilterAdaptive(JArray tools, IEnumerable<string> extraToolNames)
+        {
+            var allowlist = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);
+            foreach (var name in extraToolNames) allowlist.Add(name);
+            var result = Compact(tools.OfType<JObject>().Where(t => allowlist.Contains(t["name"]?.ToString() ?? string.Empty)));
+            result.Add(AdaptiveTools.BuildMetaToolDefinition());
+            return result;
+        }
+
         public static JObject? GetToolNotInProfileError(string? profile, string toolName)
         {
+            // adaptive never refuses a published tool: the caller auto-enables its group.
+            if (AdaptiveTools.IsAdaptive(profile)) return null;
             var allowlist = GetAllowlist(profile);
             if (allowlist == null || allowlist.Contains(toolName)) return null;
 
@@ -170,7 +182,7 @@ namespace GxMcp.Gateway
             {
                 var set = token switch
                 {
-                    "core" or "exploration" => CoreTools,
+                    "core" or "exploration" or AdaptiveTools.ProfileName => CoreTools,
                     "standard" => StandardTools,
                     "authoring" or "safe-edit" or "safe_edit" => AuthoringTools,
                     "devops" or "cicd" or "build" or "versioning" or "deploy" => DevOpsTools,

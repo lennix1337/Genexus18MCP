@@ -559,7 +559,11 @@ namespace GxMcp.Gateway
                         }
                         if (method == "tools/list" || method == "resources/list" || method == "prompts/list")
                         {
-                            request.HttpContext.Response.Headers["Cache-Control"] = "public, max-age=3600";
+                            // The adaptive list changes within a session; never let a cache serve it.
+                            request.HttpContext.Response.Headers["Cache-Control"] =
+                                method == "tools/list" && response["result"]?["profile"]?.ToString() == AdaptiveTools.ProfileName
+                                    ? "no-store"
+                                    : "public, max-age=3600";
                         }
                         return Results.Content(jsonResponse, "application/json; charset=utf-8", Encoding.UTF8);
                     }
