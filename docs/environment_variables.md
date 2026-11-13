@@ -38,6 +38,8 @@ read-preview-save workflow.
 | `GENEXUS_MCP_NO_UPDATE_CHECK` | Set to `1` to disable the background "is a newer version available?" check performed on `initialize`. Useful on networks that block the GitHub API. | check enabled |
 | `GENEXUS_MCP_NO_SELF_UPDATE` | Set to `1` to disable the self-update apply path (the check may still run; nothing is installed). | self-update enabled |
 
+Self-update downloads `publish.zip` and `publish.zip.sha256` from the GitHub release of the newer version and stages it only when the SHA-256 of the zip matches the published checksum. A release without a readable checksum, or with a mismatching one, is refused and logged (`[SelfUpdate] ... refusing to stage`); there is no opt-out flag. Set `GENEXUS_MCP_NO_SELF_UPDATE=1` to turn the feature off entirely.
+
 ## HTTP endpoint
 
 | Variable | Purpose | Default |

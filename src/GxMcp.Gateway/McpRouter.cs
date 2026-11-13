@@ -399,6 +399,7 @@ namespace GxMcp.Gateway
                     ["prompts"] = new JObject { ["listChanged"] = false },
                     ["tools"] = new JObject { ["listChanged"] = true },
                     ["resources"] = new JObject { ["listChanged"] = true, ["subscribe"] = true },
+                    ["logging"] = new JObject(),
                     ["completion"] = new JObject()
                 },
                 ["serverInfo"] = new JObject
@@ -426,6 +427,7 @@ namespace GxMcp.Gateway
                     ["tools"] = new JObject { ["listChanged"] = true },
                     ["resources"] = new JObject { ["listChanged"] = true, ["subscribe"] = true },
                     ["prompts"] = new JObject { ["listChanged"] = false },
+                    ["logging"] = new JObject(),
                     ["completion"] = new JObject(),
                     ["extensions"] = new JObject
                     {
@@ -519,6 +521,18 @@ namespace GxMcp.Gateway
                     return _cachedPromptsListResponse;
                 case "prompts/get":
                     return BuildPromptResponse(request);
+                case "logging/setLevel":
+                    {
+                        string? level = (request["params"] as JObject)?["level"]?.ToString();
+                        if (!Program.TrySetMinimumLogLevel(level))
+                        {
+                            return new McpRouterError(
+                                -32602,
+                                $"Unknown logging level '{level}'. Use one of: debug, info, notice, warning, error, critical, alert, emergency.",
+                                new JObject { ["level"] = level });
+                        }
+                        return new { resultType = "complete" };
+                    }
                 case "ping":
                     return new { resultType = "complete" };
                 default:
@@ -932,7 +946,7 @@ namespace GxMcp.Gateway
                 "Start by reading 'genexus://kb/agent-playbook'. " +
                 $"Inspect 'genexus://objects/{name}/ui-context', 'genexus://objects/{name}/pattern-metadata', and 'genexus://objects/{name}/part/{normalizedSurface}' first. " +
                 "Determine the authoritative surface before editing: base layout, raw WebForm metadata, or pattern-owned metadata. " +
-                "If assets are involved, inspect `genexus_asset` metadata before changing any binary file. " +
+                "If assets are involved, inspect them with `genexus_io` action=asset_find or asset_read before changing any binary file. " +
                 "After the write, re-read the exact same surface and report whether persistence is confirmed or still blocked.";
         }
 

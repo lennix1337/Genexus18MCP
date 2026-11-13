@@ -41,6 +41,26 @@ try {
     Assert-True ($manifest2.schemaSha256 -ne $manifest.schemaSha256) 'schema change changes manifest hash'
     $passed++
 
+    # Engine binaries: hashed when present, required only with -RequireEngine.
+    $missingEngine = & pwsh -NoProfile -File (Join-Path $PSScriptRoot '..\write-release-manifest.ps1') `
+        -PublishDirectory $publish -Version '4.6.1' -SourceRoot $PSScriptRoot -SourceCommit 'fixture-commit' -RequireEngine 2>&1
+    Assert-True ($LASTEXITCODE -ne 0) '-RequireEngine fails when engine binaries are missing'
+    Assert-True (($missingEngine | Out-String) -match 'gx-engine\.exe') 'the failure names the missing engine binary'
+    $passed += 2
+
+    Set-Content -LiteralPath (Join-Path $publish 'gx-engine.exe') -Value 'engine' -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $publish 'gxwire.exe') -Value 'wire' -Encoding ascii
+    $manifestPath = & pwsh -NoProfile -File (Join-Path $PSScriptRoot '..\write-release-manifest.ps1') `
+        -PublishDirectory $publish -Version '4.6.1' -SourceRoot $PSScriptRoot -SourceCommit 'fixture-commit' -RequireEngine
+    Assert-True ($LASTEXITCODE -eq 0) '-RequireEngine succeeds with engine binaries present'
+    $manifest3 = Get-Content -LiteralPath ($manifestPath | Select-Object -Last 1) -Raw | ConvertFrom-Json
+    foreach ($engineFile in @('gx-engine.exe', 'gxwire.exe')) {
+        $entry = @($manifest3.artifacts | Where-Object path -eq $engineFile)
+        Assert-True ($entry.Count -eq 1) "$engineFile is listed in the manifest"
+        Assert-True ($entry[0].sha256 -eq (Get-FileHash -LiteralPath (Join-Path $publish $engineFile) -Algorithm SHA256).Hash.ToLowerInvariant()) "$engineFile hash matches bytes"
+    }
+    $passed += 5
+
     Write-Host "release-manifest: $passed assertions passed" -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }

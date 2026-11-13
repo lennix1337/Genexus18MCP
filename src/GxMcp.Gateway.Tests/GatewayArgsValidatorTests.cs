@@ -336,7 +336,7 @@ namespace GxMcp.Gateway.Tests
 
             var nextSteps = error["nextSteps"] as JArray;
             Assert.NotNull(nextSteps);
-            Assert.Contains(nextSteps!.OfType<JObject>(), s => s["tool"]?.ToString() == "genexus_orient");
+            Assert.Contains(nextSteps!.OfType<JObject>(), s => s["tool"]?.ToString() == "genexus_whoami");
         }
 
         [Fact]

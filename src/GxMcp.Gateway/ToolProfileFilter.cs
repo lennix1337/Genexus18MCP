@@ -255,9 +255,50 @@ namespace GxMcp.Gateway
             int sentenceEnd = LastSentenceEnd(text, MaxToolSummaryLength);
             if (sentenceEnd >= MaxToolSummaryLength * 3 / 5) return text.Substring(0, sentenceEnd + 1);
 
-            int end = text.LastIndexOf(' ', MaxToolSummaryLength - 1);
+            // No sentence fits: prefer the last complete clause (";"), else the last word.
+            int clauseEnd = LastClauseEnd(text, MaxToolSummaryLength);
+            int end = clauseEnd >= MaxToolSummaryLength * 3 / 5
+                ? clauseEnd
+                : text.LastIndexOf(' ', MaxToolSummaryLength - 1);
             if (end <= 0) end = MaxToolSummaryLength - 1;
-            return text.Substring(0, end).TrimEnd(' ', ',', ';', ':', '(', '|', '-', '\u2014', '+') + "\u2026";
+            return TrimDanglingWords(text.Substring(0, end)) + "\u2026";
+        }
+
+        private static readonly char[] SummaryTrailingPunctuation = { ' ', ',', ';', ':', '(', '|', '-', '\u2014', '+' };
+
+        // Words that cannot end a phrase; cutting right after one leaves a clause open
+        // ("... with what was").
+        private static readonly HashSet<string> DanglingWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "a", "an", "the", "of", "to", "for", "with", "without", "in", "on", "by", "from", "at", "as", "into",
+            "and", "or", "but", "if", "when", "that", "which", "what", "was", "is", "are", "be", "not", "than", "so", "per"
+        };
+
+        private static string TrimDanglingWords(string cut)
+        {
+            string trimmed = cut.TrimEnd(SummaryTrailingPunctuation);
+            while (true)
+            {
+                int space = trimmed.LastIndexOf(' ');
+                if (space <= 0 || !DanglingWords.Contains(trimmed.Substring(space + 1))) break;
+                trimmed = trimmed.Substring(0, space).TrimEnd(SummaryTrailingPunctuation);
+            }
+            return trimmed;
+        }
+
+        private static int LastClauseEnd(string text, int limit)
+        {
+            int last = -1;
+            int depth = 0;
+            int max = Math.Min(limit, text.Length);
+            for (int i = 0; i < max; i++)
+            {
+                char c = text[i];
+                if (c == '(' || c == '[') depth++;
+                else if ((c == ')' || c == ']') && depth > 0) depth--;
+                else if (c == ';' && depth == 0) last = i;
+            }
+            return last;
         }
 
         private static int LastSentenceEnd(string text, int limit)

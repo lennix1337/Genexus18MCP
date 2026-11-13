@@ -67,9 +67,51 @@ namespace GxMcp.Gateway
                 return new JObject { ["tool"] = tool, ["args"] = followArgs,
                     ["hint"] = "Response too large. Narrow the request (a specific target/mode/part) or read incrementally with genexus_read." };
             }
-            followArgs["page"] = 1;
-            followArgs["page_size"] = 25;
-            return new JObject { ["tool"] = tool, ["args"] = followArgs };
+            // Only genexus_lifecycle reads page/page_size; every other tool silently ignores
+            // them and the agent would repeat the same oversize call. Emit the arguments the
+            // tool's schema really has, or no args plus a prose hint to narrow the request.
+            if (t.Equals("genexus_lifecycle", StringComparison.OrdinalIgnoreCase))
+            {
+                followArgs["page"] = 1;
+                followArgs["page_size"] = 25;
+                return new JObject { ["tool"] = tool, ["args"] = followArgs };
+            }
+            if (t.Equals("genexus_read", StringComparison.OrdinalIgnoreCase))
+            {
+                followArgs["offset"] = followArgs["offset"] ?? 0;
+                followArgs["limit"] = SmallerLimit(followArgs["limit"], 200);
+                return new JObject { ["tool"] = tool, ["args"] = followArgs,
+                    ["hint"] = "Response too large. Read the part in windows: repeat with offset advanced by limit until the part ends." };
+            }
+            if (t.Equals("genexus_list_objects", StringComparison.OrdinalIgnoreCase)
+                || t.Equals("genexus_kb_version", StringComparison.OrdinalIgnoreCase)
+                || t.Equals("genexus_wwp", StringComparison.OrdinalIgnoreCase))
+            {
+                followArgs["offset"] = followArgs["offset"] ?? 0;
+                followArgs["limit"] = SmallerLimit(followArgs["limit"], 25);
+                return new JObject { ["tool"] = tool, ["args"] = followArgs,
+                    ["hint"] = "Response too large. Page with offset/limit (use nextOffset or nextCursor from the result until hasMore=false)." };
+            }
+            if (t.Equals("genexus_query", StringComparison.OrdinalIgnoreCase))
+            {
+                followArgs["limit"] = SmallerLimit(followArgs["limit"], 25);
+                return new JObject { ["tool"] = tool, ["args"] = followArgs,
+                    ["hint"] = "Response too large. Lower limit and resume with the cursor from nextCursor, or narrow the query." };
+            }
+            if (t.Equals("genexus_search_source", StringComparison.OrdinalIgnoreCase))
+            {
+                followArgs["maxResults"] = SmallerLimit(followArgs["maxResults"], 25);
+                return new JObject { ["tool"] = tool, ["args"] = followArgs,
+                    ["hint"] = "Response too large. Lower maxResults and resume with the cursor from nextCursor, or narrow the scan to an object." };
+            }
+            return new JObject { ["tool"] = tool,
+                ["hint"] = "Response too large and this tool has no pagination arguments. Narrow the request (a specific name/target/part/action) and call again." };
+        }
+
+        private static JToken SmallerLimit(JToken? current, int fallback)
+        {
+            int value = current != null && current.Type == JTokenType.Integer ? current.Value<int>() : 0;
+            return value > 1 ? value / 2 : fallback;
         }
 
         // PERFORMANCE (G-B2): existing path streams the JSON through a CountingStream so we

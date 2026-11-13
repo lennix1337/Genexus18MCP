@@ -729,6 +729,39 @@ namespace GxMcp.Gateway
             return app.RunAsync();
         }
 
+        /// <summary>
+        /// PIDs that LISTEN on exactly <paramref name="port"/> according to
+        /// <c>netstat -ano</c> output. The local-address port is compared whole,
+        /// so port 5000 never matches :50001 or :15000.
+        /// </summary>
+        internal static IReadOnlyList<int> ParseListeningPidsForPort(string netstatOutput, int port)
+        {
+            var pids = new List<int>();
+            foreach (var line in (netstatOutput ?? string.Empty).Split((char)10))
+            {
+                var parts = line.Split(new[] { ' ', (char)9, (char)13 }, StringSplitOptions.RemoveEmptyEntries);
+                // Proto  Local Address  Foreign Address  State  PID
+                if (parts.Length < 5 || !parts[0].StartsWith("TCP", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!parts[3].Equals("LISTENING", StringComparison.OrdinalIgnoreCase)) continue;
+                string local = parts[1];
+                int colon = local.LastIndexOf(':');
+                if (colon < 0 || !int.TryParse(local.Substring(colon + 1), out int localPort) || localPort != port) continue;
+                if (int.TryParse(parts[parts.Length - 1], out int pid)) pids.Add(pid);
+            }
+            return pids;
+        }
+
+        /// <summary>True when a Kestrel/socket bind failed because the address is already taken.</summary>
+        internal static bool IsAddressInUseFailure(Exception? ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is System.Net.Sockets.SocketException se && se.SocketErrorCode == System.Net.Sockets.SocketError.AddressAlreadyInUse) return true;
+                if (e.GetType().Name == "AddressInUseException") return true;
+            }
+            return false;
+        }
+
         private static void TryKillProcessOnPort(int port)
         {
             try {
@@ -743,36 +776,25 @@ namespace GxMcp.Gateway
                string output = process.StandardOutput.ReadToEnd();
                process.WaitForExit();
 
-               var lines = output.Split('\n');
-               foreach (var line in lines)
+               foreach (int pid in ParseListeningPidsForPort(output, port))
                {
-                   if (line.Contains($":{port}") && line.Contains("LISTENING"))
-                   {
-                       var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                       var pidStr = parts.Last().Trim();
-                       if (int.TryParse(pidStr, out int pid) && pid != Environment.ProcessId)
+                   if (pid == Environment.ProcessId) continue;
+                   try {
+                       var zombie = Process.GetProcessById(pid);
+                       // Only reclaim the port from a prior GxMcp.Gateway process. A bare
+                       // `dotnet` host is NOT accepted: its name proves nothing about what
+                       // it runs, and killing it could take down an unrelated app. If it
+                       // isn't ours, leave it be.
+                       string pname = zombie.ProcessName;
+                       if (!pname.Equals("GxMcp.Gateway", StringComparison.OrdinalIgnoreCase))
                        {
-                           try {
-                               var zombie = Process.GetProcessById(pid);
-                               // Only reclaim the port from one of OUR OWN processes (a prior
-                               // gateway or its dotnet host). Blindly Kill(true)-ing whatever
-                               // holds the port could nuke an unrelated app — or, in the
-                               // split-brain case, a still-live master gateway's whole tree
-                               // (its GeneXus worker included). If it isn't ours, leave it be.
-                               string pname = zombie.ProcessName;
-                               bool ours = pname.Equals("GxMcp.Gateway", StringComparison.OrdinalIgnoreCase)
-                                        || pname.Equals("dotnet", StringComparison.OrdinalIgnoreCase);
-                               if (!ours)
-                               {
-                                   Log($"[PortRecovery] Process {pid} ({pname}) holds port {port} but is not a GxMcp gateway — not killing. Configure a different HttpPort.");
-                                   continue;
-                               }
-                               Log($"[PortRecovery] Found stale gateway {pid} ({pname}) on port {port}. Killing it...");
-                               zombie.Kill(true);
-                               zombie.WaitForExit(3000);
-                           } catch { } // Process might already be gone
+                           Log($"[PortRecovery] Process {pid} ({pname}) holds port {port} but is not a GxMcp gateway — not killing. Configure a different HttpPort.");
+                           continue;
                        }
-                   }
+                       Log($"[PortRecovery] Found stale gateway {pid} ({pname}) on port {port}. Killing it...");
+                       zombie.Kill(true);
+                       zombie.WaitForExit(3000);
+                   } catch { } // Process might already be gone
                }
             } catch (Exception ex) { Log($"[PortRecovery] Error: {ex.Message}"); }
         }

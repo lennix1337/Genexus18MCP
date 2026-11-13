@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -27,9 +28,10 @@ namespace GxMcp.Gateway.Tests
             internal string CachePath => Path.Combine(CacheRoot.Path, "index.bin");
             internal bool Launched { get; private set; }
             internal string? LaunchedArguments { get; private set; }
+            internal IReadOnlyList<string>? LaunchedArgumentList { get; private set; }
             internal int? LaunchedTimeoutSeconds { get; private set; }
 
-            internal Func<string, string, int, Task<GxwireProcessRun>> Launcher { get; set; } =
+            internal Func<string, IReadOnlyList<string>, int, Task<GxwireProcessRun>> Launcher { get; set; } =
                 (_, _, _) => Task.FromResult(new GxwireProcessRun("<status schema=\"gxwire.status/v1\" empty=\"true\"/>", "", false, 30, 0, 12));
 
             internal Func<string?> Locator { get; set; } = () => FakeExe;
@@ -41,7 +43,8 @@ namespace GxMcp.Gateway.Tests
                 Launch = (exe, args, timeout) =>
                 {
                     Launched = true;
-                    LaunchedArguments = args;
+                    LaunchedArguments = string.Join(" ", args);
+                    LaunchedArgumentList = args;
                     LaunchedTimeoutSeconds = timeout;
                     return Launcher(exe, args, timeout);
                 }
@@ -441,6 +444,42 @@ namespace GxMcp.Gateway.Tests
 
             Assert.Equal("ok", result["status"]?.ToString());
             Assert.Contains("--token-budget 1200", fx.LaunchedArguments);
+        }
+
+        [Theory]
+        [InlineData("target", "--cache-path")]
+        [InlineData("target", "-x")]
+        [InlineData("from", "--dir")]
+        [InlineData("format", "--cache-path")]
+        public async Task LeadingDashValue_IsRejectedBeforeLaunch(string key, string value)
+        {
+            using var fx = new Fixture();
+            fx.MakeTextTree();
+            fx.WriteIndex();
+            var args = Args("path", fx.Tree.Path, ("from", "A"), ("to", "B"));
+            args[key] = value;
+
+            var result = await Run(fx, args);
+
+            AssertCodedError(result, GxwireErrorCodes.InvalidArgument);
+            Assert.False(fx.Launched, "a value that would parse as a flag must never reach gxwire");
+        }
+
+        [Fact]
+        public async Task QuoteInjectionInTarget_StaysOneArgument()
+        {
+            using var fx = new Fixture();
+            fx.MakeTextTree();
+            fx.WriteIndex();
+            const string payload = "x\" --cache-path \"C:\elsewhere";
+
+            var result = await Run(fx, Args("callers", fx.Tree.Path, ("target", payload)));
+
+            Assert.Equal("ok", result["status"]?.ToString());
+            var list = new List<string>(fx.LaunchedArgumentList!);
+            Assert.Equal(payload, list[list.IndexOf("--callers") + 1]);
+            Assert.Single(list, a => a == "--cache-path");
+            Assert.Equal(fx.CachePath, list[list.IndexOf("--cache-path") + 1]);
         }
 
         [Fact]

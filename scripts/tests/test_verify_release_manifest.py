@@ -19,7 +19,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ReleaseManifestTests(unittest.TestCase):
-    def _fixture(self):
+    def _fixture(self, version="3.0.0-rc.1", engine=False):
         root = Path(tempfile.mkdtemp(prefix="gxmcp-manifest-test-"))
         (root / "worker").mkdir()
         files = {
@@ -29,6 +29,9 @@ class ReleaseManifestTests(unittest.TestCase):
             "nexus-ide.vsix": b"vsix",
             "gxmcp-sbom.json": b"{}",
         }
+        if engine:
+            files["gx-engine.exe"] = b"engine"
+            files["gxwire.exe"] = b"wire"
         for relative, payload in files.items():
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,7 +42,7 @@ class ReleaseManifestTests(unittest.TestCase):
         ]
         manifest = {
             "schemaVersion": "gxmcp-release-manifest/1",
-            "version": "3.0.0-rc.1",
+            "version": version,
             "sourceCommit": "fixture",
             "runtime": {"gateway": "net10.0-windows", "worker": "net48-x86", "node": ">=22.0.0"},
             "protocolVersions": ["2025-11-25", "2026-07-28"],
@@ -50,6 +53,42 @@ class ReleaseManifestTests(unittest.TestCase):
         }
         (root / "gxmcp-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         return root
+
+    def _verify(self, root, version):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), str(root), "--version", version],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_release_above_floor_requires_engine_binaries(self):
+        for version in ("4.6.1", "4.7.0", "5.0.0-rc.1"):
+            root = self._fixture(version=version)
+            try:
+                result = self._verify(root, version)
+                self.assertEqual(2, result.returncode, f"{version}: {result.stdout}")
+                self.assertIn("gx-engine.exe", result.stderr)
+                self.assertIn("gxwire.exe", result.stderr)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+
+    def test_release_above_floor_with_engine_binaries_is_valid(self):
+        root = self._fixture(version="4.6.1", engine=True)
+        try:
+            result = self._verify(root, "4.6.1")
+            self.assertEqual(0, result.returncode, result.stderr)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_published_releases_up_to_floor_still_verify_without_engine(self):
+        for version in ("4.6.0", "4.5.2", "4.6.0-rc.1"):
+            root = self._fixture(version=version)
+            try:
+                result = self._verify(root, version)
+                self.assertEqual(0, result.returncode, f"{version}: {result.stderr}")
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
 
     def test_valid_manifest(self):
         root = self._fixture()

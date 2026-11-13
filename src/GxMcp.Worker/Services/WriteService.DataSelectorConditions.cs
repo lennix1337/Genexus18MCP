@@ -138,7 +138,8 @@ namespace GxMcp.Worker.Services
                 }
                 catch (Exception ex)
                 {
-                    try { transaction?.Rollback(); } catch { }
+                    try { transaction?.Rollback(); }
+                    catch (Exception rollbackEx) { Logger.Debug("[WRITE] DataSelector conditions transaction rollback failed: " + rollbackEx.Message); }
                     return Models.McpResponse.Err(
                         code: "DataSelectorConditionsWriteFailed",
                         message: FormatExceptionChain(ex),

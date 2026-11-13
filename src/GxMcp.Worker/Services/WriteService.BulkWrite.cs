@@ -173,7 +173,8 @@ namespace GxMcp.Worker.Services
                     string targetName = it?["name"]?.ToString();
                     if (string.IsNullOrEmpty(targetName)) continue;
                     IdeConcurrencyStatus probe = null;
-                    try { probe = IdeConcurrencyDetector.Check(kbPath, kbName, targetName); } catch { }
+                    try { probe = IdeConcurrencyDetector.Check(kbPath, kbName, targetName); }
+                    catch (Exception probeEx) { Logger.Debug("[BULK-WRITE] fail_if_open IDE probe failed for " + targetName + ": " + probeEx.Message); }
                     if (probe != null && probe.IsTargetObjectOpen)
                     {
                         return McpResponse.Err(
@@ -258,7 +259,8 @@ namespace GxMcp.Worker.Services
 
                 // Issue #128: attach IDE concurrency warning and nudge IDE if applicable
                 IdeConcurrencyStatus itemProbe = null;
-                try { itemProbe = IdeConcurrencyDetector.Check(kbPath, kbName, name); } catch { }
+                try { itemProbe = IdeConcurrencyDetector.Check(kbPath, kbName, name); }
+                catch (Exception probeEx) { Logger.Debug("[BULK-WRITE] IDE probe failed for " + name + ": " + probeEx.Message); }
                 if (itemProbe != null && itemProbe.HasWarning)
                 {
                     raw = AttachWarning(raw, itemProbe.ToWarningObject(name, kbName));

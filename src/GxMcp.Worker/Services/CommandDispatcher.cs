@@ -741,6 +741,7 @@ namespace GxMcp.Worker.Services
             {
                 // Compatibilidade: o parse legado acontecia dentro do try abaixo; um
                 // JSON malformado era convertido em envelope DispatcherException aqui.
+                Logger.Error("[DISPATCHER] Unhandled exception parsing request line: " + ex);
                 return Models.McpResponse.Err(
                     code: "DispatcherException",
                     message: ex.Message,
@@ -847,6 +848,14 @@ namespace GxMcp.Worker.Services
             }
             catch (Exception ex)
             {
+                // The envelope carries only ex.Message; the hint sends callers to the log,
+                // so the full chain must be written there.
+                Logger.Error(string.Format(
+                    "[DISPATCHER] Unhandled exception. Method: {0}, Action: {1}, CorrelationId: {2}: {3}",
+                    request?["method"]?.ToString(),
+                    request?["action"]?.ToString(),
+                    ReadDiagnosticContext.CurrentCorrelationId,
+                    ex));
                 return Models.McpResponse.Err(
                     code: "DispatcherException",
                     message: ex.Message,

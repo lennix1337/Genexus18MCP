@@ -121,7 +121,8 @@ namespace GxMcp.Worker.Services
                 }
                 catch (Exception ex)
                 {
-                    try { transaction.Rollback(); } catch { }
+                    try { transaction.Rollback(); }
+                    catch (Exception rollbackEx) { Logger.Debug("[WRITE] WinForm transaction rollback failed: " + rollbackEx.Message); }
                     RestoreWinFormPart(part, restorePoint);
                     return CreateWriteError("WinForm write failed", target, "WinForm", FormatExceptionChain(ex), obj, code: "WinFormWriteFailed");
                 }

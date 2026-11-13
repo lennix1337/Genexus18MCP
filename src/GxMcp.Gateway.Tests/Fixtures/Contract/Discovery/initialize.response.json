@@ -17,14 +17,14 @@
         "replacedBy": "genexus_analyze"
       },
       {
-        "argHint": "use action=ddl with name (and includeSubordinated)",
+        "argHint": "use action=sql_ddl with name (and includeSubordinated)",
         "name": "genexus_get_sql",
-        "replacedBy": "genexus_sql"
+        "replacedBy": "genexus_db"
       },
       {
-        "argHint": "use action=navigation with name and levelNumber",
+        "argHint": "use action=sql_navigation with name and levelNumber",
         "name": "genexus_get_sql_for_navigation",
-        "replacedBy": "genexus_sql"
+        "replacedBy": "genexus_db"
       },
       {
         "argHint": "use action=open with path (and optional alias)",
@@ -41,6 +41,7 @@
   },
   "capabilities": {
     "completion": {},
+    "logging": {},
     "prompts": {
       "listChanged": false
     },

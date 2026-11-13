@@ -35,3 +35,36 @@ missing live fixture therefore remains an unexecuted gate.
 No KB source, credentials, or model prompt content belongs in the manifest or
 telemetry. A missing live fixture keeps the replay gate unexecuted; it must not
 be replaced by a production KB or an inferred success.
+
+## First-call tool-selection harness (opt-in)
+
+`scripts/run-agent-model-eval.py` measures one thing: given the tool list exactly
+as served (`src/GxMcp.Gateway.Tests/Fixtures/Contract/Discovery/tools-list.response.json`)
+and the `initialize` instructions as the system prompt, does a model pick an
+acceptable **first** tool for a scenario task, and does that call carry the
+schema's required keys. Scenarios come from
+`tests/agent-evals/first-tool-expectations.json` (task text plus
+`expectedFirstTools`, derived from the first step of the matching corpus flow;
+`genexus_whoami` is always accepted because the server instructions ask for it).
+Only E02, E03, E05, E06, E07, E08, E10 and E15 have a single-tool first step.
+
+It does not run a worker or KB, does not execute the returned call, and does not
+cover multi-turn recovery, argument correctness beyond required keys, or the
+safety oracles. `modelEvaluation` in `corpus.json` stays `not_executed`.
+
+```powershell
+python scripts/run-agent-model-eval.py --dry-run                 # request sizes, sends nothing
+$env:ANTHROPIC_API_KEY = "<key>"                                  # opt-in; never read by CI
+python scripts/run-agent-model-eval.py --out artifacts/first-tool-eval.json
+python scripts/run-agent-model-eval.py --scenario E03 --model <model-id> --limit 1
+```
+
+The report holds per-scenario results and totals (first-call accuracy,
+required-args validity, input tokens). HTTP and network errors are recorded per
+scenario without aborting the run. Cost: one request per scenario, each about
+105 KB of request body (the full catalog), so a full run is 8 large requests;
+set a budget before running.
+
+Status: the harness has been unit-tested offline against a fake transport only.
+It has not been executed against the live API; the request format and the
+resulting numbers are unverified.

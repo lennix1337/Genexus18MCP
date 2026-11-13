@@ -1192,6 +1192,12 @@ namespace GxMcp.Worker.Services
                         execution["status"] = "searching";
                         string src = null;
                         bool haveSrc = false;
+                        // Only text read from the SDK in this iteration is persisted. The
+                        // index and part-cache tiers carry no proof that their text matches
+                        // e.LastUpdate (stamping it would certify stale text as fresh across
+                        // restarts), and a store hit is already persisted, so re-putting it
+                        // only re-hashes and re-reads the record.
+                        bool readFromSdk = false;
                         bool useIndexedSource = indexedSourceScope
                             && IsSourceAlias(part)
                             && e.FullSource != null;
@@ -1246,6 +1252,7 @@ namespace GxMcp.Worker.Services
                                 ? _objectService.ReadPartSourceRaw(obj, resolvedPart)
                                 : TryGetPartSource(obj, resolvedPart);
                             haveSrc = src != null;
+                            readFromSdk = haveSrc;
                             if (haveSrc) execution["sdkReads"] = execution["sdkReads"]!.ToObject<int>() + 1;
                             sourceReadTicks += System.Diagnostics.Stopwatch.GetTimestamp() - sourceReadStart;
                         }
@@ -1253,7 +1260,7 @@ namespace GxMcp.Worker.Services
                         {
                             if (_index.PromoteSourceForSearch(e, src)) sourceIndexPromotions++;
                         }
-                        if (haveSrc && !string.IsNullOrEmpty(e.Guid))
+                        if (readFromSdk && !string.IsNullOrEmpty(e.Guid))
                         {
                             SourceStoreService.Instance.Put(
                                 e.Guid,

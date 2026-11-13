@@ -3,6 +3,22 @@ import { GxFileSystemProvider } from "../gxFileSystem";
 import { formatMcpErrorMessage } from "../utils/McpErrorFormatter";
 import { GxUriParser } from "../utils/GxUriParser";
 import { escapeHtml } from "../utils/htmlEscape";
+import { createNonce, messagePage, scriptNonceCsp } from "../utils/webviewHtml";
+
+/**
+ * Validates a message posted by the history webview. Returns the revision to
+ * diff, or undefined for anything that is not a well-formed viewDiff request
+ * for the object this panel was opened for.
+ */
+export function parseViewDiffMessage(message: unknown, panelObjName: string): number | undefined {
+  if (typeof message !== "object" || message === null) return undefined;
+  const m = message as { command?: unknown; versionId?: unknown; objName?: unknown };
+  if (m.command !== "viewDiff" || m.objName !== panelObjName) return undefined;
+  if (typeof m.versionId !== "number" || !Number.isSafeInteger(m.versionId) || m.versionId < 0) {
+    return undefined;
+  }
+  return m.versionId;
+}
 
 export class HistoryView {
   private static panels = new Map<string, vscode.WebviewPanel>();
@@ -42,7 +58,7 @@ export class HistoryView {
       historyProvider.clear(objName);
     });
 
-    panel.webview.html = `<h1>Carregando historico de ${escapeHtml(objName)}...</h1>`;
+    panel.webview.html = messagePage(`Carregando historico de ${objName}...`);
 
     try {
       const result = await provider.callMcpTool("genexus_history", {
@@ -63,7 +79,7 @@ export class HistoryView {
                     <td style="padding: 10px; border-bottom: 1px solid #333;">${escapeHtml(rev.user || rev.User || "")}</td>
                     <td style="padding: 10px; border-bottom: 1px solid #333; font-style: italic; color: #aaa;">${rev.comment || rev.Comment ? escapeHtml(rev.comment || rev.Comment) : '<span style="opacity: 0.5;">Sem comentario</span>'}</td>
                     <td style="padding: 10px; border-bottom: 1px solid #333; text-align: center;">
-                        <button onclick="viewDiff(${Number(rev.version ?? rev.Id) || 0})" style="background: #007acc; color: white; border: none; padding: 4px 8px; cursor: pointer; border-radius: 2px;">Comparar (Diff)</button>
+                        <button class="diff-btn" data-version="${Number(rev.version ?? rev.Id) || 0}" style="background: #007acc; color: white; border: none; padding: 4px 8px; cursor: pointer; border-radius: 2px;">Comparar (Diff)</button>
                     </td>
                 </tr>
             `,
@@ -74,16 +90,17 @@ export class HistoryView {
         panel.webview.html = this.getHtml(objName, rows, panel.webview.cspSource);
 
         panel.webview.onDidReceiveMessage(async (message) => {
-          if (message.command === "viewDiff") {
+          const versionId = parseViewDiffMessage(message, objName);
+          if (versionId !== undefined) {
             vscode.window.setStatusBarMessage(
-              `$(sync~spin) Buscando revisao #${message.versionId} para diff...`,
+              `$(sync~spin) Buscando revisao #${versionId} para diff...`,
               3000,
             );
             try {
               const codeResult = await provider.callMcpTool("genexus_history", {
                 action: "get_source",
-                name: message.objName,
-                versionId: message.versionId,
+                name: objName,
+                versionId,
               });
 
               if (codeResult && codeResult.source) {
@@ -92,7 +109,7 @@ export class HistoryView {
                   "base64",
                 ).toString("utf8");
                 const historyUri = vscode.Uri.parse(
-                  `gx-history:/v${message.versionId}/${message.objName}.gx`,
+                  `gx-history:/v${versionId}/${objName}.gx`,
                 );
                 historyProvider.update(historyUri, historicalContent);
 
@@ -100,7 +117,7 @@ export class HistoryView {
                   "vscode.diff",
                   historyUri,
                   targetUri!,
-                  `${message.objName} (Revisao #${message.versionId}) <-> (Atual)`,
+                  `${objName} (Revisao #${versionId}) <-> (Atual)`,
                 );
               } else {
                 vscode.window.showErrorMessage(
@@ -119,19 +136,22 @@ export class HistoryView {
           }
         });
       } else {
-        panel.webview.html = `<h1>${formatMcpErrorMessage("Historico:", result || "Historico nao encontrado.")}</h1>`;
+        panel.webview.html = messagePage(
+          formatMcpErrorMessage("Historico:", result || "Historico nao encontrado."),
+        );
       }
     } catch (e) {
-      panel.webview.html = `<h1>${formatMcpErrorMessage("Erro critico:", e)}</h1>`;
+      panel.webview.html = messagePage(formatMcpErrorMessage("Erro critico:", e));
     }
   }
 
-  private static getHtml(objName: string, rows: string, cspSource: string): string {
+  /** Exported for testing. */
+  static getHtml(objName: string, rows: string, cspSource: string, nonce = createNonce()): string {
     return `
       <!DOCTYPE html>
       <html>
       <head>
-          <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'unsafe-inline';">
+          <meta http-equiv="Content-Security-Policy" content="${scriptNonceCsp(cspSource, nonce)}">
           <style>
               body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background-color: #1e1e1e; color: #ccc; }
               table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #252526; box-shadow: 0 4px 6px rgba(0,0,0,0.3); border-radius: 4px; overflow: hidden; }
@@ -155,11 +175,14 @@ export class HistoryView {
               </thead>
               <tbody>${rows || '<tr><td colspan="5" style="padding: 20px; text-align: center;">Nenhuma revisao encontrada.</td></tr>'}</tbody>
           </table>
-          <script>
+          <script nonce="${nonce}">
               const vscode = acquireVsCodeApi();
-              function viewDiff(vId) {
-                  vscode.postMessage({ command: 'viewDiff', versionId: vId, objName: ${JSON.stringify(objName)} });
-              }
+              const objName = ${JSON.stringify(objName).replace(/</g, "\\u003c")};
+              document.addEventListener('click', (event) => {
+                  const btn = event.target.closest && event.target.closest('.diff-btn');
+                  if (!btn) return;
+                  vscode.postMessage({ command: 'viewDiff', versionId: Number(btn.dataset.version), objName });
+              });
           </script>
       </body>
       </html>

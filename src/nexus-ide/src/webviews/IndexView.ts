@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { GxFileSystemProvider } from "../gxFileSystem";
 import { GxUriParser } from "../utils/GxUriParser";
+import { escapeHtml } from "../utils/htmlEscape";
+import { createNonce, scriptNonceCsp } from "../utils/webviewHtml";
 
 export class IndexView {
   private static panels = new Map<string, vscode.WebviewPanel>();
@@ -48,12 +50,13 @@ export class IndexView {
     }
   }
 
-  private static getHtml(objName: string, cspSource: string): string {
+  /** Exported for testing. */
+  static getHtml(objName: string, cspSource: string, nonce = createNonce()): string {
     return `
       <!DOCTYPE html>
       <html>
       <head>
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'unsafe-inline';">
+        <meta http-equiv="Content-Security-Policy" content="${scriptNonceCsp(cspSource, nonce)}">
         <style>
           :root {
             --bg: var(--vscode-editor-background);
@@ -86,14 +89,12 @@ export class IndexView {
         </style>
       </head>
       <body>
-        <div class="toolbar">Indexes for ${objName}</div>
+        <div class="toolbar">Indexes for ${escapeHtml(objName)}</div>
         <div class="table-container">
           <div id="content">Loading Indexes...</div>
         </div>
 
-        <script>
-          const vscode = acquireVsCodeApi();
-
+        <script nonce="${nonce}">
           function esc(v) {
             return String(v == null ? '' : v)
               .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')

@@ -32,7 +32,7 @@
     "automation"
   ],
   "scripts": {
-    "test": "node --test cli/run.test.js cli/lib/client-adapters.test.js cli/lib/runtime-stager.test.js scripts/lint.test.js scripts/verify-install.test.js && npm run test:live-contract",
+    "test": "node --test cli/run.test.js cli/lib/client-adapters.test.js cli/lib/runtime-stager.test.js scripts/lint.test.js scripts/verify-install.test.js scripts/check-pack.test.js && npm run test:live-contract",
     "test:docs": "node scripts/tests/docs.test.js",
     "lint": "node scripts/lint.js",
     "test:live-contract": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/test-live.test.ps1",
@@ -47,6 +47,8 @@
   },
   "files": [
     "cli",
+    "!cli/**/*.test.js",
+    "!cli/test-support",
     "config/gx-versions.json",
     "publish",
     "docs/llm_cli_mcp_playbook.md",

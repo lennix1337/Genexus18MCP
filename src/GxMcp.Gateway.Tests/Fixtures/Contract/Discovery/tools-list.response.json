@@ -4,7 +4,7 @@
   "tools": [
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -102,7 +102,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -232,7 +232,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -368,7 +368,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -639,7 +639,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -986,12 +986,12 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Database umbrella. Actions: drift_check|drift_report; optimize_analyze|optimize_suggest|optimize_report; sql_ddl|sql_navigation; sample_data; records_query|records_insert|records_update (typed… Full guidance: genexus://kb/tool-help/genexus_db",
+      "description": "Database umbrella. Actions: drift_check|drift_report; optimize_analyze|optimize_suggest|optimize_report; sql_ddl|sql_navigation; sample_data… Full guidance: genexus://kb/tool-help/genexus_db",
       "inputSchema": {
         "properties": {
           "action": {
@@ -1201,7 +1201,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Deploy application over the SDK. action=list_targets (read-only, default) enumerates deployment target types (IDeploymentTargetService); action=deploy (destructive, confirm=true) runs… Full guidance: genexus://kb/tool-help/genexus_deploy",
+      "description": "Deploy application over the SDK. action=list_targets (read-only, default) enumerates deployment target types (IDeploymentTargetService)… Full guidance: genexus://kb/tool-help/genexus_deploy",
       "inputSchema": {
         "properties": {
           "action": {
@@ -1232,7 +1232,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read-only entity-relationship diagram of a Transaction or Table, built only from the table relations the SDK reports: extends (N-1) and subordinates (1-N) edges, a Mermaid erDiagram, and the… Full guidance: genexus://kb/tool-help/genexus_dfd",
+      "description": "Read-only entity-relationship diagram of a Transaction or Table, built only from the table relations the SDK reports: extends (N-1) and subordinates (1-N) edges, a Mermaid erDiagram… Full guidance: genexus://kb/tool-help/genexus_dfd",
       "inputSchema": {
         "properties": {
           "kb": {
@@ -1654,7 +1654,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -1749,7 +1749,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -2207,7 +2207,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -2532,7 +2532,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -2791,7 +2791,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -2993,7 +2993,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": true,
         "readOnlyHint": false
@@ -3344,7 +3344,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -3599,7 +3599,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read-only context of one object: identity from the index, callers/callees with coverage (fieldTrust partial means not read), and its data model (ER diagram for a Transaction/Table), with what was… Full guidance: genexus://kb/tool-help/genexus_object_context",
+      "description": "Read-only context of one object: identity from the index, callers/callees with coverage (fieldTrust partial means not read), and its data model (ER diagram for a Transaction/Table)… Full guidance: genexus://kb/tool-help/genexus_object_context",
       "inputSchema": {
         "properties": {
           "entityKey": {
@@ -3645,7 +3645,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -4021,7 +4021,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -4313,7 +4313,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Audit KB security. action=audit_gam scans GAM/env props; action=scan_secrets greps Source for credential-shaped literals; action=scan_native drives the native GeneXus Security Scanner… Full guidance: genexus://kb/tool-help/genexus_security",
+      "description": "Audit KB security. action=audit_gam scans GAM/env props; action=scan_secrets greps Source for credential-shaped literals… Full guidance: genexus://kb/tool-help/genexus_security",
       "inputSchema": {
         "properties": {
           "action": {
@@ -4360,7 +4360,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -4679,7 +4679,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -5020,7 +5020,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "MANDATORY ARCHITECTURAL DISCOVERY & CALL GRAPH ENGINE (Rust native, sub-10ms). Call this FIRST before genexus_read, genexus_query, or editing KB objects to orient on any task. Full guidance: genexus://kb/tool-help/genexus_wire",
+      "description": "CALL GRAPH & IMPACT ENGINE (Rust native, sub-10ms) for EXPORTED TEXT SOURCE TREES (dir=; create one with genexus_io action=export_kb_to_text). Full guidance: genexus://kb/tool-help/genexus_wire",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -5132,7 +5132,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Reload worker. mode=soft drains and respawns; mode=hard copies sourceDir during the drain window and respawns. force=true kills and respawns a wedged Worker, but cannot be combined with mode=hard; no… Full guidance: genexus://kb/tool-help/genexus_worker_reload",
+      "description": "Reload worker. mode=soft drains and respawns; mode=hard copies sourceDir during the drain window and respawns. force=true kills and respawns a wedged Worker, but cannot be combined with mode=hard… Full guidance: genexus://kb/tool-help/genexus_worker_reload",
       "inputSchema": {
         "properties": {
           "alias": {
@@ -5169,7 +5169,7 @@
     },
     {
       "annotations": {
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false

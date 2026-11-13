@@ -106,4 +106,38 @@ finally {
 $installSource = Get-Content -LiteralPath (Join-Path $root 'install.ps1') -Raw
 Assert-True ($installSource -match '(?m)^\s*&\s*\(Join-Path \$root "build\.ps1"\)\s+-PreserveEngineConfig\b') 'install.ps1 must call build.ps1 with -PreserveEngineConfig.'
 
+# 6. A release build (-RequireEngineBinaries) fails when the Rust binaries were not
+# produced; a plain developer build only warns. The gate is cut out of build.ps1
+# and executed against a temp publish dir.
+$engineGateSegment = Get-BuildSegment $buildSource '# 6.07 Release builds must ship the default backend' '# 6.1 Slim the publish output'
+function Fail-Build([string]$message, [int]$exitCode = 1) { throw "Fail-Build: $message" }
+function Invoke-EngineGate {
+    param([string]$PublishDir, [bool]$Require)
+    $publishDir = $PublishDir
+    $RequireEngineBinaries = [switch]$Require
+    $output = & ([scriptblock]::Create($engineGateSegment)) 6>&1
+    return @($output | ForEach-Object { [string]$_ })
+}
+$gateTemp = Join-Path ([IO.Path]::GetTempPath()) ('gxmcp-engine-gate-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $gateTemp -Force | Out-Null
+try {
+    $threw = $null
+    try { Invoke-EngineGate -PublishDir $gateTemp -Require $true } catch { $threw = $_.Exception.Message }
+    Assert-True ($threw -match 'gx-engine\.exe was not produced') "A release build must fail when gx-engine.exe is missing, got: $threw"
+
+    Set-Content -LiteralPath (Join-Path $gateTemp 'gx-engine.exe') -Value 'engine' -Encoding ascii
+    $threw = $null
+    try { Invoke-EngineGate -PublishDir $gateTemp -Require $true } catch { $threw = $_.Exception.Message }
+    Assert-True ($threw -match 'gxwire\.exe was not produced') "A release build must fail when gxwire.exe is missing, got: $threw"
+
+    $devLog = Invoke-EngineGate -PublishDir $gateTemp -Require $false
+    Assert-True (@($devLog | Where-Object { $_ -match 'Warning: gxwire\.exe was not produced' }).Count -eq 1) 'A developer build must only warn about the missing binary.'
+
+    Set-Content -LiteralPath (Join-Path $gateTemp 'gxwire.exe') -Value 'wire' -Encoding ascii
+    Invoke-EngineGate -PublishDir $gateTemp -Require $true | Out-Null
+}
+finally {
+    if (Test-Path -LiteralPath $gateTemp) { Remove-Item -LiteralPath $gateTemp -Recurse -Force }
+}
+
 Write-Host 'build-publish-config: Engine section preservation checks passed' -ForegroundColor Green

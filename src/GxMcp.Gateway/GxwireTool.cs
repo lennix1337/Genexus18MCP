@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -28,6 +30,7 @@ namespace GxMcp.Gateway
         internal const string TaskRequired = "TaskRequired";
         internal const string PathEndpointsRequired = "PathEndpointsRequired";
         internal const string UnknownAction = "UnknownAction";
+        internal const string InvalidArgument = "InvalidArgument";
     }
 
     internal sealed class GxwireTool
@@ -69,8 +72,8 @@ namespace GxMcp.Gateway
 
             internal Func<string?> LocateExecutable { get; init; } = LocateGxwireExecutable;
 
-            /// <summary>(exePath, arguments, timeoutSeconds) → the completed run.</summary>
-            internal Func<string, string, int, Task<GxwireProcessRun>> Launch { get; init; } = LaunchGxwireAsync;
+            /// <summary>(exePath, argument list, timeoutSeconds) → the completed run. Arguments are never joined into a command line.</summary>
+            internal Func<string, IReadOnlyList<string>, int, Task<GxwireProcessRun>> Launch { get; init; } = LaunchGxwireAsync;
 
             internal Func<string?, string> ResolveCachePath { get; init; } = GxwireCacheLocation.Resolve;
         }
@@ -163,6 +166,21 @@ namespace GxMcp.Gateway
             GxwireToolSeams seams,
             GxwireRunContext ctx)
         {
+            // Values reach gxwire as separate argv entries, so a value that itself
+            // starts with '-' would be read as a flag (e.g. --cache-path).
+            foreach (string key in GxwireCallerValueKeys)
+            {
+                string? supplied = ReadGxwireArg(tArgs, key);
+                if (supplied != null && supplied.StartsWith("-", StringComparison.Ordinal))
+                {
+                    return BuildGxwireError(
+                        GxwireErrorCodes.InvalidArgument,
+                        $"Argument '{key}' must not start with '-'.",
+                        ctx,
+                        hint: "Values are passed to gxwire as separate arguments; a leading '-' would be parsed as a gxwire flag. Prefix relative paths with './' if needed.");
+                }
+            }
+
             string? exePath = seams.LocateExecutable();
             if (string.IsNullOrEmpty(exePath))
             {
@@ -275,25 +293,25 @@ namespace GxMcp.Gateway
                     next: $"genexus_wire action=index dir={kbDir}");
             }
 
-            var argsBuilder = new StringBuilder();
+            var gxArgs = new List<string>();
 
             switch (action.ToLowerInvariant())
             {
                 case "doctor":
-                    argsBuilder.Append("--doctor");
+                    gxArgs.Add("--doctor");
                     if (!string.IsNullOrWhiteSpace(kbDir))
                     {
-                        argsBuilder.Append($" --dir \"{kbDir}\"");
+                        gxArgs.AddRange(new[] { "--dir", kbDir });
                     }
-                    argsBuilder.Append($" --format {format}");
+                    gxArgs.AddRange(new[] { "--format", format });
                     break;
 
                 case "status":
-                    argsBuilder.Append($"--dir \"{kbDir}\" --format {format}");
+                    gxArgs.AddRange(new[] { "--dir", kbDir!, "--format", format });
                     break;
 
                 case "index":
-                    argsBuilder.Append($"--index --dir \"{kbDir}\"");
+                    gxArgs.AddRange(new[] { "--index", "--dir", kbDir! });
                     break;
 
                 case "callers":
@@ -302,8 +320,8 @@ namespace GxMcp.Gateway
                     {
                         return BuildGxwireError(GxwireErrorCodes.TargetRequired, "Action 'callers' requires 'target'.", ctx);
                     }
-                    argsBuilder.Append($"--callers \"{target}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
-                    if (full) argsBuilder.Append(" --full");
+                    gxArgs.AddRange(new[] { "--callers", target, "--dir", kbDir!, "--format", format, "--token-budget", budget.ToString(CultureInfo.InvariantCulture) });
+                    if (full) gxArgs.Add("--full");
                     break;
 
                 case "impact":
@@ -312,8 +330,8 @@ namespace GxMcp.Gateway
                     {
                         return BuildGxwireError(GxwireErrorCodes.TargetRequired, "Action 'impact' requires 'target'.", ctx);
                     }
-                    argsBuilder.Append($"--impact \"{impactTarget}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
-                    if (full) argsBuilder.Append(" --full");
+                    gxArgs.AddRange(new[] { "--impact", impactTarget, "--dir", kbDir!, "--format", format, "--token-budget", budget.ToString(CultureInfo.InvariantCulture) });
+                    if (full) gxArgs.Add("--full");
                     break;
 
                 case "for":
@@ -322,8 +340,8 @@ namespace GxMcp.Gateway
                     {
                         return BuildGxwireError(GxwireErrorCodes.TaskRequired, "Action 'for' requires 'task'.", ctx);
                     }
-                    argsBuilder.Append($"--for \"{forTask}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
-                    if (full) argsBuilder.Append(" --full");
+                    gxArgs.AddRange(new[] { "--for", forTask, "--dir", kbDir!, "--format", format, "--token-budget", budget.ToString(CultureInfo.InvariantCulture) });
+                    if (full) gxArgs.Add("--full");
                     break;
 
                 case "pack_task":
@@ -333,8 +351,8 @@ namespace GxMcp.Gateway
                     {
                         return BuildGxwireError(GxwireErrorCodes.TaskRequired, "Action 'pack_task' requires 'task'.", ctx);
                     }
-                    argsBuilder.Append($"--pack-task \"{packTask}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
-                    if (full) argsBuilder.Append(" --full");
+                    gxArgs.AddRange(new[] { "--pack-task", packTask, "--dir", kbDir!, "--format", format, "--token-budget", budget.ToString(CultureInfo.InvariantCulture) });
+                    if (full) gxArgs.Add("--full");
                     break;
 
                 case "slice":
@@ -343,7 +361,7 @@ namespace GxMcp.Gateway
                     {
                         return BuildGxwireError(GxwireErrorCodes.TargetRequired, "Action 'slice' requires 'target' (e.g. 'ProcName:VarName').", ctx);
                     }
-                    argsBuilder.Append($"--slice \"{sliceTarget}\" --dir \"{kbDir}\" --format {format} --token-budget {budget}");
+                    gxArgs.AddRange(new[] { "--slice", sliceTarget, "--dir", kbDir!, "--format", format, "--token-budget", budget.ToString(CultureInfo.InvariantCulture) });
                     break;
 
                 case "safe_delete":
@@ -353,7 +371,7 @@ namespace GxMcp.Gateway
                     {
                         return BuildGxwireError(GxwireErrorCodes.TargetRequired, "Action 'safe_delete' requires 'target'.", ctx);
                     }
-                    argsBuilder.Append($"--safe-delete \"{delTarget}\" --dir \"{kbDir}\" --format {format}");
+                    gxArgs.AddRange(new[] { "--safe-delete", delTarget, "--dir", kbDir!, "--format", format });
                     break;
 
                 case "path":
@@ -364,8 +382,8 @@ namespace GxMcp.Gateway
                     {
                         return BuildGxwireError(GxwireErrorCodes.PathEndpointsRequired, "Action 'path' requires 'from' and 'to' parameters.", ctx);
                     }
-                    argsBuilder.Append($"--from \"{fromSym}\" --to \"{toSym}\" --dir \"{kbDir}\" --format {format}");
-                    if (full) argsBuilder.Append(" --full");
+                    gxArgs.AddRange(new[] { "--from", fromSym, "--to", toSym, "--dir", kbDir!, "--format", format });
+                    if (full) gxArgs.Add("--full");
                     break;
 
                 default:
@@ -381,7 +399,7 @@ namespace GxMcp.Gateway
             // directory read-only.
             if (!string.IsNullOrWhiteSpace(gxwireCachePath))
             {
-                argsBuilder.Append($" --cache-path \"{gxwireCachePath}\"");
+                gxArgs.AddRange(new[] { "--cache-path", gxwireCachePath });
             }
 
             int timeoutSeconds = GxwireProcessRunner.ResolveTimeoutSeconds(action);
@@ -390,7 +408,7 @@ namespace GxMcp.Gateway
             GxwireProcessRun run;
             try
             {
-                run = await seams.Launch(exePath!, argsBuilder.ToString(), timeoutSeconds).ConfigureAwait(false);
+                run = await seams.Launch(exePath!, gxArgs, timeoutSeconds).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -543,12 +561,11 @@ namespace GxMcp.Gateway
         /// the budget expired or a cancellation arrived from outside, so the child
         /// never outlives the call (#498).
         /// </summary>
-        internal static async Task<GxwireProcessRun> LaunchGxwireAsync(string exePath, string arguments, int timeoutSeconds)
+        internal static async Task<GxwireProcessRun> LaunchGxwireAsync(string exePath, IReadOnlyList<string> arguments, int timeoutSeconds)
         {
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
-                Arguments = arguments,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -556,6 +573,8 @@ namespace GxMcp.Gateway
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8
             };
+
+            foreach (string argument in arguments) psi.ArgumentList.Add(argument);
 
             using var proc = Process.Start(psi)
                 ?? throw new InvalidOperationException("Process.Start returned no process for gxwire.");
@@ -618,6 +637,11 @@ namespace GxMcp.Gateway
             if (ctx.ExceptionType != null) context["exceptionType"] = ctx.ExceptionType;
             return context;
         }
+
+        private static readonly string[] GxwireCallerValueKeys =
+        {
+            "format", "dir", "kb", "target", "symbol", "name", "task", "query", "from", "source", "origin", "to", "destination"
+        };
 
         private static string? ReadGxwireArg(JObject? args, string key)
         {

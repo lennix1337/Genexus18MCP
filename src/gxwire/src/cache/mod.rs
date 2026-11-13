@@ -2,6 +2,7 @@ use crate::graph::CsrGraph;
 use crate::model::{EdgeKind, EntityKind, EntityNode, RawEdge};
 use crate::parser::lexer::ParsedSymbolRef;
 use crate::parser::{ParseResult, parse_genexus_source};
+use bincode::Options;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
@@ -440,9 +441,29 @@ pub fn save_index_to(
             fs::create_dir_all(parent)?;
         }
     }
-    let mut file = File::create(cache_path)?;
-    file.write_all(&encoded)?;
+    write_atomically(cache_path, &encoded)?;
     Ok(())
+}
+
+/// Writes `bytes` to a sibling temp file and renames it over `target`.
+///
+/// Several gxwire processes can index the same tree at once, and a crash
+/// mid-write must not leave a half-written index at the final path. The rename
+/// is atomic within a directory, so readers see the old file or the new one.
+fn write_atomically(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp_name = target.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".{}.tmp", std::process::id()));
+    let tmp = target.with_file_name(tmp_name);
+    let result = (|| {
+        let mut file = File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&tmp, target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// Reads the index, rejecting any file whose layout marker is not ours.
@@ -461,8 +482,16 @@ fn read_bundle(cache_path: &Path) -> Option<CachedBundle> {
         return None;
     }
 
-    // A truncated write fails here and falls back to a full reparse.
-    bincode::deserialize::<CachedBundle>(&bytes).ok()
+    // A truncated or corrupt file fails here and falls back to a full reparse.
+    // Every length prefix counts against the file size, so a corrupt prefix is
+    // rejected instead of allocating (the crate builds with `panic = "abort"`).
+    // Fixint + trailing bytes keep this identical to `bincode::serialize`.
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+        .with_limit(bytes.len() as u64)
+        .deserialize::<CachedBundle>(&bytes)
+        .ok()
 }
 
 #[derive(Serialize, Deserialize)]

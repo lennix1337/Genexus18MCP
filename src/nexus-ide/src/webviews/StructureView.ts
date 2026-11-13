@@ -1,7 +1,31 @@
 import * as vscode from "vscode";
 import { GxFileSystemProvider } from "../gxFileSystem";
 import { GxUriParser } from "../utils/GxUriParser";
-import { escapeHtml } from "../utils/htmlEscape";
+import { createNonce, messagePage, scriptNonceCsp } from "../utils/webviewHtml";
+
+function isStructureItem(item: unknown): boolean {
+  if (typeof item !== "object" || item === null) return false;
+  const { name, children } = item as { name?: unknown; children?: unknown };
+  if (typeof name !== "string") return false;
+  return children === undefined || (Array.isArray(children) && children.every(isStructureItem));
+}
+
+/**
+ * Validates a message posted by the structure webview. Returns the structure to
+ * save, or undefined if the message is not a well-formed save request (a tree
+ * of items with string names under a top-level "children" array).
+ */
+export function parseSaveMessage(message: unknown): { children: unknown[] } | undefined {
+  if (typeof message !== "object" || message === null) return undefined;
+  const m = message as { command?: unknown; structure?: unknown };
+  if (m.command !== "save") return undefined;
+  const structure = m.structure as { children?: unknown } | null | undefined;
+  if (typeof structure !== "object" || structure === null) return undefined;
+  if (!Array.isArray(structure.children) || !structure.children.every(isStructureItem)) {
+    return undefined;
+  }
+  return structure as { children: unknown[] };
+}
 
 export class StructureView {
   private static panels = new Map<string, vscode.WebviewPanel>();
@@ -42,18 +66,19 @@ export class StructureView {
       if (result && !result.error) {
         panel.webview.postMessage({ type: "update", structure: result });
       } else {
-        panel.webview.html = `<h1>Error: ${escapeHtml(result?.error || "Unknown error")}</h1>`;
+        panel.webview.html = messagePage(`Error: ${result?.error || "Unknown error"}`);
       }
 
       panel.webview.onDidReceiveMessage(async (message) => {
-        if (message.command === "save") {
+        const structure = isReadOnly ? undefined : parseSaveMessage(message);
+        if (structure) {
           try {
             const saveResult = await provider.callMcpTool(
               "genexus_structure",
               {
                 action: "update_visual",
                 name: target,
-                payload: message.structure,
+                payload: structure,
               },
               180000
             );
@@ -72,16 +97,17 @@ export class StructureView {
         }
       });
     } catch (e) {
-      panel.webview.html = `<h1>Critical Error: ${escapeHtml(String(e))}</h1>`;
+      panel.webview.html = messagePage(`Critical Error: ${String(e)}`);
     }
   }
 
-  private static getHtml(objName: string, isReadOnly: boolean, cspSource: string): string {
+  /** Exported for testing. */
+  static getHtml(objName: string, isReadOnly: boolean, cspSource: string, nonce = createNonce()): string {
     return `
       <!DOCTYPE html>
       <html>
       <head>
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'unsafe-inline';">
+        <meta http-equiv="Content-Security-Policy" content="${scriptNonceCsp(cspSource, nonce)}">
         <style>
           :root {
             --bg: var(--vscode-editor-background);
@@ -171,13 +197,13 @@ export class StructureView {
         <div class="toolbar">
           ${
             !isReadOnly
-              ? '<button onclick="addRow(false)"><span>➕</span> Attr</button><button onclick="addRow(true)"><span>📁</span> Level</button>'
+              ? '<button id="btn-add-attr"><span>➕</span> Attr</button><button id="btn-add-level"><span>📁</span> Level</button>'
               : '<span class="readonly-badge">READ-ONLY (Edit in Transaction)</span>'
           }
           <div class="search-container">
-            <input type="text" class="search-input" placeholder="Filter..." oninput="filterRows(this.value)">
+            <input type="text" class="search-input" placeholder="Filter..." id="filter-input">
           </div>
-          ${!isReadOnly ? '<button class="primary" onclick="requestSave()"><span>💾</span> Save</button>' : ""}
+          ${!isReadOnly ? '<button class="primary" id="btn-save"><span>💾</span> Save</button>' : ""}
           <div id="status">Ready</div>
         </div>
         
@@ -192,7 +218,7 @@ export class StructureView {
           <div id="content">Loading Structure...</div>
         </div>
 
-        <script>
+        <script nonce="${nonce}">
           const vscode = acquireVsCodeApi();
           const isReadOnly = ${isReadOnly};
           let currentData = null;
@@ -232,6 +258,44 @@ export class StructureView {
             }
           });
 
+          // Handlers are wired here (the CSP forbids inline onclick/oninput/...).
+          // Row events are delegated because the table is re-rendered on change.
+          const contentEl = document.getElementById('content');
+          function rowIdOf(el) {
+            const row = el.closest('tr[data-id]');
+            return row ? row.dataset.id : null;
+          }
+          function isFormControl(el) {
+            return el.tagName === 'INPUT' || el.tagName === 'SELECT';
+          }
+          contentEl.addEventListener('click', event => {
+            const el = event.target.closest('[data-action]');
+            const id = el ? rowIdOf(el) : null;
+            if (id === null) return;
+            if (el.dataset.action === 'toggle-key') toggleKey(id);
+            else if (el.dataset.action === 'delete-row') deleteRow(id);
+          });
+          // contenteditable cells: focusout bubbles (blur does not).
+          contentEl.addEventListener('focusout', event => {
+            const el = event.target;
+            if (!el.dataset || !el.dataset.field || isFormControl(el)) return;
+            const id = rowIdOf(el);
+            if (id !== null) updateLocalData(id, el.dataset.field, el.innerText);
+          });
+          contentEl.addEventListener('change', event => {
+            const el = event.target;
+            if (!el.dataset || !el.dataset.field || !isFormControl(el)) return;
+            const id = rowIdOf(el);
+            if (id !== null) updateLocalData(id, el.dataset.field, el.value);
+          });
+          const addAttrBtn = document.getElementById('btn-add-attr');
+          if (addAttrBtn) addAttrBtn.addEventListener('click', () => addRow(false));
+          const addLevelBtn = document.getElementById('btn-add-level');
+          if (addLevelBtn) addLevelBtn.addEventListener('click', () => addRow(true));
+          const saveBtn = document.getElementById('btn-save');
+          if (saveBtn) saveBtn.addEventListener('click', requestSave);
+          document.getElementById('filter-input').addEventListener('input', event => filterRows(event.target.value));
+
           function filterRows(text) {
             filterText = text.toLowerCase();
             renderStructure();
@@ -270,29 +334,29 @@ export class StructureView {
                 let iconClass = item.isLevel ? 'level-icon' : (item.isKey ? 'key-icon' : 'attr-icon');
 
                 const nameEditable = !isReadOnly ? 'contenteditable="true"' : '';
-                html += \`<td class="item-name-cell">\${indentSpace}<span class="icon \${iconClass}" onclick="toggleKey('\${id}')">\${iconHtml}</span><span class="editable" \${nameEditable} onblur="updateLocalData('\${id}', 'name', this.innerText)">\${esc(item.name)}</span></td>\`;
+                html += \`<td class="item-name-cell">\${indentSpace}<span class="icon \${iconClass}" data-action="toggle-key">\${iconHtml}</span><span class="editable" data-field="name" \${nameEditable}>\${esc(item.name)}</span></td>\`;
 
                 const typeDisabled = isReadOnly || item.isLevel ? "readonly" : "";
-                html += \`<td style="position: relative"><input type="text" list="gx-types" class="type-input" value="\${esc(item.type || '')}" onchange="updateLocalData('\${id}', 'type', this.value)" \${typeDisabled} autocomplete="off"/></td>\`;
+                html += \`<td style="position: relative"><input type="text" list="gx-types" class="type-input" value="\${esc(item.type || '')}" data-field="type"\${typeDisabled} autocomplete="off"/></td>\`;
 
                 const descEditable = !isReadOnly && !item.isLevel;
-                html += '<td class="editable" contenteditable="' + descEditable + '" onblur="updateLocalData(' + quote + id + quote + ', ' + quote + 'description' + quote + ', this.innerText)">' + esc(item.description || '') + '</td>';
+                html += '<td class="editable" data-field="description" contenteditable="' + descEditable + '">' + esc(item.description || '') + '</td>';
 
                 const formulaEditable = !isReadOnly && !item.isLevel;
-                html += '<td class="editable formula-text" contenteditable="' + formulaEditable + '" onblur="updateLocalData(' + quote + id + quote + ', ' + quote + 'formula' + quote + ', this.innerText)">' + esc(item.formula || '') + '</td>';
+                html += '<td class="editable formula-text" data-field="formula" contenteditable="' + formulaEditable + '">' + esc(item.formula || '') + '</td>';
                 
                 if (item.isLevel) {
                   html += '<td></td>';
                 } else {
                   const val = item.nullable || 'No';
-                  html += '<td><select class="nullable-select" ' + (isReadOnly ? 'disabled' : '') + ' onchange="updateLocalData(' + quote + id + quote + ', ' + quote + 'nullable' + quote + ', this.value)">' +
+                  html += '<td><select class="nullable-select" ' + (isReadOnly ? 'disabled' : '') + ' data-field="nullable">' +
                       '<option value="No" ' + (val === 'No' ? 'selected' : '') + '>No</option>' +
                       '<option value="Yes" ' + (val === 'Yes' ? 'selected' : '') + '>Yes</option>' +
                       '<option value="Managed" ' + (val === 'Managed' || val === 'Compatible' ? 'selected' : '') + '>Mng</option>' +
                     '</select></td>';
                 }
                 
-                html += '<td class="actions-cell">' + (!isReadOnly ? '<button class="btn-del" onclick="deleteRow(' + quote + id + quote + ')">×</button>' : '') + '</td>';
+                html += '<td class="actions-cell">' + (!isReadOnly ? '<button class="btn-del" data-action="delete-row">×</button>' : '') + '</td>';
                 html += '</tr>';
                 
                 if (item.children && item.children.length > 0) {

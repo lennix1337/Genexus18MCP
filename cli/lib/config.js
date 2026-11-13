@@ -2333,9 +2333,24 @@ function switchActiveKb(configPath, { name, path: explicitPath }) {
     return { ok: true, catalog, switchedTo: { name: targetName, path: targetPath } };
 }
 
-function applyLauncherConfigOrExit({ cwd, stderr, quiet }) {
+// A cwd config.json is adopted only when it looks like a GeneXus MCP config, so
+// launching from an unrelated project (any Node app has a config.json) does not
+// point the Gateway at the wrong file. `Server` alone is too generic to count.
+function looksLikeGeneXusMcpConfig(cfg) {
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return false;
+    const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
+    if (isObject(cfg.GeneXus)) return true;
+    if (typeof cfg.ConfigSchemaVersion === 'number' || typeof cfg.GatewayMode === 'string') return true;
+    const env = cfg.Environment;
+    return isObject(env) && ['KBPath', 'KBs', 'ActiveKb', 'DefaultKb', 'ResolutionPolicy'].some((key) => key in env);
+}
+
+function applyLauncherConfigOrExit({ cwd, stderr, quiet }, deps = {}) {
+    const discover = deps.discoverGeneXusInstallation || discoverGeneXusInstallation;
+    const homedir = deps.homedir || os.homedir;
     const log = (msg) => {
-        if (!quiet) stderr.write(`${msg}\n`);
+        if (!quiet) stderr.write(`${msg}
+`);
     };
 
     const cwdConfigPath = path.join(cwd, 'config.json');
@@ -2345,26 +2360,31 @@ function applyLauncherConfigOrExit({ cwd, stderr, quiet }) {
     }
 
     if (fs.existsSync(cwdConfigPath)) {
-        process.env.GX_CONFIG_PATH = cwdConfigPath;
+        if (looksLikeGeneXusMcpConfig(readJsonFileSafe(cwdConfigPath))) {
+            process.env.GX_CONFIG_PATH = cwdConfigPath;
+            return { ok: true };
+        }
+        log(`[genexus-mcp] Ignoring ${cwdConfigPath}: not a GeneXus MCP config.`);
+    }
+
+    const userMcpDir = path.join(homedir(), '.genexus-mcp');
+    const userMcpConfigPath = path.join(userMcpDir, 'config.json');
+    const cwdIsKb = directoryLooksLikeKnowledgeBase(cwd);
+
+    // An existing user config needs no GeneXus discovery (slow registry probes).
+    if (!cwdIsKb && fs.existsSync(userMcpConfigPath)) {
+        process.env.GX_CONFIG_PATH = userMcpConfigPath;
         return { ok: true };
     }
 
-    const discoveredGxPath = discoverGeneXusInstallation();
+    const discoveredGxPath = discover();
     if (!discoveredGxPath) {
         log('[genexus-mcp] ERROR: No config.json found and GeneXus installation auto-discovery failed.');
         log('[genexus-mcp] Fix with: npx genexus-mcp init --interactive');
         return { ok: false };
     }
 
-    const userMcpDir = path.join(os.homedir(), '.genexus-mcp');
-    const userMcpConfigPath = path.join(userMcpDir, 'config.json');
-
-
-    if (!directoryLooksLikeKnowledgeBase(cwd)) {
-        if (fs.existsSync(userMcpConfigPath)) {
-            process.env.GX_CONFIG_PATH = userMcpConfigPath;
-            return { ok: true };
-        }
+    if (!cwdIsKb) {
         log(`[genexus-mcp] Auto-discovered GeneXus at: ${discoveredGxPath}`);
         log(`[genexus-mcp] Current directory is not a GeneXus KB. Generating neutral user config at: ${userMcpConfigPath}`);
         fs.mkdirSync(userMcpDir, { recursive: true });

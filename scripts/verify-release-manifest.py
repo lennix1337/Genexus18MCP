@@ -17,6 +17,10 @@ REQUIRED = {
     "worker/GxMcp.Worker.exe",
     "tool_definitions.json",
 }
+# Engine.Backend defaults to gxengine, so releases after ENGINE_FLOOR must ship
+# the Rust binaries. Releases up to and including 4.6.0 predate this check.
+ENGINE_REQUIRED = {"gx-engine.exe", "gxwire.exe"}
+ENGINE_FLOOR = (4, 6, 0)
 PROTOCOLS = {"2025-11-25", "2026-07-28"}
 PROVENANCE = "gxmcp-sbom.json"
 # Keys build.ps1 writes into the neutral publish/config.json (New-PublishConfigJson
@@ -27,6 +31,15 @@ NEUTRAL_CONFIG_KEYS = {
     "GeneXus": {"InstallationPath", "WorkerExecutable"},
     "Environment": {"ResolutionPolicy"},
 }
+
+
+def requires_engine(version: str) -> bool:
+    """True when the release version is above the floor (a prerelease of the floor is not)."""
+    core = re.match(r"(\d+)\.(\d+)\.(\d+)(-.*)?$", version)
+    if not core:
+        return False
+    numbers = tuple(int(core.group(i)) for i in (1, 2, 3))
+    return numbers > ENGINE_FLOOR
 
 
 def fail(message: str) -> int:
@@ -145,7 +158,8 @@ def main() -> int:
         if str(entry.get("sha256", "")).lower() != actual:
             return fail(f"SHA-256 mismatch: {relative}")
 
-    missing = sorted(REQUIRED - seen)
+    required = REQUIRED | (ENGINE_REQUIRED if requires_engine(expected_version) else set())
+    missing = sorted(required - seen)
     if missing:
         return fail("required artifacts are not covered: " + ", ".join(missing))
     if PROVENANCE not in seen:

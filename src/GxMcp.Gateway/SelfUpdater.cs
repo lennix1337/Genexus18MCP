@@ -316,22 +316,7 @@ namespace GxMcp.Gateway
                 try { zipBytes = await http.GetByteArrayAsync(zipUrl); }
                 catch (Exception ex) { Program.Log($"[SelfUpdate] download failed: {ex.Message}"); return; }
 
-                // Verify SHA-256 if the release publishes a checksum; else fall back to
-                // structural validation only (with a logged warning).
-                string? expected = await TryGetChecksumAsync(http, shaUrl);
-                if (expected != null)
-                {
-                    string actual = Sha256Hex(zipBytes);
-                    if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-                    {
-                        Program.Log($"[SelfUpdate] checksum MISMATCH for v{v} (expected {expected}, got {actual}) — refusing to stage.");
-                        return;
-                    }
-                }
-                else
-                {
-                    Program.Log($"[SelfUpdate] no publish.zip.sha256 for v{v} — staging after structural validation only.");
-                }
+                if (!ChecksumAllowsStaging(expected: await TryGetChecksumAsync(http, shaUrl), zipBytes, v)) return;
 
                 // Extract to .staged.tmp, validate, then atomically swap to .staged.
                 TryDeleteDir(StagedTmpDir);
@@ -360,6 +345,23 @@ namespace GxMcp.Gateway
                 Program.Log($"[SelfUpdate] staging skipped: {ex.GetType().Name}: {ex.Message}");
                 TryDeleteDir(StagedTmpDir);
             }
+        }
+
+        // Fail closed: an update without a matching published checksum is never staged.
+        internal static bool ChecksumAllowsStaging(string? expected, byte[] zipBytes, string version)
+        {
+            if (expected == null)
+            {
+                Program.Log($"[SelfUpdate] no publish.zip.sha256 for v{version} — refusing to stage an unverified update.");
+                return false;
+            }
+            string actual = Sha256Hex(zipBytes);
+            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                Program.Log($"[SelfUpdate] checksum MISMATCH for v{version} (expected {expected}, got {actual}) — refusing to stage.");
+                return false;
+            }
+            return true;
         }
 
         private static async Task<string?> TryGetChecksumAsync(HttpClient http, string shaUrl)

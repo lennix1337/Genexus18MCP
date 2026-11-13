@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "genexus-agent-first-tool-expectations/1",
+  "corpus": "corpus.json",
+  "note": "Machine-readable first-call expectations for scripts/run-agent-model-eval.py. Each expectedFirstTools entry is derived from the first step of the matching corpus scenario flow. Scenarios whose flow is infrastructure-only or whose first step has no single tool (E01, E04, E09, E11-E14) are intentionally absent.",
+  "alwaysAcceptable": ["genexus_whoami"],
+  "alwaysAcceptableReason": "The server initialize instructions say to start every session with genexus_whoami, so an orienting call is not a selection error.",
+  "scenarios": [
+    {
+      "id": "E02",
+      "userTask": "The open Knowledge Base has an Attribute named Code, a Domain named Code, and two procedures named P in modules ModuleA and ModuleB. List the objects named Code so I can tell which is which.",
+      "expectedFirstTools": ["genexus_query", "genexus_list_objects"]
+    },
+    {
+      "id": "E03",
+      "userTask": "I want to change the Source of the procedure ProcSample in the open KB. Start by reading its Source part and its current version token.",
+      "expectedFirstTools": ["genexus_read"]
+    },
+    {
+      "id": "E05",
+      "userTask": "Preview (do not apply yet) a Source edit on the procedure ProcOne in the open KB that replaces the text 'old' with 'new'.",
+      "expectedFirstTools": ["genexus_edit"]
+    },
+    {
+      "id": "E06",
+      "userTask": "Preview renaming the procedure CustomerLookup to CustomerFind in the open KB, without applying it.",
+      "expectedFirstTools": ["genexus_refactor"]
+    },
+    {
+      "id": "E07",
+      "userTask": "I changed the Domain CustomerId in the open KB. What objects are affected and in which order should they be rebuilt?",
+      "expectedFirstTools": ["genexus_impact", "genexus_lifecycle", "genexus_analyze"]
+    },
+    {
+      "id": "E08",
+      "userTask": "Apply the WorkWithPlus pattern to the Transaction Customer in the open KB.",
+      "expectedFirstTools": ["genexus_apply_pattern"]
+    },
+    {
+      "id": "E10",
+      "userTask": "Preview a records update on the table behind the Transaction Customer in the test datastore, without committing any change.",
+      "expectedFirstTools": ["genexus_db"]
+    },
+    {
+      "id": "E15",
+      "userTask": "Give me the full task context for the object CustomerLookup in the open KB: description, callers, callees and data model.",
+      "expectedFirstTools": ["genexus_analyze", "genexus_object_context"]
+    }
+  ]
+}

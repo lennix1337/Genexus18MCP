@@ -22,7 +22,7 @@ suite("DiagramView - CSP + local mermaid", () => {
       assert.ok(!/cdn\.jsdelivr\.net/.test(html), "expected no jsdelivr CDN reference");
       assert.ok(/mermaid\.min\.js/.test(html), "expected the vendored local mermaid asset to be referenced");
       assert.ok(/nonce-/.test(html), "expected a per-render CSP nonce");
-      assert.ok(/graph TD; A-->B;/.test(html), "expected the mermaid diagram source to be inlined");
+      assert.ok(/graph TD; A--&gt;B;/.test(html), "expected the mermaid diagram source to be inlined (HTML-escaped)");
     } finally {
       panel.dispose();
     }

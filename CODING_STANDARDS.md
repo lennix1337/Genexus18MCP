@@ -27,8 +27,18 @@ carry history or contracts:
 
 **Review signals.** A diff that rewrites a whole file's line endings, or a
 `CHANGELOG.md` that lost `## v` sections, is this bug wearing a different hat.
+(Releases older than the current major are moved on purpose to
+`docs/changelog/v<major>.md` and listed under `## Older releases` in `CHANGELOG.md`;
+`## Unreleased` and the current major stay in `CHANGELOG.md`.)
 Check `git diff --stat`: when the changed-line count dwarfs the semantic change,
 the edit mechanism is suspect, not the intent.
+
+Rule moved from `AGENTS.md`:
+
+- Edit tracked text with the native edit tools (keep LF line endings), not by piping it through a shell or text-mode script:
+  fixed line indices truncate long files, shell round-trips re-encode UTF-8, and
+  index arithmetic with shifting bounds deletes code. Use the shell to read and
+  to run commands.
 
 `git checkout --ours` / `--theirs` is the correct way to resolve a conflict
 wholesale. Resolving a single hunk means hand-editing the markers out.
