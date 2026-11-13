@@ -1,18 +1,7 @@
 {
   "schema": "gxmcp-release-issues/1",
-  "version": "4.5.0",
-  "tag": "v4.5.0",
-  "collectedAtUtc": "2026-11-12T21:40:49.2857224Z",
-  "issues": [
-    {
-      "number": 928,
-      "title": "reorg_preview deep=true reports ReorganizationNeeded with empty DDL while the IDE build (F5) needs no reorg",
-      "url": "https://github.com/lennix1337/Genexus18MCP/issues/928",
-      "state": "open",
-      "labels": [
-        "fixed-pending-release"
-      ],
-      "milestone": null
-    }
-  ]
+  "version": "4.6.0",
+  "tag": "v4.6.0",
+  "collectedAtUtc": "2026-11-13T04:29:01.4281103Z",
+  "issues": []
 }
