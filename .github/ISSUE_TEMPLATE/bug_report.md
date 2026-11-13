@@ -50,6 +50,25 @@ enough for us to debug a crash without your KB.
 - **Expected:**
 - **Actual:**
 
+## Doctor report right after the failure (most useful part)
+
+<!--
+Reproduce the problem, then, within the hour and without restarting the MCP,
+call `genexus_doctor` (pass kb=<alias> if more than one KB is open) and paste
+`result.issueReport`. Its `walkthrough` lists the last 20 tool calls with their
+error codes, exception types and SDK frames, with every object name, KB alias,
+source text and path replaced by tokens such as <v1> or <text 120 chars>, so we
+can replay your steps on our own test KB. Read it before posting; it is plain JSON.
+-->
+
+<details><summary>genexus_doctor result.issueReport</summary>
+
+```json
+paste here
+```
+
+</details>
+
 ## Diagnostics bundle (redacted — please run and paste)
 
 <!--

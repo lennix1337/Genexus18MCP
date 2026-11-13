@@ -831,6 +831,50 @@ namespace GxMcp.Gateway
             return list;
         }
 
+        // The last `last` calls whose tool passes `include`, oldest first, for genexus_doctor's
+        // issue walkthrough (IssueWalkthrough redacts them before they leave the machine).
+        internal IReadOnlyList<IssueStep> SnapshotIssueSteps(int last, Func<string, bool> include)
+        {
+            var steps = new List<IssueStep>();
+            foreach (var rec in _operations.Values.Where(r => include(r.ToolName)).OrderByDescending(r => r.StartedAtUtc).Take(last))
+            {
+                lock (rec.SyncRoot)
+                {
+                    string? code = null, message = null, exceptionType = null, failureTrace = null;
+                    if (rec.WorkerPayload != null)
+                    {
+                        foreach (var obj in ToolMetricState.EnumerateObjects(rec.WorkerPayload))
+                        {
+                            if (code == null && obj["error"] is JObject error)
+                            {
+                                code = error["code"]?.ToString();
+                                message = error["message"]?.ToString();
+                            }
+                            exceptionType ??= obj["exceptionType"]?.ToString();
+                            failureTrace ??= obj["failureTrace"]?.ToString();
+                        }
+                    }
+                    if (code == null && message == null) message = rec.LastError;
+                    steps.Add(new IssueStep
+                    {
+                        AtUtc = rec.StartedAtUtc,
+                        Tool = rec.ToolName,
+                        Status = rec.Status,
+                        DurationMs = rec.CompletedAtUtc.HasValue
+                            ? Math.Max(0L, (long)(rec.CompletedAtUtc.Value - rec.StartedAtUtc).TotalMilliseconds)
+                            : null,
+                        Arguments = rec.ToolArguments != null ? (JObject)rec.ToolArguments.DeepClone() : null,
+                        Code = code,
+                        Message = message,
+                        ExceptionType = exceptionType,
+                        FailureTrace = failureTrace
+                    });
+                }
+            }
+            steps.Reverse();
+            return steps;
+        }
+
         // Test seam: record a tool invocation synthetically (no worker round-trip required).
         // Used by HeatmapBlockTests and ExecutionHistoryTests to keep them hermetic.
         internal void RecordSyntheticCompletion(string toolName, long elapsedMs, bool isError, JObject? toolArguments = null)
@@ -1210,7 +1254,7 @@ namespace GxMcp.Gateway
                 }
             }
 
-            private static IEnumerable<JObject> EnumerateObjects(JToken token)
+            internal static IEnumerable<JObject> EnumerateObjects(JToken token)
             {
                 if (token is JObject obj)
                 {

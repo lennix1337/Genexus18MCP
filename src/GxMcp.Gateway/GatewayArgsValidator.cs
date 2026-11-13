@@ -17,6 +17,7 @@ namespace GxMcp.Gateway
     {
         // Cache: toolName → inputSchema JObject (null = tool has no inputSchema or no constraints)
         private static readonly ConcurrentDictionary<string, JObject?> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, ISet<string>> _vocabularyCache = new(StringComparer.OrdinalIgnoreCase);
         private static readonly object _loadLock = new();
         private static JArray? _toolDefs;
 
@@ -498,6 +499,34 @@ namespace GxMcp.Gateway
             _ => true // unknown types pass
         };
 
+        // Words a tool's schema declares at any depth: property names and enum values. They are the
+        // product's vocabulary (actions, parts, modes), never a user's KB, so genexus_doctor's issue
+        // walkthrough keeps them while it replaces every other argument value with a token.
+        internal static ISet<string> SchemaVocabulary(string toolName) =>
+            _vocabularyCache.GetOrAdd(toolName, name =>
+            {
+                var words = new HashSet<string>(CrossCuttingArgs, StringComparer.OrdinalIgnoreCase);
+                if (GetSchema(name) is JObject schema) CollectVocabulary(schema, words);
+                return words;
+            });
+
+        private static void CollectVocabulary(JToken node, HashSet<string> words)
+        {
+            if (node is JArray items)
+            {
+                foreach (var item in items) CollectVocabulary(item, words);
+                return;
+            }
+            if (node is not JObject schema) return;
+            if (schema["properties"] is JObject properties)
+                foreach (var property in properties.Properties()) words.Add(property.Name);
+            if (schema["enum"] is JArray values)
+                foreach (var value in values.Where(v => v.Type == JTokenType.String)) words.Add(value.ToString());
+            // Examples hold sample object names, not vocabulary.
+            foreach (var child in schema.Properties().Where(p => p.Name != "examples"))
+                CollectVocabulary(child.Value, words);
+        }
+
         private static JObject? GetSchema(string toolName)
         {
             if (_schemaCache.TryGetValue(toolName, out var cached))
@@ -557,6 +586,7 @@ namespace GxMcp.Gateway
         internal static void PrimeCache(string toolName, JObject? schema)
         {
             _schemaCache[toolName] = schema;
+            _vocabularyCache.TryRemove(toolName, out _);
         }
 
         /// <summary>
@@ -565,6 +595,7 @@ namespace GxMcp.Gateway
         internal static void ClearCache()
         {
             _schemaCache.Clear();
+            _vocabularyCache.Clear();
             lock (_loadLock) { _toolDefs = null; }
         }
     }

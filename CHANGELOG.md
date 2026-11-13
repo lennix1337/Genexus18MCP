@@ -7,6 +7,8 @@
 
 ### Added
 
+- **`genexus_doctor` issue reports now carry a replayable walkthrough.** `result.issueReport.walkthrough` lists the last 20 tool calls the gateway handled in the past hour (oldest first): tool, outcome, duration, error code, root exception type and its first SDK frames, and the arguments reduced to their shape. Words the tool schema declares (property names, actions, parts) stay; every other value becomes `<v1>`, `<v2>`... (the same token for the same value across steps and error messages), long or multi-line text becomes `<text N chars>` and paths become `<path>`. A reporter reproduces the problem, runs `genexus_doctor` and pastes `issueReport`; maintainers can then replay the steps on a test KB without the reporter's KB, object names or source.
+
 ### Changed
 
 ### Fixed
