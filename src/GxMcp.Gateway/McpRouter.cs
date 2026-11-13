@@ -2169,6 +2169,23 @@ namespace GxMcp.Gateway
                     }
                 }
             }
+            if ((code?.ToString() ?? string.Empty).StartsWith("TransferImport", StringComparison.Ordinal))
+            {
+                // genexus_transfer action=import refusals (TransferImportFidelityFailed, TransferImportDeclined, TransferImportFailed,
+                // TransferImportVerificationUnavailable): whether the SDK said anything at all, what it said and, for a fidelity
+                // failure, which object's WebForm differed and how the repair and the rollback ended. Without them the caller knows
+                // that the import failed but not on which object, so it cannot tell a problem of the package from one of the SDK.
+                // The lists and the long texts are capped here, with their totals; verbose_errors keeps them whole.
+                foreach (string key in new[] { "imported", "fidelityVerified", "diagnosticsAvailable", "diagnosticsTruncated" })
+                {
+                    JToken? value = ResolveErrorField(error, key);
+                    if (value != null) trimmed[key] = value;
+                }
+                if (ResolveErrorField(error, "sdkDiagnostics") is JArray sdkDiagnostics)
+                    BoundImportDiagnostics(trimmed, sdkDiagnostics);
+                if (ResolveErrorField(error, "fidelity") is JObject importFidelity)
+                    trimmed["fidelity"] = BoundImportFidelity(importFidelity);
+            }
             string receiptCode = code?.ToString() ?? string.Empty;
             if ((receiptCode.StartsWith("Pattern", StringComparison.Ordinal)
                     || receiptCode.StartsWith("WwpLayout", StringComparison.Ordinal)
@@ -2241,6 +2258,121 @@ namespace GxMcp.Gateway
                     bounded[property.Name + "Total"] = items.Count;
                 }
                 else bounded[property.Name] = property.Value.DeepClone();
+            }
+            return bounded;
+        }
+
+        // The terse envelope of a failed XPZ import keeps this many SDK messages and object mismatches, and this many characters
+        // of each text.
+        private const int MaxTerseImportDiagnostics = 20;
+        private const int MaxTerseImportMismatches = 10;
+        private const int MaxTerseImportText = 500;
+
+        private static string BoundImportText(string text)
+        {
+            if (text.Length <= MaxTerseImportText) return text;
+            int cut = MaxTerseImportText;
+            if (char.IsHighSurrogate(text[cut - 1])) cut--; // never split a surrogate pair
+            return text.Substring(0, cut) + "... (" + (text.Length - cut) + " more characters; verbose_errors keeps them)";
+        }
+
+        private static JToken BoundImportValue(JToken value) =>
+            value.Type == JTokenType.String ? new JValue(BoundImportText(value.ToString())) : value.DeepClone();
+
+        // The messages the terse envelope keeps when the SDK said more than the cap: errors first, then warnings, then the rest,
+        // each group in the order the SDK emitted it, and the kept ones back in their original order. The cause of a refusal is
+        // often an error that follows many information lines (the exception of a failed import is the last record), which a plain
+        // "first N" would drop.
+        private static IEnumerable<JToken> PickImportDiagnostics(JArray diagnostics)
+        {
+            if (diagnostics.Count <= MaxTerseImportDiagnostics) return diagnostics;
+            return diagnostics
+                .Select((item, index) => (item, index))
+                .OrderBy(entry => ImportDiagnosticRank(entry.item))
+                .ThenBy(entry => entry.index)
+                .Take(MaxTerseImportDiagnostics)
+                .OrderBy(entry => entry.index)
+                .Select(entry => entry.item)
+                .ToList();
+        }
+
+        private static int ImportDiagnosticRank(JToken item)
+        {
+            string? severity = (item as JObject)?["severity"]?.ToString();
+            if (severity != null && severity.StartsWith("Error", StringComparison.OrdinalIgnoreCase)) return 0;
+            if (severity != null && severity.StartsWith("Warn", StringComparison.OrdinalIgnoreCase)) return 1;
+            return 2;
+        }
+
+        // sdkDiagnostics is always present in the terse envelope, empty too: an empty list is the answer "the SDK supplied no
+        // diagnostic", which the caller needs in order to stop looking for one.
+        private static void BoundImportDiagnostics(JObject trimmed, JArray diagnostics)
+        {
+            var kept = new JArray();
+            foreach (JToken item in PickImportDiagnostics(diagnostics))
+            {
+                if (item is JObject message)
+                {
+                    var bounded = new JObject();
+                    foreach (JProperty property in message.Properties())
+                        bounded[property.Name] = BoundImportValue(property.Value);
+                    kept.Add(bounded);
+                }
+                else kept.Add(BoundImportValue(item));
+            }
+            trimmed["sdkDiagnostics"] = kept;
+            if (diagnostics.Count > MaxTerseImportDiagnostics)
+            {
+                trimmed["sdkDiagnosticsTotal"] = diagnostics.Count;
+                trimmed["sdkDiagnosticsTruncated"] = true;
+            }
+        }
+
+        // A copy of the fidelity block of a failed import for the terse envelope: the counters whole, the mismatches capped with
+        // their total, each mismatch with its diffs capped and the answer of its repair reduced to a code and a message.
+        internal static JObject BoundImportFidelity(JObject fidelity)
+        {
+            var bounded = new JObject();
+            foreach (JProperty property in fidelity.Properties())
+            {
+                if (property.Name == "mismatches" && property.Value is JArray mismatches)
+                {
+                    var kept = new JArray();
+                    foreach (JToken mismatch in mismatches.Take(MaxTerseImportMismatches))
+                        kept.Add(mismatch is JObject entry ? BoundImportMismatch(entry) : mismatch.DeepClone());
+                    bounded["mismatches"] = kept;
+                    if (mismatches.Count > MaxTerseImportMismatches)
+                    {
+                        bounded["mismatchesTotal"] = mismatches.Count;
+                        bounded["mismatchesTruncated"] = true;
+                    }
+                }
+                else bounded[property.Name] = property.Value.DeepClone();
+            }
+            return bounded;
+        }
+
+        private static JObject BoundImportMismatch(JObject mismatch)
+        {
+            var bounded = new JObject();
+            foreach (JProperty property in mismatch.Properties())
+            {
+                if (property.Name == "repairResponse")
+                {
+                    // The whole answer of the repair write stays in verbose_errors; why it failed is its code and its message.
+                    if (property.Value is JObject repair)
+                    {
+                        string? repairStatus = repair["status"]?.ToString();
+                        if (!string.IsNullOrEmpty(repairStatus)) bounded["repairStatus"] = repairStatus;
+                        string? repairCode = ResolveErrorField(repair, "code")?.ToString();
+                        if (!string.IsNullOrEmpty(repairCode)) bounded["repairCode"] = repairCode;
+                        string repairMessage = ResolveErrorMessage(repair);
+                        if (!string.Equals(repairMessage, "Unknown error", StringComparison.Ordinal))
+                            bounded["repairMessage"] = BoundImportText(TerseErrorMessage(repairMessage));
+                    }
+                    continue;
+                }
+                bounded[property.Name] = BoundImportValue(property.Value);
             }
             return bounded;
         }
