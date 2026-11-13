@@ -2,6 +2,10 @@ name: CI
 
 on:
   pull_request:
+  # Validates `main` after a merge. The classifiers see a non-pull_request event
+  # and fail closed (every lane runs, SDK evidence is required).
+  push:
+    branches: [main]
   workflow_call:
   workflow_dispatch:
 
@@ -270,6 +274,17 @@ jobs:
         shell: pwsh
         run: cargo test --manifest-path src/gxwire/Cargo.toml --locked
 
+      # Advisory audit of the locked dependency graph (RustSec). cargo-audit comes
+      # prebuilt from the SHA-pinned install action, so nothing is compiled per run.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-audit
+
+      - name: Audit gxwire dependencies
+        shell: pwsh
+        run: cargo audit --file src/gxwire/Cargo.lock
+
   rust-engine:
     name: rust (gx-engine)
     needs: [changes]
@@ -326,6 +341,17 @@ jobs:
       - name: Test gx-engine doctests
         shell: pwsh
         run: cargo test --doc --manifest-path src/gx-engine/Cargo.toml --locked
+
+      # Advisory audit of the locked dependency graph (RustSec). cargo-audit comes
+      # prebuilt from the SHA-pinned install action, so nothing is compiled per run.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-audit
+
+      - name: Audit gx-engine dependencies
+        shell: pwsh
+        run: cargo audit --file src/gx-engine/Cargo.lock
 
   contracts:
     name: contracts (python + docs)
@@ -385,6 +411,23 @@ jobs:
           $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
           python scripts/verify-release-metadata.py --root . --version $version
           if ($LASTEXITCODE -ne 0) { throw 'Release-facing metadata is out of sync. Run python scripts/sync-release-metadata.py --version <package-version> --write.' }
+
+      # Python unit tests for the metadata, manifest and contract tooling. They read
+      # docs/ and *.md, so the docs_only shortcut must not skip them.
+      - name: Python contract and metadata unit tests
+        shell: pwsh
+        run: |
+          foreach ($test in @(
+            'test_merge_tool_definitions',
+            'test_events_audit_manifests',
+            'test_release_metadata',
+            'test_sync_release_metadata',
+            'test_validate_agent_replay',
+            'test_validate_typed_visual_authoring'
+          )) {
+            python -m unittest discover -s scripts/tests -p "$test.py" -v
+            if ($LASTEXITCODE -ne 0) { throw "$test failed." }
+          }
 
       - name: Validate quality gate manifests and scripts
         shell: pwsh

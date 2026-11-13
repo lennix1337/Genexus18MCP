@@ -490,3 +490,12 @@ English and past tense for fixes, and avoid roadmap codes, session narratives,
 agent IDs, commit hashes, KB-specific names, and implementation dumps. Do not
 put test counts in user-facing sections. Every merged PR's user-facing work
 must include the contributor credit and PR links before release.
+
+## Post-merge issue marking
+
+Moved from `AGENTS.md`.
+
+- After pushing a merged fix that is not yet released, mark each fixed issue
+  with `pwsh -NoProfile -File scripts/release-issues.ps1 -Action MarkFixedPendingRelease -Issue <N>`;
+  the release entrypoint closes labeled issues on publish. Do not post issue
+  comments unless the user asks.

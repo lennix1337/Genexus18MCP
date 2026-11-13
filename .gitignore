@@ -19,6 +19,9 @@ publish.zip.sha256
 *.xpz
 /artifacts/
 BenchmarkDotNet.Artifacts/
+# dotnet test result files carry the machine name and are ~1 MB each.
+TestResults/
+*.trx
 .history/
 batch_buffer/
 /cache/
