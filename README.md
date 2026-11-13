@@ -420,6 +420,7 @@ Not every client should load 60 schemas up front. New configurations written by 
 |---|---:|---|
 | `standard` | 20 | Recommended default: core read/search/lifecycle, create, structure, variable, properties, and IO tools |
 | `core` | 15 | Read, search, inspect, edit, and lifecycle essentials |
+| `adaptive` | 15 + 1 | `core` plus `genexus_tools`, a tiny meta tool that lists tool groups and enables them per session (`list_changed` is sent; unlisted tools still run). Opt-in, not combinable |
 | `authoring` | 35 | Core plus the full object-authoring and refactoring surface |
 | `devops` | 37 | Core plus build, versioning, deployment, diagnostics, and worker operations |
 | `ui` | 23 | Core plus layout, form, browser, and WorkWithPlus tools |

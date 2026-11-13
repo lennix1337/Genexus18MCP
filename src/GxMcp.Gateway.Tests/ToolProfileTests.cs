@@ -363,6 +363,7 @@ namespace GxMcp.Gateway.Tests
         {
             "standard",
             "core",
+            "adaptive",
             "authoring",
             "devops",
             "ui",
