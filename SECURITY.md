@@ -21,10 +21,11 @@ You should get an acknowledgement within **3 business days**. Fixes ship as patc
 
 Only the **latest minor** receives security fixes. Older minors are not backported — upgrade with `npx genexus-mcp@latest`.
 
-| Version | Supported |
-|---------|-----------|
-| 3.0.x   | ✅ |
-| < 3.0   | ❌ |
+## Self-update
+
+Managed installs can update themselves. The gateway reads the latest release from GitHub (`lennix1337/Genexus18MCP`), downloads `publish.zip` and `publish.zip.sha256` from that release, and stages the update only if the SHA-256 of the zip matches the published checksum **and** the payload contains the expected gateway and worker binaries. A release without a checksum, or with a mismatching one, is refused (fail closed; there is no opt-out). The staged update is applied on the next start.
+
+To disable self-update entirely, set `GENEXUS_MCP_NO_SELF_UPDATE=1`; see [`docs/environment_variables.md`](docs/environment_variables.md).
 
 ## Threat model — what's in scope
 

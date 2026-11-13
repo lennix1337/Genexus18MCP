@@ -902,8 +902,16 @@ namespace GxMcp.Gateway
                             }
                         }
                         catch (Exception exHttp) { 
-                            Log($"[HTTP] Bind failure (5000): {exHttp.Message}. Attempting port recovery ({retryCount + 1}/5)...");
-                            TryKillProcessOnPort(config.Server?.HttpPort ?? 5000);
+                            int httpPort = config.Server?.HttpPort ?? 5000;
+                            if (IsAddressInUseFailure(exHttp))
+                            {
+                                Log($"[HTTP] Bind failure ({httpPort}): {exHttp.Message}. Attempting port recovery ({retryCount + 1}/5)...");
+                                TryKillProcessOnPort(httpPort);
+                            }
+                            else
+                            {
+                                Log($"[HTTP] Start failure ({httpPort}): {exHttp.Message}. Not a port conflict, skipping port recovery ({retryCount + 1}/5).");
+                            }
                             retryCount++;
                             await Task.Delay(1000);
                         }
