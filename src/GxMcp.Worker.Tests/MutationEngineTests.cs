@@ -11,6 +11,24 @@ namespace GxMcp.Worker.Tests
     public class MutationEngineTests
     {
         [Fact]
+        public void ExtractSnapshotSource_DecodesBase64SoRollbackRestoresPlainText()
+        {
+            string seed = "// seed PR990A\n";
+            string b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(seed));
+            var json = new JObject { ["source"] = b64, ["isBase64"] = true }.ToString();
+
+            Assert.Equal(seed, DefaultSdkObjectWriter.ExtractSnapshotSource(json));
+        }
+
+        [Fact]
+        public void ExtractSnapshotSource_KeepsPlainTextThatLooksLikeBase64()
+        {
+            var json = new JObject { ["source"] = "Ly8gc2VlZCBQUjk5MEEK", ["isBase64"] = false }.ToString();
+
+            Assert.Equal("Ly8gc2VlZCBQUjk5MEEK", DefaultSdkObjectWriter.ExtractSnapshotSource(json));
+        }
+
+        [Fact]
         public void MutationEngine_PreflightGuard_RejectsLiteralLineBreaks()
         {
             var engine = new MutationEngine();
