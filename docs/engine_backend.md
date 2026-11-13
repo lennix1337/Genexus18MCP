@@ -628,6 +628,31 @@ replacement text in `content` (an empty string clears the part), an optional
 tokens/change sets, validation and verification modes, object creation and
 `return_post_state` would remain outside it.
 
+#### `genexus_edit validationMode=native` → `kb-diagnose` (advisory, after the SDK save)
+
+An edit that is still served by the SDK can ask for compiler-style feedback in about a
+second: with `validationMode=native` the Gateway, after a successful save, runs
+`gx-engine kb-diagnose <kb> <name>` (plus the active `--design-model/--kb-version`)
+under a hard 2 s budget and adds a `nativeDiagnostics` block to the edit result:
+
+```json
+{"status":"errors","scope":"syntax","errors":[{"line":2,"column":9,"message":"..."}],"elapsedMs":412}
+```
+
+- `status` is `ok`, `errors` or `unavailable` (with a `reason`). The check parses the
+  saved Procedure `Source` with the engine front end only: it does not specify, type-check
+  or compile, so `ok` is not a build result. The parser covers a subset of GeneXus and
+  stops at its first error, so `errors` holds one entry today and a construct outside the
+  subset is reported like a syntax error (`note` points to `validationMode=specify`).
+- Everything else is `unavailable`, never an edit failure and never retried: another
+  object type or no `Source` part, `targets[]`/`changeSet`/`dryRun`, a KB without
+  `knowledgebase.connection`, `Engine.Backend=sdk`, engine missing, timeout or cancel,
+  engine refusal (including a KB-version scope it does not serve), or an answer outside the contract.
+- Zero cost when the argument is absent: one string comparison, no engine contact.
+- The read happens after the save through the same storage, so it sees the saved text.
+  It is independent of the `genexus_edit` deferral above and does not make the engine a
+  writer.
+
 ### `genexus_lifecycle` `build`/`rebuild` → `rebuild-all`
 
 Admitted: `action=build|rebuild` with the blocking contract —

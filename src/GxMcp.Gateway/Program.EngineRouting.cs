@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -116,5 +117,50 @@ namespace GxMcp.Gateway
             string? kbAlias,
             CancellationToken cancellationToken) =>
             EngineOperations.TryDispatchAsync(toolName, lifecycleAction, toolArgs, kbPath, kbAlias, cancellationToken);
+
+        /// <summary>
+        /// genexus_edit validationMode=native: after the SDK save, attaches the engine's
+        /// <c>nativeDiagnostics</c> block (see <see cref="EngineRoutedOperations.DiagnoseSavedObjectAsync"/>).
+        /// A call that did not ask for it, or whose edit failed, is left untouched and costs one string compare.
+        /// Never throws and never changes the edit's outcome.
+        /// </summary>
+        internal static async Task AttachNativeDiagnosticsAsync(
+            JObject? innerResult, string toolName, JObject? toolArgs, CancellationToken cancellationToken)
+        {
+            if (!EngineRoutedOperations.WantsNativeDiagnostics(toolName, toolArgs)) return;
+            if (innerResult == null || (innerResult["isError"]?.ToObject<bool?>() ?? false)) return;
+            try
+            {
+                JObject? payload = TryReadResultPayload(innerResult, out JObject? parsed) ? parsed : null;
+                JObject block = payload != null && IsSuccessfulMutationPayload(payload)
+                    ? await EngineOperations.DiagnoseSavedObjectAsync(
+                        toolArgs, _currentKb.Value?.Path, _currentKb.Value?.Alias,
+                        EngineRoutedOperations.NativeDiagnosticsBudgetMs, cancellationToken).ConfigureAwait(false)
+                    : new JObject { ["status"] = "unavailable", ["reason"] = "the edit result was not a plain success" };
+                if (payload != null) FoldNativeDiagnostics(innerResult, payload, block);
+            }
+            catch (Exception ex)
+            {
+                Log($"[Engine] native diagnostics not attached: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private static bool TryReadResultPayload(JObject innerResult, out JObject? payload)
+        {
+            payload = null;
+            string? text = (innerResult["content"] as JArray)?.FirstOrDefault() is JObject first ? first["text"]?.ToString() : null;
+            if (string.IsNullOrEmpty(text)) return false;
+            try { payload = JObject.Parse(text); return true; }
+            catch (Newtonsoft.Json.JsonException) { return false; }
+        }
+
+        internal static void FoldNativeDiagnostics(JObject innerResult, JObject payload, JObject block)
+        {
+            payload["nativeDiagnostics"] = block;
+            if ((innerResult["content"] as JArray)?.FirstOrDefault() is JObject first)
+                first["text"] = payload.ToString(Newtonsoft.Json.Formatting.None);
+            if (innerResult["structuredContent"] is JObject structured)
+                structured["nativeDiagnostics"] = block.DeepClone();
+        }
     }
 }
