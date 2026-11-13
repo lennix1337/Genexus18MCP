@@ -1649,7 +1649,12 @@ namespace GxMcp.Gateway
                 ["hint"] = warnings.Count > 0 ? warnings[0] : JValue.CreateNull()
             };
             if (sharedHost != null) result["sharedHost"] = sharedHost;
-            result["issueReport"] = BuildDoctorIssueReport(result, target, _activeConfig?.GeneXus?.InstallationPath);
+            var issueReport = BuildDoctorIssueReport(result, target, _activeConfig?.GeneXus?.InstallationPath);
+            issueReport["walkthrough"] = IssueWalkthrough.Build(
+                _operationTracker.SnapshotIssueSteps(IssueWalkthrough.MaxSteps,
+                    tool => !string.Equals(tool, "genexus_doctor", StringComparison.OrdinalIgnoreCase)),
+                GatewayArgsValidator.SchemaVocabulary);
+            result["issueReport"] = issueReport;
 
             return new JObject
             {
