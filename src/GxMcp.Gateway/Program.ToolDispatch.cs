@@ -173,19 +173,8 @@ namespace GxMcp.Gateway
             bool isMutating = IsMutatingTool(tName, tArgs);
             // READ-ONLY MODE: fails closed, so it is checked against the classifier's proof of a
             // read rather than against isMutating (an unclassified tool is not a proven read).
-            if (ReadOnlyMode.FromEnvironment().Refuses(tName, tArgs))
-                return BuildToolResultContent(ReadOnlyMode.BuildRefusal(tName), isError: true, toolName: tName, toolArgs: tArgs);
-            if (isMutating && !IsMutationPreview(tArgs))
-            {
-                var writeAllowlist = WriteKbAllowlist.FromEnvironment();
-                string? writeKbPath = _currentKb.Value?.Path ?? _activeConfig?.Environment?.KBPath;
-                if (!writeAllowlist.Allows(writeKbPath))
-                    return BuildToolResultContent(
-                        WriteKbAllowlist.BuildRefusal(tName, writeKbPath ?? "(no KB resolved)", writeAllowlist.Raw),
-                        isError: true,
-                        toolName: tName,
-                        toolArgs: tArgs);
-            }
+            JObject? policyRefusal = TryRefuseByPolicy(tName, tArgs, isMutating);
+            if (policyRefusal != null) return policyRefusal;
             // WRITE GATE: unconditional on purpose. A write refused because a peer
             // Gateway held the journal mid-commit would be a false block, so this
             // must not consult a change signal. The genexus_read branch below uses
@@ -204,32 +193,8 @@ namespace GxMcp.Gateway
             }
             if (isMutating && !IsMutationPreview(tArgs))
             {
-                RecoveryRequirement? recoveryRequirement = null;
-                // Every scope the KB's fences may carry: a fence recorded under the folder
-                // alias by a call that addressed the KB by path still blocks the write.
-                IReadOnlyList<string> fenceScopes = _mutationRecovery.Count > 0
-                    ? CurrentKbScopes()
-                    : Array.Empty<string>();
-                foreach (var recoveryTarget in EnumerateMutationRecoveryTargets(tName, tArgs))
-                {
-                    foreach (var fenceScope in fenceScopes.Count > 0 ? (IEnumerable<string>)fenceScopes : new[] { kbScope })
-                    {
-                        if (_mutationRecovery.TryGet(fenceScope, recoveryTarget.Target, recoveryTarget.Part, out var found))
-                        {
-                            recoveryRequirement = found;
-                            break;
-                        }
-                    }
-                    if (recoveryRequirement != null) break;
-                }
-                if (recoveryRequirement != null)
-                {
-                    return BuildToolResultContent(
-                        MutationRecoveryRegistry.BuildBlockedEnvelope(recoveryRequirement),
-                        isError: true,
-                        toolName: tName,
-                        toolArgs: tArgs);
-                }
+                JObject? fenceBlocked = TryRefuseWhenWriteFenced(tName, tArgs, kbScope);
+                if (fenceBlocked != null) return fenceBlocked;
             }
             if (isMutating && !IsMutationPreview(tArgs))
             {
@@ -319,24 +284,8 @@ namespace GxMcp.Gateway
             string? cKey = CreateSemanticCacheKey(
                 kbScope, tName, tArgs, isMutating, isLiveTool,
                 cacheRevisionAtDispatch, modelScope, environmentScope);
-            if (cKey != null && _semanticCache.TryGet(cKey, out var cachedResponse, out long cacheAgeMs))
-            {
-                if (_verboseRequestLogs) Log($"[Cache] HIT for {tName}");
-                var cached = cachedResponse["result"] as JObject;
-                if (cached != null)
-                {
-                    var hit = (JObject)cached.DeepClone();
-                    var hitMeta = hit["_meta"] as JObject ?? new JObject();
-                    hit["_meta"] = hitMeta;
-                    hitMeta["cacheOutcome"] = "hit";
-                    hitMeta["cacheSource"] = "gateway-semantic-cache";
-                    hitMeta["cacheAgeMs"] = cacheAgeMs;
-                    AttachGatewaySemanticCacheAge(hit, cacheAgeMs);
-                    AttachExactReadIndexMetadata(hit, tName, tArgs);
-                    _operationTracker.RecordCacheHit(tName);
-                    return hit;
-                }
-            }
+            JObject? cacheHit = TryServeSemanticCacheHit(cKey, tName, tArgs);
+            if (cacheHit != null) return cacheHit;
 
             // Rebuild full request so ConvertToolCall works
             var fullReq = new JObject
@@ -367,122 +316,9 @@ namespace GxMcp.Gateway
                 tName, lcAction, tArgs, _currentKb.Value?.Path, _currentKb.Value?.Alias, transportCancellation);
             if (engineRoutedResult != null) return engineRoutedResult;
 
-            // v2.6.9 perf: gateway-side fast-fail for SDK-bound tools when
-            // the worker is still doing its initial BulkIndex on the STA thread.
-            // Without this the request queues behind a 30-60s SDK enumeration
-            // and the agent eats the full 60s gateway-timeout before learning
-            // the index isn't ready. Once _lastKnownIndexState reports a usable
-            // status we forward normally; when it doesn't, the block below does a
-            // synchronous refresh-and-recheck before fast-failing so a ready index
-            // isn't masked by a stale mirror. Worker-side ListService has its own
-            // fast-fail for callers that bypass this short-circuit.
-            //
-            // Allow-list of tools that are blocked behind the STA thread and
-            // therefore benefit from the short-circuit. Gateway-served tools
-            // (whoami, recipe, kb_diff, sandbox, etc.) bypass naturally because they
-            // never hit the worker dispatcher. genexus_doctor is deliberately NOT
-            // listed: the Gateway answers it from its own state, and its one Worker
-            // read, the WorkWithPlus template block, does not go through the index.
-            if (IsIndexDependentTool(tName, tArgs))
-            {
-                IndexStateSnapshot idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
-                bool indexUsable = IsIndexUsableForReads(idxSnap);
-                if (!indexUsable)
-                {
-                    // The gateway's index mirror is only written by TryRefreshIndexStateFromWorkerAsync
-                    // (whoami), so a "not usable" snapshot may just be STALE — the worker finished
-                    // indexing but no whoami has refreshed the mirror since. Rather than fast-fail
-                    // on a possibly-stale cache (which left agents stuck on IndexNotReady until they
-                    // manually called whoami), do ONE bounded synchronous refresh and re-check.
-                    // GetIndexState runs off the worker's STA thread, so this stays fast even while a
-                    // cold-start BulkIndex is in flight. Skip the refresh when the mirror was just
-                    // refreshed (index genuinely still building) so tight retry loops don't each pay
-                    // a round-trip.
-                    bool cacheStale = idxSnap == null
-                        || idxSnap.RefreshedAtUtc == DateTime.MinValue
-                        || (DateTime.UtcNow - idxSnap.RefreshedAtUtc).TotalSeconds > 2;
-                    if (cacheStale && await TryRefreshIndexStateFromWorkerAsync(
-                        timeoutMs: 1200, kbAlias: _currentKb.Value?.NormalizedAlias))
-                    {
-                        idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
-                        indexUsable = IsIndexUsableForReads(idxSnap);
-                    }
-                }
-                if (!indexUsable)
-                {
-                    // A KB the Worker failed to open never leaves Cold: report why, do not make the
-                    // caller wait out the settle window and loop on IndexNotReady (issue #957).
-                    JObject? openFailed = BuildKbOpenFailedEnvelope(idxSnap);
-                    if (openFailed != null)
-                    {
-                        Log($"[IndexGate] closed tool={tName} kbOpenFailed={openFailed["message"]}");
-                        return BuildToolResultContent(openFailed, true, tName, tArgs);
-                    }
-                }
-                if (!indexUsable)
-                {
-                    // Cold path: right after a KB open the bootstrap settles the index mirror, and
-                    // this call can land inside that short window. Joining that settle is bounded
-                    // and turns the agent's first index-dependent call into a real result instead
-                    // of an IndexNotReady envelope it must retry — measured against a real KB, the
-                    // envelope cost a full extra turn plus the advertised retryAfterMs backoff on
-                    // an index that became usable ~250ms later.
-                    //
-                    // The join alone is not enough: a call that reaches this gate in the same
-                    // instant the bootstrap publishes its settle loses the race and fast-fails
-                    // (observed intermittently with genexus_search_source as the first call). So
-                    // when the mirror reports a restored snapshot still awaiting its delta, this
-                    // gate settles the mirror itself — same bounded routine, same budget — making
-                    // the outcome independent of that race. Any other not-ready state (a genuine
-                    // first-ever build) falls straight through to the envelope below.
-                    string? currentKbAlias = _currentKb.Value?.NormalizedAlias;
-                    var settleInFlight = GetIndexMirrorSettleInFlight(currentKbAlias);
-                    if (settleInFlight != null)
-                    {
-                        if (!settleInFlight.IsCompleted)
-                        {
-                            // Link the caller's token with gateway shutdown so either one ends
-                            // the wait. A completed settle is still meaningful: do not start a
-                            // second budget-expensive refresh after it has already given up.
-                            using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(
-                                _gatewayLifetime.Token, transportCancellation);
-                            try
-                            {
-                                await Task.WhenAny(settleInFlight,
-                                    Task.Delay(IndexMirrorSettleGateWaitCeilingMs, waitCts.Token));
-                            }
-                            catch { }
-                        }
-                    }
-                    else if (IsRestoredSnapshotAwaitingDeltaForTest(idxSnap?.Status, idxSnap?.Freshness))
-                    {
-                        await SettleIndexMirrorAfterBootstrapAsync(
-                            kbAlias: currentKbAlias,
-                            cancellationToken: transportCancellation);
-                    }
-                    idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
-                    indexUsable = IsIndexUsableForReads(idxSnap);
-                }
-                if (!indexUsable)
-                {
-                    // This envelope is silent otherwise, and "which field closed the gate, and how
-                    // old is the mirror it came from" is the first question when the agent's cold
-                    // start eats Indexing envelopes against an index that is already usable.
-                    long mirrorAgeMs = idxSnap == null || idxSnap.RefreshedAtUtc == DateTime.MinValue
-                        ? -1
-                        : (long)(DateTime.UtcNow - idxSnap.RefreshedAtUtc).TotalMilliseconds;
-                    Log($"[IndexGate] closed tool={tName} status={idxSnap?.Status ?? "<null>"} "
-                        + $"freshness={idxSnap?.Freshness ?? "<null>"} "
-                        + $"opState={idxSnap?.OperationState ?? "<null>"} mirrorAgeMs={mirrorAgeMs}");
-                    return BuildToolResultContent(
-                        BuildIndexNotReadyEnvelope(
-                            idxSnap?.Status, idxSnap?.Freshness, idxSnap?.TotalObjects ?? 0,
-                            idxSnap?.Progress, idxSnap?.EtaMs, idxSnap?.OperationId,
-                            idxSnap?.OperationState, idxSnap?.WorkerAlive,
-                            idxSnap?.Recoverable, idxSnap?.Stalled),
-                        false, tName, tArgs);
-                }
-            }
+            // Index gate: gateway-side fast-fail for SDK-bound tools while the Worker index is not usable.
+            JObject? indexGateResult = await TryRefuseWhenIndexNotReadyAsync(tName, tArgs, transportCancellation);
+            if (indexGateResult != null) return indexGateResult;
 
             // Gateway-served tools (factored method below; null = fall through).
             // genexus_wire action=pack_task on the open native KB is the one Gateway-owned call
@@ -498,32 +334,7 @@ namespace GxMcp.Gateway
             JObject? asyncBuildResult = await TryDispatchAsyncLifecycleBuildAsync(tName, lcAction, tArgs, request, sessionId, idToken, transportCancellation);
             if (asyncBuildResult != null) return asyncBuildResult;
 
-            object? rawWorkerCmd = null;
-            if (string.Equals(tName, "genexus_export_object", StringComparison.OrdinalIgnoreCase))
-            {
-                rawWorkerCmd = new
-                {
-                    module = "Object",
-                    action = "ExportText",
-                    target = tArgs?["name"]?.ToString(),
-                    path = tArgs?["outputPath"]?.ToString(),
-                    part = tArgs?["part"]?.ToString() ?? "Source",
-                    type = tArgs?["type"]?.ToString(),
-                    overwrite = tArgs?["overwrite"]?.ToObject<bool?>() ?? false
-                };
-            }
-            else if (string.Equals(tName, "genexus_import_object", StringComparison.OrdinalIgnoreCase))
-            {
-                rawWorkerCmd = new
-                {
-                    module = "Object",
-                    action = "ImportText",
-                    target = tArgs?["name"]?.ToString(),
-                    path = tArgs?["inputPath"]?.ToString(),
-                    part = tArgs?["part"]?.ToString() ?? "Source",
-                    type = tArgs?["type"]?.ToString()
-                };
-            }
+            object? rawWorkerCmd = BuildFileTransferWorkerCommand(tName, tArgs);
 
             try
             {
@@ -592,266 +403,26 @@ namespace GxMcp.Gateway
             // mutation clears the cache while this read is in flight, the store below
             // is skipped because the epoch will no longer match.
             int cacheEpochAtDispatch = System.Threading.Interlocked.CompareExchange(ref SemanticCacheEpoch, 0, 0);
+            var responseCtx = new ToolCallResponseContext
+            {
+                ToolName = tName,
+                ToolArgs = tArgs,
+                LcAction = lcAction,
+                KbScope = kbScope,
+                RecoveryReads = recoveryReads,
+                PropertiesRecoveryRead = propertiesRecoveryRead,
+                CacheKey = cKey,
+                IsLiveTool = isLiveTool,
+                CacheEpochAtDispatch = cacheEpochAtDispatch,
+                CacheRevisionAtDispatch = cacheRevisionAtDispatch
+            };
             innerResult = await SendWorkerCommandAsync(
                 workerCmd,
                 timeoutMs,
                 $"Timeout waiting for tool: {tName}",
-                resultObj =>
-                {
-                    NormalizeInterruptedModuleInstallation(resultObj, tName, tArgs);
-                    JToken? finalResult = null;
-                    var omittedMutationFields = new JArray();
-                    JToken? workerPayload = resultObj["result"] ?? resultObj["error"];
-                    // The Worker's pre-cut certificate of what the SDK holds. Taken here,
-                    // before any budget, trim or size guard can touch the payload, so the
-                    // decision to clear a fence does not depend on how much of the part
-                    // the caller is allowed to see.
-                    JObject? recoveryCertificate = recoveryReads.Count > 0
-                        ? ExtractRecoveryCertificate(workerPayload)
-                        : null;
-                    bool includePersistedText = IsMutatingTool(tName, tArgs)
-                        && (tArgs?["includePersistedText"]?.Value<bool?>() ?? false);
-                    JToken shapedPayload = workerPayload ?? JValue.CreateNull();
-                    try
-                    {
-                        shapedPayload = ShapeMutationResponse(workerPayload, tName, tArgs, omittedMutationFields);
-                    }
-                    catch (Exception exShape)
-                    {
-                        Log($"[Gateway] Mutation response shaping failed for {tName}: {exShape.Message}");
-                    }
-                    try {
-                        finalResult = includePersistedText
-                            ? shapedPayload
-                            : TruncateResponseIfNeeded(shapedPayload, tName);
-                    } catch (Exception exTrunc) {
-                        Log($"[Gateway] Error during truncation: {exTrunc.Message}");
-                        finalResult = shapedPayload;
-                    }
-
-                    if (string.Equals(tName, "genexus_edit_and_build", StringComparison.OrdinalIgnoreCase)
-                        && finalResult is JObject editAndBuildPayload)
-                    {
-                        NormalizeEditAndBuildPayload(editAndBuildPayload);
-                    }
-
-                    bool isErr = resultObj["error"] != null || string.Equals(resultObj["status"]?.ToString(), "Error", StringComparison.OrdinalIgnoreCase);
-                    // Inner-payload error detection — tools that return their
-                    // failure envelope as result.{error|status} (e.g. genexus_read
-                    // returning {"part":"Source","error":"Part 'Source' not found ..."})
-                    // were previously sent with isError=false because we only checked
-                    // the outer envelope. Mirror the inner shape so MCP clients that
-                    // branch on isError stay correct.
-                    if (!isErr && finalResult is JObject innerErrObj)
-                    {
-                        bool innerHasError = innerErrObj["error"] != null
-                            || string.Equals(innerErrObj["status"]?.ToString(), "Error", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(innerErrObj["status"]?.ToString(), "NotFound", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(innerErrObj["status"]?.ToString(), "NotImplemented", StringComparison.OrdinalIgnoreCase);
-                        if (innerHasError) isErr = true;
-                    }
-                    if (!isErr && OperationClassifier.IsKbEnvironmentMutation(tName, lcAction))
-                        InvalidateDatabaseInfoCache(kbScope);
-
-                    // Friction 2026-05-22 #63: attach suggested_next_step on every error
-                    // envelope (verbose OR terse). McpRouter.AttachSuggestedNextStep is a
-                    // pure pattern-match over code/message text; routes patch NoMatch →
-                    // near-match inspection, visual write failures → LayoutGotchaScanner,
-                    // KB_AMBIGUOUS → kb=<alias>, spc0150 → extract_to_procedure recipe.
-                    if (isErr && finalResult is JObject preTrimErr)
-                    {
-                        if (preTrimErr["suggested_next_step"] == null)
-                        {
-                            var hint = McpRouter.AttachSuggestedNextStep(preTrimErr);
-                            if (hint != null) preTrimErr["suggested_next_step"] = hint;
-                        }
-
-                        if (preTrimErr["diagnosticContext"] == null)
-                        {
-                            preTrimErr["diagnosticContext"] = BuildDiagnosticContext();
-                        }
-                    }
-
-                    // TerseErrors: trim error envelopes to {message, code, hint} by default.
-                    // verbose_errors=true restores the full payload. Gated by PerfProfile.V1Enabled.
-                    // Runs BEFORE ResponseSizeGuard so the guard sees the trimmed (smaller) payload.
-                    if (isErr && PerfProfile.V1Enabled && finalResult is JObject errObj)
-                    {
-                        bool verbose = tArgs?["verbose_errors"]?.ToObject<bool?>() ?? false;
-                        finalResult = McpRouter.TrimErrorEnvelope(errObj, verbose);
-                    }
-
-                    // ResponseSizeGuard: replace oversize JObject results with a truncation sentinel.
-                    // Gated by PerfProfile.V1Enabled so it can be disabled via MCP_PERF_PROFILE=legacy.
-                    if (!isErr && !includePersistedText && PerfProfile.V1Enabled && finalResult is JObject finalJObj)
-                    {
-                        var guard = new ResponseSizeGuard();
-                        var (guarded, _) = guard.Apply(finalJObj, tName, tArgs);
-                        finalResult = guarded;
-                    }
-
-                    // Reconcile only content that actually survives the wire guards.
-                    if (!isErr && string.Equals(tName, "genexus_read", StringComparison.OrdinalIgnoreCase)
-                        && recoveryReads.Count > 0)
-                    {
-                        int fencesCleared = ConfirmRecoveryReadWithCertificate(
-                            _mutationRecovery, kbScope, finalResult, recoveryCertificate, recoveryReads);
-                        if (finalResult is JObject clearedPayload)
-                        {
-                            clearedPayload["recoveryFenceCleared"] = fencesCleared > 0;
-                            // Which fences this read covered, and what the version says about
-                            // the write that timed out (clearing a fence does not say it landed).
-                            clearedPayload["recoveryFences"] = DescribeRecoveryFences(
-                                _mutationRecovery, finalResult, recoveryCertificate, recoveryReads);
-                        }
-                    }
-                    if (!isErr && propertiesRecoveryRead && finalResult is JObject propertyPayload)
-                    {
-                        bool cleared = false;
-                        foreach (var recoveryTarget in recoveryReads)
-                        {
-                            if (IsCompletePropertiesRecoveryRead(propertyPayload, recoveryTarget.Observed, tArgs))
-                                cleared |= _mutationRecovery.ConfirmRead(kbScope, recoveryTarget.Target,
-                                    recoveryTarget.Part, recoveryTarget.Observed);
-                        }
-                        propertyPayload["recoveryFenceCleared"] = cleared;
-                        if (propertyPayload["result"] is JObject propertyResult)
-                        {
-                            propertyResult["recoveryFenceCleared"] = cleared;
-                            if (propertyResult["values"] != null)
-                                propertyPayload["values"] = propertyResult["values"]!.DeepClone();
-                            if (propertyResult["versionToken"] != null)
-                                propertyPayload["versionToken"] = propertyResult["versionToken"]!.DeepClone();
-                        }
-                    }
-
-                    // StripNulls: remove null-valued properties from the result to reduce wire size.
-                    // Runs after ResponseSizeGuard so the guard measures the pre-stripped payload.
-                    if (PerfProfile.V1Enabled && finalResult is JObject stripObj)
-                    {
-                        McpRouter.StripNulls(stripObj);
-                    }
-
-                    // v2.3.8 (Task 6.1) — compact lifecycle status by default.
-                    // Replaces the verbose BuildTaskStatus payload (full Errors/Warnings/Output)
-                    // with counts + top-10 errors + warning dedup. compact=false restores legacy shape.
-                    if (!isErr
-                        && string.Equals(tName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase)
-                        && string.Equals(lcAction, "status", StringComparison.OrdinalIgnoreCase)
-                        && finalResult is JObject lifecycleObj
-                        && LifecycleResponseShaper.ShouldCompact(tArgs))
-                    {
-                        // perf: tree-based compact, no serialize→parse round-trip.
-                        // The old code wrapped a parse failure; CompactObject works on
-                        // an already-parsed JObject and cannot throw for JSON reasons.
-                        finalResult = LifecycleResponseShaper.CompactObject(lifecycleObj);
-                    }
-
-                    // The worker envelope has no further consumers after this callback.
-                    // Transfer the selected payload out of it so KB metadata can be
-                    // attached without cloning the entire response tree.
-                    DetachResponsePayload(resultObj, finalResult);
-                    var toolResult = BuildToolResultContent(finalResult, isErr, tName, tArgs, payloadOwned: true);
-                    AttachOmittedFieldsMetadata(toolResult, omittedMutationFields);
-                    AttachExactReadIndexMetadata(toolResult, tName, tArgs);
-                    if (cKey != null)
-                    {
-                        var cacheMeta = toolResult["_meta"] as JObject ?? new JObject();
-                        toolResult["_meta"] = cacheMeta;
-                        cacheMeta["cacheOutcome"] = "miss";
-                    }
-
-                    // v2.3.8 (post-self-review) — don't cache transient envelopes.
-                    // A "Reindexing"/"IndexCold"/"Timeout"/"Cancelled"/"BuildPlanTooLarge"
-                    // response is a snapshot of the worker's current state, not a stable
-                    // semantic answer. Caching it kept analyze impact pinned to the
-                    // first response (often Timeout during a reindex), so callers got
-                    // the same stale envelope on every retry until cache eviction.
-                    bool isTransient = finalResult is JObject transientCheck
-                        && IsTransientResponseForCache(transientCheck);
-
-                    // PERF: `cKey != null` also excludes mutating tools (which
-                    // cleared the cache and must not pollute it with a write
-                    // result), plus parameter-dependent side effects recognized by
-                    // OperationClassifier. The old `Contains("write")/Contains("patch")`
-                    // check missed tools like genexus_edit.
-                    // C1 (race fix): if a mutation invalidated the cache while this read
-                    // was in flight, the pre-mutation envelope must not be stored.
-                    if (!isErr && !isTransient && !isLiveTool && cKey != null
-                        && System.Threading.Volatile.Read(ref SemanticCacheEpoch) == cacheEpochAtDispatch
-                        && _semanticCache.GetRevision(kbScope) == cacheRevisionAtDispatch)
-                    {
-                        // Store full envelope in semantic cache (rebuilt on hit above)
-                        _semanticCache.Set(cKey, new JObject
-                        {
-                            ["jsonrpc"] = "2.0",
-                            ["result"] = toolResult
-                        });
-                    }
-
-                    return toolResult;
-                },
+                resultObj => ShapeWorkerToolResponse(resultObj, responseCtx),
                 (operationId, correlationId) =>
-                {
-                    string message = $"GeneXus MCP Worker timed out executing tool: {tName}.";
-                    var timeoutPayload = new JObject
-                    {
-                        ["status"] = "error",
-                        ["error"] = new JObject
-                        {
-                            ["code"] = "WorkerTimeout",
-                            ["message"] = message,
-                            ["hint"] = "The Worker may still be finishing; poll the operation before retrying.",
-                            ["retryable"] = true,
-                            ["reconciliationRequired"] = false
-                        },
-                        ["correlationId"] = correlationId
-                    };
-
-                    bool recordWrite = IsTransactionRecordOperation(tName!, tArgs) && IsMutatingTool(tName!, tArgs);
-                    bool moduleInstall = IsModuleInstallation(tName, tArgs) && tArgs?["dryRun"]?.ToObject<bool?>() != true;
-                    if (moduleInstall) MarkModuleInstallOutcomeUnknown(timeoutPayload);
-                    if (recordWrite) MarkRecordWriteOutcomeUnknown(timeoutPayload);
-                    var timeoutError = timeoutPayload["error"] as JObject;
-                    if (recordWrite && timeoutError != null)
-                    {
-                        timeoutError["code"] = "UnknownCommitState";
-                        timeoutError["hint"] = "Do not repeat the mutation. Poll the original operation and read the target back before authorizing a new attempt.";
-                        timeoutError["retryable"] = false;
-                        timeoutError["reconciliationRequired"] = true;
-                    }
-                    bool hasTimeoutRecoveryTargets = RegisterTimeoutRecoveryFence(
-                        _mutationRecovery, kbScope, tName, tArgs, operationId, timeoutPayload);
-                    var help = new JArray();
-                    if (recordWrite)
-                        help.Add("Do not repeat the write. Poll the original operation result, then query the record keys against the datastore.");
-                    if (string.Equals(timeoutPayload["recoveryScope"]?.ToString(), "kb", StringComparison.OrdinalIgnoreCase))
-                        help.Add("The manifest may have changed multiple KB objects and parts; reconcile the KB state before retrying.");
-                    if (moduleInstall)
-                        help.Add("Do not repeat installation. Wait until the Worker is no longer busy, then independently inspect installed modules, dependencies and objects. A Source read cannot reconcile a module installation; no asynchronous result or automatic inventory reconciliation is available.");
-                    if (!string.IsNullOrWhiteSpace(operationId))
-                    {
-                        timeoutPayload["operationId"] = operationId;
-                        if (!moduleInstall)
-                            help.Add($"Operation is still running. Query genexus_lifecycle(action='status', target='op:{operationId}') or action='result'.");
-                        if (tName != null && (tName.IndexOf("edit", StringComparison.OrdinalIgnoreCase) >= 0
-                                             || tName.IndexOf("write", StringComparison.OrdinalIgnoreCase) >= 0
-                                             || tName.IndexOf("variable", StringComparison.OrdinalIgnoreCase) >= 0
-                                             || isAsyncGxServer
-                                             || hasTimeoutRecoveryTargets))
-                        {
-                            // Writes have usually persisted by the time the gateway times out; poll result, then read — don't retry the edit.
-                            help.Add("For long writes the change is usually already persisted; check action='result' once, then read back instead of retrying.");
-                        }
-                    }
-                    else if (!recordWrite && !moduleInstall && !hasTimeoutRecoveryTargets)
-                    {
-                        help.Add("Retry with narrower scope or lower limit.");
-                    }
-                    timeoutPayload["help"] = help;
-
-                    return BuildToolResultContent(timeoutPayload, isError: true, toolName: tName, toolArgs: tArgs);
-                },
+                    BuildWorkerTimeoutToolResult(operationId, correlationId, responseCtx, isAsyncGxServer),
                 toolName: tName,
                 toolArgs: tArgs,
                 trackOperation: true,
@@ -878,141 +449,134 @@ namespace GxMcp.Gateway
             // (applied, refused or timed out).
             InvalidateSettledMutationScope(_semanticCache, kbScope, tArgs, isMutating);
 
-            // apply_pattern { validate: true } — post-apply build of the
-            // generated host so the LLM sees compile failures in a single
-            // tool call. Without this the agent declared "Success" and only
-            // discovered the broken binding by opening the IDE. Runs OUTSIDE
-            // the SendWorkerCommandAsync onSuccess lambda (which is sync) so
-            // we can await the validation build here.
-            if (innerResult != null
-                && !(innerResult["isError"]?.ToObject<bool?>() ?? false)
-                && string.Equals(tName, "genexus_apply_pattern", StringComparison.OrdinalIgnoreCase)
-                && (tArgs?["validate"]?.ToObject<bool?>() ?? false))
-            {
-                string applyText = (innerResult["content"] as JArray)?[0]?["text"]?.ToString() ?? "";
-                // Round-trip is structural: innerResult.content[0].text was serialized
-                // by BuildToolResultContent inside SendWorkerCommandAsync's sync onSuccess
-                // lambda (after truncation/normalization) and no parsed payload survives;
-                // we must parse to read patternHost AND to fold the validation block back in.
-                JObject? applyPayload = null;
-                try { applyPayload = JObject.Parse(applyText); } catch { }
-                string? hostName =applyPayload?["patternHost"]?.ToString();
+            // apply_pattern { validate: true }: post-apply validation build (no-op for other tools).
+            await ValidateAppliedPatternAsync(innerResult, tName, tArgs);
 
-                var vBlock = new JObject { ["target"] = hostName };
-                if (string.IsNullOrWhiteSpace(hostName))
-                {
-                    vBlock["status"] = "skipped";
-                    vBlock["reason"] = "No patternHost in apply response — nothing to validate.";
-                }
-                else
-                {
-                    // Worker's BuildService.Build is async internally — kicks off
-                    // Task.Run and returns a Running envelope with a taskId in ms.
-                    // We must (1) fire Build/Build, (2) poll Build/Status with that
-                    // taskId until terminal, (3) fetch Build/Result for errors.
-                    var vSw = System.Diagnostics.Stopwatch.StartNew();
-                    JObject startCmd = new JObject
-                    {
-                        ["module"] = "Build",
-                        ["action"] = "Build",
-                        ["target"] = hostName,
-                        ["includeCallees"] = "direct"
-                    };
-                    JObject? startEnv = await SendWorkerCommandAsync(
-                        startCmd, 10000,
-                        "validate-start timeout",
-                        env => env,
-                        (_, cid) => new JObject { ["__timeout"] = true, ["correlationId"] = cid },
-                        toolName: "genexus_apply_pattern.validate.start",
-                        toolArgs: null, trackOperation: false);
-
-                    string? taskId = null;
-                    JObject? startInner = startEnv?["result"] as JObject;
-                    if (startInner == null && startEnv?["result"] is JValue sjv && sjv.Type == JTokenType.String)
-                    {
-                        try { startInner = JObject.Parse(sjv.ToString()); } catch { }
-                    }
-                    taskId = startInner?["TaskId"]?.ToString() ?? startInner?["taskId"]?.ToString();
-
-                    JObject? terminal = null;
-                    if (!string.IsNullOrEmpty(taskId))
-                    {
-                        // Poll up to 180s. Adaptive interval: most validation
-                        // builds of a single object finish in 1-3s, so poll fast
-                        // (250ms) for the first 2s and fall back to 1s — cuts the
-                        // common-case wait from ~1-4s to ~0.25-1s.
-                        for (int i = 0; i < 180 && vSw.ElapsedMilliseconds < 180000; i++)
-                        {
-                            await Task.Delay(i < 8 ? 250 : 1000);
-                            var statusCmd = new JObject
-                            {
-                                ["module"] = "Build",
-                                ["action"] = "Status",
-                                ["target"] = taskId
-                            };
-                            JObject? statusEnv = await SendWorkerCommandAsync(
-                                statusCmd, 8000, "validate-poll timeout",
-                                env => env,
-                                (_, cid) => new JObject { ["__timeout"] = true, ["correlationId"] = cid },
-                                toolName: "genexus_apply_pattern.validate.poll",
-                                toolArgs: null, trackOperation: false);
-                            JObject? sObj = statusEnv?["result"] as JObject;
-                            if (sObj == null && statusEnv?["result"] is JValue pjv && pjv.Type == JTokenType.String)
-                            {
-                                try { sObj = JObject.Parse(pjv.ToString()); } catch { }
-                            }
-                            string? sStatus = sObj?["Status"]?.ToString() ?? sObj?["status"]?.ToString();
-                            if (ApplyPatchValidation.IsEndState(sStatus))
-                            {
-                                terminal = sObj;
-                                break;
-                            }
-                        }
-                    }
-                    vSw.Stop();
-                    vBlock["durationMs"] = vSw.ElapsedMilliseconds;
-
-                    if (string.IsNullOrEmpty(taskId))
-                    {
-                        vBlock["status"] = "error";
-                        vBlock["error"] = "Worker did not return a taskId for the validation build.";
-                        if (startInner != null) vBlock["startResponse"] = startInner;
-                    }
-                    else if (terminal == null)
-                    {
-                        vBlock["status"] = "timeout";
-                        vBlock["error"] = "Validation build did not finish in 180s.";
-                        vBlock["taskId"] = taskId;
-                    }
-                    else
-                    {
-                        ApplyPatchValidation.WriteBlock(vBlock, terminal, taskId);
-                    }
-                }
-
-                // Fold the validation block back into the toolResult text
-                // payload, and promote isError when validation didn't pass.
-                if (applyPayload != null)
-                {
-                    applyPayload["validation"] = vBlock;
-                    var newText = applyPayload.ToString(Formatting.None);
-                    var contentArr = innerResult["content"] as JArray;
-                    if (contentArr != null && contentArr.Count > 0 && contentArr[0] is JObject c0)
-                    {
-                        c0["text"] = newText;
-                    }
-                    if (ApplyPatchValidation.PromotesToError(vBlock))
-                    {
-                        innerResult["isError"] = true;
-                    }
-                }
-            }
-
-            return innerResult ?? BuildToolResultContent(
+            return innerResult ??BuildToolResultContent(
                 new JObject { ["error"] = "Tool did not produce a result." },
                 isError: true,
                 toolName: tName,
                 toolArgs: tArgs);
+        }
+
+        /// <summary>
+        /// Environment policy gates: read-only mode and the write-KB allowlist. Returns the
+        /// refusal result, or null when the call may continue. Extracted from
+        /// DispatchToolCallCoreAsync (phase: policy).
+        /// </summary>
+        private static JObject? TryRefuseByPolicy(string tName, JObject? tArgs, bool isMutating)
+        {
+            if (ReadOnlyMode.FromEnvironment().Refuses(tName, tArgs))
+                return BuildToolResultContent(ReadOnlyMode.BuildRefusal(tName), isError: true, toolName: tName, toolArgs: tArgs);
+            if (isMutating && !IsMutationPreview(tArgs))
+            {
+                var writeAllowlist = WriteKbAllowlist.FromEnvironment();
+                string? writeKbPath = _currentKb.Value?.Path ?? _activeConfig?.Environment?.KBPath;
+                if (!writeAllowlist.Allows(writeKbPath))
+                    return BuildToolResultContent(
+                        WriteKbAllowlist.BuildRefusal(tName, writeKbPath ?? "(no KB resolved)", writeAllowlist.Raw),
+                        isError: true,
+                        toolName: tName,
+                        toolArgs: tArgs);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Refuses a write that a still-unreconciled recovery fence covers; null when no
+        /// fence applies. Extracted from DispatchToolCallCoreAsync (phase: write fence).
+        /// </summary>
+        private static JObject? TryRefuseWhenWriteFenced(string tName, JObject? tArgs, string kbScope)
+        {
+            RecoveryRequirement? recoveryRequirement = null;
+            // Every scope the KB's fences may carry: a fence recorded under the folder
+            // alias by a call that addressed the KB by path still blocks the write.
+            IReadOnlyList<string> fenceScopes = _mutationRecovery.Count > 0
+                ? CurrentKbScopes()
+                : Array.Empty<string>();
+            foreach (var recoveryTarget in EnumerateMutationRecoveryTargets(tName, tArgs))
+            {
+                foreach (var fenceScope in fenceScopes.Count > 0 ? (IEnumerable<string>)fenceScopes : new[] { kbScope })
+                {
+                    if (_mutationRecovery.TryGet(fenceScope, recoveryTarget.Target, recoveryTarget.Part, out var found))
+                    {
+                        recoveryRequirement = found;
+                        break;
+                    }
+                }
+                if (recoveryRequirement != null) break;
+            }
+            if (recoveryRequirement != null)
+            {
+                return BuildToolResultContent(
+                    MutationRecoveryRegistry.BuildBlockedEnvelope(recoveryRequirement),
+                    isError: true,
+                    toolName: tName,
+                    toolArgs: tArgs);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Gateway semantic-cache lookup: the cached tool result stamped as a hit, or null
+        /// on a miss (or a null key). Extracted from DispatchToolCallCoreAsync (phase: cache lookup).
+        /// </summary>
+        private static JObject? TryServeSemanticCacheHit(string? cKey, string tName, JObject? tArgs)
+        {
+            if (cKey != null && _semanticCache.TryGet(cKey, out var cachedResponse, out long cacheAgeMs))
+            {
+                if (_verboseRequestLogs) Log($"[Cache] HIT for {tName}");
+                var cached = cachedResponse["result"] as JObject;
+                if (cached != null)
+                {
+                    var hit = (JObject)cached.DeepClone();
+                    var hitMeta = hit["_meta"] as JObject ?? new JObject();
+                    hit["_meta"] = hitMeta;
+                    hitMeta["cacheOutcome"] = "hit";
+                    hitMeta["cacheSource"] = "gateway-semantic-cache";
+                    hitMeta["cacheAgeMs"] = cacheAgeMs;
+                    AttachGatewaySemanticCacheAge(hit, cacheAgeMs);
+                    AttachExactReadIndexMetadata(hit, tName, tArgs);
+                    _operationTracker.RecordCacheHit(tName);
+                    return hit;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Worker command for the two file-transfer tools the router does not convert
+        /// (export/import object text); null for every other tool.
+        /// Extracted from DispatchToolCallCoreAsync (phase: worker command).
+        /// </summary>
+        private static object? BuildFileTransferWorkerCommand(string tName, JObject? tArgs)
+        {
+            if (string.Equals(tName, "genexus_export_object", StringComparison.OrdinalIgnoreCase))
+            {
+                return new
+                {
+                    module = "Object",
+                    action = "ExportText",
+                    target = tArgs?["name"]?.ToString(),
+                    path = tArgs?["outputPath"]?.ToString(),
+                    part = tArgs?["part"]?.ToString() ?? "Source",
+                    type = tArgs?["type"]?.ToString(),
+                    overwrite = tArgs?["overwrite"]?.ToObject<bool?>() ?? false
+                };
+            }
+            if (string.Equals(tName, "genexus_import_object", StringComparison.OrdinalIgnoreCase))
+            {
+                return new
+                {
+                    module = "Object",
+                    action = "ImportText",
+                    target = tArgs?["name"]?.ToString(),
+                    path = tArgs?["inputPath"]?.ToString(),
+                    part = tArgs?["part"]?.ToString() ?? "Source",
+                    type = tArgs?["type"]?.ToString()
+                };
+            }
+            return null;
         }
 
         /// <summary>
