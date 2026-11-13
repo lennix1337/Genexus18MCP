@@ -110,9 +110,8 @@ fn benchmark_scale_50k_nodes() {
     );
 
     // Benchmark 3: Search for task
-    let (search_res, search_latency) = best_of(3, || {
-        search_for_task(&graph, "business object 00100", 10)
-    });
+    let (search_res, search_latency) =
+        best_of(3, || search_for_task(&graph, "business object 00100", 10));
     println!(
         "4. Query --for (Busca Semantica + PageRank): {:?} ({} resultados)",
         search_latency,
@@ -126,8 +125,7 @@ fn benchmark_scale_50k_nodes() {
     );
 
     // Benchmark 4: Pack task under token budget
-    let (pack_res, pack_latency) =
-        best_of(3, || pack_task(&graph, "business object 00100", 1200));
+    let (pack_res, pack_latency) = best_of(3, || pack_task(&graph, "business object 00100", 1200));
     println!(
         "5. Query --pack-task (Orientacao One-Shot): {:?} (est_tokens: {})",
         pack_latency, pack_res.est_tokens
