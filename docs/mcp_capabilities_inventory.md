@@ -265,6 +265,7 @@ semantics documented in #65, and the homonym-routing behavior tracked in #34.
 | `gx_trace_dependencies` | active | Dependency tracing workflow with impact analysis |
 | `gx_agent_ship_change` | active | Controlled-change workflow for agents with explicit verification and reporting |
 | `gx_agent_visual_change` | active | Visual metadata workflow that forces authoritative-surface resolution before editing |
+| `gx_legacy_kb_assessment` | active | Read-only migration assessment of a legacy KB (GX 8/9/15, Evolution 1-2): inventory, driver limits, manual-review list; text only, uses published read tools |
 
 ## Completion
 

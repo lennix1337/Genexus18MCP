@@ -73,18 +73,35 @@ namespace GxMcp.Gateway.Tests
             Assert.True(problems.Length == 0, string.Join("; ", problems));
         }
 
-        [Fact]
-        public void VisualChangePrompt_NamesOnlyPublishedTools()
+        [Theory]
+        [InlineData("""{"jsonrpc":"2.0","id":"1","method":"prompts/get","params":{"name":"gx_agent_visual_change","arguments":{"name":"Customer","changeGoal":"Resize logo"}}}""")]
+        [InlineData("""{"jsonrpc":"2.0","id":"1","method":"prompts/get","params":{"name":"gx_legacy_kb_assessment","arguments":{}}}""")]
+        public void Prompts_NameOnlyPublishedTools(string requestJson)
         {
-            var request = JObject.Parse(
-                """{"jsonrpc":"2.0","id":"1","method":"prompts/get","params":{"name":"gx_agent_visual_change","arguments":{"name":"Customer","changeGoal":"Resize logo"}}}""");
-
-            var json = JObject.FromObject(McpRouter.Handle(request)!);
+            var json = JObject.FromObject(McpRouter.Handle(JObject.Parse(requestJson))!);
             string text = json["messages"]![0]!["content"]?["text"]?.ToString() ?? string.Empty;
 
             var named = BacktickedTool.Matches(text).Cast<Match>().Select(m => m.Groups[1].Value).ToArray();
             Assert.NotEmpty(named);
             Assert.All(named, tool => Assert.True(IsPublished(tool), "prompt names an unpublished tool: " + tool));
+        }
+
+        [Fact]
+        public void LegacyAssessmentPrompt_IsListed_ReadOnlyAndShort()
+        {
+            var list = JObject.FromObject(McpRouter.Handle(JObject.Parse("""{"jsonrpc":"2.0","id":"1","method":"prompts/list"}"""))!);
+            Assert.Contains((JArray)list["prompts"]!, p => p["name"]?.ToString() == "gx_legacy_kb_assessment");
+
+            var get = JObject.FromObject(McpRouter.Handle(JObject.Parse(
+                """{"jsonrpc":"2.0","id":"1","method":"prompts/get","params":{"name":"gx_legacy_kb_assessment","arguments":{"kb":"OldKb"}}}"""))!);
+            string text = get["messages"]![0]!["content"]!["text"]!.ToString();
+
+            Assert.Contains("OldKb", text);
+            Assert.Contains("UNSUPPORTED_IN_GENEXUS_VERSION", text);
+            Assert.True(text.Length < 1800, "prompt grew to " + text.Length + " characters");
+            // read-only: none of the mutating tools may be named
+            foreach (var mutating in new[] { "genexus_edit", "genexus_create", "genexus_io", "genexus_refactor", "genexus_delete_object" })
+                Assert.DoesNotContain("`" + mutating + "`", text);
         }
     }
 }

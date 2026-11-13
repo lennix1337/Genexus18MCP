@@ -2,6 +2,15 @@
   "schemaVersion": "genexus-agent-first-tool-expectations/1",
   "corpus": "corpus.json",
   "note": "Machine-readable first-call expectations for scripts/run-agent-model-eval.py. Each expectedFirstTools entry is derived from the first step of the matching corpus scenario flow. Scenarios whose flow is infrastructure-only or whose first step has no single tool (E01, E04, E09, E11-E14) are intentionally absent.",
+  "omittedScenarios": {
+    "E01": "The first step is the MCP method tools/list/server/discover, not a tool call.",
+    "E04": "'Warm collection and object reads' could be genexus_query, genexus_list_objects or genexus_read; no single first tool.",
+    "E09": "'Preview translations' has no dedicated translation tool; genexus_edit, genexus_properties and others are all defensible, so the first tool is ambiguous.",
+    "E11": "Concurrency of MCP clients and cancellation; a transport behaviour, not a tool choice.",
+    "E12": "Gateway journal and restart recovery; the first step is infrastructure, not a model tool choice.",
+    "E13": "Load and indexing test with N producers; infrastructure, not a model tool choice.",
+    "E14": "Installer upgrade and rollback; not an MCP tool task."
+  },
   "alwaysAcceptable": ["genexus_whoami"],
   "alwaysAcceptableReason": "The server initialize instructions say to start every session with genexus_whoami, so an orienting call is not a selection error.",
   "scenarios": [
