@@ -4401,7 +4401,14 @@ namespace GxMcp.Worker.Services
                     return DescribeReadFreshness(cachedPayload, false, "worker-object-service-cache");
                 }
 
-                string payload = DescribeReadFreshness(ReadObjectSourceInternal(obj, resolvedPart, offset, limit, client, minimize, diagContext), false, "sdk-object-state");
+                // Opt-in (GXMCP_SOURCE_STORE_READS=1): answer from the durable source store
+                // when its record is provably the text this SDK object holds. Evaluated once,
+                // before any part text is read, so the same answer gates both the store read
+                // and whether this read's version token may certify the store record below.
+                bool storeEligible = SourceStoreService.ReadFastPathEnabled()
+                    && IsStoreServableRead(obj, resolvedPart);
+                string payload = (storeEligible ? TryReadSourceFromStore(obj, resolvedPart, offset, limit, client) : null)
+                    ?? DescribeReadFreshness(ReadObjectSourceInternal(obj, resolvedPart, offset, limit, client, minimize, diagContext), false, "sdk-object-state");
                 if (TryGetCacheablePayload(payload, out JObject parsedPayload))
                 {
                     SetReadCache(cacheKey, payload);
@@ -4417,7 +4424,8 @@ namespace GxMcp.Worker.Services
                         // raw cache. The helper uses the already-loaded index and never
                         // forces a cold index load from the read hot path.
                         TryPromoteCompleteSourceRead(
-                            obj.Guid, resolvedPart, parsedPayload, offset, client, minimize);
+                            obj.Guid, resolvedPart, parsedPayload, offset, client, minimize,
+                            storeEligible ? parsedPayload["versionToken"]?.ToString() : null);
                     }
                 }
 
@@ -6512,7 +6520,8 @@ namespace GxMcp.Worker.Services
             JObject payload,
             int? offset,
             string client,
-            bool minimize)
+            bool minimize,
+            string versionToken = null)
         {
             if (objectGuid == Guid.Empty || payload == null || minimize
                 || !string.Equals(client, "mcp", StringComparison.OrdinalIgnoreCase)
@@ -6529,15 +6538,139 @@ namespace GxMcp.Worker.Services
 
             string guid = objectGuid.ToString();
             SearchIndex.IndexEntry entry = index.FindByGuid(guid);
+            // versionToken is non-null only on the opt-in store-read path (see
+            // ReadObjectSourceResolved). It binds the record to the SDK object state the
+            // text was read from; should the stored text ever differ from the text the token
+            // fingerprints, the token simply never certifies a read.
             SourceStoreService.Instance.Put(
                 guid,
                 NormalizeRawSourcePart(partName),
                 source,
                 entry != null && entry.LastUpdate > DateTime.MinValue ? (DateTime?)entry.LastUpdate : null,
-                null);
+                versionToken);
             return entry != null
                 && string.Equals(NormalizeRawSourcePart(partName), ResolveSearchPartName(entry.Type), StringComparison.OrdinalIgnoreCase)
                 && indexCache.PromoteSourceForSearch(entry, source);
+        }
+
+        /// <summary>readFreshness.origin of a read answered from the durable source store.</summary>
+        internal const string ReadOriginSourceStore = "worker-source-store";
+
+        // Store-read fast-path outcomes, for the measurement plan and tests. Reads run on the
+        // STA thread; Interlocked keeps the counters exact if that ever changes.
+        private static long _storeReadServed;
+        private static long _storeReadRefused;
+        internal static long StoreReadServedCount => Interlocked.Read(ref _storeReadServed);
+        internal static long StoreReadRefusedCount => Interlocked.Read(ref _storeReadRefused);
+
+        /// <summary>
+        /// True when the SDK path for this read would take exactly the generic text branch
+        /// of <see cref="ReadObjectSourceInternal"/> (result = { part } + ProcessSourceContent
+        /// over <c>ISource.Source</c>) for a part the durable store records under the same
+        /// key, and the SDK object holds no unsaved edit. Limited to the primary source parts
+        /// the store is populated with: Procedure.Source and WebPanel/Transaction.Events.
+        /// Every SDK access here is a property read on the already-resolved object; no part
+        /// text is read. Unknown shapes, an unreadable dirty flag or any exception refuse.
+        /// </summary>
+        private static bool IsStoreServableRead(KBObject obj, string resolvedPart)
+        {
+            string reason = null;
+            try
+            {
+                string partName = ResolvePartName(obj, resolvedPart);
+                object typedPart = null;
+                if (obj is Procedure procedure && string.Equals(partName, "Source", StringComparison.OrdinalIgnoreCase))
+                    typedPart = procedure.ProcedurePart;
+                else if (obj is WebPanel webPanel && string.Equals(partName, "Events", StringComparison.OrdinalIgnoreCase))
+                    typedPart = webPanel.Events;
+                else if (obj is Transaction transaction && string.Equals(partName, "Events", StringComparison.OrdinalIgnoreCase))
+                    typedPart = transaction.Events;
+
+                if (typedPart == null) reason = "unsupported-part";
+                else if (WebFormXmlHelper.IsVisualPart(partName) || PatternAnalysisService.IsPatternPart(partName))
+                    reason = "special-part";
+                else
+                {
+                    // ReadObjectSourceInternal reads the part GetPart returns; serve only when
+                    // that is the same typed part the store's readers (ReadPartSourceUncached,
+                    // backfill) read.
+                    KBObjectPart part = GxMcp.Worker.Structure.PartAccessor.GetPart(obj, partName);
+                    string concrete = part?.GetType().Name ?? string.Empty;
+                    if (part == null || !ReferenceEquals(part, typedPart) || !(part is ISource))
+                        reason = "part-mismatch";
+                    else if (concrete.IndexOf("Variables", StringComparison.OrdinalIgnoreCase) >= 0
+                        || concrete.IndexOf("ThemeStylesPart", StringComparison.OrdinalIgnoreCase) >= 0
+                        || concrete.IndexOf("DesignStylesPart", StringComparison.OrdinalIgnoreCase) >= 0)
+                        reason = "special-part";
+                    // Issue #830: an ordinary SDK read returns the in-memory buffer, which can
+                    // carry text assigned but not saved. The store only knows saved versions.
+                    else if (!IsKnownClean(obj) || !IsKnownClean(part))
+                        reason = "dirty-or-unknown";
+                }
+            }
+            catch (Exception ex)
+            {
+                reason = "error:" + ex.GetType().Name;
+            }
+
+            if (reason == null) return true;
+            Interlocked.Increment(ref _storeReadRefused);
+            Logger.Info("[STORE-READ] refused " + obj?.Name + " (" + resolvedPart + "): " + reason);
+            return false;
+        }
+
+        private static bool IsKnownClean(object sdkObject)
+        {
+            object dirty = SdkReflection.ReadFirst(sdkObject, "Dirty", "IsDirty");
+            return dirty is bool flag && !flag;
+        }
+
+        /// <summary>
+        /// Builds the read payload from the durable store, or returns null to fall back to
+        /// the SDK. The record is served only when its stored version token equals the token
+        /// this SDK object yields for the stored text: the token is the object's LastUpdate
+        /// and parent identity plus a SHA-256 of the text, so equality proves the record was
+        /// read from this same saved version of this object, independently of the index entry,
+        /// the watcher tick or which KB the store directory was opened for. The payload is
+        /// produced by the same ProcessSourceContent call as the SDK branch, so every field
+        /// except readFreshness (origin and textSource name the store) is identical.
+        /// </summary>
+        private string TryReadSourceFromStore(KBObject obj, string resolvedPart, int? offset, int? limit, string client)
+        {
+            string reason;
+            try
+            {
+                if (!SourceStoreService.Instance.TryGetWithVersionToken(
+                        obj.Guid.ToString(), NormalizeRawSourcePart(resolvedPart),
+                        out string stored, out string storedToken))
+                {
+                    reason = "no-tokenized-record";
+                }
+                else
+                {
+                    string expected = WriteService.ComputeContentVersionToken(obj, stored);
+                    if (expected == null || !string.Equals(expected, storedToken, StringComparison.Ordinal))
+                    {
+                        reason = "version-mismatch";
+                    }
+                    else
+                    {
+                        var result = new JObject { ["part"] = ResolvePartName(obj, resolvedPart) };
+                        ProcessSourceContent(obj, stored, offset, limit, result, client);
+                        Interlocked.Increment(ref _storeReadServed);
+                        Logger.Info("[STORE-READ] served " + obj.Name + " (" + resolvedPart + ") from the source store");
+                        return DescribeReadFreshness(result.ToString(), false, ReadOriginSourceStore);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                reason = "error:" + ex.GetType().Name;
+            }
+
+            Interlocked.Increment(ref _storeReadRefused);
+            Logger.Info("[STORE-READ] refused " + obj?.Name + " (" + resolvedPart + "): " + reason);
+            return null;
         }
 
         private void ProcessSourceContent(KBObject obj, string content, int? offset, int? limit, JObject result, string client = "ide")

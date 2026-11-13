@@ -510,8 +510,12 @@ namespace GxMcp.Worker.Services
                 string ignoredDetail;
                 bool validRecord = TryReadStoredRecord(
                     guid, partName, out ignoredSource, out ignoredState, out ignoredDetail);
-                bool metadataSame = !lastUpdate.HasValue
-                    || (existing.LastUpdate.HasValue && existing.LastUpdate.Value == lastUpdate.Value);
+                // A supplied version token is metadata too: without this, a record first
+                // stored without one (search, plain read promotion) could never gain it.
+                bool metadataSame = (!lastUpdate.HasValue
+                        || (existing.LastUpdate.HasValue && existing.LastUpdate.Value == lastUpdate.Value))
+                    && (versionToken == null
+                        || string.Equals(existing.VersionToken, versionToken, StringComparison.Ordinal));
                 if (validRecord && metadataSame)
                     return true;
             }
@@ -861,6 +865,108 @@ namespace GxMcp.Worker.Services
             // "not stored" and silently shrink coverage.
             RecordCertification(key, summary.RelativeFilePath, summary, CertificationNow());
             return true;
+        }
+
+        // ---- Opt-in read paths. Both are off unless the variable is "1" (whitespace ignored). ----
+
+        /// <summary>GXMCP_SOURCE_STORE_READS: serve genexus_read from a version-matched store record.</summary>
+        internal static Func<string> ReadFastPathSetting { get; set; } =
+            () => Environment.GetEnvironmentVariable("GXMCP_SOURCE_STORE_READS");
+
+        /// <summary>GXMCP_SOURCE_SEARCH_TRIGRAM_PRUNE: skip stored-and-fresh candidates the postings prove cannot match.</summary>
+        internal static Func<string> TrigramPruneSetting { get; set; } =
+            () => Environment.GetEnvironmentVariable("GXMCP_SOURCE_SEARCH_TRIGRAM_PRUNE");
+
+        internal static bool ReadFastPathEnabled() => IsFlagOn(ReadFastPathSetting);
+
+        internal static bool TrigramPruneEnabled() => IsFlagOn(TrigramPruneSetting);
+
+        private static bool IsFlagOn(Func<string> setting)
+        {
+            try { return string.Equals(setting?.Invoke()?.Trim(), "1", StringComparison.Ordinal); }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Returns a stored part body together with the version token recorded with it, or
+        /// false when there is no valid record or the record carries no token. The token is
+        /// taken from the catalog summary before the body is read; a concurrent replacement
+        /// can therefore pair an old token with a new body, which the caller's token check
+        /// (it fingerprints the returned body) rejects.
+        /// </summary>
+        internal bool TryGetWithVersionToken(string guid, string partName, out string source, out string versionToken)
+        {
+            source = null;
+            versionToken = null;
+            if (string.IsNullOrWhiteSpace(guid) || string.IsNullOrWhiteSpace(partName)) return false;
+
+            Initialize();
+            string normalizedPart = ObjectService.NormalizeRawSourcePart(partName);
+            if (!_records.TryGetValue(MakeKey(guid, normalizedPart), out var summary)
+                || summary == null || string.IsNullOrEmpty(summary.VersionToken))
+                return false;
+
+            string token = summary.VersionToken;
+            if (!TryReadStoredRecord(guid, normalizedPart, out string body, out _, out _))
+                return false;
+            source = body;
+            versionToken = token;
+            return true;
+        }
+
+        /// <summary>
+        /// True only when the store proves <paramref name="literal"/> cannot occur in the
+        /// current text of this candidate part, so a search may skip it. Issue #264: pruning
+        /// on text that is not known to be complete and current produced false "no results",
+        /// so both conditions are required:
+        /// <list type="number">
+        /// <item><description>the part's record is stored and fresh for this index entry
+        /// (<see cref="IsStoredAndFreshCached"/>, the same predicate as search coverage), so
+        /// its body is the text the scan's store tier would read; and</description></item>
+        /// <item><description>a trigram of the lower-cased literal is missing from the
+        /// record's own trigram set, built from that body.</description></item>
+        /// </list>
+        /// Absence is checked first because it is an in-memory lookup: a candidate that may
+        /// match costs no extra I/O. A record whose trigram set is empty (body shorter than
+        /// three characters, or no set derived) is never pruned. The catalog summary and the
+        /// trigram set must be the same instances before and after the freshness check, so a
+        /// concurrent <c>Put</c> (which publishes the set before the summary) refuses
+        /// rather than pairing one body's freshness with another body's trigrams. Sets loaded
+        /// from the persisted postings file are only accepted for the exact catalog (record
+        /// hashes included) they were written with, and freshness hash-checks the body against
+        /// that catalog. The caller owns case handling: trigrams are lower-cased with the invariant culture.
+        /// </summary>
+        internal bool ProvesLiteralAbsent(SearchIndex.IndexEntry entry, string part, string literal)
+        {
+            if (entry == null || string.IsNullOrWhiteSpace(entry.Guid)
+                || string.IsNullOrWhiteSpace(part) || literal == null || literal.Length < 3)
+                return false;
+
+            var required = TrigramExtractor.ExtractTrigrams(literal);
+            if (required.Count == 0) return false;
+
+            Initialize();
+            string normalizedPart = ObjectService.NormalizeRawSourcePart(
+                ObjectService.ResolveSearchPartName(entry.Type, part));
+            string key = MakeKey(entry.Guid, normalizedPart);
+
+            if (!_records.TryGetValue(key, out var summaryBefore) || summaryBefore == null) return false;
+            if (!_trigramsByRecord.TryGetValue(key, out var indexed) || indexed == null || indexed.Count == 0)
+                return false;
+
+            bool missing = false;
+            foreach (string trigram in required)
+            {
+                if (!indexed.Contains(trigram)) { missing = true; break; }
+            }
+            if (!missing) return false;
+
+            if (!IsStoredAndFreshCached(entry, part)) return false;
+
+            return _records.TryGetValue(key, out var summaryAfter)
+                && ReferenceEquals(summaryBefore, summaryAfter)
+                && _trigramsByRecord.TryGetValue(key, out var indexedAfter)
+                && ReferenceEquals(indexed, indexedAfter);
         }
 
         private static List<string> ResolveRequestedParts(string type, List<string> scope)
