@@ -2925,7 +2925,14 @@ namespace GxMcp.Worker.Services
             using (var process = System.Diagnostics.Process.GetCurrentProcess()) return process.PrivateMemorySize64;
         };
 
-        internal bool PromoteSourceForSearch(SearchIndex.IndexEntry entry, string source)
+        /// <param name="readFromSdk">
+        /// True only when the caller read <paramref name="source"/> from the SDK in this
+        /// operation. Text from the index, the durable store or the part cache carries no
+        /// proof that it matches the entry's LastUpdate, so it is promoted in memory but
+        /// never written to the durable store stamped with that timestamp (that would
+        /// certify possibly stale text as fresh across restarts).
+        /// </param>
+        internal bool PromoteSourceForSearch(SearchIndex.IndexEntry entry, string source, bool readFromSdk = false)
         {
             if (entry == null || source == null || source.Length > PersistedFullSourceMaxChars) return false;
             var index = TryGetLoadedIndex();
@@ -2936,7 +2943,7 @@ namespace GxMcp.Worker.Services
             if (!string.IsNullOrEmpty(entry.Guid)
                 && !string.Equals(current.Guid, entry.Guid, StringComparison.OrdinalIgnoreCase)) return false;
 
-            if (!string.IsNullOrEmpty(entry.Guid))
+            if (readFromSdk && !string.IsNullOrEmpty(entry.Guid))
             {
                 SourceStoreService.Instance.Put(
                     entry.Guid,
@@ -2946,7 +2953,7 @@ namespace GxMcp.Worker.Services
                     null);
             }
 
-            // The source is already persisted above; only the in-memory copy is skipped.
+            // An SDK-read source is already persisted above; only the in-memory copy is skipped.
             if (PrivateBytesProbe() > PromotionPrivateBytesCeiling) return false;
 
             // Issue #364: the budget reads a running total instead of re-summing every

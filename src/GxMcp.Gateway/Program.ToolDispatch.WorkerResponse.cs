@@ -12,7 +12,7 @@ namespace GxMcp.Gateway
         /// DispatchToolCallCoreAsync before the worker call. Plain values only: the
         /// ambient state (_currentKb, session context, statics) is not copied here.
         /// </summary>
-        private sealed class ToolCallResponseContext
+        internal sealed class ToolCallResponseContext
         {
             public required string ToolName { get; init; }
             public required JObject? ToolArgs { get; init; }
@@ -24,6 +24,10 @@ namespace GxMcp.Gateway
             public required bool IsLiveTool { get; init; }
             public required int CacheEpochAtDispatch { get; init; }
             public required long CacheRevisionAtDispatch { get; init; }
+            /// <summary>Resolved KB and MCP session, for the opt-in KB history (<see cref="KbHistoryRecorder"/>).</summary>
+            public string? KbPath { get; init; }
+            public string? KbAlias { get; init; }
+            public string? SessionId { get; init; }
         }
 
         /// <summary>
@@ -31,7 +35,7 @@ namespace GxMcp.Gateway
         /// envelope, returning the tool result. Extracted from the onSuccess callback of
         /// DispatchToolCallCoreAsync (phase: response shaping).
         /// </summary>
-        private static JObject ShapeWorkerToolResponse(JObject resultObj, ToolCallResponseContext ctx)
+        internal static JObject ShapeWorkerToolResponse(JObject resultObj, ToolCallResponseContext ctx)
         {
             string tName = ctx.ToolName;
             JObject? tArgs = ctx.ToolArgs;
@@ -57,6 +61,8 @@ namespace GxMcp.Gateway
                 : null;
             bool includePersistedText = IsMutatingTool(tName, tArgs)
                 && (tArgs?["includePersistedText"]?.Value<bool?>() ?? false);
+            // Before shaping: it trims the very text (source) the history commit needs. Enqueue only.
+            TryRecordKbHistory(_kbHistory, ctx, workerPayload);
             JToken shapedPayload = workerPayload ?? JValue.CreateNull();
             try
             {

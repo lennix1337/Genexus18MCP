@@ -414,7 +414,10 @@ namespace GxMcp.Gateway
                 CacheKey = cKey,
                 IsLiveTool = isLiveTool,
                 CacheEpochAtDispatch = cacheEpochAtDispatch,
-                CacheRevisionAtDispatch = cacheRevisionAtDispatch
+                CacheRevisionAtDispatch = cacheRevisionAtDispatch,
+                KbPath = _currentKb.Value?.Path ?? _activeConfig?.Environment?.KBPath,
+                KbAlias = _currentKb.Value?.Alias,
+                SessionId = sessionId
             };
             innerResult = await SendWorkerCommandAsync(
                 workerCmd,

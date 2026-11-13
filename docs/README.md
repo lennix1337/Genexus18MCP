@@ -15,6 +15,7 @@ also read [`AGENTS.md`](../AGENTS.md).
 - [Supported GeneXus versions](generated/supported-versions.md) — generated from `config/gx-versions.json`.
 - [SDK compatibility](sdk-compatibility.md) — how the Worker binds to each GeneXus major.
 - [Environment variables](environment_variables.md) — every runtime variable read by the Gateway and Worker.
+- [KB change history](kb-history.md) — opt-in git history of what agents changed in a KB (`git log`, `git diff`, `git blame` per object).
 - [Engine backend switch (gx-engine)](engine_backend.md) — experimental SDK↔engine routing gate, capability registry and `genexus_doctor` reporting.
 - [UDM physical storage notes](udm_storage_notes.md) — entity types, `ModelEntityVersion`/composition/blob layout, `sqlcmd` behavior and the live-write gap, verified against a real GeneXus 18 KB.
 - [Enumerated domains](udm_enumerated_domains.md) — stored-domain type evidence, conservative mapping and unresolved SDK generation cases.

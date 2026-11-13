@@ -770,12 +770,15 @@ namespace GxMcp.Gateway
                 || (args != null && args.Any(a => string.Equals(a, "--shared-gateway", StringComparison.OrdinalIgnoreCase)));
             bool useSharedLease = !isStdioIsolated && (!isStdio || sharedGatewayExplicit);
             LogGeneXusVersionCheck(config);
+            _kbHistory = KbHistoryRecorder.CreateFromEnvironment(Log);
             try { RecipeCatalog.ConfigureUserMacroDirectory(GetUserMacroDir()); }
             catch (Exception ex) { Log("[RecipeCatalog] User-macro discovery skipped: " + ex.Message); }
             Log("[Gateway] Startup orphan-kill disabled. Existing gateway reuse is handled by the extension client.");
             AppDomain.CurrentDomain.ProcessExit += (_, __) =>
             {
                 try { _gatewayLifetime.Cancel(); } catch { }
+                // Bounded drain: pending history commits finish within seconds or are abandoned and counted.
+                try { _kbHistory?.StopAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult(); } catch { }
                 try
                 {
                     // Dispose the .gx_mirror watcher (and its pending debounce timer) on

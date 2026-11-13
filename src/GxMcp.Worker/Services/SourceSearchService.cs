@@ -839,6 +839,11 @@ namespace GxMcp.Worker.Services
                 }
 
                 var literals = ExtractLiteralTokens(c.Pattern, c.Callee);
+                // Null unless the opt-in flag is on and the pattern is a plain literal the
+                // trigram postings can reason about soundly (see GetTrigramPruneLiteral).
+                string pruneLiteral = SourceStoreService.TrigramPruneEnabled()
+                    ? GetTrigramPruneLiteral(c, CultureInfo.CurrentCulture)
+                    : null;
 
                 // Candidate membership and order must not depend on mutable source
                 // caches: a cursor is an ordinal in this identity-ordered set.
@@ -1201,6 +1206,24 @@ namespace GxMcp.Worker.Services
                         bool useIndexedSource = indexedSourceScope
                             && IsSourceAlias(part)
                             && e.FullSource != null;
+                        // Opt-in trigram pruning (GXMCP_SOURCE_SEARCH_TRIGRAM_PRUNE=1). Only a
+                        // candidate whose text would come from the store tier below is eligible:
+                        // the store proves the part is stored-and-fresh and that the literal
+                        // cannot occur in it. A pruned part is accounted exactly like a scanned
+                        // part with no match (status, scannedObjects; the cursor and hit counts
+                        // are untouched), so pages and resumed scans return the same hits.
+                        if (!useIndexedSource && pruneLiteral != null && !string.IsNullOrEmpty(e.Guid))
+                        {
+                            storeProbeExecuted = 1;
+                            storeProbeCandidates++;
+                            if (SourceStoreService.Instance.ProvesLiteralAbsent(e, resolvedPart, pruneLiteral))
+                            {
+                                storeProbeHits++;
+                                execution["status"] = "searched";
+                                execution["scannedObjects"] = execution["scannedObjects"]!.ToObject<int>() + 1;
+                                continue;
+                            }
+                        }
                         if (useIndexedSource)
                         {
                             src = e.FullSource;
@@ -1258,7 +1281,7 @@ namespace GxMcp.Worker.Services
                         }
                         if (haveSrc && indexedSourceScope && IsSourceAlias(part) && e.FullSource == null)
                         {
-                            if (_index.PromoteSourceForSearch(e, src)) sourceIndexPromotions++;
+                            if (_index.PromoteSourceForSearch(e, src, readFromSdk)) sourceIndexPromotions++;
                         }
                         if (readFromSdk && !string.IsNullOrEmpty(e.Guid))
                         {
@@ -1873,6 +1896,41 @@ namespace GxMcp.Worker.Services
             if (entry == null) return false;
             if (HasIdentityScope(criteria) && !MatchesIdentityScope(entry, criteria)) return false;
             return objectNameSet == null || ObjectNameMatches(objectNameSet, entry.Name);
+        }
+
+        /// <summary>
+        /// The literal a trigram prune may test, or null when pruning cannot be proven sound
+        /// for this request. Only a pattern made entirely of ASCII letters, digits and
+        /// underscores (at least three) qualifies: such a regex matches exactly where the text
+        /// contains the literal, on one line, so "a trigram of the literal is absent from the
+        /// text" implies "no hit". Callee searches and argument matchers parse calls and are
+        /// never pruned. Case: a case-sensitive match implies the invariant-lower-cased text
+        /// holds the lower-cased literal. Case-insensitive matching compares with the current
+        /// culture; outside Turkish and Azerbaijani (the cultures whose I/i mapping differs
+        /// from the invariant one) that is the invariant mapping the postings use, so those
+        /// two cultures do not prune.
+        /// </summary>
+        internal static string GetTrigramPruneLiteral(SourceSearchCriteria c, CultureInfo culture)
+        {
+            if (c == null || !string.IsNullOrEmpty(c.Callee) || (c.ArgMatches != null && c.ArgMatches.Count > 0))
+                return null;
+            string pattern = c.Pattern;
+            if (string.IsNullOrEmpty(pattern) || pattern.Length < 3) return null;
+            foreach (char ch in pattern)
+            {
+                bool plain = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_';
+                if (!plain) return null;
+            }
+            if (!c.CaseSensitive)
+            {
+                string language = culture?.TwoLetterISOLanguageName;
+                if (language == null
+                    || string.Equals(language, "tr", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(language, "az", StringComparison.OrdinalIgnoreCase))
+                    return null;
+            }
+            return pattern;
         }
 
         internal static bool MatchesAnyLiteral(Models.SearchIndex.IndexEntry e, System.Collections.Generic.List<string> literals)
