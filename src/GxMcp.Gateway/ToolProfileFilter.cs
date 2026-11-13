@@ -106,6 +106,40 @@ namespace GxMcp.Gateway
             "genexus_navigation"
         };
 
+        /// <summary>
+        /// Inputs left out of the schema published by every profile except <c>all</c>.
+        /// They stay in <c>tool_definitions.json</c>, so the Gateway validates and
+        /// dispatches them as before and <c>genexus://kb/tool-help/&lt;tool&gt;</c> still
+        /// documents them: only the list a model reads to pick arguments gets shorter.
+        /// Listed here are aliases of an input that stays published, tuning caps,
+        /// paging and wait refinements, verification overrides and experimental flags.
+        /// Never list a required input or the only input an action takes.
+        /// </summary>
+        internal static readonly IReadOnlyDictionary<string, string[]> AdvancedInputs =
+            new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["genexus_edit"] = new[]
+                {
+                    "expectedVersion", "indentation", "scope", "estimated_seconds", "includePersistedText",
+                    "return_post_state", "verbose", "verifyRollback", "verifyMode", "requireObjectSave",
+                    "forceWrite", "concurrencyPolicy", "visualVerify", "contentPath"
+                },
+                ["genexus_lifecycle"] = new[]
+                {
+                    "jobId", "page_size", "buildPlanCap", "callerCap", "fastIncremental", "skipFullDeploy",
+                    "notifyOnFailure", "log_limit", "log_offset", "page", "pageSize", "since", "until",
+                    "freshness", "estimated_seconds", "expectedVersion"
+                },
+                ["genexus_io"] = new[]
+                {
+                    "includeModuleMetadata", "includeModulePackages", "includeTableProjections", "indentString",
+                    "includeReferences", "importMissingReferences", "forceSave", "listOnly", "skip", "stopOnError",
+                    "intervalMs", "initialSync", "full", "includePersistedText", "relativeRoot", "ignore",
+                    "pathPrefix", "includeChildren"
+                },
+                ["genexus_create"] = new[] { "objectType", "updateExisting", "parentPath" }
+            };
+
         public static string ResolveActiveProfile(string? configuredProfile = null)
         {
             string? envProfile = global::System.Environment.GetEnvironmentVariable("GXMCP_PROFILE");
@@ -127,10 +161,12 @@ namespace GxMcp.Gateway
             if (tools == null || tools.Count == 0) return new JArray();
 
             var allowlist = GetAllowlist(profile);
-            IEnumerable<JToken> selected = allowlist == null
-                ? tools
-                : tools.OfType<JObject>().Where(tool => allowlist.Contains(tool["name"]?.ToString() ?? string.Empty));
-            return Compact(selected);
+            // No allowlist means `all` (or an unknown profile, which fails open): the complete surface.
+            return allowlist == null
+                ? Compact(tools, hideAdvancedInputs: false)
+                : Compact(
+                    tools.OfType<JObject>().Where(tool => allowlist.Contains(tool["name"]?.ToString() ?? string.Empty)),
+                    hideAdvancedInputs: true);
         }
 
         /// <summary>Core tools plus those of the enabled adaptive groups, then the meta tool.</summary>
@@ -138,7 +174,9 @@ namespace GxMcp.Gateway
         {
             var allowlist = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);
             foreach (var name in extraToolNames) allowlist.Add(name);
-            var result = Compact(tools.OfType<JObject>().Where(t => allowlist.Contains(t["name"]?.ToString() ?? string.Empty)));
+            var result = Compact(
+                tools.OfType<JObject>().Where(t => allowlist.Contains(t["name"]?.ToString() ?? string.Empty)),
+                hideAdvancedInputs: true);
             result.Add(AdaptiveTools.BuildMetaToolDefinition());
             return result;
         }
@@ -212,7 +250,14 @@ namespace GxMcp.Gateway
             return profiles;
         }
 
-        private static JArray Compact(IEnumerable<JToken> tools)
+        private static void RemoveAdvancedInputs(JObject tool)
+        {
+            if (!AdvancedInputs.TryGetValue(tool["name"]?.ToString() ?? string.Empty, out var hidden)) return;
+            if (tool["inputSchema"]?["properties"] is not JObject properties) return;
+            foreach (string input in hidden) properties.Remove(input);
+        }
+
+        private static JArray Compact(IEnumerable<JToken> tools, bool hideAdvancedInputs)
         {
             var result = new JArray();
             foreach (JToken tool in tools)
@@ -224,6 +269,7 @@ namespace GxMcp.Gateway
                 }
 
                 var compacted = (JObject)definition.DeepClone();
+                if (hideAdvancedInputs) RemoveAdvancedInputs(compacted);
                 compacted["description"] = BuildCompactToolDescription(
                     compacted["name"]?.ToString(),
                     compacted["description"]?.ToString());

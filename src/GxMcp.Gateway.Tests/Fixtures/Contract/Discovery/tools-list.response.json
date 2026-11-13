@@ -793,7 +793,7 @@
             "type": "object"
           },
           "rollbackOnFailure": {
-            "description": "Issue #60: with action=object and…",
+            "description": "With action=object and…",
             "type": "boolean"
           },
           "rules": {
@@ -838,7 +838,7 @@
             "type": "boolean"
           },
           "validationMode": {
-            "description": "Issue #60: with action=object, run the…",
+            "description": "With action=object, run the inline…",
             "enum": [
               "specify"
             ],
@@ -1620,7 +1620,7 @@
             "type": "string"
           },
           "validationMode": {
-            "description": "specify (Issue #60): run the inline…",
+            "description": "specify: run the inline Specify pass…",
             "enum": [
               "specify",
               "native"
