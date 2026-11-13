@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text;
 using GxMcp.Gateway;
 using Newtonsoft.Json.Linq;
@@ -142,15 +143,64 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
-        public void OversizedPayload_FollowUpArgs_ContainPage1AndPageSize25()
+        public void OversizedPayload_ReadFollowUp_UsesOffsetAndLimitNotPageArgs()
         {
             var guard = new ResponseSizeGuard(maxBytes: 220_000);
 
             var (result, _) = guard.Apply(OversizedPayload(), "genexus_read", SomeArgs());
 
             var followArgs = (JObject)result["_meta"]!["truncated"]!["follow_up"]!["args"]!;
+            Assert.Equal(0, followArgs["offset"]?.Value<int>());
+            Assert.Equal(200, followArgs["limit"]?.Value<int>());
+            Assert.Null(followArgs["page"]);
+            Assert.Null(followArgs["page_size"]);
+        }
+
+        [Fact]
+        public void OversizedPayload_LifecycleFollowUp_KeepsPageAndPageSize()
+        {
+            var guard = new ResponseSizeGuard(maxBytes: 220_000);
+
+            var (result, _) = guard.Apply(OversizedPayload(), "genexus_lifecycle", JObject.Parse("""{"action":"result"}"""));
+
+            var followArgs = (JObject)result["_meta"]!["truncated"]!["follow_up"]!["args"]!;
             Assert.Equal(1, followArgs["page"]?.Value<int>());
             Assert.Equal(25, followArgs["page_size"]?.Value<int>());
+        }
+
+        [Fact]
+        public void OversizedPayload_ToolWithoutPagination_OmitsArgsAndGivesProseHint()
+        {
+            var guard = new ResponseSizeGuard(maxBytes: 220_000);
+
+            var (result, _) = guard.Apply(OversizedPayload(), "genexus_security", SomeArgs());
+
+            var followUp = (JObject)result["_meta"]!["truncated"]!["follow_up"]!;
+            Assert.Null(followUp["args"]);
+            Assert.Contains("Narrow", followUp["hint"]?.ToString());
+        }
+
+        [Fact]
+        public void OversizedPayload_FollowUp_AddsOnlyArgumentsThePublishedSchemaDeclares()
+        {
+            var guard = new ResponseSizeGuard(maxBytes: 220_000);
+            var tools = JArray.Parse(GxMcp.TestSupport.RepoSource.Read("src", "GxMcp.Gateway", "tool_definitions.json"));
+            var offenders = new System.Collections.Generic.List<string>();
+
+            foreach (var tool in tools.OfType<JObject>())
+            {
+                string name = tool.Value<string>("name")!;
+                var declared = (JObject?)tool["inputSchema"]?["properties"] ?? new JObject();
+                var original = JObject.Parse("""{"object_name":"Invoice"}""");
+                var (result, _) = guard.Apply(OversizedPayload(), name, original);
+                var followArgs = result["_meta"]!["truncated"]!["follow_up"]!["args"] as JObject;
+                if (followArgs == null) continue;
+                foreach (var prop in followArgs.Properties())
+                    if (original[prop.Name] == null && declared[prop.Name] == null)
+                        offenders.Add(name + "." + prop.Name);
+            }
+
+            Assert.True(offenders.Count == 0, "Follow-up args not in the tool schema: " + string.Join(", ", offenders));
         }
 
         [Fact]
@@ -181,7 +231,7 @@ namespace GxMcp.Gateway.Tests
         // ── null args handled gracefully ─────────────────────────────────────
 
         [Fact]
-        public void OversizedPayload_NullArgs_FollowUpArgsHasPageFields()
+        public void OversizedPayload_NullArgs_FollowUpArgsHasOffsetAndLimit()
         {
             var guard = new ResponseSizeGuard(maxBytes: 220_000);
 
@@ -189,8 +239,9 @@ namespace GxMcp.Gateway.Tests
 
             Assert.True(truncated);
             var followArgs = (JObject)result["_meta"]!["truncated"]!["follow_up"]!["args"]!;
-            Assert.Equal(1, followArgs["page"]?.Value<int>());
-            Assert.Equal(25, followArgs["page_size"]?.Value<int>());
+            Assert.Equal(0, followArgs["offset"]?.Value<int>());
+            Assert.Equal(25, followArgs["limit"]?.Value<int>());
+            Assert.Null(followArgs["page"]);
         }
 
         // ── custom cap respected ─────────────────────────────────────────────

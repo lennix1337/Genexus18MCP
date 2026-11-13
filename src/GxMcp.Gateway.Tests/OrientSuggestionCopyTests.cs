@@ -66,14 +66,12 @@ namespace GxMcp.Gateway.Tests
                 ? null
                 : (payload["error"] as JObject)!["nextSteps"] as JArray;
             Assert.NotNull(nextSteps);
-            var orient = nextSteps!.OfType<JObject>()
-                .FirstOrDefault(s => s["tool"]?.ToString() == "genexus_orient");
-            Assert.NotNull(orient);
-            Assert.Equal(CanonicalOrientWhy, orient!["why"]?.ToString());
+            // genexus_orient is not published; the Gateway points at genexus_whoami.
+            Assert.DoesNotContain(nextSteps!.OfType<JObject>(), s => s["tool"]?.ToString() == "genexus_orient");
+            Assert.Contains(nextSteps!.OfType<JObject>(), s => s["tool"]?.ToString() == "genexus_whoami");
         }
 
         [Theory]
-        [InlineData("GxMcp.Gateway", "Program.RequestLoop.cs")]
         [InlineData("GxMcp.Worker", "Services", "CommandDispatcher.cs")]
         [InlineData("GxMcp.Worker", "Services", "HelpService.cs")]
         public void OrientAssociatedWhy_NeverClaimsCatalogOrSchema(params string[] segments)

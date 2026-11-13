@@ -19,13 +19,13 @@ namespace GxMcp.Gateway
         {
             ["genexus_wire"] =
                 "# genexus_wire\n\n" +
-                "High-performance native Rust architectural discovery, call graph, and impact engine (sub-10ms).\n" +
-                "Call this FIRST before reading large objects or modifying the KB.\n\n" +
+                "High-performance native Rust call graph and impact engine (sub-10ms) for exported text source trees.\n" +
+                "Use it when you have an exported source tree (`dir`); on a native KB start with `genexus_whoami` and use `genexus_impact` / `genexus_object_context`.\n\n" +
                 "## Requires a text source tree, not a native KB (except pack_task)\n" +
                 "genexus_wire reads GeneXus sources **from files**. A native GeneXus 18 Knowledge Base keeps its object sources in the KB database, not on disk, so every action except `pack_task` refuses it with `GXWIRE_REQUIRES_TEXT_SOURCE_TREE` before any process starts: indexing that folder would walk gigabytes of generated output (environment, build, obj, UserControls, Locks, OutputLogs...) and report it as a graph.\n" +
                 "Export the text tree first: `genexus_io action=export_kb_to_text format=native part=all outputPath=<folder>` writes the SDK text tree under `<folder>\\src`; then `genexus_wire action=index dir=<folder>` once and query with the same `dir`. The refusal carries this as `textTreeExport`. `action=doctor` still runs on a native root and answers `textSourceTreeRequired: true` with the same guidance.\n" +
                 "`pack_task` works on the native KB the session has open, without any export: the Worker resolves the objects through the SDK-backed index and returns them with their direct callers and callees. It is read-only and runs no Specify, Generate, Build, Rebuild, reorganization or execution (see below).\n" +
-                "To work on a native KB itself, use the SDK-backed tools instead: `genexus_read`, `genexus_query`, `genexus_search_source`, `genexus_analyze`, `genexus_inspect`.\n" +
+                "To work on a native KB itself, use the SDK-backed tools instead: `genexus_impact` and `genexus_object_context` (the equivalents of `callers`/`impact` and `pack_task`), `genexus_read`, `genexus_query`, `genexus_search_source`, `genexus_analyze`, `genexus_inspect`.\n" +
                 "genexus_wire writes nothing into the directory it analyses: the index lives under `%LOCALAPPDATA%\\GxMcp\\Cache\\gxwire`.\n\n" +
                 "## Index first, then query\n" +
                 "`action=status` answers from the index and returns `GxwireCacheMissing` (with the exact `action=index` call) when there is none, instead of parsing the tree on the fly. The other queries parse on the fly when no index exists, which on a large tree ends in `GxwireTimeout` pointing at `action=index`. `index` has a 900 s budget (`GXMCP_GXWIRE_TIMEOUT_SECONDS` raises it; queries get 30 s) and reports `cachePath`, `cacheExists`, `nodes` and `elapsedMs`. gxwire has no folder exclusions yet, so `dir` must be a text source tree, never a KB root.\n\n" +

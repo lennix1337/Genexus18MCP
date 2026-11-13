@@ -526,7 +526,7 @@ namespace GxMcp.Gateway
                         // Terse mode: keep the violation list (that's the actionable part)
                         // and drop the repeated hint/nextSteps scaffolding — an agent that
                         // already saw one full InvalidArgs envelope doesn't need the
-                        // "call genexus_orient" pointer re-shipped on every retry.
+                        // "call genexus_whoami" pointer re-shipped on every retry.
                         var invalidArgsPayload = TerseResponsesEnabledCached()
                             ? new JObject
                             {
@@ -551,9 +551,9 @@ namespace GxMcp.Gateway
                                 {
                                     new JObject
                                     {
-                                        ["tool"] = "genexus_orient",
+                                        ["tool"] = "genexus_whoami",
                                         ["args"] = new JObject(),
-                                        ["why"] = "Welcome card: KB info, recent edits, and top gotchas."
+                                        ["why"] = "KB context, version, health and next-step hints."
                                     }
                                 },
                                 ["violations"] = violationsArr

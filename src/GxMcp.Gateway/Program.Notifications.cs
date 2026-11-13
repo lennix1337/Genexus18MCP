@@ -114,8 +114,45 @@ namespace GxMcp.Gateway
             "update-check"
         };
 
+        // RFC 5424 severities in the order the MCP logging capability defines them.
+        private static readonly string[] LogLevels =
+            { "debug", "info", "notice", "warning", "error", "critical", "alert", "emergency" };
+
+        // -1 until a client sends logging/setLevel: the default keeps the gateway's own
+        // filtering (stdio allowlist, HTTP gets everything) exactly as before.
+        private static int _minimumLogLevel = -1;
+
+        /// <summary>Handles logging/setLevel; false when <paramref name="level"/> is not an RFC 5424 level.</summary>
+        internal static bool TrySetMinimumLogLevel(string? level)
+        {
+            int rank = Array.IndexOf(LogLevels, level);
+            if (rank < 0) return false;
+            Volatile.Write(ref _minimumLogLevel, rank);
+            return true;
+        }
+
+        internal static void ResetMinimumLogLevel() => Volatile.Write(ref _minimumLogLevel, -1);
+
+        /// <summary>
+        /// notifications/message below the level a client requested is dropped. A payload
+        /// without a recognised level is never dropped.
+        /// </summary>
+        internal static bool PassesMinimumLogLevel(string method, object? payload)
+        {
+            int minimum = Volatile.Read(ref _minimumLogLevel);
+            if (minimum < 0 || method != "notifications/message") return true;
+            try
+            {
+                JObject? jp = payload as JObject ?? (payload == null ? null : JObject.FromObject(payload));
+                int rank = Array.IndexOf(LogLevels, jp?["level"]?.ToString()?.ToLowerInvariant());
+                return rank < 0 || rank >= minimum;
+            }
+            catch { return true; }
+        }
+
         private static void BroadcastNotification(string method, object payload)
         {
+            if (!PassesMinimumLogLevel(method, payload)) return;
             _ = Task.Run(() => {
                 try {
                     string json = JsonConvert.SerializeObject(new

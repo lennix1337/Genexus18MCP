@@ -255,6 +255,34 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ToolSummary_NeverEndsOnADanglingWord()
+        {
+            // The 200-char cap falls right after "with what was": the summary must stop before it.
+            string description = "Use to build a single-call object context bundle that carries the object source, its callers and callees, "
+                + "the data model for a Transaction or Table, with what was supplied by the caller and with what was resolved by the index.";
+
+            string summary = ToolProfileFilter.BuildToolSummary(description);
+
+            Assert.EndsWith("…", summary);
+            string lastWord = summary.TrimEnd('…').Split(' ').Last();
+            Assert.DoesNotContain(lastWord, new[] { "with", "what", "was", "the", "and", "of", "a" });
+            Assert.True(summary.Length <= ToolProfileFilter.MaxToolSummaryLength + 1);
+        }
+
+        [Fact]
+        public void ToolSummary_PrefersTheLastCompleteClauseOverAMidClauseWordCut()
+        {
+            string description = "Umbrella tool for assets, text exchange and screenshots; actions are listed per group below and each group has its own required arguments; "
+                + "the long tail of optional arguments is documented in the tool help resource and is not repeated in this summary at all because it is far too long.";
+
+            string summary = ToolProfileFilter.BuildToolSummary(description);
+
+            Assert.Equal(
+                "Umbrella tool for assets, text exchange and screenshots; actions are listed per group below and each group has its own required arguments…",
+                summary);
+        }
+
+        [Fact]
         public void ToolSummary_DropsTheInlineToolHelpPointerBecauseTheSuffixCarriesIt()
         {
             string description = "Search objects in active KB. See genexus://kb/tool-help/genexus_query. Requires a Ready index.";
