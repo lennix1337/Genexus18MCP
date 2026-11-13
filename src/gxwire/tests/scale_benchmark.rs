@@ -53,6 +53,21 @@ fn generate_large_kb(num_nodes: usize, edges_per_node: usize) -> CsrGraph {
     CsrGraph::build(nodes, &edges)
 }
 
+/// Fastest of `runs` executions: scheduler noise on a shared runner only adds
+/// time, so the minimum is the query's own cost and a real slowdown still fails.
+fn best_of<T>(runs: usize, mut f: impl FnMut() -> T) -> (T, std::time::Duration) {
+    let mut best: Option<(T, std::time::Duration)> = None;
+    for _ in 0..runs {
+        let t = Instant::now();
+        let out = f();
+        let elapsed = t.elapsed();
+        if best.as_ref().is_none_or(|(_, b)| elapsed < *b) {
+            best = Some((out, elapsed));
+        }
+    }
+    best.expect("runs > 0")
+}
+
 #[test]
 fn benchmark_scale_50k_nodes() {
     let num_nodes = 50_000;
@@ -95,9 +110,8 @@ fn benchmark_scale_50k_nodes() {
     );
 
     // Benchmark 3: Search for task
-    let t_search = Instant::now();
-    let search_res = search_for_task(&graph, "business object 00100", 10);
-    let search_latency = t_search.elapsed();
+    let (search_res, search_latency) =
+        best_of(3, || search_for_task(&graph, "business object 00100", 10));
     println!(
         "4. Query --for (Busca Semantica + PageRank): {:?} ({} resultados)",
         search_latency,
@@ -111,9 +125,7 @@ fn benchmark_scale_50k_nodes() {
     );
 
     // Benchmark 4: Pack task under token budget
-    let t_pack = Instant::now();
-    let pack_res = pack_task(&graph, "business object 00100", 1200);
-    let pack_latency = t_pack.elapsed();
+    let (pack_res, pack_latency) = best_of(3, || pack_task(&graph, "business object 00100", 1200));
     println!(
         "5. Query --pack-task (Orientacao One-Shot): {:?} (est_tokens: {})",
         pack_latency, pack_res.est_tokens
