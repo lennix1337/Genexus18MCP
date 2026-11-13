@@ -1450,6 +1450,10 @@
           "typeFilter": {
             "type": "string",
             "description": "Only report objects of this type; the…"
+          },
+          "whatIf": {
+            "type": "boolean",
+            "description": "One-call change report: top callers,…"
           }
         }
       }
