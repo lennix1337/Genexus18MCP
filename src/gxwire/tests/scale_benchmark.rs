@@ -61,7 +61,7 @@ fn best_of<T>(runs: usize, mut f: impl FnMut() -> T) -> (T, std::time::Duration)
         let t = Instant::now();
         let out = f();
         let elapsed = t.elapsed();
-        if best.as_ref().map_or(true, |(_, b)| elapsed < *b) {
+        if best.as_ref().is_none_or(|(_, b)| elapsed < *b) {
             best = Some((out, elapsed));
         }
     }
