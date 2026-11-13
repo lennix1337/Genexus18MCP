@@ -31,6 +31,15 @@ suite when a variable read under `src/` is missing from this page, so a new
 See [K2B IDE Designer bridge](k2b-ide-bridge.md) for installation and the
 read-preview-save workflow.
 
+## KB change history (git shadow repository)
+
+**Operator-facing**, Gateway only, opt-in. Off unless `GXMCP_KB_HISTORY` is set, in which case the feature adds no work at all. See [KB change history](kb-history.md).
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_KB_HISTORY` | Set to `1` (or `true`) to record every confirmed `genexus_edit` single-part write and `genexus_delete_object` deletion as a commit in a local shadow git repository. Needs `git` on `PATH`; if it is missing or the repository cannot be created the feature switches itself off for the process with one log line. | off |
+| `GXMCP_KB_HISTORY_DIR` | Parent folder of the per-KB shadow repositories. Must not be inside a Knowledge Base folder (the feature disables itself if it is). | `%LOCALAPPDATA%\GxMcp\history` |
+
 ## Update / self-update
 
 | Variable | Purpose | Default |

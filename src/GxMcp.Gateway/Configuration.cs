@@ -88,7 +88,7 @@ namespace GxMcp.Gateway
         // GXMCP_LEGACY_TOOL_ALIASES, MCP_PERF_PROFILE, GXMCP_SERVER_VERSION,
         // GXMCP_ALLOW_CONCURRENT_BUILDS, GXMCP_BUILD_NOPROGRESS_SEC,
         // GXMCP_INPROCESS_BUILD_FASTPATH, GXMCP_REAP_ORPHAN_MSBUILD,
-        // GXMCP_SEMANTIC_CACHE_MAX, PATH, PATHEXT, LOCALAPPDATA, and the
+        // GXMCP_SEMANTIC_CACHE_MAX, GXMCP_KB_HISTORY, GXMCP_KB_HISTORY_DIR, PATH, PATHEXT, LOCALAPPDATA, and the
         // remaining worker/tool-specific variables forwarded or read outside config.
 
         public static Configuration Load()
