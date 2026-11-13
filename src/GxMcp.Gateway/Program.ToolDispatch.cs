@@ -328,6 +328,11 @@ namespace GxMcp.Gateway
                 : await TryDispatchGatewayToolAsync(tName, tArgs, sessionId, sessionContextEnabled);
             if (gatewayResult != null) return gatewayResult;
 
+            // genexus_impact whatIf=true: Gateway-composed read (null for every other call).
+            JObject? whatIfResult = await TryDispatchImpactWhatIfAsync(
+                tName, tArgs, request, sessionId, sessionContextEnabled, idToken, transportCancellation);
+            if (whatIfResult != null) return whatIfResult;
+
             // Async lifecycle build (factored TryDispatchAsyncLifecycleBuildAsync below).
             // build / rebuild actions go through path selection (see factored method below):
             // null = not an async-eligible build, or sync fast-path → fall through.
