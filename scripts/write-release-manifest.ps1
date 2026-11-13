@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$SourceRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$SourceCommit,
-    [string]$VsixPath
+    [string]$VsixPath,
+    # Releases > 4.6.0 must ship the default backend (Engine.Backend = gxengine).
+    [switch]$RequireEngine
 )
 
 Set-StrictMode -Version Latest
@@ -58,6 +60,17 @@ foreach ($relative in $required) {
 
 $artifactPaths = New-Object System.Collections.Generic.List[string]
 foreach ($relative in $required) { [void]$artifactPaths.Add((Join-Path $resolvedPublish $relative)) }
+
+# The Rust engine binaries are hashed whenever present so the manifest covers
+# them; verify-release-manifest.py requires them for versions above 4.6.0.
+foreach ($relative in @('gx-engine.exe', 'gxwire.exe')) {
+    $enginePath = Join-Path $resolvedPublish $relative
+    if (Test-Path -LiteralPath $enginePath -PathType Leaf) {
+        [void]$artifactPaths.Add($enginePath)
+    } elseif ($RequireEngine) {
+        throw "Required release artifact is missing: $relative"
+    }
+}
 
 # Keep a small, reproducible provenance document beside the binaries. It does
 # not claim publisher identity; it binds the candidate to the source commit and

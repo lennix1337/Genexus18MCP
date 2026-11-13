@@ -28,8 +28,11 @@ const {
     compareGeneXusKbAndInstallation,
     readKbCatalog,
     switchActiveKb,
-    patchClientConfig
+    patchClientConfig,
+    applyLauncherConfigOrExit
 } = require('./lib/config');
+const { EventEmitter } = require('node:events');
+const { bindChildLifecycle } = require('./index');
 const { handleInit, resolveMcpSmokeTarget, buildMcpSmokeCommand } = require('./commands/axi');
 
 const cliPath = path.join(__dirname, 'run.js');
@@ -3298,4 +3301,150 @@ test('patchClientConfig keeps a stale same-second backup and writes a distinct b
         assert.equal(backups.length, 2);
         assert.ok(backups.some((name) => name !== path.basename(stale)));
     } finally { removeTempPath(fixture.tempRoot, { recursive: true, force: true }); }
+});
+
+// --- Launcher lifecycle: the Gateway must not outlive the launcher ---------
+
+function processIsAlive(pid) {
+    try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+async function waitFor(predicate, timeoutMs = 10000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (predicate()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return predicate();
+}
+
+const longLivedStub = ['-e', 'setInterval(() => {}, 1000)'];
+
+test('bindChildLifecycle forwards a termination signal to the gateway child', async () => {
+    const fakeProc = new EventEmitter();
+    const child = spawn(process.execPath, longLivedStub, { stdio: 'ignore' });
+    const dispose = bindChildLifecycle(child, { proc: fakeProc, graceMs: 50 });
+    try {
+        await new Promise((resolve) => child.once('spawn', resolve));
+        assert.equal(fakeProc.listenerCount('SIGTERM'), 1);
+        fakeProc.emit('SIGTERM');
+        assert.equal(await waitFor(() => !processIsAlive(child.pid)), true, 'child must be gone after the signal');
+    } finally {
+        dispose();
+        child.kill('SIGKILL');
+    }
+    for (const event of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK', 'exit']) {
+        assert.equal(fakeProc.listenerCount(event), 0, `${event} listener must be removed by dispose`);
+    }
+});
+
+test('bindChildLifecycle registers every forwarded signal and kills on launcher exit', async () => {
+    const fakeProc = new EventEmitter();
+    const child = spawn(process.execPath, longLivedStub, { stdio: 'ignore' });
+    const dispose = bindChildLifecycle(child, { proc: fakeProc });
+    try {
+        await new Promise((resolve) => child.once('spawn', resolve));
+        for (const event of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+            assert.equal(fakeProc.listenerCount(event), 1, `${event} must be handled`);
+        }
+        fakeProc.emit('exit', 0);
+        assert.equal(await waitFor(() => !processIsAlive(child.pid)), true);
+    } finally {
+        dispose();
+        child.kill('SIGKILL');
+    }
+});
+
+test('a launcher that exits takes its gateway child with it', async () => {
+    const harness = [
+        `const { bindChildLifecycle } = require(${JSON.stringify(path.join(__dirname, 'index.js'))});`,
+        `const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });`,
+        'bindChildLifecycle(child);',
+        `child.once('spawn', () => { process.stdout.write(String(child.pid)); setTimeout(() => process.exit(0), 50); });`
+    ].join('\n');
+    const result = spawnSync(process.execPath, ['-e', harness], { encoding: 'utf8', timeout: 20000 });
+    assert.equal(result.status, 0, result.stderr);
+    const childPid = Number(result.stdout.trim());
+    assert.ok(childPid > 0, `expected a child pid, got "${result.stdout}"`);
+    try {
+        assert.equal(await waitFor(() => !processIsAlive(childPid)), true, 'gateway child must not outlive the launcher');
+    } finally {
+        try { process.kill(childPid, 'SIGKILL'); } catch { }
+    }
+});
+
+// --- Launcher config resolution ------------------------------------------------
+
+function withLauncherConfigFixture(fn) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-launcher-config-'));
+    const cwd = path.join(root, 'project');
+    const home = path.join(root, 'home');
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.mkdirSync(path.join(home, '.genexus-mcp'), { recursive: true });
+    const previous = process.env.GX_CONFIG_PATH;
+    delete process.env.GX_CONFIG_PATH;
+    const messages = [];
+    const calls = { discover: 0 };
+    const deps = {
+        homedir: () => home,
+        discoverGeneXusInstallation: () => { calls.discover += 1; return null; }
+    };
+    try {
+        return fn({ cwd, home, userConfig: path.join(home, '.genexus-mcp', 'config.json'), deps, calls, messages, stderr: { write: (m) => messages.push(m) } });
+    } finally {
+        if (previous === undefined) delete process.env.GX_CONFIG_PATH; else process.env.GX_CONFIG_PATH = previous;
+        removeTempPath(root, { recursive: true, force: true });
+    }
+}
+
+const sampleUserConfig = JSON.stringify({ GeneXus: { InstallationPath: 'C:\\gx' } });
+
+test('launcher config: an existing user config is used without GeneXus discovery', () => {
+    withLauncherConfigFixture(({ cwd, userConfig, deps, calls, stderr }) => {
+        fs.writeFileSync(userConfig, sampleUserConfig);
+        const result = applyLauncherConfigOrExit({ cwd, stderr, quiet: true }, deps);
+        assert.equal(result.ok, true);
+        assert.equal(process.env.GX_CONFIG_PATH, userConfig);
+        assert.equal(calls.discover, 0, 'discovery must not run when a user config exists');
+    });
+});
+
+test('launcher config: without a user config discovery still runs and failure is an error', () => {
+    withLauncherConfigFixture(({ cwd, deps, calls, stderr }) => {
+        const result = applyLauncherConfigOrExit({ cwd, stderr, quiet: true }, deps);
+        assert.equal(result.ok, false);
+        assert.equal(calls.discover, 1);
+        assert.equal(process.env.GX_CONFIG_PATH, undefined);
+    });
+});
+
+test('launcher config: a GeneXus MCP config in the working directory is adopted', () => {
+    withLauncherConfigFixture(({ cwd, deps, calls, stderr }) => {
+        const cwdConfig = path.join(cwd, 'config.json');
+        fs.writeFileSync(cwdConfig, JSON.stringify({ ConfigSchemaVersion: 2, Server: { McpStdio: true } }));
+        const result = applyLauncherConfigOrExit({ cwd, stderr, quiet: true }, deps);
+        assert.equal(result.ok, true);
+        assert.equal(process.env.GX_CONFIG_PATH, cwdConfig);
+        assert.equal(calls.discover, 0);
+    });
+});
+
+test('launcher config: an unrelated or unparsable config.json in the working directory is ignored', () => {
+    const unrelated = [
+        JSON.stringify({ name: 'my-app', port: 3000, Server: { host: 'localhost' } }),
+        JSON.stringify([1, 2, 3]),
+        '{ not json'
+    ];
+    for (const content of unrelated) {
+        withLauncherConfigFixture(({ cwd, userConfig, deps, calls, messages, stderr }) => {
+            const cwdConfig = path.join(cwd, 'config.json');
+            fs.writeFileSync(cwdConfig, content);
+            fs.writeFileSync(userConfig, sampleUserConfig);
+            const result = applyLauncherConfigOrExit({ cwd, stderr, quiet: false }, deps);
+            assert.equal(result.ok, true);
+            assert.equal(process.env.GX_CONFIG_PATH, userConfig, `must not adopt ${content}`);
+            assert.equal(calls.discover, 0);
+            assert.equal(messages.filter((m) => /Ignoring .*config\.json/.test(m)).length, 1);
+        });
+    }
 });

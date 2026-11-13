@@ -9,7 +9,12 @@ param(
     # Carry Engine.Backend/Fallback/TimeoutSeconds of the existing publish\config.json
     # into the regenerated one. Off by default so a packaged build never inherits a
     # developer's local choice; the build warns whenever an Engine section is dropped.
-    [switch]$PreserveEngineConfig
+    [switch]$PreserveEngineConfig,
+
+    # Release builds: fail when gx-engine.exe or gxwire.exe was not produced.
+    # Engine.Backend defaults to gxengine, so a package without them cannot run
+    # its default backend. Plain developer builds keep only warning.
+    [switch]$RequireEngineBinaries
 )
 
 Set-StrictMode -Version Latest
@@ -323,6 +328,23 @@ if (Test-Path (Join-Path $gxEngineDir "Cargo.toml")) {
     }
 }
 
+# 6.07 Release builds must ship the default backend (Engine.Backend = gxengine)
+# and the wire tool. publish\ was emptied at the start, so presence means this
+# build produced them.
+if ($RequireEngineBinaries) {
+    foreach ($engineBinary in @('gx-engine.exe', 'gxwire.exe')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $publishDir $engineBinary) -PathType Leaf)) {
+            Fail-Build "$engineBinary was not produced (cargo missing or the Rust build failed); a release build requires it."
+        }
+    }
+} else {
+    foreach ($engineBinary in @('gx-engine.exe', 'gxwire.exe')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $publishDir $engineBinary) -PathType Leaf)) {
+            Write-Host "   > Warning: $engineBinary was not produced; this build is not releasable (use -RequireEngineBinaries for releases)." -ForegroundColor Yellow
+        }
+    }
+}
+
 # 6.1 Slim the publish output: drop debug symbols (.pdb - not shipped) and any
 # transient runtime logs/cache a dev run may have written into the dir.
 Get-ChildItem -Path $publishDir -Recurse -Include *.pdb,*.log,*.prev.log,*panic*.log -ErrorAction SilentlyContinue |
@@ -347,10 +369,11 @@ $manifestCsproj = Get-Content -LiteralPath $gatewayProject -Raw
 if ([string]::IsNullOrWhiteSpace($Version) -and $manifestCsproj -match '<Version>([^<]+)</Version>') {
     $manifestVersion = $Matches[1]
 }
+$manifestArguments = @{ RequireEngine = [bool]$RequireEngineBinaries }
 & pwsh -NoProfile -File $manifestScript `
     -PublishDirectory $publishDir `
     -Version $manifestVersion `
-    -SourceRoot $root | Out-Null
+    -SourceRoot $root @manifestArguments | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Fail-Build "Release manifest generation failed."
 }

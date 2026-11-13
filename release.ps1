@@ -1481,7 +1481,7 @@ if (-not $DryRun -and -not $SkipBuild -and -not $SkipTests -and (Test-Path -Lite
 # -- 3. Build + zip publish/ -----------------------------------------------
 if (-not $SkipBuild) {
     Step "Building (build.ps1)"
-    Invoke-Cmd 'pwsh' @('-NoProfile', '-File', (Join-Path $root 'build.ps1')) -IgnoreExit
+    Invoke-Cmd 'pwsh' @('-NoProfile', '-File', (Join-Path $root 'build.ps1'), '-RequireEngineBinaries') -IgnoreExit
     if (-not $DryRun -and $LASTEXITCODE -ne 0) {
         # build.ps1 returns non-zero on warnings sometimes; check artefacts.
         $gw = Join-Path $root 'publish\GxMcp.Gateway.exe'
@@ -1500,7 +1500,9 @@ $publishDir = Join-Path $root 'publish'
 $requiredArtefacts = @(
     'GxMcp.Gateway.exe',
     'worker\GxMcp.Worker.exe',
-    'tool_definitions.json'
+    'tool_definitions.json',
+    'gx-engine.exe',
+    'gxwire.exe'
 )
 foreach ($rel in $requiredArtefacts) {
     $path = Join-Path $publishDir $rel

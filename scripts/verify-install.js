@@ -19,6 +19,18 @@ const packageVersion = (() => {
   }
 })();
 const packageMajor = Number.parseInt(packageVersion.split('.')[0], 10) || 0;
+// Engine.Backend defaults to gxengine: packages above 4.6.0 must ship the Rust
+// binaries. Earlier releases (<= 4.6.0) never did, so they keep verifying.
+const ENGINE_FLOOR = [4, 6, 0];
+const requiresEngine = (() => {
+  const match = packageVersion.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  for (let i = 0; i < 3; i += 1) {
+    const part = Number(match[i + 1]);
+    if (part !== ENGINE_FLOOR[i]) return part > ENGINE_FLOOR[i];
+  }
+  return false;
+})();
 
 const required = [
   'publish/GxMcp.Gateway.exe',
@@ -28,6 +40,10 @@ const required = [
 
 if (packageMajor >= 3) {
   required.push('publish/gxmcp-manifest.json');
+}
+
+if (requiresEngine) {
+  required.push('publish/gx-engine.exe', 'publish/gxwire.exe');
 }
 
 const missing = required.filter((rel) => {

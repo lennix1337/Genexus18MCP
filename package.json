@@ -47,6 +47,8 @@
   },
   "files": [
     "cli",
+    "!cli/**/*.test.js",
+    "!cli/test-support",
     "config/gx-versions.json",
     "publish",
     "docs/llm_cli_mcp_playbook.md",

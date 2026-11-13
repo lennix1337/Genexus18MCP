@@ -424,6 +424,40 @@ function writeAppLockerHint(stderr, gatewayExePath) {
     stderr.write('[genexus-mcp] Or copy the package `publish/` folder to a path outside %APPDATA%/%LOCALAPPDATA% and point the MCP client at that exe.\n');
 }
 
+const FORWARDED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'];
+const CHILD_KILL_GRACE_MS = 5000;
+
+// The MCP client stops the launcher, not the Gateway it spawned. Forward the
+// termination signals to the child and kill it when the launcher exits for any
+// other reason so the Gateway (and its Worker) are not left running. Returns a
+// disposer that removes the listeners once the child is gone.
+function bindChildLifecycle(child, { proc = process, graceMs = CHILD_KILL_GRACE_MS } = {}) {
+    let graceTimer = null;
+    const childAlive = () => child.exitCode === null && child.signalCode === null;
+    const kill = (signal) => {
+        try { child.kill(signal); } catch { }
+    };
+    const handlers = FORWARDED_SIGNALS.map((signal) => {
+        const handler = () => {
+            if (!childAlive()) return;
+            kill(signal);
+            if (!graceTimer) {
+                graceTimer = setTimeout(() => { if (childAlive()) kill('SIGKILL'); }, graceMs);
+                if (graceTimer.unref) graceTimer.unref();
+            }
+        };
+        proc.on(signal, handler);
+        return [signal, handler];
+    });
+    const onExit = () => { if (childAlive()) kill('SIGKILL'); };
+    proc.on('exit', onExit);
+    return () => {
+        if (graceTimer) clearTimeout(graceTimer);
+        for (const [signal, handler] of handlers) proc.removeListener(signal, handler);
+        proc.removeListener('exit', onExit);
+    };
+}
+
 async function launchGateway(passthroughArgs, options) {
     const stderrTail = createStderrTail();
     const launcherStderr = {
@@ -491,6 +525,7 @@ async function launchGateway(passthroughArgs, options) {
             resolve(code);
         };
         const handleSpawnError = (err) => {
+            if (typeof disposeLifecycle === 'function') disposeLifecycle();
             const message = `[genexus-mcp] ERROR: Failed to start gateway process: ${err.message}`;
             launcherStderr.write(`${message}\n`);
             const code = err && (err.code || err.errno);
@@ -501,6 +536,7 @@ async function launchGateway(passthroughArgs, options) {
         };
 
         let child;
+        let disposeLifecycle;
         try {
             child = spawn(gatewayExePath, passthroughArgs, {
                 // Keep stdout attached to the MCP protocol and tee stderr so a
@@ -522,8 +558,10 @@ async function launchGateway(passthroughArgs, options) {
         }
 
         child.once('error', handleSpawnError);
+        disposeLifecycle = bindChildLifecycle(child);
 
         child.once('close', (code, signal) => {
+            disposeLifecycle();
             if (signal || code !== 0) {
                 recordStdioFailure({ gatewayExePath, exitCode: code, signal });
             }
@@ -759,6 +797,7 @@ async function main(argv) {
 
 module.exports = {
     main,
+    bindChildLifecycle,
     parseArgs,
     EXIT_CODES,
     KNOWN_COMMANDS,
