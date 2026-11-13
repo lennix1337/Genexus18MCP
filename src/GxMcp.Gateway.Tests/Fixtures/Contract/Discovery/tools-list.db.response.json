@@ -1,0 +1,1825 @@
+{
+  "profile": "db",
+  "tools": [
+    {
+      "name": "genexus_analyze",
+      "description": "Use to run cross-object semantic analysis: impact, callers, hierarchy, navigation, linter, summary, explain, theme_classes and context (360° task context). Full guidance: genexus://kb/tool-help/genexus_analyze",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "context",
+              "deep_context",
+              "linter",
+              "navigation",
+              "hierarchy",
+              "impact",
+              "cross_platform_impact",
+              "callers",
+              "event_flow",
+              "data_context",
+              "ui_context",
+              "pattern_metadata",
+              "summary",
+              "dependency_heatmap",
+              "code_metrics",
+              "kb_stats",
+              "table_relations",
+              "theme_classes",
+              "explain"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "description": "mode=explain: legacy code snippet…"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Continuation cursor from a budgeted…"
+          },
+          "maxCallers": {
+            "type": "integer",
+            "description": "mode=callers: callers to scan in this…"
+          },
+          "maxSourceBytes": {
+            "type": "integer",
+            "description": "mode=callers: UTF-8 bytes of caller…"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "ascii"
+            ],
+            "description": "mode=dependency_heatmap: ascii adds…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "maxBytes": {
+            "type": "integer",
+            "description": "mode=context: maximum UTF-8 bytes for…"
+          },
+          "waitForIndex": {
+            "type": "boolean",
+            "description": "mode=impact: block up to 30s for Ready…",
+            "default": true
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "mode=linter: with fix=true, reject the…"
+          },
+          "fix": {
+            "type": "boolean",
+            "description": "mode=linter: apply automatic fixes to…"
+          },
+          "top": {
+            "type": "integer",
+            "description": "mode=code_metrics: maximum results…"
+          },
+          "waitTimeoutMs": {
+            "type": "integer",
+            "description": "mode=impact: maximum index wait in…"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      }
+    },
+    {
+      "name": "genexus_data_view",
+      "description": "Native, typed, atomic Transaction + Data View authoring over an existing physical table. action=inspect|dry_run|create|update|delete. Full guidance: genexus://kb/tool-help/genexus_data_view",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "action",
+          "transaction",
+          "dataViewName"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "inspect",
+              "dry_run",
+              "create",
+              "update",
+              "delete"
+            ],
+            "description": "Operation to inspect, preview, create,…"
+          },
+          "transaction": {
+            "type": "string",
+            "description": "Root-only Transaction name."
+          },
+          "dataViewName": {
+            "type": "string",
+            "description": "Data View name associated with the…"
+          },
+          "dataStore": {
+            "type": "string",
+            "description": "Existing GeneXus data store category…"
+          },
+          "schema": {
+            "type": "string",
+            "description": "Existing physical schema."
+          },
+          "table": {
+            "type": "string",
+            "description": "Existing physical table and GeneXus…"
+          },
+          "attributeMappings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "attribute",
+                "column"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "attribute": {
+                  "type": "string"
+                },
+                "column": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            }
+          },
+          "updatable": {
+            "type": "boolean",
+            "default": true
+          },
+          "expectedVersion": {
+            "type": "string",
+            "description": "Optimistic concurrency token returned…"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "Forces every action to remain…"
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "Required for action=delete when…"
+          },
+          "rollbackOnFailure": {
+            "type": "boolean",
+            "default": true,
+            "description": "Atomic SDK rollback is always enforced;…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_db",
+      "description": "Database umbrella. Actions: drift_check|drift_report; optimize_analyze|optimize_suggest|optimize_report; sql_ddl|sql_navigation; sample_data… Full guidance: genexus://kb/tool-help/genexus_db",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "drift_check",
+              "drift_report",
+              "optimize_analyze",
+              "optimize_suggest",
+              "optimize_report",
+              "sql_ddl",
+              "sql_navigation",
+              "sample_data",
+              "records_query",
+              "records_insert",
+              "records_update",
+              "types_list",
+              "types_describe",
+              "types_validate",
+              "translations_import",
+              "reorg_impact",
+              "reorg_preview"
+            ],
+            "description": "Database operation. records_query is…"
+          },
+          "deep": {
+            "type": "boolean",
+            "description": "reorg_impact/reorg_preview only: run…"
+          },
+          "name": {
+            "type": "string",
+            "description": "Object/transaction/type name."
+          },
+          "trn": {
+            "type": "string",
+            "description": "sample_data: Transaction name."
+          },
+          "transaction": {
+            "type": "string",
+            "description": "records_*: root-level Transaction name."
+          },
+          "dataStore": {
+            "type": "string",
+            "description": "records_*: existing active-environment…"
+          },
+          "dataStoreAlias": {
+            "type": "string",
+            "description": "records_query: profile alias; no…"
+          },
+          "where": {
+            "type": "object",
+            "description": "records_query/update: equality filters…"
+          },
+          "values": {
+            "type": "object",
+            "description": "records_insert/update: typed attribute…"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "records_query: optional root-attribute…"
+          },
+          "databaseManagedFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "records_*: reviewed trigger-maintained…"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "records_query: 1-1000; default 100."
+          },
+          "expectedCount": {
+            "type": "integer",
+            "description": "records_update: defaults to exactly one…"
+          },
+          "expectedVersion": {
+            "type": "string",
+            "description": "records_*: v2 token from the matching…"
+          },
+          "versionToken": {
+            "type": "string",
+            "description": "records_*: alias of expectedVersion."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": true,
+            "description": "records_insert/update: validate and…"
+          },
+          "rollbackOnFailure": {
+            "type": "boolean",
+            "default": true,
+            "description": "records_*: default true; validation…"
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "description": "records_*: command timeout, 1-60…"
+          },
+          "rows": {
+            "type": "integer",
+            "description": "sample_data: 1-1000; default 5."
+          },
+          "includeSubordinated": {
+            "type": "boolean",
+            "description": "sql_ddl only."
+          },
+          "levelNumber": {
+            "type": "integer",
+            "description": "sql_navigation only."
+          },
+          "includeExecutionPlan": {
+            "type": "boolean",
+            "description": "sql_navigation."
+          },
+          "includeIndexAdvisor": {
+            "type": "boolean",
+            "description": "sql_navigation."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "description": "optimize_report only."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "domain",
+              "sdt",
+              "all"
+            ],
+            "description": "types_list filter."
+          },
+          "value": {
+            "type": "string",
+            "description": "types_validate."
+          },
+          "type": {
+            "type": "string",
+            "description": "types_validate / disambiguator."
+          },
+          "inputPath": {
+            "type": "string",
+            "description": "translations_import: CSV path."
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_dfd",
+      "description": "Read-only entity-relationship diagram of a Transaction or Table, built only from the table relations the SDK reports: extends (N-1) and subordinates (1-N) edges, a Mermaid erDiagram… Full guidance: genexus://kb/tool-help/genexus_dfd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Transaction or Table name."
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6,
+            "description": "Relation hops from the root (default 3)."
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_doc",
+      "description": "Use to generate structured docs (wiki, dependency graph, health reports). Don't use for programmatic analysis (see genexus_analyze) or source (see genexus_read). Full guidance: genexus://kb/tool-help/genexus_doc",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "wiki",
+              "visualize",
+              "health"
+            ],
+            "description": "wiki: generate markdown docs;…"
+          },
+          "target": {
+            "type": "string",
+            "description": "Object or domain name (required for…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias for health or other…"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "genexus_edit",
+      "description": "Edit object part. name or targets (exclusive). mode: full|patch|ops. dryRun first. async=true returns an operationId for lifecycle polling. Full guidance: genexus://kb/tool-help/genexus_edit",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
+          },
+          "parts": {
+            "type": "array",
+            "description": "Multi-part edit on a single object.…",
+            "items": {
+              "type": "object",
+              "properties": {
+                "part": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "part",
+                "content"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "patch",
+              "ops"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "contentPath": {
+            "type": "string",
+            "description": "mode=full, instead of content: absolute…"
+          },
+          "ops": {
+            "type": "array",
+            "description": "GeneXus semantic ops (NOT RFC 6902…",
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "set_attribute",
+                    "add_attribute",
+                    "remove_attribute",
+                    "add_rule",
+                    "remove_rule",
+                    "set_property"
+                  ]
+                },
+                "args": {
+                  "type": "object",
+                  "description": "Op-specific args. set_attribute: {name,…"
+                }
+              },
+              "required": [
+                "op"
+              ]
+            }
+          },
+          "patch": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Shorthand for {find,replace}; implies…",
+            "properties": {
+              "find": {
+                "type": "string",
+                "description": "Exact existing text to find. Real line…"
+              },
+              "replace": {
+                "type": "string",
+                "description": "Replacement text, inserted literally."
+              },
+              "scope": {
+                "type": "object",
+                "required": [
+                  "start"
+                ],
+                "description": "Region delimited by complete-line…",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "description": "Required. Unique complete-line anchor…"
+                  },
+                  "end": {
+                    "type": "string",
+                    "description": "Optional. Unique complete-line anchor…"
+                  }
+                }
+              },
+              "indentation": {
+                "type": "object",
+                "required": [
+                  "mode"
+                ],
+                "description": "Validates the base indentation of the…",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "validate"
+                    ],
+                    "description": "validate: block the write when the…"
+                  }
+                }
+              }
+            }
+          },
+          "scope": {
+            "type": "object",
+            "description": "Top-level alias of patch.scope, honored…"
+          },
+          "indentation": {
+            "type": "object",
+            "description": "Top-level alias of patch.indentation,…"
+          },
+          "context": {
+            "type": "string",
+            "description": "Exact existing text to find (Replace)…"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "Replace",
+              "Insert_After",
+              "Append"
+            ]
+          },
+          "expectedCount": {
+            "type": "integer"
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "patch mode only. Apply to ALL…"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "async": {
+            "type": "boolean",
+            "description": "Run as a background job. Result returns…"
+          },
+          "estimated_seconds": {
+            "type": "integer",
+            "description": "When async=true, expected runtime used…"
+          },
+          "verifyRollback": {
+            "type": "boolean"
+          },
+          "targets": {
+            "type": "array",
+            "description": "Multi-target Source/Rules writes. Each…",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "part": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                },
+                "expectedVersion": {
+                  "type": "string"
+                },
+                "baseVersion": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "content"
+              ]
+            }
+          },
+          "type": {
+            "type": "string"
+          },
+          "return_post_state": {
+            "type": "boolean",
+            "description": "Omit post_state.diff (default true)."
+          },
+          "includePersistedText": {
+            "type": "boolean",
+            "description": "Full text; default false."
+          },
+          "verbose": {
+            "type": "boolean",
+            "description": "Add ±15-line slices to post_state."
+          },
+          "validate": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "best-effort",
+              "only"
+            ],
+            "description": "strict (default) aborts on first error…"
+          },
+          "validationMode": {
+            "type": "string",
+            "enum": [
+              "specify"
+            ],
+            "description": "Issue #60: run the inline Specify pass…"
+          },
+          "rollbackOnFailure": {
+            "type": "boolean",
+            "description": "Explicit rollback only. Full Source…"
+          },
+          "requireObjectSave": {
+            "type": "boolean",
+            "default": false,
+            "description": "Full Source requires transactional…"
+          },
+          "forceWrite": {
+            "type": "boolean",
+            "default": false,
+            "description": "WebForm only: persist despite SDK…"
+          },
+          "verifyMode": {
+            "type": "string",
+            "enum": [
+              "semantic",
+              "normalized",
+              "exact"
+            ],
+            "description": "Omitted: semantic for Structure and…"
+          },
+          "visualVerify": {
+            "type": "boolean",
+            "default": false,
+            "description": "Post-edit headless screenshot +…"
+          },
+          "baseVersion": {
+            "type": "string",
+            "description": "Optimistic concurrency: the…"
+          },
+          "expectedVersion": {
+            "type": "string",
+            "description": "Concurrency alias of baseVersion;…"
+          },
+          "concurrencyPolicy": {
+            "type": "string",
+            "enum": [
+              "warn",
+              "fail_if_open"
+            ],
+            "default": "warn",
+            "description": "warn (default) or fail_if_open if open…"
+          },
+          "autoDeclareVariables": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true, scans updated source for…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "changeSet": {
+            "type": "object",
+            "required": [
+              "action",
+              "changes"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "preview",
+                  "validate",
+                  "apply"
+                ]
+              },
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "content"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "part": {
+                      "type": "string",
+                      "enum": [
+                        "Source",
+                        "Rules",
+                        "Variables"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "expectedVersion": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "changeSetId": {
+                "type": "string"
+              },
+              "baseRevision": {
+                "type": "string"
+              }
+            }
+          },
+          "module": {
+            "type": "string",
+            "description": "mode=ops: Transaction module for…"
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_impact",
+      "description": "Read-only affected set of an object over the caller/callee graph: objects with depth, counts by type, a dependencies-first rebuild order, cycles and the cap that truncated it. No risk score. Full guidance: genexus://kb/tool-help/genexus_impact",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Object name; a name shared by several…"
+          },
+          "guid": {
+            "type": "string",
+            "description": "Object GUID."
+          },
+          "entityKey": {
+            "type": "string",
+            "description": "Object entity key."
+          },
+          "path": {
+            "type": "string",
+            "description": "Object path, with or without the Root…"
+          },
+          "type": {
+            "type": "string",
+            "description": "Object type, to narrow a bare name."
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down",
+              "both"
+            ],
+            "description": "up: callers (default); down: callees."
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6,
+            "description": "Default 2."
+          },
+          "maxNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000,
+            "description": "Default 200."
+          },
+          "typeFilter": {
+            "type": "string",
+            "description": "Only report objects of this type; the…"
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_inspect",
+      "description": "Use this for a compact object snapshot: metadata, variables, structure, signature and navigation context. Modular objects accept persisted GUID, EntityKey, or path in addition to name/type. Full guidance: genexus://kb/tool-help/genexus_inspect",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "guid": {
+            "type": "string",
+            "description": "Persisted object GUID from…"
+          },
+          "entityKey": {
+            "type": "string",
+            "description": "Typed GeneXus EntityKey from…"
+          },
+          "path": {
+            "type": "string",
+            "description": "Module/folder-qualified object path…"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "metadata",
+                "variables",
+                "signature",
+                "structure",
+                "parts",
+                "controls",
+                "events_repertoire",
+                "callers",
+                "runtimeIds"
+              ]
+            }
+          },
+          "projection": {
+            "type": "string",
+            "enum": [
+              "minimal",
+              "standard",
+              "verbose"
+            ],
+            "description": "Token budget.…"
+          },
+          "type": {
+            "type": "string"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "verbose": {
+            "type": "boolean",
+            "description": "Include verbose diagnostic fields."
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_kb",
+      "description": "Manage open KBs, session selection, startup config, Knowledge Base creation, and GeneXus environments. create bootstraps a brand new KB via native MSBuild tasks… Full guidance: genexus://kb/tool-help/genexus_kb",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "open",
+              "close",
+              "select",
+              "set_session_default",
+              "set_persistent_default",
+              "set_default",
+              "set_startup",
+              "get_startup",
+              "list_environments",
+              "get_environment",
+              "set_environment",
+              "create"
+            ],
+            "description": "KB pool or startup-selection operation…"
+          },
+          "alias": {
+            "type": "string",
+            "description": "KB alias. open: auto from path basename…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias for environment actions;…"
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute KB path (required for create…"
+          },
+          "driver": {
+            "type": "string",
+            "enum": [
+              "native-sdk",
+              "dotnet-reflection",
+              "com-gxpublic"
+            ],
+            "description": "open only: per-KB driver override. Use…"
+          },
+          "installationPath": {
+            "type": "string",
+            "description": "open only: per-KB GeneXus…"
+          },
+          "name": {
+            "type": "string",
+            "description": "Object name (required for set_startup)…"
+          },
+          "environment": {
+            "type": "string",
+            "description": "Environment name/folder (required for…"
+          },
+          "persist": {
+            "type": "boolean",
+            "description": "Persist KB to config.json for create…"
+          },
+          "dbServer": {
+            "type": "string",
+            "description": "create only: SQL Server instance name…"
+          },
+          "dbName": {
+            "type": "string",
+            "description": "create only: target database name…"
+          },
+          "dbUser": {
+            "type": "string",
+            "description": "create only: database user for SQL…"
+          },
+          "dbPassword": {
+            "type": "string",
+            "description": "create only: database password for SQL…"
+          },
+          "template": {
+            "type": "string",
+            "description": "create only: generator template path or…"
+          },
+          "sdkPath": {
+            "type": "string",
+            "description": "create only: explicit GeneXus SDK…"
+          },
+          "major": {
+            "type": "string",
+            "description": "open/create: target GeneXus major…"
+          },
+          "openAfterCreate": {
+            "type": "boolean",
+            "description": "create only: automatically open the KB…"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "create only: preview KB creation plan…"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "genexus_lifecycle",
+      "description": "Build, validate, index or poll the KB; Build All may run SDK-configured commands with external effects. Long operations are async with operationId. Full guidance: genexus://kb/tool-help/genexus_lifecycle",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "build",
+              "build_all",
+              "cancel",
+              "specify",
+              "specify_only",
+              "rebuild",
+              "reorg",
+              "reorg_preview",
+              "validate",
+              "validate-kb",
+              "sync",
+              "index",
+              "status",
+              "result",
+              "snapshots-list",
+              "snapshots-restore",
+              "inspect",
+              "reconcile"
+            ],
+            "description": "Lifecycle action to perform."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "compile_check"
+            ],
+            "description": "With action=build: compile_check…"
+          },
+          "target": {
+            "type": "string",
+            "description": "Object/task ID/op:<id>. compile_check…"
+          },
+          "targetGuid": {
+            "type": "string",
+            "description": "specify_only: GUID of the object to…"
+          },
+          "expectedVersion": {
+            "type": "string",
+            "description": "specify_only: refuse if the object's…"
+          },
+          "job_id": {
+            "type": "string",
+            "description": "Gateway operation id or Worker task id…"
+          },
+          "jobId": {
+            "type": "string",
+            "description": "Legacy alias for job_id."
+          },
+          "code": {
+            "type": "string",
+            "description": "validate: in-memory code to check…"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "validate-kb: maximum number of…"
+          },
+          "snapshotPath": {
+            "type": "string",
+            "description": "snapshots-restore: path to pattern…"
+          },
+          "estimated_seconds": {
+            "type": "integer",
+            "description": "Build: <20 sync, >=20 async (default…"
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "description": "Status/build long-poll cap, 0-600s."
+          },
+          "wait_until_done": {
+            "type": "boolean",
+            "description": "Build/build_all/rebuild/specify_only:…"
+          },
+          "until": {
+            "type": "string",
+            "enum": [
+              "change",
+              "terminal"
+            ],
+            "description": "Status wait stop condition: change…"
+          },
+          "wait": {
+            "type": "integer",
+            "description": "Status block, 0-600s. With a build…"
+          },
+          "since": {
+            "type": "string",
+            "description": "Status: prior _meta.snapshot for…"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "current",
+              "stale",
+              "refreshing"
+            ],
+            "description": "Status: freshness target for the wait.…"
+          },
+          "compact": {
+            "type": "boolean",
+            "description": "Status: counts + top-10 errors (default…"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Index: full SDK rescan (clears…"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "build/build_all/rebuild/index/specify_o…"
+          },
+          "environment": {
+            "type": "string",
+            "description": "Build: target environment name/folder.…"
+          },
+          "includeCallees": {
+            "type": "string",
+            "enum": [
+              "none",
+              "direct",
+              "transitive"
+            ],
+            "description": "Build: expand call graph so callees…"
+          },
+          "callers": {
+            "type": "boolean",
+            "description": "compile_check: expand transitive…"
+          },
+          "callerCap": {
+            "type": "integer",
+            "description": "compile_check: max callers to pull into…"
+          },
+          "deploy": {
+            "type": "boolean",
+            "description": "Build: force the full deploy…"
+          },
+          "buildPlanCap": {
+            "type": "integer",
+            "description": "Build: max nodes before…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "part": {
+            "type": "string",
+            "description": "validate: specific object part to check…"
+          },
+          "page": {
+            "type": "integer",
+            "description": "status/result: 1-based page number for…"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "status/result: page size for paginated…"
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "status/result: snake_case alias for…"
+          },
+          "log_offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "status/result: 0-based log line to page…"
+          },
+          "log_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "status/result: log lines per page."
+          },
+          "notifyOnFailure": {
+            "type": "string",
+            "description": "build: Slack/Discord webhook URL to…"
+          },
+          "skipFullDeploy": {
+            "type": "boolean",
+            "description": "build: skip full deployment stage to…"
+          },
+          "fastIncremental": {
+            "type": "boolean",
+            "description": "build: experimental fast incremental…"
+          },
+          "operationKey": {
+            "type": "string",
+            "description": "inspect/reconcile: original idempotency…"
+          },
+          "operationTool": {
+            "type": "string",
+            "description": "inspect/reconcile: canonical mutating…"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "reconcile: must be true after…"
+          },
+          "verification": {
+            "type": "string",
+            "description": "reconcile: short operator/model…"
+          },
+          "observedTargetIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "reconcile: target names observed by an…"
+          },
+          "observedRevision": {
+            "type": "string",
+            "description": "reconcile: revision/version observed by…"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "genexus_list_objects",
+      "description": "List objects with pagination. Feed nextOffset until hasMore=false. Every item exposes its persisted GUID and path; verbose=true also exposes the typed EntityKey when available. Full guidance: genexus://kb/tool-help/genexus_list_objects",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Legacy: name OR description. Prefer…"
+          },
+          "nameFilter": {
+            "type": "string",
+            "description": "Substring on name."
+          },
+          "descriptionFilter": {
+            "type": "string",
+            "description": "Substring on description."
+          },
+          "pathPrefix": {
+            "type": "string",
+            "description": "Folder prefix, e.g. 'Root Module/X/'."
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "parent": {
+            "type": "string"
+          },
+          "parentPath": {
+            "type": "string"
+          },
+          "typeFilter": {
+            "type": "string"
+          },
+          "verbose": {
+            "type": "boolean",
+            "description": "Full item shape."
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "name",
+              "lastUpdate"
+            ],
+            "description": "name (default, type-bucketed) or…"
+          },
+          "since": {
+            "type": "string",
+            "description": "ISO-8601 UTC. Only items with…"
+          },
+          "modifiedBefore": {
+            "type": "string",
+            "description": "ISO-8601 UTC. Only items with…"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque token from prior nextCursor. Use…"
+          },
+          "inline_read_top": {
+            "type": "integer",
+            "description": "0-3. Inline reads of top N."
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "axiCompact": {
+            "type": "boolean",
+            "description": "Compact projection (default true).",
+            "default": true
+          },
+          "projection": {
+            "type": "string",
+            "enum": [
+              "minimal",
+              "standard",
+              "verbose"
+            ],
+            "description": "minimal=name+type+lastUpdate;…"
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_navigation",
+      "description": "View navigation report (IDE Right-click → View Navigation). latest=true reads the most recent report from .gx/navigation-cache; latest=false runs fresh and refreshes that per-KB cache. Full guidance: genexus://kb/tool-help/genexus_navigation",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "action",
+          "name"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "view"
+            ],
+            "description": "Navigation report operation to execute."
+          },
+          "name": {
+            "type": "string"
+          },
+          "latest": {
+            "type": "boolean",
+            "default": false,
+            "description": "Read the most recent cached navigation…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_object_context",
+      "description": "Read-only context of one object: identity from the index, callers/callees with coverage (fieldTrust partial means not read), and its data model (ER diagram for a Transaction/Table)… Full guidance: genexus://kb/tool-help/genexus_object_context",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Object name; a name shared by several…"
+          },
+          "guid": {
+            "type": "string",
+            "description": "Object GUID."
+          },
+          "entityKey": {
+            "type": "string",
+            "description": "Object entity key."
+          },
+          "path": {
+            "type": "string",
+            "description": "Object path, with or without the Root…"
+          },
+          "type": {
+            "type": "string",
+            "description": "Object type, to narrow a bare name."
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6,
+            "description": "Default 1."
+          },
+          "maxNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000,
+            "description": "Default 100."
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_query",
+      "description": "Search objects in the active KB by the prefixes name:, type:, usedby:, parent:, parentPath: and description:; name:\"X\" (or bare quoted \"X\") demands an exact-name match. Full guidance: genexus://kb/tool-help/genexus_query",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "typeFilter": {
+            "type": "string"
+          },
+          "domainFilter": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "inline_read_top": {
+            "type": "integer",
+            "description": "0-3. Inline reads of top N."
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "relevance",
+              "lastUpdate"
+            ],
+            "description": "relevance (default) or lastUpdate…"
+          },
+          "since": {
+            "type": "string",
+            "description": "ISO-8601 UTC. Only items with…"
+          },
+          "modifiedBefore": {
+            "type": "string",
+            "description": "ISO-8601 UTC. Only items with…"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque token from prior nextCursor. Use…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "kbs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Federated read-only search over an…"
+          },
+          "cursors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Per-KB continuation: map each alias in…"
+          },
+          "maxConcurrency": {
+            "type": "integer",
+            "description": "Federation only: KBs searched in…"
+          },
+          "maxTotalResults": {
+            "type": "integer",
+            "description": "Federation only: total results across…"
+          },
+          "perKbTimeoutMs": {
+            "type": "integer",
+            "description": "Federation only: per-KB deadline in ms…"
+          },
+          "axiCompact": {
+            "type": "boolean",
+            "description": "Compact projection (default true).",
+            "default": true
+          },
+          "exactMatch": {
+            "type": "boolean",
+            "description": "Require an exact object-name match."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Field names to return; only name and…"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "genexus_read",
+      "description": "Read object code and metadata; omitting 'part' (RECOMMENDED) returns the COMPLETE object in 1 call, tailored to its type. Full guidance: genexus://kb/tool-help/genexus_read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "guid": {
+            "type": "string",
+            "description": "Persisted object GUID from…"
+          },
+          "entityKey": {
+            "type": "string",
+            "description": "Typed GeneXus EntityKey from…"
+          },
+          "path": {
+            "type": "string",
+            "description": "Module/folder-qualified object path…"
+          },
+          "part": {
+            "type": "string",
+            "description": "DataSelector:…"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Selected parts; unavailable…"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "refresh": {
+            "type": "boolean",
+            "default": false,
+            "description": "Bypass response caches, invalidate the…"
+          },
+          "ifUnchangedSince": {
+            "type": "string",
+            "description": "Opaque contentToken from a previous…"
+          },
+          "type": {
+            "type": "string"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          }
+        }
+      }
+    },
+    {
+      "name": "genexus_search_source",
+      "description": "Regex/semantic search across Procedure/DataProvider/WebPanel/Transaction source. Restrict a scan by object name, persisted GUID, EntityKey, or module/folder-qualified path. Full guidance: genexus://kb/tool-help/genexus_search_source",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "callee": {
+            "type": "string",
+            "description": "Method/function name (qualified or…"
+          },
+          "argMatches": {
+            "type": "object",
+            "description": "Positional arg index to expected…"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "typeFilter": {
+            "type": "string"
+          },
+          "objectName": {
+            "type": "string",
+            "description": "Exact object name(s): a comma-separated…"
+          },
+          "guid": {
+            "type": "string",
+            "description": "Persisted object GUID from…"
+          },
+          "entityKey": {
+            "type": "string",
+            "description": "Typed GeneXus EntityKey from…"
+          },
+          "path": {
+            "type": "string",
+            "description": "Module/folder-qualified object path…"
+          },
+          "startIndex": {
+            "type": "integer",
+            "description": "Legacy object-boundary resume. For a…"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token from…"
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "description": "Wall-clock budget (default 30000),…"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "source",
+                "rules",
+                "conditions",
+                "events",
+                "webForm",
+                "layout"
+              ]
+            },
+            "description": "Parts to scan with line-numbered…"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "source",
+                "caption",
+                "description",
+                "parmNames",
+                "webForm",
+                "formula"
+              ]
+            },
+            "description": "Whole-field metadata match (returns…"
+          },
+          "maxResults": {
+            "type": "integer"
+          },
+          "caseSensitive": {
+            "type": "boolean"
+          },
+          "includeComments": {
+            "type": "boolean"
+          },
+          "inline_read_top": {
+            "type": "integer",
+            "description": "0-3. Inline reads of top N distinct…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "genexus_structure",
+      "description": "Read or write the structure/data model of GeneXus objects: Transactions, SDTs, indexes, attributes, levels, Domains (including enumValues) and SubType Groups. Full guidance: genexus://kb/tool-help/genexus_structure",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "get_visual",
+              "update_visual",
+              "get_indexes",
+              "create_index",
+              "drop_index",
+              "set_attribute",
+              "set_level",
+              "set_domain",
+              "get_logic",
+              "update_group",
+              "move_attribute",
+              "remove_attribute",
+              "check_subtypes",
+              "get_item_property",
+              "set_item_property"
+            ],
+            "description": "Structure operation to execute."
+          },
+          "name": {
+            "type": "string",
+            "description": "Object name. update_visual: Transaction…"
+          },
+          "module": {
+            "type": "string",
+            "description": "update_visual/move_attribute optional:…"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "move_attribute: existing attribute to…"
+          },
+          "before": {
+            "type": "string",
+            "description": "move_attribute: place attribute before…"
+          },
+          "after": {
+            "type": "string",
+            "description": "move_attribute: place attribute after…"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "move_attribute: zero-based final…"
+          },
+          "level": {
+            "type": "string",
+            "description": "move_attribute: root (default) or an…"
+          },
+          "levelPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "move_attribute: nested level path, e.g.…"
+          },
+          "itemPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "get_item_property/set_item_property:…"
+          },
+          "property": {
+            "type": "string",
+            "description": "get_item_property/set_item_property:…"
+          },
+          "value": {
+            "type": "string",
+            "description": "set_item_property: new value.…"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "update_visual/move_attribute/create_ind…"
+          },
+          "baseVersion": {
+            "type": "string",
+            "description": "Optimistic-concurrency token for…"
+          },
+          "expectedVersion": {
+            "type": "string",
+            "description": "Alias of baseVersion for update_visual;…"
+          },
+          "payload": {
+            "type": "object",
+            "description": "update_visual…"
+          },
+          "validationMode": {
+            "type": "string",
+            "enum": [
+              "specify"
+            ],
+            "description": "Explicitly run the inline Specify pass…"
+          },
+          "rollbackOnFailure": {
+            "type": "boolean",
+            "default": true,
+            "description": "update_visual, move_attribute and…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias."
+          },
+          "type": {
+            "type": "string",
+            "description": "Optional object type disambiguator…"
+          }
+        },
+        "required": [
+          "action",
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "genexus_whoami",
+      "description": "KB context + version + health (worker/index/database) + next-step hints; call FIRST every session. Lean by default; pass verbose=true ONCE for the inline playbooks + skills catalog of verified… Full guidance: genexus://kb/tool-help/genexus_whoami",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "verbose": {
+            "type": "boolean",
+            "description": "Include the static playbooks + skills…"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "genexus_wire",
+      "description": "CALL GRAPH & IMPACT ENGINE (Rust native, sub-10ms) for EXPORTED TEXT SOURCE TREES (dir=; create one with genexus_io action=export_kb_to_text). Full guidance: genexus://kb/tool-help/genexus_wire",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "pack_task",
+              "status",
+              "for",
+              "callers",
+              "impact",
+              "path",
+              "slice",
+              "safe_delete",
+              "index",
+              "doctor"
+            ],
+            "default": "pack_task",
+            "description": "Architectural discovery action to run."
+          },
+          "task": {
+            "type": "string",
+            "description": "Intent / task description in natural…"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Native KB pack_task: object names…"
+          },
+          "target": {
+            "type": "string",
+            "description": "Symbol name (e.g. 'CustomerProc' or…"
+          },
+          "from": {
+            "type": "string",
+            "description": "Source symbol name for path action…"
+          },
+          "to": {
+            "type": "string",
+            "description": "Target symbol name for path action…"
+          },
+          "token_budget": {
+            "type": "integer",
+            "description": "Maximum token budget cap (default 1200)."
+          },
+          "full": {
+            "type": "boolean",
+            "default": false,
+            "description": "Bypass token budget clipping and output…"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "xml",
+              "json",
+              "toon",
+              "mermaid"
+            ],
+            "default": "xml",
+            "description": "Output format: toon (~40% savings,…"
+          },
+          "kb": {
+            "type": "string",
+            "description": "KB alias or directory path (defaults to…"
+          },
+          "dir": {
+            "type": "string",
+            "description": "Explicit KB directory path override."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}
