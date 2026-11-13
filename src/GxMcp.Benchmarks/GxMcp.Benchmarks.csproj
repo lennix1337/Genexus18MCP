@@ -9,6 +9,10 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>GxMcp.Benchmarks</RootNamespace>
   </PropertyGroup>
+  <!-- Release warning baseline is 0 (docs/build_warning_baseline.json). -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.13.12" />
   </ItemGroup>

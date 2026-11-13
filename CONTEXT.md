@@ -33,5 +33,5 @@ This document records the authoritative domain terms and concepts for Genexus18M
 
 ## Gateway Request Domain
 
-- **Middleware Pipeline**: A composable, sequential chain of request processing stages (`IMcpMiddleware`) in the Gateway.
-- **Middleware Stage**: An isolated handler for a single cross-cutting request concern (protocol handshake, KB resolution, schema validation, idempotency, semantic caching, worker dispatch, response shaping).
+- **Request Core**: `Program.ProcessMcpRequestCore` (`Program.RequestLoop.cs`) handles one JSON-RPC request: protocol handshake, session and KB resolution, then `tools/call` dispatch through `Program.DispatchToolCallCoreAsync` (`Program.ToolDispatch.cs`), which validates arguments, consults the semantic cache, routes to the worker or a gateway tool, and shapes the response. It is plain procedural code; there is no pluggable middleware chain.
+- **Idempotency Middleware**: `IdempotencyMiddleware` wraps only the mutating tool dispatch inside the Request Core (keyed replay through the idempotency cache and journal). It is the single stage of its kind.

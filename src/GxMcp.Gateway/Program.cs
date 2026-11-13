@@ -450,6 +450,9 @@ namespace GxMcp.Gateway
         // gateway_debug.log.1 and a fresh file is opened.  Only two files are kept.
         private const long _logRotateBytes = 10 * 1024 * 1024; // 10 MB
         private static StreamWriter? _logWriter;
+        // Bytes in the current log file, tracked under _logLock so the rotation check does
+        // not stat the file on every line.
+        private static long _logBytes;
         private static readonly string[] _defaultLocalOrigins = new[]
         {
             "http://localhost",
@@ -514,6 +517,7 @@ namespace GxMcp.Gateway
                 lock (_logLock)
                 {
                     _logWriter = new StreamWriter(_logPath, append: true, System.Text.Encoding.UTF8) { AutoFlush = true };
+                    _logBytes = new FileInfo(_logPath).Length;
                 }
             }
             catch { /* fall back to no-op if the file is unavailable */ }
@@ -533,22 +537,21 @@ namespace GxMcp.Gateway
         {
             try {
                 lock (_logLock) {
-                    string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {msg}\n";
+                    string text = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {msg}";
                     if (_logWriter == null)
                     {
                         // InitializeLogging() has not been called (e.g. in tests).
                         // Fall back to the direct append-all path so the file is
                         // always written and existing tests that snapshot file length
                         // continue to work.
-                        File.AppendAllText(_logPath, line);
+                        File.AppendAllText(_logPath, text + "\n");
                         return;
                     }
                     // Size-based rotation: rename current to .1 (overwriting any previous .1)
                     // then open a fresh log file.
                     try
                     {
-                        var fi = new FileInfo(_logPath);
-                        if (fi.Exists && fi.Length > _logRotateBytes)
+                        if (_logBytes > _logRotateBytes)
                         {
                             _logWriter.Dispose();
                             _logWriter = null;
@@ -556,10 +559,15 @@ namespace GxMcp.Gateway
                             if (File.Exists(rotated)) File.Delete(rotated);
                             File.Move(_logPath, rotated);
                             _logWriter = new StreamWriter(_logPath, append: false, System.Text.Encoding.UTF8) { AutoFlush = true };
+                            _logBytes = 0;
                         }
                     }
                     catch { /* rotation failure is non-fatal; keep using existing writer */ }
-                    _logWriter?.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {msg}");
+                    if (_logWriter != null)
+                    {
+                        _logWriter.WriteLine(text);
+                        _logBytes += System.Text.Encoding.UTF8.GetByteCount(text) + Environment.NewLine.Length;
+                    }
                 }
             } catch { }
         }
@@ -1024,6 +1032,7 @@ namespace GxMcp.Gateway
                             await Task.Delay(-1);
                         }
                         Log("Stdio closed; shutting down isolated gateway.");
+                        await DrainStdioInFlightAsync(StdioDrainTimeout);
                         break;
                     }
 
@@ -1042,10 +1051,15 @@ namespace GxMcp.Gateway
                     // _currentKb is AsyncLocal, so each dispatched request keeps its own
                     // KB routing.
                     string capturedLine = line;
+                    System.Threading.Interlocked.Increment(ref _stdioInFlight);
                     _ = Task.Run(async () =>
                     {
-                        JObject? response = await ProcessStdioLine(capturedLine);
-                        if (response != null) await TryWriteStdout(response);
+                        try
+                        {
+                            JObject? response = await ProcessStdioLine(capturedLine);
+                            if (response != null) await TryWriteStdout(response);
+                        }
+                        finally { System.Threading.Interlocked.Decrement(ref _stdioInFlight); }
                     });
                 }
             }
@@ -1054,6 +1068,27 @@ namespace GxMcp.Gateway
                 Log("[Gateway] MCP stdio disabled. Serving HTTP only.");
                 await Task.Delay(-1);
             }
+        }
+
+        // Requests dispatched fire-and-forget from the stdio loop. On stdin EOF the workers are
+        // stopped right after the loop, which would kill an in-flight mutation (e.g. a KB save)
+        // mid-write; wait a bounded time for them first.
+        internal static int _stdioInFlight;
+        internal static readonly TimeSpan StdioDrainTimeout = TimeSpan.FromSeconds(10);
+
+        internal static async Task<bool> DrainStdioInFlightAsync(TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (System.Threading.Volatile.Read(ref _stdioInFlight) > 0)
+            {
+                if (DateTime.UtcNow >= deadline)
+                {
+                    Log($"[Gateway] Shutdown drain timed out with {_stdioInFlight} request(s) still in flight.");
+                    return false;
+                }
+                await Task.Delay(50);
+            }
+            return true;
         }
 
         internal static async Task<JObject?> ProcessStdioLine(string line)
@@ -1105,6 +1140,27 @@ namespace GxMcp.Gateway
         internal static bool ProxyEmptyBodyIsSuccess(bool isNotification, System.Net.HttpStatusCode status)
             => isNotification || status == System.Net.HttpStatusCode.NoContent;
 
+        // The master's long-poll can legitimately hold a request for up to
+        // McpRouter.MaxLongPollSeconds (progress-bearing calls); a shorter client timeout
+        // made the proxy abort and re-send a call that was still running.
+        internal static readonly TimeSpan ProxyRequestTimeout = TimeSpan.FromSeconds(McpRouter.MaxLongPollSeconds + 60);
+
+        // Forward GXMCP_HTTP_TOKEN (checked by IsHttpTokenValid) so a token-protected master
+        // does not answer every proxied call with 401.
+        internal static void ApplyProxyAuthHeader(System.Net.Http.Headers.HttpRequestHeaders headers)
+        {
+            string? token = Environment.GetEnvironmentVariable("GXMCP_HTTP_TOKEN");
+            if (!string.IsNullOrEmpty(token)) headers.TryAddWithoutValidation("X-GXMCP-Token", token);
+        }
+
+        // Only a failure to establish the connection proves the request never reached the
+        // master; anything later (timeout, reset mid-response, bad body) may have executed
+        // a mutation, so it must not be re-sent.
+        internal static bool ProxyIsConnectFailure(Exception ex)
+            => ex is HttpRequestException h
+               && (h.HttpRequestError == HttpRequestError.ConnectionError
+                   || h.InnerException is System.Net.Sockets.SocketException { SocketErrorCode: System.Net.Sockets.SocketError.ConnectionRefused });
+
         // Cheap liveness probe: does anything accept a TCP connection on the port right now?
         // Used before a forced promotion so a transient hiccup can't make a proxy steal the
         // lease from — and then kill — a master that is plainly still up. A connection refusal
@@ -1127,7 +1183,8 @@ namespace GxMcp.Gateway
         {
             string baseUrl = $"http://localhost:{master.HttpPort}/mcp";
             using var httpClient = new HttpClient();
-            httpClient.Timeout = TimeSpan.FromSeconds(30); // Do not let proxy hang forever if master is dead
+            httpClient.Timeout = ProxyRequestTimeout;
+            ApplyProxyAuthHeader(httpClient.DefaultRequestHeaders);
             httpClient.DefaultRequestHeaders.Accept.ParseAdd("application/json");
             httpClient.DefaultRequestHeaders.Accept.ParseAdd("text/event-stream");
             
@@ -1157,6 +1214,7 @@ namespace GxMcp.Gateway
 
                 int retryCount = 0;
                 bool success = false;
+                JToken? failedRequestId = null;
                 while (retryCount < 3 && !success)
                 {
                     try
@@ -1164,6 +1222,7 @@ namespace GxMcp.Gateway
                         string body = line;
                         var request = GxMcp.Common.JsonIngress.ParseObject(body);
                         string requestId = request["id"]?.ToString() ?? "unknown";
+                        failedRequestId = request["id"];
                         bool isInitialize = string.Equals(request["method"]?.ToString(), "initialize", StringComparison.Ordinal);
                         bool isModern = McpRouter.IsModernRequest(request);
                         string requestProtocolVersion = McpHttpProtocol.GetRequestProtocolVersion(request)
@@ -1334,6 +1393,22 @@ namespace GxMcp.Gateway
                             success = true;
                         }
                     }
+                    catch (Exception ex) when (!ProxyIsConnectFailure(ex))
+                    {
+                        // The request may already have run on the master: never re-send it
+                        // (a keyless mutation could execute again). Report and move on.
+                        Log($"[Proxy] Request failed after it may have been sent; not retrying: {ex.Message}");
+                        if (failedRequestId != null && failedRequestId.Type != JTokenType.Null)
+                        {
+                            await TryWriteStdout(new JObject
+                            {
+                                ["jsonrpc"] = "2.0",
+                                ["id"] = failedRequestId.DeepClone(),
+                                ["error"] = new JObject { ["code"] = -32603, ["message"] = $"Master request failed: {ex.Message}" }
+                            }.ToString(Formatting.None));
+                        }
+                        success = true;
+                    }
                     catch (Exception ex)
                     {
                         retryCount++;
@@ -1396,6 +1471,7 @@ namespace GxMcp.Gateway
             string url = $"http://localhost:{port}/mcp";
             using var client = new HttpClient();
             client.Timeout = Timeout.InfiniteTimeSpan;
+            ApplyProxyAuthHeader(client.DefaultRequestHeaders);
             client.DefaultRequestHeaders.Add("MCP-Session-Id", sessionId);
             client.DefaultRequestHeaders.Add("MCP-Protocol-Version", protocolVersion);
             client.DefaultRequestHeaders.Accept.ParseAdd("text/event-stream");

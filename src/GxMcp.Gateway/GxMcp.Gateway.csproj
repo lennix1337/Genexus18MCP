@@ -21,6 +21,8 @@
     <PublishReadyToRun>true</PublishReadyToRun>
     <TieredCompilation>true</TieredCompilation>
     <TieredPGO>true</TieredPGO>
+    <!-- Release warning baseline is 0 (docs/build_warning_baseline.json). -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
