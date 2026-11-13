@@ -249,6 +249,9 @@ namespace GxMcp.Worker.Services
             if (deleted == null) return false;
 
             _indexCache.RemoveEntryByGuid(deleted.Guid);
+            Guid deletedGuid;
+            if (Guid.TryParse(deleted.Guid, out deletedGuid))
+                ObjectService.RemoveReadCacheEntries(deletedGuid, null);
             DateTime deletionTime = DateTime.UtcNow;
             _onObjectDeleted?.Invoke(deleted.Name, deleted.Type, deletionTime);
             Logger.Info($"External deletion detected: {deleted.Name} ({deleted.Type}) at {deletionTime:o}");
@@ -283,6 +286,10 @@ namespace GxMcp.Worker.Services
                 DateTime objectLastUpdate = SdkTimestampNormalizer.NormalizeUtc(obj.LastUpdate);
                 if (objectLastUpdate == nextCheckTime) _notifiedInLastTick.Add(obj.Guid);
                 Logger.Info($"External change detected: {obj.Name} ({obj.TypeDescriptor.Name}) at {objectLastUpdate:o}");
+                // Evict before the index entry gets the new LastUpdate: the managed part
+                // cache is keyed by guid|part with no LastUpdate check, so otherwise source
+                // search would keep serving the pre-save text for its whole TTL.
+                ObjectService.RemoveReadCacheEntries(obj.Guid, null);
                 try { _indexCache?.UpdateEntry(obj); }
                 catch (Exception ex) { Logger.Debug($"Watcher index update failed for {obj.Name}: {ex.Message}"); }
                 _onObjectChanged?.Invoke(obj.Name, obj.TypeDescriptor.Name, objectLastUpdate);
