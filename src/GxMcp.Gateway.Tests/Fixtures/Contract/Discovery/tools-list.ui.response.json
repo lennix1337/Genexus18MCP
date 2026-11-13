@@ -292,6 +292,10 @@
             "type": "integer",
             "description": "preview only."
           },
+          "inlineImage": {
+            "type": "boolean",
+            "description": "preview+capture screenshot: also return…"
+          },
           "diffBaseline": {
             "type": "boolean",
             "description": "preview only."
@@ -585,7 +589,7 @@
               "specify",
               "native"
             ],
-            "description": "specify: run the inline Specify pass…"
+            "description": "specify (Issue #60): run the inline…"
           },
           "rollbackOnFailure": {
             "type": "boolean",

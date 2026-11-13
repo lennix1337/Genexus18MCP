@@ -555,11 +555,11 @@
             "enum": [
               "specify"
             ],
-            "description": "With action=object, run the inline…"
+            "description": "Issue #60: with action=object, run the…"
           },
           "rollbackOnFailure": {
             "type": "boolean",
-            "description": "With action=object and…"
+            "description": "Issue #60: with action=object and…"
           },
           "spec": {
             "type": "object",
@@ -982,7 +982,7 @@
               "specify",
               "native"
             ],
-            "description": "specify: run the inline Specify pass…"
+            "description": "specify (Issue #60): run the inline…"
           },
           "rollbackOnFailure": {
             "type": "boolean",

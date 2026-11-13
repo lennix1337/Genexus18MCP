@@ -962,6 +962,22 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // The fingerprint (last segment) of the token a read of <partName> returns for <content>. Every part is
+        // fingerprinted as it is, except a visual one (WebForm, Layout): the SDK rebuilds the layout of a form that was
+        // never saved on each load, with new GUID ids, so its fingerprint ignores the value of those ids (see
+        // VisualTokenCanonicalizer). The `sha256` of an export or of a write receipt stays ComputeContentFingerprint of the text.
+        internal static string ComputePartContentFingerprint(string partName, string content)
+            => ComputeContentFingerprint(WebFormXmlHelper.IsVisualPart(partName) ? VisualTokenCanonicalizer.Canonicalize(content) : content);
+
+        internal static string ComposeContentVersionToken(string objectToken, string partName, string content)
+            => objectToken == null ? null : objectToken + ":" + ComputePartContentFingerprint(partName, content);
+
+        internal static string ComputePartContentVersionToken(
+            global::Artech.Architecture.Common.Objects.KBObject obj,
+            string partName,
+            string content)
+            => ComposeContentVersionToken(ComputeVersionToken(obj), partName, content);
+
         // Returns an error envelope when the object's current version token cannot be
         // safely checked or no longer matches the caller-supplied baseVersion, else
         // null (proceed). A supplied token is an explicit request for concurrency

@@ -280,7 +280,7 @@ jobs:
       # Advisory audit of the locked dependency graph (RustSec). cargo-audit comes
       # prebuilt from the SHA-pinned install action, so nothing is compiled per run.
       - name: Install cargo-audit
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-audit
 
@@ -332,7 +332,7 @@ jobs:
       # the per-test time budget. No release build: the staged exe was never uploaded,
       # and the release workflow and build.ps1 build the shipped binary (~130s here).
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.146
 
@@ -348,7 +348,7 @@ jobs:
       # Advisory audit of the locked dependency graph (RustSec). cargo-audit comes
       # prebuilt from the SHA-pinned install action, so nothing is compiled per run.
       - name: Install cargo-audit
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-audit
 

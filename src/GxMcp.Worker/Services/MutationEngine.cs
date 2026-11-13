@@ -71,15 +71,27 @@ namespace GxMcp.Worker.Services
             if (_objectService == null) return null;
             try
             {
-                string json = _objectService.ReadObjectSource(target, part);
-                if (string.IsNullOrEmpty(json)) return null;
-                var obj = JObject.Parse(json);
-                return obj["source"]?.ToString() ?? obj["content"]?.ToString() ?? obj["xml"]?.ToString();
+                // The snapshot is restored verbatim on rollback, so it must be the complete
+                // plain text of the part: the default "ide" client returns base64 and the
+                // default read is paged.
+                return ExtractSnapshotSource(_objectService.ReadObjectSourceForVerification(target, part));
             }
             catch
             {
                 return null;
             }
+        }
+
+        internal static string ExtractSnapshotSource(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            var obj = JObject.Parse(json);
+            string text = obj["source"]?.ToString() ?? obj["content"]?.ToString() ?? obj["xml"]?.ToString();
+            if (text != null && obj["isBase64"]?.Type == JTokenType.Boolean && obj["isBase64"].Value<bool>())
+            {
+                return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(text));
+            }
+            return text;
         }
     }
 

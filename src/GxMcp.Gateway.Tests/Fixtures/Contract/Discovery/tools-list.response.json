@@ -481,6 +481,10 @@
             "description": "preview only.",
             "type": "object"
           },
+          "inlineImage": {
+            "description": "preview+capture screenshot: also return…",
+            "type": "boolean"
+          },
           "kb": {
             "description": "KB alias.",
             "type": "string"
@@ -793,7 +797,7 @@
             "type": "object"
           },
           "rollbackOnFailure": {
-            "description": "With action=object and…",
+            "description": "Issue #60: with action=object and…",
             "type": "boolean"
           },
           "rules": {
@@ -838,7 +842,7 @@
             "type": "boolean"
           },
           "validationMode": {
-            "description": "With action=object, run the inline…",
+            "description": "Issue #60: with action=object, run the…",
             "enum": [
               "specify"
             ],
@@ -1620,7 +1624,7 @@
             "type": "string"
           },
           "validationMode": {
-            "description": "specify: run the inline Specify pass…",
+            "description": "specify (Issue #60): run the inline…",
             "enum": [
               "specify",
               "native"

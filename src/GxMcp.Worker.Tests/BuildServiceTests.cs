@@ -1134,6 +1134,17 @@ namespace GxMcp.Worker.Tests
             Assert.DoesNotContain(BuildService.GetActiveBuilds(), b => ReferenceEquals(b, orphan));
         }
 
+        [Fact]
+        public void IdleGc_IsBlockedWhileBuildInFlight()
+        {
+            // #1007: a build runs on its own thread outside the command queues, so the idle
+            // LOH compaction must treat an in-flight build as busy.
+            var (_, taskId) = SeedInFlightBuild("Build", "WebConPro");
+            try { Assert.True(GxMcp.Worker.Program.IsIdleGcBlocked()); }
+            finally { InFlightRegistry().TryRemove(taskId, out _); }
+            Assert.False(GxMcp.Worker.Program.IsIdleGcBlocked());
+        }
+
         // ── issue #42 hardening (D): concurrent-build reject scoped per KB ───
 
         [Fact]

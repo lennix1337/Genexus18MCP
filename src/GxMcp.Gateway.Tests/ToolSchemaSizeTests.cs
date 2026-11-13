@@ -266,10 +266,11 @@ namespace GxMcp.Gateway.Tests
             // genexus_edit `contentPath` (the text of a full-part write taken from a file, for text too large for a
             // command line) and genexus_transfer `async` (accept-then-poll for a long export or inspect): 40400 -> 40600
             // for the two inputs and their descriptions. Measured ~40482 tokens; ~118 headroom.
-            // genexus_edit validationMode=native and genexus_impact whatIf each fitted alone but measured ~40620
-            // together. No bump: the validationMode/rollbackOnFailure descriptions of genexus_edit and
-            // genexus_create lost their issue references and repeated wording. Measured ~40592 tokens; ~8 headroom.
-            Assert.True(approxTokens < 40600, $"tool_definitions.json is ~{approxTokens} tokens; budget 40600.");
+            // Three opt-in inputs landed together: genexus_edit `validationMode=native` (syntax check after a
+            // save), genexus_impact `whatIf` (one-call change report) and genexus_browser `inlineImage` (the
+            // preview screenshot as an image block). Each fit alone; the third to merge needs 40600 -> 40700.
+            // Measured ~40656 tokens; ~44 headroom.
+            Assert.True(approxTokens < 40700, $"tool_definitions.json is ~{approxTokens} tokens; budget 40700.");
         }
 
         [Theory]
@@ -349,14 +350,14 @@ namespace GxMcp.Gateway.Tests
         [InlineData("all", 104300)]
         // Every profile except "all" stops publishing the advanced inputs of genexus_edit, genexus_lifecycle,
         // genexus_io and genexus_create (ToolProfileFilter.AdvancedInputs), so their budgets move down to the new
-        // measured size plus ~170 bytes: core 27250 -> 24550 (measured 24382, was 27189), standard 61000 -> 40100
-        // (39933, was 44710), authoring 72550 -> 69500 (69348, was 72443), devops 53250 -> 48750 (48570, was
-        // 53059), ui 51300 -> 48550 (48387, was 51194), db 40000 -> 32550 (32392, was 35199). "all" is unchanged.
+        // measured size plus ~170 bytes: core 27250 -> 24550 (measured 24381, was 27188), standard 61000 -> 40100
+        // (39947, was 44724), authoring 72550 -> 69550 (69362, was 72457), devops 53250 -> 48750 (48569, was
+        // 53058), ui 51300 -> 48650 (48478, was 51285), db 40000 -> 32550 (32391, was 35198). "all" is unchanged.
         [InlineData("core", 24550)]
         [InlineData("standard", 40100)]
-        [InlineData("authoring", 69500)]
+        [InlineData("authoring", 69550)]
         [InlineData("devops", 48750)]
-        [InlineData("ui", 48550)]
+        [InlineData("ui", 48650)]
         [InlineData("db", 32550)]
         public void PublishedToolProfileStaysWithinItsByteBudget(string profile, int maxBytes)
         {
