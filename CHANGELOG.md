@@ -7,11 +7,40 @@
 
 ### Added
 
+- **Opt-in model evaluation harness.** `scripts/run-agent-model-eval.py` measures a model's first-call tool selection against the served `tools/list` and `initialize` instructions, with expectations for 8 scenarios in `tests/agent-evals/first-tool-expectations.json`. It is tested offline only and has not been run against a live model.
+- **`logging` capability.** `initialize` and server discovery now declare `logging`, and `logging/setLevel` gates `notifications/message`. Behaviour is unchanged until a client sets a level.
+
 ### Changed
+
+- **Self-update requires a checksum.** A release without a readable `publish.zip.sha256`, or with a mismatching one, is refused instead of being staged after structural validation only. `SECURITY.md` documents the mechanism and no longer carries a stale per-version support table.
+- **Release builds require the engine binaries.** `build.ps1 -RequireEngineBinaries` (used by `release.ps1`) fails when `gx-engine.exe` or `gxwire.exe` is not produced, and the release manifest, `verify-release-manifest.py` and `verify-install.js` require both for versions above 4.6.0. Older releases still verify.
+- **gxwire release builds use `opt-level = 3`.** Search and pack queries are about 1.5-2x faster on a 50k-node benchmark; the binary grows from 1.2 MB to 1.7 MB.
+- **The npm package no longer ships CLI tests.** `cli/**/*.test.js` and `cli/test-support` are excluded, and CI runs `scripts/check-pack.js` to keep them out.
+- **Release builds of the Gateway, its tests and the benchmarks treat warnings as errors.**
 
 ### Fixed
 
+- **Multi-target `genexus_edit` can no longer blank a part while rolling back.** A target whose current part cannot be read is not written (`RollbackSnapshotUnavailable`), a write that throws is caught and rolled back instead of leaving earlier targets written, and rollback never restores an unknown original as empty. The failed target is checked by readback and reported in `rollback.failedTarget` with `failedAt`, `failureCode` and `reconciliationRequired`.
+- **Source search no longer certifies stale text as fresh.** Only text read from the SDK in that scan is written to the durable source store, and the KB watcher clears an externally changed or deleted object's read-cache entries before updating its index entry.
+- **`genexus_wire` argument injection.** Arguments reach gxwire as a real argument list instead of one interpolated command line, and caller-supplied values that start with `-` are rejected, so a crafted target can no longer add flags such as `--cache-path`.
+- **Tool annotations follow `OperationClassifier`.** Tools that can overwrite or delete existing state (including `genexus_io`, `genexus_db`, `genexus_lifecycle` and 15 others) now carry `destructiveHint=true`; mutating-but-additive tools stay non-destructive, and a contract test fails when annotations and the classifier drift apart.
+- **HTTP port recovery no longer kills unrelated processes.** It matches the listening port exactly (`:5000` no longer matches `:50001`), reclaims the port only from a `GxMcp.Gateway` process, runs only when the bind failed because the address is in use, and logs the configured port.
+- **Agent hints no longer lead to dead ends.** `InvalidArgs` points to `genexus_whoami`, removed-tool replacements point to published `genexus_db` actions, the oversize-response follow-up carries each tool's real pagination arguments, and `genexus_wire`, `genexus_read` and `genexus_query` no longer tell agents to call `genexus_wire` first on a native KB.
+- **Legacy HTTP proxy no longer replays requests.** Only connection failures are retried, the proxy timeout is above the server's long-poll cap, and `GXMCP_HTTP_TOKEN` is forwarded, so a keyless mutation cannot run up to three times and a token-protected master no longer answers 401.
+- **In-flight requests are drained on shutdown.** On stdin EOF the Gateway waits up to 10 s for in-flight requests before stopping workers.
+- **`DispatcherException` is logged.** The envelope's hint pointed to worker logs that contained nothing; the full exception chain is now logged with method, action and correlation id.
+- **Launcher lifecycle and startup.** The launcher forwards termination signals to the Gateway and kills it on exit, uses an existing `~/.genexus-mcp/config.json` without paying the GeneXus registry discovery, and adopts a `config.json` from the working directory only when it looks like a GeneXus MCP config.
+- **gxwire cache writes are atomic,** and gx-engine refuses a `sqlcmd -Q` statement that would exceed the 32,767-character Windows command-line limit with a clear message instead of an opaque OS error.
+- **nexus-ide webviews.** History, Index, Properties and Structure use a per-render script nonce instead of `'unsafe-inline'`, MCP-supplied text is HTML-escaped, and webview messages are validated before reaching MCP calls. This also fixes Structure handlers that referenced an undefined variable and a Properties panel that stacked message handlers bound to earlier objects.
+- **Compact tool summaries no longer end on a dangling word.**
+
 ### Internal
+
+- Split `DispatchToolCallCoreAsync` into stage methods (`Program.ToolDispatch.*.cs`) and moved the `WriteObjectInternal` success envelope into `BuildWriteAppliedResponse`; no behaviour change.
+- Removed unused code: the Gateway middleware pipeline and `DiagnosticAndHealingEngine`, the Worker `MultiObjectUnitOfWork` helper and `WritePipeline.PreWriteSnapshot`, and the gxwire `memmap2` and `rayon` dependencies.
+- CI also runs on pushes to `main`, runs the Python metadata, manifest and replay unit tests in the contracts job, and audits both Cargo lockfiles with a SHA-pinned cargo-audit. The Rust toolchain is pinned to 1.97.1.
+- Stopped tracking files that `.gitignore` already excludes and two committed `.trx` test results; trimmed `AGENTS.md` to under 200 lines by moving task-specific guidance into the linked documents; moved releases older than v4 into `docs/changelog/`.
+- Gateway logging no longer stats the log file on every line, and failed SDK transaction rollbacks in the write path are logged instead of silently swallowed.
 
 ## v4.6.0 - 2026-11-13
 

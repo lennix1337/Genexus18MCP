@@ -190,6 +190,9 @@ jobs:
       - name: CLI tests
         run: npm test
 
+      - name: npm tarball contents
+        run: node scripts/check-pack.js
+
       - name: Root lint
         run: npm run lint
 
