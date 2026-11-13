@@ -173,7 +173,8 @@ namespace GxMcp.Worker.Services
                     }
                     finally
                     {
-                        try { transaction.Rollback(); } catch { }
+                        try { transaction.Rollback(); }
+                        catch (Exception rollbackEx) { Logger.Debug("[WRITE] Prospective WebForm validation rollback failed: " + rollbackEx.Message); }
                     }
                 }
             }

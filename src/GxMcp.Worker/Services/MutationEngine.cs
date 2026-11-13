@@ -482,6 +482,10 @@ namespace GxMcp.Worker.Services
             var applied = new List<AppliedTargetRecord>();
             bool anyFailed = false;
             string failureError = null;
+            string failureCode = null;
+            string failedAt = null;
+            JObject failedTarget = null;
+            bool failedWriteRequiresReconciliation = false;
 
             foreach (JObject item in request.Targets)
             {
@@ -489,27 +493,72 @@ namespace GxMcp.Worker.Services
                 string part = item["part"]?.ToString() ?? "Source";
                 string content = item["content"]?.ToString() ?? item["source"]?.ToString();
 
-                string original = _writer?.ReadObjectSource(target, part);
+                // Fail closed: without a readable pre-write snapshot a later failure could
+                // not restore this target, so it is never written and the batch stops here.
+                string original = TryReadSource(target, part);
+                if (original == null)
+                {
+                    anyFailed = true;
+                    failureCode = "RollbackSnapshotUnavailable";
+                    failedAt = target;
+                    failureError = $"Failed writing {target}: the current {part} could not be read, so no restorable snapshot exists; this target was not written.";
+                    failedTarget = new JObject
+                    {
+                        ["target"] = target,
+                        ["part"] = part,
+                        ["code"] = failureCode,
+                        ["writeAttempted"] = false,
+                        ["outcome"] = "not_written",
+                        ["reconciliationRequired"] = false
+                    };
+                    break;
+                }
 
                 var writeArgs = (JObject)item.DeepClone();
                 writeArgs["part"] = part;
                 writeArgs["content"] = content;
 
-                string resJson = _writer != null ? _writer.WriteObject(target, writeArgs) : null;
-                var resObj = !string.IsNullOrEmpty(resJson) ? JObject.Parse(resJson) : null;
+                JObject resObj = null;
+                string writeExceptionMessage = null;
+                try
+                {
+                    string resJson = _writer != null ? _writer.WriteObject(target, writeArgs) : null;
+                    resObj = !string.IsNullOrEmpty(resJson) ? JObject.Parse(resJson) : null;
+                }
+                catch (Exception ex)
+                {
+                    // The SDK may have persisted part of this write before throwing.
+                    writeExceptionMessage = ex.Message;
+                    Logger.Error($"[MUTATION-ENGINE] Write of {target} ({part}) threw; outcome unknown: {ex}");
+                }
+
+                bool outcomeUnknown = writeExceptionMessage != null;
                 string status = resObj?["status"]?.ToString();
-                bool isSuccess = string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase);
+                bool isSuccess = !outcomeUnknown
+                    && (string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase));
 
                 if (!isSuccess)
                 {
                     anyFailed = true;
-                    string innerErr = resObj?["message"]?.ToString() ?? resObj?["error"]?.ToString();
-                    failureError = !string.IsNullOrEmpty(innerErr) ? $"Failed writing {target}: {innerErr}" : $"Failed writing {target}";
+                    failedAt = target;
+                    if (outcomeUnknown)
+                    {
+                        failureCode = "MutationOutcomeUnknown";
+                        failureError = $"Failed writing {target}: write outcome unknown ({writeExceptionMessage})";
+                    }
+                    else
+                    {
+                        failureCode = "MutationWriteFailed";
+                        string innerErr = resObj?["message"]?.ToString() ?? resObj?["error"]?.ToString();
+                        failureError = !string.IsNullOrEmpty(innerErr) ? $"Failed writing {target}: {innerErr}" : $"Failed writing {target}";
+                    }
+                    failedTarget = DescribeFailedTarget(target, part, original, resObj, outcomeUnknown, failureCode);
+                    failedWriteRequiresReconciliation = failedTarget["reconciliationRequired"]?.ToObject<bool>() ?? true;
                     break;
                 }
 
-                string persisted = _writer?.ReadObjectSource(target, part);
+                string persisted = TryReadSource(target, part);
                 applied.Add(new AppliedTargetRecord
                 {
                     Target = target,
@@ -550,13 +599,24 @@ namespace GxMcp.Worker.Services
                             rollbackTargets.Add(targetRollback);
                             continue;
                         }
+                        if (record.OriginalContent == null)
+                        {
+                            // An unknown original must never be "restored" as an empty part.
+                            rollbackIndeterminate = true;
+                            targetRollback["attempted"] = false;
+                            targetRollback["outcome"] = "not_restorable";
+                            targetRollback["verified"] = false;
+                            targetRollback["reason"] = "No pre-write snapshot was captured; no recovery write was attempted.";
+                            rollbackTargets.Add(targetRollback);
+                            continue;
+                        }
                         rollbackAttempts++;
                         try
                         {
                             var rollbackArgs = new JObject
                             {
                                 ["part"] = record.Part,
-                                ["content"] = record.OriginalContent ?? string.Empty,
+                                ["content"] = record.OriginalContent,
                                 ["isRollback"] = true
                             };
                             string rollbackJson = _writer?.WriteObject(record.Target, rollbackArgs);
@@ -589,20 +649,28 @@ namespace GxMcp.Worker.Services
                         }
                         rollbackTargets.Add(targetRollback);
                     }
-                    rolledBack = rollbackAttempts > 0 && !rollbackFailed && !rollbackIndeterminate;
+                    // A failed write that may have persisted leaves the batch unrestored
+                    // even when every earlier target was put back.
+                    rolledBack = rollbackAttempts > 0 && !rollbackFailed && !rollbackIndeterminate
+                        && !failedWriteRequiresReconciliation;
                 }
 
                 string rollbackOutcome = !request.RollbackOnFailure || applied.Count == 0
                     ? "not_attempted"
                     : rolledBack ? "confirmed"
-                    : rollbackIndeterminate ? "indeterminate" : "partial";
+                    : rollbackIndeterminate || failedWriteRequiresReconciliation ? "indeterminate" : "partial";
+                bool reconciliationRequired = failedWriteRequiresReconciliation
+                    || (applied.Count > 0 && !rolledBack);
                 var rollback = new JObject
                 {
                     ["attempted"] = rollbackAttempts > 0,
                     ["outcome"] = rollbackOutcome,
                     ["confirmed"] = rolledBack,
                     ["targetCount"] = rollbackAttempts,
-                    ["targets"] = rollbackTargets
+                    ["targets"] = rollbackTargets,
+                    ["failedAt"] = failedAt,
+                    ["failedTarget"] = failedTarget,
+                    ["reconciliationRequired"] = reconciliationRequired
                 };
 
                 return new MutationResult
@@ -613,7 +681,14 @@ namespace GxMcp.Worker.Services
                     RolledBack = rolledBack,
                     RollbackOutcome = rollbackOutcome,
                     ResponseJson = McpResponse.Err("MutationFailed", failureError,
-                        extra: new JObject { ["rolledBack"] = rolledBack, ["rollback"] = rollback })
+                        extra: new JObject
+                        {
+                            ["rolledBack"] = rolledBack,
+                            ["rollback"] = rollback,
+                            ["failedAt"] = failedAt,
+                            ["failureCode"] = failureCode,
+                            ["reconciliationRequired"] = reconciliationRequired
+                        })
                 };
             }
 
@@ -638,6 +713,58 @@ namespace GxMcp.Worker.Services
                 Success = true,
                 ResponseJson = McpResponse.Ok(result: successResult)
             };
+        }
+
+        private string TryReadSource(string target, string part)
+        {
+            if (_writer == null) return null;
+            try
+            {
+                return _writer.ReadObjectSource(target, part);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug($"[MUTATION-ENGINE] Read of {target} ({part}) failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        // A failed or outcome-unknown write may already have persisted. It is never
+        // replayed blindly: it counts as unchanged only when the writer says so or a
+        // readback matches the pre-write snapshot; otherwise it needs reconciliation.
+        private JObject DescribeFailedTarget(string target, string part, string original, JObject response, bool outcomeUnknown, string code)
+        {
+            var failed = new JObject
+            {
+                ["target"] = target,
+                ["part"] = part,
+                ["code"] = code,
+                ["writeAttempted"] = true
+            };
+
+            if (!outcomeUnknown
+                && string.Equals(response?["persistedState"]?.ToString(), "unchanged", StringComparison.OrdinalIgnoreCase))
+            {
+                failed["outcome"] = "unchanged";
+                failed["reconciliationRequired"] = false;
+                return failed;
+            }
+
+            if (VariablesTextReceipt.Applies(part))
+            {
+                // A text readback cannot certify Variables metadata.
+                failed["outcome"] = "requires_reconciliation";
+                failed["verificationScope"] = "variables-dsl";
+                failed["reconciliationRequired"] = true;
+                return failed;
+            }
+
+            string current = TryReadSource(target, part);
+            bool unchanged = current != null && string.Equals(current, original, StringComparison.Ordinal);
+            failed["outcome"] = unchanged ? "unchanged" : "requires_reconciliation";
+            failed["verified"] = unchanged;
+            failed["reconciliationRequired"] = !unchanged;
+            return failed;
         }
 
         private string ResolveCurrentVersion(string target, string part)
@@ -666,8 +793,7 @@ namespace GxMcp.Worker.Services
                 preview["expectedVersion"] = expectedVersion;
 
             if (_writer == null || string.IsNullOrWhiteSpace(target)) return preview;
-            string current = null;
-            try { current = _writer.ReadObjectSource(target, part); } catch { }
+            string current = TryReadSource(target, part);
             if (current == null)
             {
                 if (!string.IsNullOrWhiteSpace(expectedVersion))
@@ -704,8 +830,7 @@ namespace GxMcp.Worker.Services
 
                 string target = item["target"]?.ToString() ?? item["name"]?.ToString();
                 string part = item["part"]?.ToString() ?? "Source";
-                string current = null;
-                try { current = _writer.ReadObjectSource(target, part); } catch { }
+                string current = TryReadSource(target, part);
                 string currentVersion = current == null ? null : ComputeVersionToken(current);
                 if (_writer == null || string.IsNullOrEmpty(currentVersion))
                 {

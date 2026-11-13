@@ -2397,7 +2397,8 @@ namespace GxMcp.Worker.Services
                         // even if Commit/Rollback escaped via a path we didn't anticipate.
                         if (!transactionFinished && !transactionCommitted)
                         {
-                            try { transaction.Rollback(); } catch { }
+                            try { transaction.Rollback(); }
+                            catch (Exception rollbackEx) { Logger.Debug("[WRITE] Transaction rollback in finally failed: " + rollbackEx.Message); }
                         }
                         try { (transaction as IDisposable)?.Dispose(); } catch { }
                         try { writeGate.Dispose(); } catch { }
@@ -2478,32 +2479,13 @@ namespace GxMcp.Worker.Services
                         Logger.Debug("[SPC0150] preflight scan skipped: " + spcEx.Message);
                     }
 
-                    // Build success result — include retryStrategy and warnings when validation was bypassed
-                    var writeResult = new JObject
-                    {
-                        // This point is reached only after EnsureSave and Commit returned.
-                        ["sdkSaveCompleted"] = true,
-                        ["objectSaved"] = true,
-                        ["metadataStampPersisted"] = metadataStampPersisted
-                    };
-                    var writeWarnings = new JArray();
-                    if (explicitBase64 || usedBase64Sniff)
-                        writeResult["decodedBase64"] = true;
-                    if (!string.Equals(retryStrategy, "standard", StringComparison.Ordinal))
-                    {
-                        writeResult["retryStrategy"] = retryStrategy;
-                        if (retryStrategy.Contains("ensure_save_without_validation"))
-                            writeWarnings.Add("validation was bypassed on save; run a build to verify");
-                        if (retryStrategy.Contains("object_save_only"))
-                            writeWarnings.Add("part-level save was skipped; only object-level save succeeded");
-                    }
-                    if (writeWarnings.Count > 0)
-                        writeResult["warnings"] = writeWarnings;
-                    WritePolicy.AddAutoCreatedVariables(writeResult, autoCreatedVariables);
-                    return Models.McpResponse.Ok(
-                        target: target,
-                        code: "WriteApplied",
-                        result: writeResult.Count > 0 ? writeResult : null);
+                    // This point is reached only after EnsureSave and Commit returned.
+                    return BuildWriteAppliedResponse(
+                        target,
+                        metadataStampPersisted,
+                        explicitBase64 || usedBase64Sniff,
+                        retryStrategy,
+                        autoCreatedVariables);
                 }
                 catch (Exception saveEx)
                 {
@@ -2517,6 +2499,41 @@ namespace GxMcp.Worker.Services
                 // obj may not have been bound yet (exception before FindObject).
                 return BuildEnrichedSaveError(null, ex, null, target, partName).ToString();
             }
+        }
+
+        // Success envelope of WriteObjectInternal, built only after EnsureSave and Commit
+        // returned. Includes retryStrategy and warnings when validation was bypassed.
+        private static string BuildWriteAppliedResponse(
+            string target,
+            bool metadataStampPersisted,
+            bool decodedBase64,
+            string retryStrategy,
+            IReadOnlyList<VariableInjector.InjectedVariable> autoCreatedVariables)
+        {
+            var writeResult = new JObject
+            {
+                ["sdkSaveCompleted"] = true,
+                ["objectSaved"] = true,
+                ["metadataStampPersisted"] = metadataStampPersisted
+            };
+            var writeWarnings = new JArray();
+            if (decodedBase64)
+                writeResult["decodedBase64"] = true;
+            if (!string.Equals(retryStrategy, "standard", StringComparison.Ordinal))
+            {
+                writeResult["retryStrategy"] = retryStrategy;
+                if (retryStrategy.Contains("ensure_save_without_validation"))
+                    writeWarnings.Add("validation was bypassed on save; run a build to verify");
+                if (retryStrategy.Contains("object_save_only"))
+                    writeWarnings.Add("part-level save was skipped; only object-level save succeeded");
+            }
+            if (writeWarnings.Count > 0)
+                writeResult["warnings"] = writeWarnings;
+            WritePolicy.AddAutoCreatedVariables(writeResult, autoCreatedVariables);
+            return Models.McpResponse.Ok(
+                target: target,
+                code: "WriteApplied",
+                result: writeResult.Count > 0 ? writeResult : null);
         }
 
         // Friction-report #2: when the bare-error catches fire (outside the transaction's own

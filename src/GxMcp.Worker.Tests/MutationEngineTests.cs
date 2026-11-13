@@ -324,6 +324,157 @@ namespace GxMcp.Worker.Tests
             Assert.All(result?["targets"] as JArray ?? new JArray(), target => Assert.True(target["verified"]?.ToObject<bool>()));
         }
 
+        [Fact]
+        public void MutationEngine_UnreadableOriginal_IsNotWrittenAndEarlierTargetsRollBack()
+        {
+            var written = new List<string>();
+            var rolledBack = new List<string>();
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) =>
+                {
+                    written.Add(target);
+                    return new JObject { ["status"] = "Success" }.ToString();
+                },
+                rollback: (target, args) =>
+                {
+                    rolledBack.Add(target);
+                    return new JObject { ["status"] = "Success" }.ToString();
+                },
+                read: (target, part) => target == "Obj2" ? null : "OriginalSource");
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject { ["target"] = "Obj1", ["part"] = "Source", ["content"] = "Code1" },
+                    new JObject { ["target"] = "Obj2", ["part"] = "Source", ["content"] = "Code2" }
+                },
+                RollbackOnFailure = true
+            });
+
+            Assert.False(res.Success);
+            Assert.Equal(new[] { "Obj1" }, written);
+            Assert.Equal(new[] { "Obj1" }, rolledBack);
+            Assert.True(res.RolledBack);
+            var envelope = JObject.Parse(res.ResponseJson);
+            Assert.Equal("RollbackSnapshotUnavailable", envelope["failureCode"]?.ToString());
+            Assert.Equal("Obj2", envelope["failedAt"]?.ToString());
+            Assert.Equal("not_written", envelope["rollback"]?["failedTarget"]?["outcome"]?.ToString());
+        }
+
+        [Fact]
+        public void MutationEngine_RollbackNeverRestoresAnUnknownOriginalAsEmpty()
+        {
+            var writeContents = new List<string>();
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) =>
+                {
+                    writeContents.Add(args["content"]?.ToString());
+                    return target == "FailObj"
+                        ? new JObject { ["status"] = "Error", ["message"] = "Simulated disk failure" }.ToString()
+                        : new JObject { ["status"] = "Success" }.ToString();
+                },
+                read: (target, part) => target == "Obj1" ? null : "OriginalSource");
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject { ["target"] = "Obj1", ["part"] = "Source", ["content"] = "Code1" },
+                    new JObject { ["target"] = "FailObj", ["part"] = "Source", ["content"] = "CodeFail" }
+                },
+                RollbackOnFailure = true
+            });
+
+            Assert.False(res.Success);
+            // Obj1 has no restorable snapshot, so it is neither written nor "restored" to "".
+            Assert.Empty(writeContents);
+            Assert.DoesNotContain(string.Empty, writeContents);
+            Assert.Equal("not_attempted", res.RollbackOutcome);
+        }
+
+        [Fact]
+        public void MutationEngine_WriterThrowsOnSecondItem_RollsBackFirstAndNamesFailedTarget()
+        {
+            var written = new List<string>();
+            var rolledBack = new List<string>();
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) =>
+                {
+                    if (target == "Obj2") throw new InvalidOperationException("COM failure");
+                    written.Add(target);
+                    return new JObject { ["status"] = "Success" }.ToString();
+                },
+                rollback: (target, args) =>
+                {
+                    rolledBack.Add(target);
+                    return new JObject { ["status"] = "Success" }.ToString();
+                });
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject { ["target"] = "Obj1", ["part"] = "Source", ["content"] = "Code1" },
+                    new JObject { ["target"] = "Obj2", ["part"] = "Source", ["content"] = "Code2" }
+                },
+                RollbackOnFailure = true
+            });
+
+            Assert.False(res.Success);
+            Assert.Contains("Obj2", res.ErrorMessage);
+            Assert.Equal(new[] { "Obj1" }, written);
+            Assert.Equal(new[] { "Obj1" }, rolledBack);
+            // The default fake reads back the original for Obj2, which proves it unchanged.
+            Assert.True(res.RolledBack);
+            var envelope = JObject.Parse(res.ResponseJson);
+            Assert.Equal("MutationOutcomeUnknown", envelope["failureCode"]?.ToString());
+            Assert.Equal("Obj2", envelope["rollback"]?["failedTarget"]?["target"]?.ToString());
+            Assert.Equal("unchanged", envelope["rollback"]?["failedTarget"]?["outcome"]?.ToString());
+        }
+
+        [Fact]
+        public void MutationEngine_FailedWriteThatPersistedRequiresReconciliation()
+        {
+            var current = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Obj1"] = "Original1",
+                ["Obj2"] = "Original2"
+            };
+            var mockWriter = new DelegateSdkObjectWriter(
+                write: (target, args) =>
+                {
+                    current[target] = args["content"]?.ToString();
+                    if (target == "Obj2") throw new InvalidOperationException("COM failure after save");
+                    return new JObject { ["status"] = "Success" }.ToString();
+                },
+                read: (target, part) => current.TryGetValue(target, out var value) ? value : null);
+
+            var engine = new MutationEngine(mockWriter);
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject { ["target"] = "Obj1", ["part"] = "Source", ["content"] = "Updated1" },
+                    new JObject { ["target"] = "Obj2", ["part"] = "Source", ["content"] = "Updated2" }
+                },
+                RollbackOnFailure = true
+            });
+
+            Assert.False(res.Success);
+            Assert.False(res.RolledBack);
+            Assert.Equal("indeterminate", res.RollbackOutcome);
+            // Obj1 is restored; Obj2 is reported, never replayed blindly.
+            Assert.Equal("Original1", current["Obj1"]);
+            Assert.Equal("Updated2", current["Obj2"]);
+            var envelope = JObject.Parse(res.ResponseJson);
+            Assert.True(envelope["reconciliationRequired"]?.ToObject<bool>());
+            Assert.Equal("requires_reconciliation", envelope["rollback"]?["failedTarget"]?["outcome"]?.ToString());
+        }
+
         private class DelegateSdkObjectWriter : ISdkObjectWriter
         {
             private readonly Func<string, JObject, string> _write;

@@ -7,7 +7,7 @@ namespace GxMcp.Worker.Helpers
 {
     /// <summary>
     /// Shared write-pipeline utilities reused across write services.
-    /// Provides pre-write snapshot capture, advisory lock checking, and
+    /// Provides advisory lock checking, write-context ownership, and
     /// per-target write notification. All methods are best-effort: failures
     /// log at Warn and do NOT block the calling write.
     /// </summary>
@@ -48,46 +48,6 @@ namespace GxMcp.Worker.Helpers
                 _disposed = true;
                 _currentOwnerId = _previousOwner;
                 _currentForce = _previousForce;
-            }
-        }
-
-        /// <summary>
-        /// Capture a pre-write snapshot of the current object part content.
-        /// Returns the snapshot descriptor or null when the snapshot could not
-        /// be captured (no KB open, object not found, part has no textual
-        /// representation, etc.). Failures are logged at Warn level.
-        /// </summary>
-        public static EditSnapshotStore.SnapshotInfo PreWriteSnapshot(
-            string target,
-            string part,
-            string typeFilter,
-            WriteService writeService)
-        {
-            if (string.IsNullOrWhiteSpace(target)) return null;
-            if (writeService == null) return null;
-            try
-            {
-                // Delegate to WriteService's own snapshot logic via reflection is
-                // fragile; instead replicate the pattern directly here using the
-                // public/internal surface available.
-                // We call WriteService.TryCapturePreWriteSnapshot via the internal
-                // helper exposed indirectly: invoke the same steps.
-
-                // Actually WriteService.TryCapturePreWriteSnapshot is private.
-                // We expose a public wrapper in WritePipeline by calling the
-                // internal static API that WriteService uses.
-                // The simplest correct approach: call WriteService's public
-                // WriteObject with dryRun=true is not appropriate here.
-                // Instead return null and let the caller use TryCapturePreWriteSnapshot
-                // directly — this method documents the intent for future refactor.
-
-                Logger.Debug($"[WritePipeline] PreWriteSnapshot requested for target='{target}' part='{part}'");
-                return null; // placeholder — callers should use WriteService.TryCapturePreWriteSnapshot directly for now
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn($"[WritePipeline] PreWriteSnapshot failed for '{target}/{part}': {ex.Message}");
-                return null;
             }
         }
 
