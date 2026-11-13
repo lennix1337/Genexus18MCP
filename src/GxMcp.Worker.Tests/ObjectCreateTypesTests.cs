@@ -109,9 +109,20 @@ namespace GxMcp.Worker.Tests
 
             var unresolved = listed
                 .Where(name => !ObjectService.TypedDescriptorIds.ContainsKey(name))
+                // A Master Page is created from the WebPanel type, which is in the table (checked below).
+                .Where(name => !ObjectCreateTypes.IsMasterPage(name))
                 .Where(name => ObjectService.ResolveObjectTypeGuid(name) == Guid.Empty)
                 .ToList();
             Assert.Empty(unresolved);
+            Assert.Contains(ObjectCreateTypes.MasterPageBaseType, ObjectService.TypedDescriptorIds.Keys, StringComparer.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MasterPage_IsNotInTheTypedDescriptorTable_SoALookupByItKeepsMatchingTheDescriptorName()
+        {
+            // A Master Page and a WebPanel share the entity type GUID. A table entry for MasterPage would resolve to that GUID
+            // and make every lookup by "MasterPage" (delete, move, properties) find a plain WebPanel of the same name.
+            Assert.DoesNotContain(ObjectCreateTypes.MasterPageType, ObjectService.TypedDescriptorIds.Keys, StringComparer.OrdinalIgnoreCase);
         }
 
         [Fact]

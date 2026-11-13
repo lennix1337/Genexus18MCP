@@ -449,6 +449,18 @@ namespace GxMcp.Worker.Services
                         hint: "Use updateExisting=true (or the preferred mode=update with expectedVersion) to update an existing object.",
                         target: spec.Name);
                 }
+                // A Master Page is born whole (WEB_COMP=Master and the form with its content place holder in one save), which the atomic
+                // definition has no way to give: refused here, also for a dryRun, so a preview cannot pass where the real call fails.
+                // An existing Master Page is updated like any other object.
+                if (!exists && ObjectCreateTypes.IsMasterPage(spec.Type))
+                {
+                    return McpResponse.Err(
+                        code: "UnsupportedObjectType",
+                        message: "object_atomic does not create a Master Page: " + spec.Name,
+                        hint: "Create it with genexus_create action=object type=MasterPage, then use object_atomic mode=update to fill its variables, rules or source.",
+                        target: spec.Name,
+                        extra: new JObject { ["persisted"] = false });
+                }
                 if (spec.UpdateRequested && !exists)
                 {
                     return McpResponse.Err(
