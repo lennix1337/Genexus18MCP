@@ -78,13 +78,27 @@ namespace GxMcp.Gateway.Tests
         [Fact]
         public void OptIn_BytesAppearOnce_NotInTextOrStructuredContent()
         {
-            var result = Build(Payload(WriteFile("a.png", 4096)), Args(true));
+            // structuredContent is off by default, so it is switched on here: the point of the test
+            // is that the image bytes are not duplicated into it when it IS emitted.
+            const string emitVariable = "GXMCP_EMIT_STRUCTURED_CONTENT";
+            string? previous = Environment.GetEnvironmentVariable(emitVariable);
+            Environment.SetEnvironmentVariable(emitVariable, "1");
+            Program.InvalidateEnvProbeCache();
+            try
+            {
+                var result = Build(Payload(WriteFile("a.png", 4096)), Args(true));
 
-            Assert.NotNull(result["structuredContent"]);
-            string data = result["content"]![1]!["data"]!.ToString();
-            Assert.DoesNotContain(data, result["structuredContent"]!.ToString());
-            Assert.DoesNotContain(data, result["content"]![0]!["text"]!.ToString());
-            Assert.Equal(1, result.ToString().Split(data).Length - 1);
+                Assert.NotNull(result["structuredContent"]);
+                string data = result["content"]![1]!["data"]!.ToString();
+                Assert.DoesNotContain(data, result["structuredContent"]!.ToString());
+                Assert.DoesNotContain(data, result["content"]![0]!["text"]!.ToString());
+                Assert.Equal(1, result.ToString().Split(data).Length - 1);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(emitVariable, previous);
+                Program.InvalidateEnvProbeCache();
+            }
         }
 
         [Fact]
