@@ -449,6 +449,14 @@ reporting per-pass timings - after two hot-path fixes the measured medians are
 
 ## Served operations and admitted space
 
+Engine routing runs before the Worker index gate (`DispatchToolCallCoreAsync`), so an
+admitted read is answered while the index is cold. Such an `genexus_query`,
+`genexus_list_objects` or `genexus_inspect` answer carries `_meta.index`
+(`status`, `freshness`, `etaMs`) while the Gateway's index mirror reports the index not
+usable; a call outside the admitted space still meets the `IndexNotReady` refusal, which
+lists the engine-served shapes in `nativeReads` when `Backend=gxengine` routes them and
+the engine executable exists.
+
 Each routed operation admits a deliberately narrow argument space, declared as
 one list of supported arguments per operation (`EngineAdmittedSpace` in
 `src/GxMcp.Gateway/EngineRoutedOperations.cs`). Any other requested argument

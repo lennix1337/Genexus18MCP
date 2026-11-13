@@ -968,6 +968,19 @@ namespace GxMcp.Gateway
                 "After the write, re-read the exact same surface and report whether persistence is confirmed or still blocked.";
         }
 
+        private static string BuildLegacyAssessmentPrompt(string kb)
+        {
+            string kbHint = string.IsNullOrWhiteSpace(kb) ? string.Empty : $"Pass kb='{kb}' to every call. ";
+            return
+                "Produce a read-only migration assessment of a legacy GeneXus Knowledge Base (GeneXus 8/9 via COM, GeneXus 15 and Evolution 1-2 via reflection). " +
+                "Do not edit, build, import or export anything. " + kbHint +
+                "1. Call `genexus_whoami` and `genexus_kb` action=list to confirm which KB is open and which driver and major it reports. " +
+                "2. Inventory: call `genexus_query` with a typeFilter for each object type (Transaction, Procedure, WebPanel, ...) and `genexus_list_objects` with limit and cursor to page; record the count per type. " +
+                "3. Readability: call `genexus_read` part=Source on a few objects of each type. Record every UNSUPPORTED_IN_GENEXUS_VERSION result (driver, capability) instead of retrying it. " +
+                "4. Report counts by type, the object types and parts this driver cannot read, and what must be reviewed by hand (everything not read, plus external dependencies and patterns you could not see). " +
+                "Label each statement observed or not observable with this driver, and do not estimate effort for objects you could not read.";
+        }
+
         private static string BuildBootstrapLlmPrompt(string goal)
         {
             string goalHint = string.IsNullOrWhiteSpace(goal)
@@ -1046,7 +1059,12 @@ namespace GxMcp.Gateway
                         args["preferredSurface"]?.ToString() ?? "PatternInstance"),
                     new PromptArgumentDefinition("name", "GeneXus object name.", true),
                     new PromptArgumentDefinition("changeGoal", "Requested UI or metadata change.", true),
-                    new PromptArgumentDefinition("preferredSurface", "Best initial guess for the authoritative editable surface.", false, _visualSurfaces))
+                    new PromptArgumentDefinition("preferredSurface", "Best initial guess for the authoritative editable surface.", false, _visualSurfaces)),
+                new PromptDefinition(
+                    "gx_legacy_kb_assessment",
+                    "Guide an agent through a read-only migration assessment of a legacy GeneXus KB: inventory, driver limits, manual review list.",
+                    args => BuildLegacyAssessmentPrompt(args["kb"]?.ToString() ?? string.Empty),
+                    new PromptArgumentDefinition("kb", "KB alias when more than one KB is open.", false))
             };
 
             return prompts.ToDictionary(prompt => prompt.Name, StringComparer.Ordinal);

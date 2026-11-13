@@ -11,7 +11,13 @@ namespace GxMcp.Gateway
         private static readonly EngineRoutedOperations EngineOperations = new EngineRoutedOperations(
             () => ActiveConfig,
             Log,
-            (payload, isError, toolName, toolArgs) => BuildToolResultContent(payload, isError, toolName, toolArgs),
+            (payload, isError, toolName, toolArgs) =>
+            {
+                JObject result = BuildToolResultContent(payload, isError, toolName, toolArgs);
+                // Engine-served index-class reads say when the Worker index is still warming.
+                if (!isError) AttachNativeServedIndexMetadata(result, toolName);
+                return result;
+            },
             ReadEngineActiveModelAsync);
 
         /// <summary>Budget for the Worker's active-model snapshot, which it answers without the SDK.</summary>

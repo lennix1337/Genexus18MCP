@@ -80,6 +80,7 @@ also read [`AGENTS.md`](../AGENTS.md).
 - [Local SDK build outside the MCP](sdk-local-msbuild.md): specify, generate and compile a test KB with the SDK's MSBuild tasks, without `BuildOne`/`BuildAll` or Cloud.
 - [SDK CI validation lane](ci-sdk-validation.md).
 - [Agent evaluation corpus](agent-evals.md).
+- [Agent evaluation scoreboard](agent-eval-scoreboard.md).
 - [Release build warning baseline](build_warning_baseline.md).
 - [Record safety and performance evidence](transaction-records-benchmarks.md).
 
