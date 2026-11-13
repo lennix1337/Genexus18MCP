@@ -85,7 +85,14 @@ namespace GxMcp.Worker.Helpers
         /// A value that is itself XML (a token list) is compared as XML, so whitespace and
         /// attribute order do not read as a change. Unparseable text compares as text.
         /// </summary>
-        internal static bool SemanticallyEqual(string left, string right)
+        internal static bool SemanticallyEqual(string left, string right) => SemanticallyEqual(left, right, variableMayBeResolved: false);
+
+        /// <summary>
+        /// As <see cref="SemanticallyEqual(string, string)"/>, and with <paramref name="variableMayBeResolved"/> a value that names a
+        /// variable ("&amp;name") in one payload equals the key the SDK resolved it to ("var:5") in the other: an XPZ names the
+        /// variables of a custom property and the SDK stores their keys when it imports the form.
+        /// </summary>
+        internal static bool SemanticallyEqual(string left, string right, bool variableMayBeResolved)
         {
             if (string.Equals(left, right, StringComparison.Ordinal)) return true;
             if (!TryParse(left, out var l) || !TryParse(right, out var r) || l == null || r == null) return false;
@@ -97,15 +104,16 @@ namespace GxMcp.Worker.Helpers
             foreach (var property in l.Properties)
             {
                 if (!rightByName.TryGetValue(property.Key, out string other)) return false;
-                if (!ValuesEqual(property.Value, other)) return false;
+                if (!ValuesEqual(property.Value, other, variableMayBeResolved)) return false;
             }
             return true;
         }
 
-        private static bool ValuesEqual(string a, string b)
+        private static bool ValuesEqual(string a, string b, bool variableMayBeResolved)
         {
             if (string.Equals(a, b, StringComparison.Ordinal)) return true;
             if (string.Equals(CanonicalXmlOrText(a), CanonicalXmlOrText(b), StringComparison.Ordinal)) return true;
+            if (variableMayBeResolved && XmlEquivalence.IsVariableNamedVsKeyed(CanonicalXmlOrText(a), CanonicalXmlOrText(b))) return true;
             // Issue #711: an expression property (ControlWhere) reads back as a TokenDataList.
             return ControlExpressionText.SameTokenExpression(a, b);
         }
