@@ -501,9 +501,10 @@
           "validationMode": {
             "type": "string",
             "enum": [
-              "specify"
+              "specify",
+              "native"
             ],
-            "description": "Issue #60: run the inline Specify pass…"
+            "description": "specify (Issue #60): run the inline…"
           },
           "rollbackOnFailure": {
             "type": "boolean",
