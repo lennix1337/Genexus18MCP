@@ -198,6 +198,7 @@ namespace GxMcp.Gateway
             // attached without cloning the entire response tree.
             DetachResponsePayload(resultObj, finalResult);
             var toolResult = BuildToolResultContent(finalResult, isErr, tName, tArgs, payloadOwned: true);
+            BrowserScreenshotImage.Attach(toolResult, finalResult, tName, tArgs, isErr);
             AttachOmittedFieldsMetadata(toolResult, omittedMutationFields);
             AttachExactReadIndexMetadata(toolResult, tName, tArgs);
             if (cKey != null)

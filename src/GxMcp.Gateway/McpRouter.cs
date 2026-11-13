@@ -947,7 +947,10 @@ namespace GxMcp.Gateway
                 $"Inspect 'genexus://objects/{name}/ui-context', 'genexus://objects/{name}/pattern-metadata', and 'genexus://objects/{name}/part/{normalizedSurface}' first. " +
                 "Determine the authoritative surface before editing: base layout, raw WebForm metadata, or pattern-owned metadata. " +
                 "If assets are involved, inspect them with `genexus_io` action=asset_find or asset_read before changing any binary file. " +
-                "After the write, re-read the exact same surface and report whether persistence is confirmed or still blocked.";
+                "After the write, re-read the exact same surface and report whether persistence is confirmed or still blocked. " +
+                "To show the user the result on a WebPanel, capture before and after with the same call, `genexus_browser` action=preview mode=run capture=[\"screenshot\"] inlineImage=true emulate=desktop1280: " +
+                "capture before, edit with `genexus_edit`, build with `genexus_lifecycle` action=build, capture again, then present both images. " +
+                "If the screenshot is refused as too large or the app does not run, say so instead of retrying blindly.";
         }
 
         private static string BuildBootstrapLlmPrompt(string goal)
