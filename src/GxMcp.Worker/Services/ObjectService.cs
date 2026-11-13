@@ -441,7 +441,7 @@ namespace GxMcp.Worker.Services
                         continue;
                     }
                     string version = null;
-                    try { version = WriteService.ComputeContentVersionToken(obj, source); } catch { }
+                    try { version = WriteService.ComputePartContentVersionToken(obj, partName, source); } catch { }
                     result.Add(new SourceStoreBackfillPart
                     {
                         PartName = partName,
@@ -4542,9 +4542,7 @@ namespace GxMcp.Worker.Services
                 if (payload["versionToken"] == null
                     && payload["source"]?.Type == JTokenType.String)
                 {
-                    payload["versionToken"] = WriteService.ComputeContentVersionToken(
-                        obj,
-                        payload["source"].ToString());
+                    payload["versionToken"] = WriteService.ComputePartContentVersionToken(obj, resolvedPart, payload["source"].ToString());
                 }
                 return payload.ToString(Newtonsoft.Json.Formatting.None);
             }
@@ -5625,6 +5623,16 @@ namespace GxMcp.Worker.Services
                     // `Source`, a Design System `Styles` or `Source`): the token ends with the fingerprint of that text.
                     // An External Object has a token of its own: there it says false.
                     exported["tokenFingerprintMatchesFile"] = exportedVersionToken.EndsWith(":" + (string)exported["sha256"], StringComparison.Ordinal);
+                    // A visual part's token fingerprints its XML with the GUID ids the SDK regenerates on each load
+                    // neutralised (VisualTokenCanonicalizer), so for a layout whose ids are GUIDs it is not the SHA-256 of
+                    // the file and the flag above says false. The receipt then names the fingerprint the token ends with.
+                    // The part is the one the read resolved (the token was built with that name), not the name that was asked for.
+                    string tokenFingerprint = WriteService.ComputePartContentFingerprint(exportResult["part"]?.ToString() ?? normalizedPart, source);
+                    if (!string.Equals(tokenFingerprint, (string)exported["sha256"], StringComparison.Ordinal))
+                    {
+                        exported["tokenFingerprint"] = tokenFingerprint;
+                        exported["tokenFingerprintBasis"] = RecoveryReadCertificate.Sha256BasisCanonicalVisualXml;
+                    }
                 }
                 return McpResponse.Ok(target: target, code: "ExportCompleted", result: exported);
             }
@@ -6700,8 +6708,11 @@ namespace GxMcp.Worker.Services
             result["totalBytes"] = page.TotalBytes;
             // Optimistic-concurrency token (stale-edit fix): pass this back as
             // baseVersion on genexus_edit so a concurrent IDE change is caught as
-            // StaleObject instead of being silently overwritten.
-            try { var vt = WriteService.ComputeContentVersionToken(obj, content); if (vt != null) result["versionToken"] = vt; } catch { }
+            // StaleObject instead of being silently overwritten. The part names the
+            // fingerprint: a visual part (WebForm, Layout) ignores the GUID ids the SDK
+            // regenerates on every load of a form that was never saved, so the read and
+            // the fresh read behind baseVersion agree on an unchanged object.
+            try { var vt = WriteService.ComputePartContentVersionToken(obj, result["part"]?.ToString(), content); if (vt != null) result["versionToken"] = vt; } catch { }
             if (page.SuggestedNextOffset.HasValue) result["suggestedNextOffset"] = page.SuggestedNextOffset.Value;
             if (page.SuggestedNextLimit.HasValue) result["suggestedNextLimit"] = page.SuggestedNextLimit.Value;
 

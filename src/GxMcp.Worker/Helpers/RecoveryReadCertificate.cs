@@ -63,13 +63,18 @@ namespace GxMcp.Worker.Helpers
         internal const string CoverageComplete = "sdk-complete";
         internal const string CoveragePartial = "sdk-partial";
         internal const string CoverageUnavailable = "sdk-unavailable";
+        /// <summary>Value of <c>sha256Basis</c> when <c>sha256</c> is that of the visual XML with its regenerated ids neutralised.</summary>
+        internal const string Sha256BasisCanonicalVisualXml = "canonical-visual-xml";
 
         internal static JObject Build(RecoveryReadObservation observation)
         {
             if (observation == null) throw new ArgumentNullException(nameof(observation));
 
             string text = observation.Text;
-            string sha256 = text == null ? null : WriteService.ComputeContentFingerprint(text);
+            // The fingerprint the read's token ends with, which is what the Gateway requires of `sha256`: the hash of the
+            // text itself for every part but a visual one, whose token ignores the GUID ids the SDK regenerates on each
+            // load (VisualTokenCanonicalizer). `sha256Basis` below says so when the two differ.
+            string sha256 = text == null ? null : WriteService.ComputePartContentFingerprint(observation.ResolvedPart, text);
             int totalLines = 0;
             bool windowCoversPart = false;
             if (text != null)
@@ -161,6 +166,11 @@ namespace GxMcp.Worker.Helpers
                 ["targetWriteStamp"] = observation.WriteStampBefore
             };
             if (reason != null) certificate["reason"] = reason;
+            // The hash above is not the SHA-256 of the text when the part is a visual one whose ids were neutralised (for
+            // every other part it is the same hash): a caller that hashes its own copy of the text must know it will not match.
+            if (text != null
+                && !string.Equals(sha256, WriteService.ComputeContentFingerprint(text), StringComparison.Ordinal))
+                certificate["sha256Basis"] = Sha256BasisCanonicalVisualXml;
             return certificate;
         }
     }
