@@ -117,3 +117,67 @@ fn cache_path_for_honours_the_override() {
 
     assert_eq!(cache_path_for(&tree, Some(&outside)), outside);
 }
+
+fn indexed_tree(label: &str) -> (PathBuf, PathBuf) {
+    let tree = scratch(label);
+    write_source(&tree, "Alpha.txt", "Procedure Alpha\nCall(Beta)\n");
+    write_source(&tree, "Beta.txt", "Procedure Beta\n");
+    let cache = tree.join("idx.bin");
+    let (graph, parses) = build_index(&tree).unwrap();
+    save_index_to(&graph, &parses, &cache).unwrap();
+    (tree, cache)
+}
+
+#[test]
+fn save_leaves_no_temp_file_and_overwrites_an_existing_index() {
+    let (tree, cache) = indexed_tree("atomic");
+    let (graph, parses) = build_index(&tree).unwrap();
+    save_index_to(&graph, &parses, &cache).unwrap();
+
+    let leftovers: Vec<_> = fs::read_dir(&tree)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temp file left behind");
+}
+
+#[test]
+fn truncated_index_falls_back_to_a_full_reparse() {
+    let (tree, cache) = indexed_tree("truncated");
+    let expected = build_index(&tree).unwrap().0.nodes.len();
+    let bytes = fs::read(&cache).unwrap();
+    fs::write(&cache, &bytes[..bytes.len() / 2]).unwrap();
+
+    let graph = load_cache_from(&cache, &tree).unwrap();
+    assert_eq!(graph.nodes.len(), expected);
+}
+
+#[test]
+fn index_with_a_huge_length_prefix_is_rejected_without_allocating() {
+    let (tree, cache) = indexed_tree("hugelen");
+    let expected = build_index(&tree).unwrap().0.nodes.len();
+    // Keep the valid version header, then claim an enormous collection length.
+    let mut bytes = fs::read(&cache).unwrap();
+    for b in bytes.iter_mut().skip(4).take(8) {
+        *b = 0xFF;
+    }
+    fs::write(&cache, &bytes).unwrap();
+
+    let graph = load_cache_from(&cache, &tree).unwrap();
+    assert_eq!(graph.nodes.len(), expected);
+}
+
+#[test]
+fn failed_save_leaves_the_previous_index_untouched() {
+    let (tree, cache) = indexed_tree("failsafe");
+    let before = fs::read(&cache).unwrap();
+    // Occupy the sibling temp name with a directory so the temp file cannot be
+    // created. A save that wrote straight to `cache` would truncate it instead.
+    let tmp = tree.join(format!("idx.bin.{}.tmp", std::process::id()));
+    fs::create_dir(&tmp).unwrap();
+
+    let (graph, parses) = build_index(&tree).unwrap();
+    assert!(save_index_to(&graph, &parses, &cache).is_err());
+    assert_eq!(fs::read(&cache).unwrap(), before);
+}

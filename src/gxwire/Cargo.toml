@@ -10,9 +10,7 @@ description = "High-performance architectural discovery, call graph, and impact 
 clap = { version = "4.5", default-features = false, features = ["std", "derive", "help"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-memmap2 = "0.9"
 regex = { version = "1.10", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
-rayon = "1.10"
 bincode = "1.3"
 walkdir = "2.5"
 
@@ -25,7 +23,7 @@ debug = "line-tables-only"
 debug = false
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"

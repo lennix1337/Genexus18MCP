@@ -59,11 +59,53 @@ fn sqlcmd_command_with_credentials(
     Ok(cmd)
 }
 
+/// Windows rejects a command line longer than this many UTF-16 units (CreateProcess).
+const MAX_COMMAND_LINE_CHARS: usize = 32_767;
+
+/// The statement cannot travel as `sqlcmd -Q <sql>` because the resulting command line
+/// would exceed what the OS accepts. Refused before spawning so the caller sees the size
+/// instead of an opaque OS error.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CommandLineTooLong {
+    pub chars: usize,
+    pub limit: usize,
+}
+
+impl std::fmt::Display for CommandLineTooLong {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SQL statement is too large for sqlcmd -Q: the command line would be about {} characters but the operating system accepts at most {}. sqlcmd was not started; reduce the amount of data written in one statement.",
+            self.chars, self.limit
+        )
+    }
+}
+
+/// Upper-bound estimate of the Windows command line: program and arguments, each quoted
+/// (two quotes plus a separator) with every embedded quote or backslash escaped.
+fn check_command_line(cmd: &std::process::Command) -> Result<(), CommandLineTooLong> {
+    let weigh = |s: &std::ffi::OsStr| {
+        let s = s.to_string_lossy();
+        s.chars().map(char::len_utf16).sum::<usize>()
+            + s.chars().filter(|c| matches!(c, '"' | '\\')).count()
+            + 3
+    };
+    let chars = weigh(cmd.get_program()) + cmd.get_args().map(weigh).sum::<usize>();
+    if chars > MAX_COMMAND_LINE_CHARS {
+        return Err(CommandLineTooLong {
+            chars,
+            limit: MAX_COMMAND_LINE_CHARS,
+        });
+    }
+    Ok(())
+}
+
 /// Executes raw SQL against a live SQL Server or LocalDB instance using `sqlcmd`.
 pub fn execute_sqlcmd(info: &KbConnectionInfo, sql: &str) -> Result<String, String> {
-    let output = sqlcmd_command(info)?
-        .arg("-Q")
-        .arg(sql)
+    let mut command = sqlcmd_command(info)?;
+    command.arg("-Q").arg(sql);
+    check_command_line(&command).map_err(|error| error.to_string())?;
+    let output = command
         .output()
         .map_err(|e| format!("Failed to invoke sqlcmd: {e}"))?;
 
@@ -348,6 +390,24 @@ mod tests {
         let vars: std::collections::BTreeMap<_, _> = command.get_envs().collect();
         assert_eq!(vars[std::ffi::OsStr::new("SQLCMDUSER")], None);
         assert_eq!(vars[std::ffi::OsStr::new("SQLCMDPASSWORD")], None);
+    }
+
+    #[test]
+    fn oversized_statement_is_refused_before_spawning_sqlcmd() {
+        let command = || {
+            sqlcmd_command_with_credentials(&sql_info(), Some("u".into()), Some("p".into()))
+                .unwrap()
+        };
+        let mut small = command();
+        small.arg("-Q").arg("SELECT 1");
+        assert_eq!(check_command_line(&small), Ok(()));
+
+        let mut large = command();
+        large.arg("-Q").arg("A".repeat(32_767));
+        let error = check_command_line(&large).unwrap_err();
+        assert!(error.chars > MAX_COMMAND_LINE_CHARS);
+        let message = error.to_string();
+        assert!(message.contains(&error.chars.to_string()) && message.contains("32767"));
     }
 
     #[test]
