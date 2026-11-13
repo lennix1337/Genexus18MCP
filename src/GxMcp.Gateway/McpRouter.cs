@@ -264,6 +264,7 @@ namespace GxMcp.Gateway
                         ["cacheScope"] = "public"
                     };
                     _cachedProfileResponses.Clear();
+                    _adaptiveListResponses.Clear();
                     ToolProfileFilter.InvalidateCache();
                     Program.Log($"[McpRouter] Loaded {_toolDefinitions.Count} tool definitions from JSON.");
                 }
@@ -447,6 +448,23 @@ namespace GxMcp.Gateway
                 ["ttlMs"] = PublicResourceTtlMs,
                 ["cacheScope"] = "public"
             };
+        }
+
+        // At most 2^groups entries (one per combination of enabled groups).
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, JObject> _adaptiveListResponses =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, JObject>(StringComparer.Ordinal);
+
+        /// <summary>tools/list for the adaptive profile: core + meta tool + the session's enabled groups.</summary>
+        internal static JObject BuildAdaptiveToolsList(IReadOnlyCollection<string> enabledGroups)
+        {
+            return _adaptiveListResponses.GetOrAdd(string.Join(",", enabledGroups), _ => new JObject
+            {
+                ["resultType"] = "complete",
+                ["tools"] = ToolProfileFilter.FilterAdaptive(_toolDefinitions, AdaptiveTools.ToolsOf(enabledGroups)),
+                ["profile"] = AdaptiveTools.ProfileName,
+                ["ttlMs"] = 0,
+                ["cacheScope"] = "private"
+            });
         }
 
         public static object? Handle(JObject request)

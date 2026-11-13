@@ -1900,7 +1900,7 @@ namespace GxMcp.Gateway
                 ["toolProfile"] = new JObject
                 {
                     ["active"] = ToolProfileFilter.ResolveActiveProfile(cfg?.Server?.ToolProfile),
-                    ["availableProfiles"] = new JArray("standard", "core", "authoring", "devops", "ui", "db", "all"),
+                    ["availableProfiles"] = new JArray("standard", "core", "adaptive", "authoring", "devops", "ui", "db", "all"),
                     ["hint"] = "Set Server.ToolProfile or GXMCP_PROFILE to choose a profile; combine profiles with '+'. Use 'all' to expose every tool."
                 },
                 ["worker"] = BuildWorkerBlock(),

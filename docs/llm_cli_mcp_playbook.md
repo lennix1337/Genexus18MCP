@@ -113,6 +113,7 @@ New neutral configs created by `genexus-mcp init` or client registration use
 |---|---:|---|
 | `standard` | 20 | Recommended default for Cursor, Codex, OpenCode, Antigravity, Claude Desktop, and other clients that eagerly load every schema. Includes core read/search/lifecycle, create, structure, variable, properties, and IO tools. |
 | `core` | 15 | Read, search, inspect, edit, and lifecycle essentials. |
+| `adaptive` | 15 | The `core` tools plus one small meta tool, `genexus_tools` (not counted here), that lists tool groups and enables them per session. See below. |
 | `authoring` | 35 | Core plus the full object-authoring and refactoring surface. |
 | `devops` | 37 | Core plus build, versioning, deployment, diagnostics, and worker operations. |
 | `ui` | 23 | Core plus layout, form, browser, and WorkWithPlus tools. |
@@ -124,6 +125,21 @@ Profiles can be combined with `+`, for example `standard+db`. Set
 Calling a known tool outside the active profile returns `ToolNotInProfile` with
 the profile(s) that expose it and the setting to change. Legacy alias names
 remain callable through compatibility rewrites but are not listed as tools.
+
+`adaptive` is opt-in and cannot be combined with other profiles. `tools/list`
+returns the `core` tools plus `genexus_tools`; `genexus_tools action=list` shows
+six groups (`authoring`, `ui`, `data`, `build`, `versioning`, `diagnostics`) with
+their tools, and `action=enable group=<name>` adds a group to that session's
+`tools/list` and sends `notifications/tools/list_changed` to that session only.
+A `tools/call` for a published tool that is not listed still runs and enables its
+group, so a cached larger list or a model that knows the name is never refused.
+The selection is per session (stdio: the one client of the process; HTTP: the
+`MCP-Session-Id`) and ends with the session; the sessionless 2026 transport keeps
+none, so it always lists core + `genexus_tools` and relies on direct calls.
+Limitation: a client that ignores `list_changed` does not see newly enabled tools
+until it calls `tools/list` again (the enable result says so); the tools can be
+called by name in the meantime. Because the list varies per session, adaptive
+responses are marked `no-store`/`private`.
 
 The public list omits examples and shortens long descriptions to stay within
 the enforced per-profile and per-tool byte budgets. Each tool description is a
