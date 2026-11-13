@@ -807,6 +807,8 @@ namespace GxMcp.Gateway
                 "- `cross` — exercise cross-browser verification.\n" +
                 "- `preview` — inspect a preview surface.\n\n" +
                 "The inspection actions are read-only with respect to the KB, but `preview` becomes state-changing when `buildFirst=true`, `updateBaseline=true`, or `capture` includes `screenshot`; those options can build or write browser artifacts. Use the response path and cleanup guidance.\n\n" +
+                "## Screenshot as image\n" +
+                "`action=preview` with `capture` including `screenshot` returns the PNG path in `captures.screenshot`. Add `inlineImage=true` to also receive it as an MCP image block after the text result (opt-in; default off). The PNG must be at most 300 KB: over that, no image is attached and a text note says so, so capture a smaller viewport (`emulate=desktop1280` or a mobile profile). The bytes are never copied into `structuredContent`. Before/after: capture, edit, build, capture again with the same arguments.\n\n" +
                 "## Auth walls\n" +
                 "When a target sits behind a login, the call stops at the auth screen and returns `status: \"auth_required\"` with a `code` naming the recovery: `GamLoginRequired` (redirected to a GAM login, no credentials supplied — pass `auth={mode:\"gam\",user,pass}` or set `GXMCP_GAM_USER`/`GXMCP_GAM_PASS`), `GamLoginRejected` (credentials were submitted and refused — fix the account, retrying unchanged will fail again), or `AuthRequired` (an auth wall that is not GAM — GAM credentials will not help; authenticate out of band). `authWall` and `credentialsSupplied` say which wall it is and whether anything was tried. No credential is ever echoed back.\n",
 

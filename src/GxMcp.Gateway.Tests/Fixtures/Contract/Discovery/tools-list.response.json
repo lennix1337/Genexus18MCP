@@ -481,6 +481,10 @@
             "description": "preview only.",
             "type": "object"
           },
+          "inlineImage": {
+            "description": "preview+capture screenshot: also return…",
+            "type": "boolean"
+          },
           "kb": {
             "description": "KB alias.",
             "type": "string"
