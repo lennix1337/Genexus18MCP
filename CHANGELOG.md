@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- **A refused `genexus_transfer` `import` keeps its evidence in the default (terse) error.** The refusals (`TransferImportFidelityFailed`, `TransferImportDeclined`, `TransferImportFailed`, `TransferImportVerificationUnavailable`) answered with their code, message and hint: the SDK's own messages and, for a fidelity failure, the object whose WebForm did not survive the import, the difference found and how the repair and the rollback ended were only in the verbose error (`verbose_errors=true`). The terse error now also carries `imported` (absent when the outcome is unknown), `sdkDiagnostics` (an empty list means the SDK said nothing; `diagnosticsAvailable=false` means it has no output service) and, where the refusal has them, `fidelityVerified` and `fidelity`. The lists are capped at 20 messages (errors first, then warnings) and 10 mismatches and each text at 500 characters, with `sdkDiagnosticsTotal`, `mismatchesTotal` and the matching `...Truncated` flags saying what was cut; a repair write is reduced to `repairStatus`, `repairCode` and `repairMessage`. `verbose_errors=true` still returns everything.
+
 ### Internal
 
 ## v4.6.0 - 2026-11-13
