@@ -1144,6 +1144,12 @@ namespace GxMcp.Worker
         // Idle-driven LOH compaction. Runs one CompactOnce+collect per idle period (reset
         // when activity resumes), so a long session can't accumulate fragmentation
         // indefinitely on the x86 heap. Opt out with GXMCP_IDLE_GC=0.
+        // A background build/deploy runs on its own thread, outside the command queues, so
+        // queue emptiness alone reads as idle while MSBuild is still working (#1007).
+        internal static bool IsIdleGcBlocked() =>
+            CommandQueue.Count > 0 || SdkCommandQueue.Count > 0 || !BackgroundQueue.IsEmpty
+            || Services.BuildService.GetActiveBuilds().Count > 0;
+
         private static void IdleMemoryMaintenance()
         {
             if (string.Equals(Environment.GetEnvironmentVariable("GXMCP_IDLE_GC"), "0", StringComparison.OrdinalIgnoreCase))
@@ -1156,7 +1162,7 @@ namespace GxMcp.Worker
                     Thread.Sleep(15000);
                     long lastTicks = Interlocked.Read(ref _lastActivityTicks);
                     double idleMs = (DateTime.UtcNow.Ticks - lastTicks) / (double)TimeSpan.TicksPerMillisecond;
-                    bool busy = CommandQueue.Count > 0 || SdkCommandQueue.Count > 0 || !BackgroundQueue.IsEmpty;
+                    bool busy = IsIdleGcBlocked();
                     long currentMb = GC.GetTotalMemory(false) / (1024 * 1024);
                     double requiredIdleMs = currentMb > 400 ? 15000 : 60000;
                     if (busy || idleMs < requiredIdleMs)
