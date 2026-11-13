@@ -1300,22 +1300,26 @@ namespace GxMcp.Gateway
             }
             // MCP's structuredContent lets modern clients consume the JSON result
             // without reparsing the text content. Keep the text representation for
-            // legacy clients and omit structuredContent on tool errors. Lifecycle is
-            // the one published tool with outputSchema: even in lean mode it must carry
-            // structuredContent or strict MCP clients reject the successful result as
-            // -32600. Other tools retain the lean omission behavior.
+            // legacy clients and omit structuredContent on tool errors. Any tool that
+            // declares an outputSchema (today: genexus_lifecycle) must carry
+            // structuredContent on success even in lean mode, or strict MCP clients
+            // reject the result as -32600. Other tools follow the setting.
             // Perf: structuredContent duplicates the whole payload (~+55% bytes per
-            // response, measured). Gated by Server.EmitStructuredContent / env
-            // GXMCP_NO_STRUCTURED_CONTENT for tools without an advertised output schema.
+            // response, measured), so it is off by default. Opt in with
+            // Server.EmitStructuredContent=true or GXMCP_EMIT_STRUCTURED_CONTENT=1;
+            // GXMCP_NO_STRUCTURED_CONTENT=1 forces it off.
             if (!isError
-                && (EmitStructuredContentEnabledCached()
-                    || string.Equals(toolName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase))
+                && (EmitStructuredContentEnabledCached() || ToolDeclaresOutputSchema(toolName))
                 && (axiPayload.Type == JTokenType.Object || axiPayload.Type == JTokenType.Array))
             {
                 result["structuredContent"] = axiPayload;
             }
             return result;
         }
+
+        internal static bool ToolDeclaresOutputSchema(string? toolName)
+            => !string.IsNullOrWhiteSpace(toolName)
+               && McpRouter.FindToolDefinitionForHelp(toolName!)?["outputSchema"] != null;
 
         // Resolved per call (cheap: one env lookup + one static field read) so a config
         // reload or env change takes effect without restart. Env wins over config file.
@@ -1333,7 +1337,7 @@ namespace GxMcp.Gateway
                     || string.Equals(emitEnv, "true", StringComparison.OrdinalIgnoreCase);
             }
 
-            return ActiveConfig?.Server?.EmitStructuredContent ?? true;
+            return ActiveConfig?.Server?.EmitStructuredContent ?? false;
         }
 
         // Resolved per call like EmitStructuredContentEnabled. Env wins.
@@ -1383,14 +1387,9 @@ namespace GxMcp.Gateway
             return ActiveConfig?.Server?.TerseResponses ?? false;
         }
 
-        private static bool ResolveStructuredContentUncached()
-        {
-            string? env = Environment.GetEnvironmentVariable("GXMCP_NO_STRUCTURED_CONTENT");
-            if (string.Equals(env, "1", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(env, "true", StringComparison.OrdinalIgnoreCase))
-                return false;
-            return ActiveConfig?.Server?.EmitStructuredContent ?? true;
-        }
+        // Same precedence as EmitStructuredContentEnabled (the cached hot path must
+        // honor GXMCP_EMIT_STRUCTURED_CONTENT too).
+        private static bool ResolveStructuredContentUncached() => EmitStructuredContentEnabled();
 
         internal static bool TerseResponsesEnabledCached()
         {

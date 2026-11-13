@@ -144,6 +144,65 @@ namespace GxMcp.Gateway
             else toolResult.Remove("_meta");
         }
 
+        // Reads gx-engine answers from the KB storage instead of the Worker index. They are never
+        // refused by the gate (native routing runs first), so the only thing the agent needs while
+        // the index warms is to know that the answer is storage-backed and the index is not current.
+        private static readonly string[] NativeIndexMarkedTools =
+            { "genexus_query", "genexus_list_objects", "genexus_inspect" };
+
+        internal static void AttachNativeServedIndexMetadataForTest(JObject toolResult, string? toolName)
+            => AttachNativeServedIndexMetadata(toolResult, toolName);
+
+        /// <summary>
+        /// Adds the existing <c>_meta.index</c> block (as exact reads do) to a gx-engine-served index-class
+        /// read while the index is not usable. Silent when the mirror was never refreshed: a placeholder
+        /// Cold is "unknown", not a warming index. In-memory read, only reached for engine-served results.
+        /// </summary>
+        private static void AttachNativeServedIndexMetadata(JObject toolResult, string? toolName)
+        {
+            if (toolName == null
+                || !Array.Exists(NativeIndexMarkedTools, t => string.Equals(t, toolName, StringComparison.OrdinalIgnoreCase)))
+                return;
+            IndexStateSnapshot snapshot = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
+            if (snapshot.RefreshedAtUtc == DateTime.MinValue) return;
+            JObject? indexMetadata = BuildExactReadIndexMetadata(snapshot);
+            if (indexMetadata == null) return;
+            JObject metadata = toolResult["_meta"] as JObject ?? new JObject();
+            metadata["index"] = indexMetadata;
+            toolResult["_meta"] = metadata;
+        }
+
+        // Gated operations (see IndexDependentToolSet) that gx-engine can answer without the index,
+        // with the admitted shape. Whether each is routed comes from the registry (EngineRouter), so
+        // this list cannot claim a route the engine does not have.
+        private static readonly (string Operation, string Shape)[] NativeReadsDuringIndexing =
+        {
+            ("genexus_query", "genexus_query query=type:<Type> fields=name,type limit<=200"),
+            ("genexus_list_objects",
+                "genexus_list_objects typeFilter=<Procedure|Transaction|WebPanel|Table|DataProvider> limit<=100 fields=name,type"),
+        };
+
+        internal static System.Collections.Generic.IReadOnlyList<string> NativeReadOperationsDuringIndexingForTest
+            => Array.ConvertAll(NativeReadsDuringIndexing, entry => entry.Operation);
+
+        /// <summary>
+        /// The native reads an IndexNotReady refusal can point at: non-null only when the engine backend
+        /// would route them (Backend=gxengine, parity capability) and the engine executable exists.
+        /// </summary>
+        internal static JArray? BuildNativeReadsAvailableDuringIndexing(
+            EngineBackendSettings settings, Func<EngineBackendSettings, string?> locateEngine)
+        {
+            JArray? shapes = null;
+            foreach (var (operation, shape) in NativeReadsDuringIndexing)
+            {
+                string? capabilityId = EngineRoutedOperations.EngineCapabilityIdForOperation(operation);
+                if (capabilityId == null
+                    || EngineRouter.Decide(capabilityId, settings).Target != EngineRouteTarget.Engine) continue;
+                (shapes ??= new JArray()).Add(shape);
+            }
+            return shapes != null && locateEngine(settings) != null ? shapes : null;
+        }
+
         // Issue #209 (policy A): the gate stays fail-closed, but its envelope must be
         // observable, awaitable and retryable — it names the index state, points at the one
         // call that waits for freshness=current, and always carries a retry hint (the worker's

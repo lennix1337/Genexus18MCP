@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from mcp_readback import readback_payload
 import date_semantics_cases
 import calendar_semantics_cases
 import datetime_semantics_cases
@@ -27,7 +28,7 @@ def verify_evidence(folder, cases=date_semantics_cases):
     if report['exit'] != 0 or not report['source_verified']:
         raise ValueError('native execution was not verified')
     for part in ['Source', 'Variables']:
-        result = json.loads((folder / f'readback-{part}.json').read_text(encoding='utf-8'))['result']['structuredContent']
+        result = readback_payload(folder / f'readback-{part}.json')
         if result.get('truncated') or result.get('isTruncatedByWorker'):
             raise ValueError('native readback was truncated')
         if part == 'Source' and result['source'].replace('\r\n', '\n') != source:

@@ -171,6 +171,15 @@ class BenchmarkGateTests(unittest.TestCase):
         self.assertTrue(bench.envelope_is_ok(envelope))
         self.assertGreater(measurement.response_bytes, 0)
 
+    def test_rpc_parses_text_content_when_structured_content_is_omitted(self):
+        body = json.dumps({"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}).encode()
+        with self.serving(body):
+            measurement = bench.rpc("s", "tools/call", {})
+            _, envelope = measurement
+        self.assertEqual({"status": "ok"}, envelope)
+        self.assertTrue(bench.envelope_is_ok(envelope))
+        self.assertEqual(0, measurement.structured_content_bytes)
+
     def test_rpc_reports_an_http_error_status_as_an_envelope(self):
         with self.serving(b"backend unavailable", status=503):
             measurement = bench.rpc("s", "tools/call", {})

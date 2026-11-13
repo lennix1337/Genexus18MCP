@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from mcp_readback import readback_payload
 from string_semantics_cases import (
     compare_output, engine_expected, length_labels, native_expected, source, variables, safety_divergences,
 )
@@ -19,7 +20,7 @@ def verify_evidence(folder):
     if report['exit'] != 0 or not report['source_verified']:
         raise ValueError('native execution was not verified')
     for part in ['Source', 'Variables']:
-        result = json.loads((folder / f'readback-{part}.json').read_text(encoding='utf-8'))['result']['structuredContent']
+        result = readback_payload(folder / f'readback-{part}.json')
         if result.get('truncated') or result.get('isTruncatedByWorker'):
             raise ValueError('native readback was truncated')
         if part == 'Source' and result['source'].replace('\r\n', '\n') != source:
