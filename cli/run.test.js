@@ -293,7 +293,10 @@ test('windows cleanup stops a real scoped gateway stub before removal', { skip: 
     stopLingeringGatewayStubs(probeDir);
     let removeError = null;
     try {
-        fs.rmSync(probeDir, { recursive: true, force: true });
+        // Windows releases the image of a just-killed process a moment after
+        // Wait-Process returns, so the directory delete goes through the same
+        // bounded retry the suite teardown uses.
+        removeTempPath(probeDir, { recursive: true, force: true });
     } catch (error) {
         removeError = error;
     }
