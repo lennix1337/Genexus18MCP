@@ -290,6 +290,12 @@ after changing inherited credentials. `IntegratedSecurity=True` keeps Windows
 authentication (`-E`) and ignores SQLCMD credential variables. The engine does
 not silently change authentication identity or retry with Windows authentication.
 
+The opt-in native TDS read transport (`GXMCP_ENGINE_SQL_TRANSPORT=tds`, an engine
+built with the `tds` cargo feature) resolves credentials by the same rules and
+from the same variables, and never sends a SQL login outside TLS. Its fallback
+to `sqlcmd`, encryption behavior and unverified status are in
+[`src/gx-engine/README.md`](../src/gx-engine/README.md#sql-transport-experimental-opt-in).
+
 For `rebuild-all`, missing credentials produce exit **5**, empty stdout, and a
 single JSON diagnostic on stderr under `--diagnostics=json`:
 `category=sql_credentials_unavailable`, an actionable `message`, and `location=null`.

@@ -44,6 +44,65 @@ when this credential preflight fails. The Gateway can safely use SDK fallback
 for that exact refusal; generic failures/timeouts after start cannot replay builds.
 See [SQL authentication and auto routing](../../docs/engine_backend.md#sql-authentication-issue-635).
 
+## SQL transport (experimental, opt-in)
+
+Generated KB reads go through a `sqlcmd` subprocess, with part payloads as hex text. An
+alternative transport speaks the SQL Server wire protocol (TDS) directly, reads part payloads
+as bytes and needs no `sqlcmd` for those reads. It is off unless both hold:
+
+- the engine was built with the cargo feature: `cargo build --features tds` (the default build
+  and the shipped binary do not have it, and do not compile its dependencies);
+- `GXMCP_ENGINE_SQL_TRANSPORT=tds` is set for the engine process.
+
+**Not verified against a real server.** No SQL Server or LocalDB was available where this was
+written: the protocol handling is tested against an in-process endpoint built from the protocol
+specification, which cannot prove interoperability. Run
+`pwsh scripts/validate-engine-tds-live.ps1 -KbPath C:\KBs\<test KB>` on a machine with a test
+Knowledge Base before relying on it; it compares both transports byte for byte and is read-only.
+
+What it uses: the [`tiberius`](https://crates.io/crates/tiberius) client behind a blocking
+adapter (`src/udm/tds`), NTLMv2 through Windows SSPI for integrated authentication (the
+`winauth` backend of `tiberius`; it does not negotiate Kerberos, so a login that needs
+Kerberos, or a domain that forbids NTLM, fails before any read and `sqlcmd` takes over), and
+the Windows TLS stack (schannel).
+
+| Connection (`knowledgebase.connection`) | Over TDS |
+| :--- | :--- |
+| `(LocalDB)\name`, integrated | Named pipe found with `sqllocaldb info` (a stopped instance is started, as connecting does). |
+| `host`, `host,port`, `host\instance` | TCP; a named instance without a port is resolved through the SQL Server Browser. |
+| `np:\\host\pipe\...` | That named pipe. |
+| `lpc:` (shared memory), or a local server with TCP disabled | Not reachable: `sqlcmd` reads it. |
+
+Rules it keeps:
+
+- **Fallback only before any read.** The first session of a connection decides. If TDS cannot
+  connect or log in, that connection's reads use `sqlcmd` for the rest of the process and the
+  reason is kept (printed on stderr as `gx-engine: SQL transport: reads used sqlcmd: ...`, except
+  under `--diagnostics=json`, whose stderr is one diagnostic line by contract). After a TDS
+  session has served a read, any failure, including a later connection failure, is an error:
+  rows of one read never come from two transports.
+- **Same statements, same decoding.** Every read returns the text the callers already parse;
+  only the part reads select `EntityVersionData` / `EntityVersionProperties` as `varbinary`
+  instead of hex, and both forms go through the same length check and the same envelope/GZip
+  decoder. Only integer, bit, character and binary columns are served; a date, decimal, float
+  or GUID column fails the read by name instead of being formatted differently from `sqlcmd`.
+  One known difference: non-ASCII text in a plain character column arrives as stored over TDS,
+  while `sqlcmd` output passes through the console code page.
+- **Credentials.** The same as above: `SQLCMDUSER` / `SQLCMDPASSWORD` from the environment
+  override the connection file, a missing one is refused, and neither is logged or put in an
+  error (the server's own login-failure text is redacted).
+- **Encryption.** Over TCP or a remote pipe the session is TLS from the login to the last row,
+  with the server certificate validated against the Windows trust store. A server that offers
+  no encryption, or whose certificate does not validate, is not read over TDS: nothing is sent
+  in clear text and `sqlcmd` takes over. `GXMCP_ENGINE_SQL_TRUST_SERVER_CERTIFICATE=1` accepts
+  an unvalidated certificate, still under TLS. A LocalDB pipe never leaves the machine: it is
+  asked for TLS without validating its self-signed certificate, and if that fails with a
+  Windows-integrated login (no password travels) it is read without TLS. A server that requires
+  encryption gets it in every case.
+
+Writes, and any statement that is not a generated `SET NOCOUNT ON; SELECT` read, still use
+`sqlcmd`.
+
 ## SDK-form output
 
 What a whole-KB run writes, and from what:

@@ -1,6 +1,6 @@
 //! Reads of one model: active objects, parents, compositions, entity versions, entity types and cross references.
 
-use super::live_rows::{entity_version_from_fields, parse_live_int, parse_live_rows};
+use super::live_rows::{parse_live_int, parse_live_rows, part_payload_columns};
 use super::*;
 
 impl UdmClient {
@@ -482,23 +482,22 @@ impl UdmClient {
             // none when it does not: the caller tells a missing part from an empty one.
             // The properties are read as hex too: the column is free text (a value can hold a
             // newline), and hex keeps every row on one tab-separated line with a declared length.
-            let sql = format!(
-                "SET NOCOUNT ON; SELECT 'PRESENT', ISNULL(DATALENGTH(EntityVersionData), 0), CONVERT(VARCHAR(MAX), EntityVersionData, 2), ISNULL(DATALENGTH(EntityVersionProperties), 0), CONVERT(VARCHAR(MAX), CAST(EntityVersionProperties AS VARBINARY(MAX)), 2) FROM EntityVersion WHERE EntityTypeId = {entity_type} AND EntityId = {entity_id} AND EntityVersionId = {version_id}"
-            );
-            let raw = self.execute_live_sql(&sql)?;
-            let rows = parse_live_rows(&raw, 5)?;
-            match rows.as_slice() {
-                [] => {}
-                [row] => {
-                    let rec = entity_version_from_fields(
-                        entity_type,
-                        entity_id,
-                        version_id,
-                        row[1],
-                        row[2],
-                        row[3],
-                        row[4],
-                    )?;
+            // Over the TDS transport the same two payloads are read as bytes.
+            let mut records = self.read_part_records(
+                false,
+                1,
+                |binary| {
+                    format!(
+                        "SET NOCOUNT ON; SELECT 'PRESENT', {} FROM EntityVersion WHERE EntityTypeId = {entity_type} AND EntityId = {entity_id} AND EntityVersionId = {version_id}",
+                        part_payload_columns("", binary)
+                    )
+                },
+                |_| Ok((entity_type, entity_id, version_id)),
+            )?;
+            match records.len() {
+                0 => {}
+                1 => {
+                    let rec = records.remove(0);
                     let mut store = self
                         .storage
                         .write()

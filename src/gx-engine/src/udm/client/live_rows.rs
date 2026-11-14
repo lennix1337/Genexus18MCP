@@ -22,6 +22,17 @@ pub(super) fn entity_version_from_fields(
     let declared_props = usize::try_from(declared_props)
         .map_err(|_| format!("EntityVersionProperties DATALENGTH {declared_props} is negative"))?;
     let props_bytes = decode_hex_value(props_hex, declared_props)?;
+    entity_version_from_payloads(entity_type, entity_id, version_id, data, props_bytes)
+}
+
+/// Builds one `EntityVersion` record from its payload bytes, whichever transport carried them.
+fn entity_version_from_payloads(
+    entity_type: i32,
+    entity_id: i32,
+    version_id: i32,
+    data: Vec<u8>,
+    props_bytes: Vec<u8>,
+) -> Result<EntityVersionRecord, String> {
     // A NULL column and an empty one both store no properties.
     let properties = if props_bytes.is_empty() {
         None
@@ -37,6 +48,156 @@ pub(super) fn entity_version_from_fields(
         data,
         properties,
     })
+}
+
+/// The four select-list columns that carry one part: each payload's declared byte length and the
+/// payload. `sqlcmd` prints a payload as hex text; a session with binary payloads reads the same
+/// bytes as they are stored, so `prefix` is the only thing a caller chooses (`e.` or nothing).
+pub(super) fn part_payload_columns(prefix: &str, binary: bool) -> String {
+    if binary {
+        format!(
+            "ISNULL(DATALENGTH({prefix}EntityVersionData), 0), {prefix}EntityVersionData, ISNULL(DATALENGTH({prefix}EntityVersionProperties), 0), CAST({prefix}EntityVersionProperties AS VARBINARY(MAX))"
+        )
+    } else {
+        format!(
+            "ISNULL(DATALENGTH({prefix}EntityVersionData), 0), CONVERT(VARCHAR(MAX), {prefix}EntityVersionData, 2), ISNULL(DATALENGTH({prefix}EntityVersionProperties), 0), CONVERT(VARCHAR(MAX), CAST({prefix}EntityVersionProperties AS VARBINARY(MAX)), 2)"
+        )
+    }
+}
+
+/// One payload read as bytes. Its declared length is checked as the hex digits of the text
+/// form are: a payload that disagrees with it was cut, and is an error here.
+fn binary_payload(
+    declared: &live::Value,
+    payload: live::Value,
+    column: &str,
+) -> Result<Vec<u8>, String> {
+    let live::Value::Int(declared) = declared else {
+        return Err(format!("the database returned a non-integer value for {column}"));
+    };
+    let declared = usize::try_from(*declared)
+        .map_err(|_| format!("{column} {declared} is negative"))?;
+    let bytes = match payload {
+        live::Value::Null => Vec::new(),
+        live::Value::Bytes(bytes) => bytes,
+        _ => return Err(format!("the payload of {column} is not binary")),
+    };
+    if bytes.len() != declared {
+        return Err(format!(
+            "{column} is {declared} but the payload has {} bytes: it was truncated before it was decoded",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
+/// A leading column of a typed row, as the text `sqlcmd` would print for it.
+fn leading_text(value: &live::Value) -> Result<String, String> {
+    match value {
+        live::Value::Null => Ok("NULL".into()),
+        live::Value::Int(number) => Ok(number.to_string()),
+        live::Value::Text(text) => Ok(text.clone()),
+        live::Value::Bytes(_) => Err("a part row has a binary column before its payloads".into()),
+    }
+}
+
+/// What one part read returned: the text `sqlcmd` prints, or typed rows whose payloads are bytes.
+enum PartRows {
+    Hex(String),
+    Binary(Vec<Vec<live::Value>>),
+}
+
+impl UdmClient {
+    /// Reads `EntityVersion` part rows: `leading` columns of the caller, then the four columns of
+    /// [`part_payload_columns`]. `sql` builds the statement for the payload form the session
+    /// carries, and `key` reads a part's identity from a row's leading fields. Both forms end in
+    /// the same records. `own_session` reads on a session of its own instead of the one this
+    /// client's reads share, for a shard that is read in parallel.
+    pub(super) fn read_part_records(
+        &self,
+        own_session: bool,
+        leading: usize,
+        sql: impl Fn(bool) -> String,
+        key: impl Fn(&[&str]) -> Result<(i32, i32, i32), String>,
+    ) -> Result<Vec<EntityVersionRecord>, String> {
+        let info = self
+            .connection_info
+            .as_ref()
+            .ok_or_else(|| "No connection info configured for live SQL execution".to_string())?;
+        let fetch = |session: &mut live::ReadSession| {
+            if session.binary_payloads() {
+                session.query_rows(&sql(true)).map(PartRows::Binary)
+            } else {
+                session.query(&sql(false)).map(PartRows::Hex)
+            }
+        };
+        // A read view cannot fan out into independently committed SQL sessions.
+        let rows = if own_session && !self.consistent_read && self.read_session.is_some() {
+            fetch(&mut live::ReadSession::start(info)?)?
+        } else {
+            self.on_read_session(info, fetch)?
+        };
+        rows.decode(leading, key)
+    }
+}
+
+impl PartRows {
+    /// The records of the rows, the same for both forms of the same stored rows.
+    fn decode(
+        self,
+        leading: usize,
+        key: impl Fn(&[&str]) -> Result<(i32, i32, i32), String>,
+    ) -> Result<Vec<EntityVersionRecord>, String> {
+        match self {
+            PartRows::Hex(raw) => parse_live_rows(&raw, leading + 4)?
+                .into_iter()
+                .map(|row| {
+                    let (entity_type, entity_id, version_id) = key(&row[..leading])?;
+                    entity_version_from_fields(
+                        entity_type,
+                        entity_id,
+                        version_id,
+                        row[leading],
+                        row[leading + 1],
+                        row[leading + 2],
+                        row[leading + 3],
+                    )
+                })
+                .collect(),
+            PartRows::Binary(rows) => rows
+                .into_iter()
+                .map(|mut row| {
+                    if row.len() != leading + 4 {
+                        return Err(format!(
+                            "the database returned a row with {} columns; expected {}",
+                            row.len(),
+                            leading + 4
+                        ));
+                    }
+                    let props = row.pop().expect("length checked above");
+                    let props_len = row.pop().expect("length checked above");
+                    let data = row.pop().expect("length checked above");
+                    let data_len = row.pop().expect("length checked above");
+                    let fields = row.iter().map(leading_text).collect::<Result<Vec<_>, _>>()?;
+                    let fields: Vec<&str> = fields.iter().map(|field| field.trim()).collect();
+                    let (entity_type, entity_id, version_id) = key(&fields)?;
+                    let data = binary_payload(&data_len, data, "EntityVersion DATALENGTH")?;
+                    let props_bytes = binary_payload(
+                        &props_len,
+                        props,
+                        "EntityVersionProperties DATALENGTH",
+                    )?;
+                    entity_version_from_payloads(
+                        entity_type,
+                        entity_id,
+                        version_id,
+                        data,
+                        props_bytes,
+                    )
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Splits `sqlcmd -s <tab>` output into rows of exactly `columns` fields.
@@ -300,6 +461,169 @@ mod tests {
     #[test]
     fn entity_version_fields_refuse_a_payload_that_disagrees_with_its_length() {
         assert!(entity_version_from_fields(7, 8, 9, "2", "414243", "0", "").is_err());
+    }
+
+    fn key(fields: &[&str]) -> Result<(i32, i32, i32), String> {
+        Ok((
+            parse_live_int(fields[0], "EntityTypeId")?,
+            parse_live_int(fields[1], "EntityId")?,
+            parse_live_int(fields[2], "EntityVersionId")?,
+        ))
+    }
+
+    /// One stored part row in the form each transport returns it.
+    fn both_forms(
+        id: i64,
+        data: Option<&[u8]>,
+        properties: Option<&[u8]>,
+    ) -> (String, Vec<live::Value>) {
+        let hex = |payload: Option<&[u8]>| match payload {
+            None => "NULL".to_string(),
+            Some(bytes) => bytes.iter().map(|byte| format!("{byte:02X}")).collect(),
+        };
+        let length = |payload: Option<&[u8]>| payload.map_or(0, <[u8]>::len) as i64;
+        let bytes = |payload: Option<&[u8]>| {
+            payload.map_or(live::Value::Null, |bytes| live::Value::Bytes(bytes.to_vec()))
+        };
+        (
+            format!(
+                "38\t{id}\t1\t{}\t{}\t{}\t{}\r\n",
+                length(data),
+                hex(data),
+                length(properties),
+                hex(properties)
+            ),
+            vec![
+                live::Value::Int(38),
+                live::Value::Int(id),
+                live::Value::Int(1),
+                live::Value::Int(length(data)),
+                bytes(data),
+                live::Value::Int(length(properties)),
+                bytes(properties),
+            ],
+        )
+    }
+
+    #[test]
+    fn hex_text_and_binary_rows_of_the_same_parts_decode_to_the_same_records() {
+        let blob: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
+        let stored: [(Option<&[u8]>, Option<&[u8]>); 4] = [
+            (Some(&blob), Some(b"<Properties/>")),
+            (Some(b""), None),
+            (None, Some(b"")),
+            (Some(b"\x00\xFF"), Some(b"a\tb\r\nc")),
+        ];
+        let (mut text, mut rows) = (String::new(), Vec::new());
+        for (id, (data, properties)) in stored.into_iter().enumerate() {
+            let (hex, binary) = both_forms(id as i64, data, properties);
+            text.push_str(&hex);
+            rows.push(binary);
+        }
+        let from_hex = PartRows::Hex(text).decode(3, key).expect("hex rows");
+        let from_binary = PartRows::Binary(rows).decode(3, key).expect("binary rows");
+        assert_eq!(from_hex, from_binary);
+        assert_eq!(from_binary.len(), 4);
+        assert_eq!(from_binary[0].data, blob);
+        assert_eq!(from_binary[0].properties.as_deref(), Some("<Properties/>"));
+        // A NULL payload and an empty one are both no bytes, in either form.
+        assert_eq!((from_binary[1].data.len(), &from_binary[1].properties), (0, &None));
+        assert_eq!((from_binary[2].data.len(), &from_binary[2].properties), (0, &None));
+    }
+
+    #[test]
+    fn a_binary_payload_that_disagrees_with_its_declared_length_is_refused() {
+        // Mutation check: without the length comparison a payload cut in transit decodes as a
+        // shorter part, where the hex form already fails.
+        let row = |declared: i64, data: live::Value, props_len: i64, props: live::Value| {
+            PartRows::Binary(vec![vec![
+                live::Value::Int(38),
+                live::Value::Int(7),
+                live::Value::Int(1),
+                live::Value::Int(declared),
+                data,
+                live::Value::Int(props_len),
+                props,
+            ]])
+            .decode(3, key)
+        };
+        let bytes = |payload: &[u8]| live::Value::Bytes(payload.to_vec());
+        assert!(row(3, bytes(b"ABC"), 0, live::Value::Null).is_ok());
+        for (declared, data, props_len, props) in [
+            (4, bytes(b"ABC"), 0, live::Value::Null),
+            (3, live::Value::Null, 0, live::Value::Null),
+            (3, bytes(b"ABC"), 2, bytes(b"x")),
+            (-1, live::Value::Null, 0, live::Value::Null),
+            (3, live::Value::Text("414243".into()), 0, live::Value::Null),
+        ] {
+            assert!(row(declared, data, props_len, props).is_err());
+        }
+        // A row with a column missing is refused as the text form's field count is.
+        assert!(
+            PartRows::Binary(vec![vec![live::Value::Int(38); 6]])
+                .decode(3, key)
+                .is_err()
+        );
+    }
+
+    /// Synthetic benchmark of the client-side decode stage of a part read, on generated payloads:
+    /// the hex text `sqlcmd` prints, parsed and decoded into records, against the typed rows of
+    /// the TDS transport turned into the same records. It leaves out everything a server is
+    /// needed for: the server-side hex conversion, the transfer, the `sqlcmd` process and its
+    /// pipe, and the TDS driver's own parsing. Run it by name on a release build:
+    /// `cargo test --release --manifest-path src/gx-engine/Cargo.toml --lib synthetic_benchmark_part_payload_decode -- --ignored --nocapture`
+    #[test]
+    #[ignore = "synthetic benchmark; run it by name with --ignored --nocapture on a release build"]
+    fn synthetic_benchmark_part_payload_decode() {
+        const ROW_PAYLOAD: usize = 2048;
+        // The hex sizes the README reports for a catalog read: served types only, and every type.
+        for (hex_megabytes, iterations) in [(2usize, 21usize), (62, 7)] {
+            let rows = hex_megabytes * 1024 * 1024 / 2 / ROW_PAYLOAD;
+            let (mut text, mut binary) = (String::new(), Vec::new());
+            for id in 0..rows {
+                let payload: Vec<u8> = (0..ROW_PAYLOAD).map(|n| (n * 31 + id) as u8).collect();
+                let (hex, row) = both_forms(id as i64, Some(&payload), None);
+                text.push_str(&hex);
+                binary.push(row);
+            }
+            let median = |mut samples: Vec<f64>| {
+                samples.sort_by(f64::total_cmp);
+                (samples[samples.len() / 2], samples[0])
+            };
+            let time = |rows: &dyn Fn() -> PartRows| {
+                median(
+                    (0..iterations)
+                        .map(|_| {
+                            // The input is copied outside the timed section.
+                            let input = rows();
+                            let started = std::time::Instant::now();
+                            let records = input.decode(3, key).expect("records");
+                            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+                            assert_eq!(records.len(), binary.len());
+                            elapsed
+                        })
+                        .collect(),
+                )
+            };
+            let (hex_median, hex_min) = time(&|| PartRows::Hex(text.clone()));
+            let (binary_median, binary_min) = time(&|| PartRows::Binary(binary.clone()));
+            println!(
+                "synthetic part payload decode: {hex_megabytes} MB of hex text = {} MB of payload in {rows} rows, {iterations} iterations: hex text -> records median {hex_median:.3} ms (min {hex_min:.3}); binary rows -> records median {binary_median:.3} ms (min {binary_min:.3})",
+                hex_megabytes / 2
+            );
+        }
+    }
+
+    #[test]
+    fn the_payload_columns_of_a_part_read_keep_the_statement_sqlcmd_receives() {
+        assert_eq!(
+            part_payload_columns("", false),
+            "ISNULL(DATALENGTH(EntityVersionData), 0), CONVERT(VARCHAR(MAX), EntityVersionData, 2), ISNULL(DATALENGTH(EntityVersionProperties), 0), CONVERT(VARCHAR(MAX), CAST(EntityVersionProperties AS VARBINARY(MAX)), 2)"
+        );
+        assert_eq!(
+            part_payload_columns("e.", true),
+            "ISNULL(DATALENGTH(e.EntityVersionData), 0), e.EntityVersionData, ISNULL(DATALENGTH(e.EntityVersionProperties), 0), CAST(e.EntityVersionProperties AS VARBINARY(MAX))"
+        );
     }
 
     #[test]

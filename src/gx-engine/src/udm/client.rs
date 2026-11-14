@@ -206,7 +206,9 @@ impl UdmClient {
         Ok(())
     }
 
-    /// Executes raw SQL against live SQL Server or LocalDB instance using `sqlcmd`.
+    /// Executes raw SQL against live SQL Server or LocalDB instance and returns the text `sqlcmd`
+    /// prints for it. A generated read runs on the transport `live::SqlTransport` decided for the
+    /// connection; every other statement runs through `sqlcmd`.
     pub fn execute_live_sql(&self, sql: &str) -> Result<String, String> {
         if self.consistent_read {
             if self.read_session.is_none() {
@@ -223,31 +225,47 @@ impl UdmClient {
             .connection_info
             .as_ref()
             .ok_or_else(|| "No connection info configured for live SQL execution".to_string())?;
-        if let Some(shared) = &self.read_session {
-            if sql.trim_start().starts_with("SET NOCOUNT ON; SELECT ") {
-                let mut slot = shared
-                    .lock()
-                    .map_err(|_| "SQL reader session lock poisoned")?;
-                if slot.is_none() {
-                    if self.consistent_read {
-                        return Err(
-                            "consistent read session ended; the operation cannot be replayed"
-                                .into(),
-                        );
-                    }
-                    *slot = Some(live::ReadSession::start(info)?);
-                }
-                let result = slot
-                    .as_mut()
-                    .expect("the session slot was filled above under the same lock")
-                    .query(sql);
-                if result.is_err() {
-                    *slot = None; // Reap the failed process; never replay this query.
-                }
-                return result;
-            }
+        if sql.trim_start().starts_with("SET NOCOUNT ON; SELECT ") {
+            return self.on_read_session(info, |session| session.query(sql));
         }
         live::execute_sqlcmd(info, sql)
+    }
+
+    /// Runs one generated read on the session this client's reads share, or on a session of
+    /// its own statement when the client keeps none.
+    fn on_read_session<T>(
+        &self,
+        info: &KbConnectionInfo,
+        read: impl FnOnce(&mut live::ReadSession) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let Some(shared) = &self.read_session else {
+            if self.consistent_read {
+                return Err(
+                    "consistent read session is unavailable; the operation cannot be replayed"
+                        .into(),
+                );
+            }
+            return read(&mut live::ReadSession::per_statement(info)?);
+        };
+        let mut slot = shared
+            .lock()
+            .map_err(|_| "SQL reader session lock poisoned")?;
+        if slot.is_none() {
+            if self.consistent_read {
+                return Err(
+                    "consistent read session ended; the operation cannot be replayed".into(),
+                );
+            }
+            *slot = Some(live::ReadSession::start(info)?);
+        }
+        let result = read(
+            slot.as_mut()
+                .expect("the session slot was filled above under the same lock"),
+        );
+        if result.is_err() {
+            *slot = None; // Reap the failed session; never replay this query.
+        }
+        result
     }
 
     /// Tests the connection to the database.
