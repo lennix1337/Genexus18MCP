@@ -150,12 +150,54 @@ namespace GxMcp.Worker.Tests
             return m.Invoke(null, new object[] { pattern, opts });
         }
 
+        // The cache is static and bounded, and a full cache stops caching new
+        // patterns. Regexes compiled by tests that ran earlier in the same process
+        // can therefore decide the outcome of a test that expects a hit, so those
+        // tests start from an empty cache.
+        private static void ClearCompiledRegexCache()
+        {
+            var field = typeof(SourceSearchService).GetField("_compiledRegexCache", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(field);
+            ((System.Collections.IDictionary)field.GetValue(null)).Clear();
+        }
+
+        private static int CompiledRegexCacheMaxEntries()
+        {
+            var field = typeof(SourceSearchService).GetField("CompiledRegexCacheMaxEntries", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(field);
+            return (int)field.GetRawConstantValue();
+        }
+
         [Fact]
         public void GetCachedRegex_SamePattern_SameInstance()
         {
+            ClearCompiledRegexCache();
             var a = GetCached("parm", caseSensitive: false);
             var b = GetCached("parm", caseSensitive: false);
             Assert.Same(a, b); // no re-JIT on the second call
+        }
+
+        [Fact]
+        public void GetCachedRegex_FullCache_StopsCachingNewPatternsAndKeepsTheOldOnes()
+        {
+            // The overflow rule the cache documents, and the reason the test above
+            // must not inherit a cache other tests filled: with every slot taken a
+            // new pattern is compiled on each call, while cached ones are still hits.
+            ClearCompiledRegexCache();
+            try
+            {
+                int capacity = CompiledRegexCacheMaxEntries();
+                var first = GetCached("fill0", caseSensitive: false);
+                for (int i = 1; i < capacity; i++) GetCached("fill" + i, caseSensitive: false);
+
+                Assert.NotSame(GetCached("overflow", caseSensitive: false), GetCached("overflow", caseSensitive: false));
+                Assert.Same(first, GetCached("fill0", caseSensitive: false));
+            }
+            finally
+            {
+                // Leave room for the tests that run after this one.
+                ClearCompiledRegexCache();
+            }
         }
 
         [Fact]

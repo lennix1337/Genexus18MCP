@@ -62,6 +62,7 @@
 ### Internal
 
 - `cli/lib/client-adapters.test.js` no longer depends on the real home for the neutral launcher config: `applyLauncherConfigOrExit` is called with an injected `homedir`, so the test cannot create or reuse `~/.genexus-mcp/config.json`.
+- `SourceSearchPerfGuardTests.GetCachedRegex_SamePattern_SameInstance` no longer depends on test order. The compiled-regex cache is static and bounded to 16 entries, so regexes compiled by tests that ran earlier in the same process could fill it, and the test then got a fresh instance on each call. It now starts from an empty cache, and a new test pins the overflow rule.
 - Split `DispatchToolCallCoreAsync` into stage methods (`Program.ToolDispatch.*.cs`) and moved the `WriteObjectInternal` success envelope into `BuildWriteAppliedResponse`; no behaviour change.
 - `scripts/coverage/collect.ps1 -Parallel` (opt-in) runs the Gateway and the Worker coverage suites at the same time instead of one after the other. They are separate test processes with separate build outputs, environments and reports, and the verdicts are the sequential ones: a Worker failure is recorded in `worker.failed.txt`, a Gateway failure stops the script. On a machine with the GeneXus SDK the collection took 330 s instead of 518 s on the same checkout; a hosted runner has no SDK, skips the Worker suite and is unaffected.
 - Removed unused code: the Gateway middleware pipeline and `DiagnosticAndHealingEngine`, the Worker `MultiObjectUnitOfWork` helper and `WritePipeline.PreWriteSnapshot`, and the gxwire `memmap2` and `rayon` dependencies.
