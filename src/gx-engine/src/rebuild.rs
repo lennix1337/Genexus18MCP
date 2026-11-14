@@ -7,10 +7,12 @@
 
 #![forbid(unsafe_code)]
 
+mod artifact_cache;
 mod classify;
 mod compile;
 mod emission;
 mod parallel;
+mod reuse;
 mod specify;
 
 use crate::{
@@ -23,6 +25,7 @@ use classify::classify_objects;
 use compile::compile_phase;
 use emission::emission_phase;
 use parallel::Findings;
+use reuse::Session;
 use serde::{Deserialize, Serialize};
 use specify::specify_phase;
 use std::{
@@ -72,7 +75,21 @@ pub struct RebuildOptions {
     /// [`crate::csharp::model_files`]), each group with its label, or why the group is not written. Written
     /// with the support files; a reason here fails a run that writes them.
     pub model_files: Vec<crate::csharp::model_files::ModelFileGroup>,
+    /// Directory of the content-addressed artifact cache (`GXMCP_ENGINE_BUILD_CACHE_DIR`), which may be
+    /// shared between output folders and machines. Unset, the default, reads and writes no cache.
+    #[serde(default)]
+    pub artifact_cache_dir: Option<PathBuf>,
+    /// The generation stamp written into every web class (`yyyyMMddHHmmss`), instead of the current time
+    /// (`GXMCP_ENGINE_GENERATION_STAMP`). A web class regenerated at another time differs only by this
+    /// stamp, so a fixed one makes two rebuilds of one model comparable byte for byte.
+    #[serde(default)]
+    pub generation_stamp: Option<String>,
 }
+
+/// Environment variable naming the artifact cache directory (see [`RebuildOptions::artifact_cache_dir`]).
+pub const BUILD_CACHE_DIR_VARIABLE: &str = "GXMCP_ENGINE_BUILD_CACHE_DIR";
+/// Environment variable fixing the generation stamp (see [`RebuildOptions::generation_stamp`]).
+pub const GENERATION_STAMP_VARIABLE: &str = "GXMCP_ENGINE_GENERATION_STAMP";
 
 /// The GeneXus runtime assemblies a web model links (`NetModel/web/bin`), searched for SDT classes.
 const RUNTIME_ASSEMBLIES: [&str; 2] = ["GxClasses.dll", "GxClasses.Web.dll"];
@@ -153,6 +170,8 @@ impl Default for RebuildOptions {
             client_config: None,
             runtime_sdts: BTreeSet::new(),
             model_files: Vec::new(),
+            artifact_cache_dir: None,
+            generation_stamp: None,
         }
     }
 }
@@ -222,6 +241,47 @@ impl RebuildOptions {
     pub fn with_genexus_runtime_version(mut self, version: impl Into<String>) -> Self {
         self.genexus_runtime_version = version.into();
         self
+    }
+
+    pub fn with_artifact_cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.artifact_cache_dir = Some(dir.into());
+        self
+    }
+
+    /// Fixes the generation stamp. It is the 14 digits the SDK writes (`yyyyMMddHHmmss`); anything else
+    /// would change the shape of a web class, so it is refused.
+    pub fn with_generation_stamp(mut self, stamp: impl Into<String>) -> Result<Self, String> {
+        let stamp = stamp.into();
+        if stamp.len() != 14 || !stamp.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(format!(
+                "the generation stamp must be 14 digits (yyyyMMddHHmmss), got '{stamp}'"
+            ));
+        }
+        self.generation_stamp = Some(stamp);
+        Ok(self)
+    }
+
+    /// Applies the settings a process reads from its environment: the artifact cache directory and the
+    /// fixed generation stamp. An unset or empty variable leaves the option as it is.
+    pub fn with_process_environment(self) -> Result<Self, String> {
+        self.with_environment(|name| std::env::var(name).ok())
+    }
+
+    /// `with_process_environment` over the given variable lookup.
+    pub fn with_environment(
+        mut self,
+        variable: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, String> {
+        let set = |name: &str| variable(name).filter(|value| !value.trim().is_empty());
+        if let Some(dir) = set(BUILD_CACHE_DIR_VARIABLE) {
+            self = self.with_artifact_cache_dir(dir);
+        }
+        if let Some(stamp) = set(GENERATION_STAMP_VARIABLE) {
+            self = self
+                .with_generation_stamp(stamp)
+                .map_err(|error| format!("{GENERATION_STAMP_VARIABLE}: {error}"))?;
+        }
+        Ok(self)
     }
 }
 
@@ -296,6 +356,67 @@ pub struct RebuildReport {
     pub warnings: Vec<String>,
     pub emitted_files: Vec<PathBuf>,
     pub navigation_reports: Vec<NavigationReport>,
+    /// What this run reused from the previous run in the same output directory and from the artifact
+    /// cache. It describes how the outcome was reached; every other field is the same for a run that
+    /// reused nothing.
+    #[serde(default)]
+    pub reuse: ReuseSummary,
+}
+
+/// What a rebuild reused instead of generating (see `rebuild/reuse.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReuseSummary {
+    /// `unchanged`: the model is the one the previous run generated, so nothing was generated.
+    /// `incremental`: the previous run's record was used, object by object. `full`: nothing was reused.
+    pub mode: String,
+    /// Why nothing was reused, when `mode` is `full`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Procedures whose files of the previous run were kept, and those emitted or restored in this run.
+    pub procedures_kept: usize,
+    pub procedures_emitted: usize,
+    /// Procedure specifications taken from the previous run, and those computed or restored in this run.
+    pub specifications_kept: usize,
+    pub specifications_computed: usize,
+    /// Whether the structured data type files of the previous run were kept.
+    pub sdts_kept: bool,
+    /// Files the previous run wrote that this run no longer produces, removed from the output.
+    pub stale_files_removed: usize,
+    /// Artifact cache entries read into this run, and entries this run published.
+    pub cache_entries_restored: usize,
+    pub cache_entries_stored: usize,
+}
+
+/// Everything a run settles before it compiles: the classification, the findings of specification and
+/// emission, and the files of the model. It is what an unchanged model reports again without generating.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Generation {
+    procedures_count: usize,
+    transactions_count: usize,
+    sdts_count: usize,
+    webpanels_count: usize,
+    total_objects: usize,
+    skipped: Vec<SkippedObject>,
+    not_generated: Vec<SkippedObject>,
+    not_targeted: Vec<SkippedObject>,
+    refused: Vec<SkippedObject>,
+    definitions: BTreeMap<String, usize>,
+    errors: Vec<String>,
+    warnings: Vec<String>,
+    // Recorded apart: the reports with each Procedure, the files by their names in the output.
+    #[serde(skip)]
+    navigation_reports: Vec<NavigationReport>,
+    #[serde(skip)]
+    emitted_files: Vec<PathBuf>,
+    /// The main project, or `None` when nothing was emitted.
+    #[serde(skip)]
+    main_project: Option<PathBuf>,
+    #[serde(skip)]
+    read_ms: u64,
+    #[serde(skip)]
+    spec_ms: u64,
+    #[serde(skip)]
+    emit_ms: u64,
 }
 
 impl RebuildReport {
@@ -306,16 +427,17 @@ impl RebuildReport {
 }
 
 /// Executes the end-to-end parallel Rebuild All pipeline.
+///
+/// A run reuses what the previous run into `output_dir` settled for the same inputs (see
+/// `rebuild/reuse.rs`): an unchanged model is not generated again, and a changed one regenerates the
+/// objects whose inputs changed. The output directory and the report are those of a run that reuses
+/// nothing; `RebuildReport::reuse` says what was reused.
 pub fn rebuild_all(
     catalog: &Catalog,
     output_dir: &Path,
     options: &RebuildOptions,
 ) -> Result<RebuildReport, String> {
     let total_start = Instant::now();
-
-    // Phase 0: Object Classification
-    let (manifest, read_ms) =
-        classify_objects(catalog, &options.web_environment, &options.runtime_sdts);
 
     let worker_concurrency = if options.concurrency == 0 {
         std::thread::available_parallelism()
@@ -325,62 +447,51 @@ pub fn rebuild_all(
         options.concurrency
     };
 
-    let mut findings = Findings::default();
-
-    // A refused object was requested and cannot be built from this catalog: it is an error. The message names
-    // the object's own kind: a refused Transaction is not a Procedure.
-    for refused in &manifest.refused {
-        findings.errors.push(format!(
-            "refused to build {} '{}': {}",
-            refused.kind, refused.name, refused.reason
-        ));
-    }
-
-    // Phase 1: Parallel Specification
-    let (nav_reports, spec_ms) = specify_phase(
-        &manifest,
-        catalog,
-        worker_concurrency,
-        options,
-        &mut findings,
-    )?;
-
-    if options.fail_fast && !findings.errors.is_empty() {
-        return Err(findings.errors.join("; "));
-    }
-
-    // A closure build starts at `Main` of its entry. When classification left nothing to generate (the
-    // entry is stored as not main and nothing reaches it, so the SDK does not generate it), that class does
-    // not exist: emitting a project that starts there only fails `dotnet build` with CS1555 (#675).
-    let nothing_to_generate = manifest.procedures.is_empty()
-        && manifest.transactions.is_empty()
-        && manifest.sdts.is_empty()
-        && manifest.webpanels.is_empty();
-    let (emitted_files, emit_ms, compile_ms, built) = if options.startup_object.is_some()
-        && nothing_to_generate
-    {
-        findings.warnings.push(
-            "nothing to generate: the closure entry is not targeted (see not_targeted_objects), so no project was emitted or compiled"
-                .to_string(),
-        );
-        (Vec::new(), 0, 0, false)
-    } else {
-        // Phase 2: Parallel C# & Project Code Emission
-        let (emitted_files, main_csproj_path, emit_ms) = emission_phase(
-            &manifest,
+    let mut session = Session::open(catalog, output_dir, options);
+    let generation = match session.unchanged_generation() {
+        Some(mut generation) => {
+            generation.read_ms = total_start.elapsed().as_millis() as u64;
+            generation
+        }
+        None => generate(
+            catalog,
             output_dir,
-            worker_concurrency,
             options,
-            &mut findings,
-        )?;
+            worker_concurrency,
+            &mut session,
+        )?,
+    };
+    let reuse = session.summary();
+    eprintln!("generation: {}", describe_reuse(&reuse));
 
-        // Phase 3: Parallel Compilation Driver (`dotnet build`)
-        let (compile_ms, built) = if !options.skip_compile {
-            compile_phase(&main_csproj_path, worker_concurrency, &mut findings)
-        } else {
-            (0, false)
-        };
-        (emitted_files, emit_ms, compile_ms, built)
+    let Generation {
+        procedures_count,
+        transactions_count,
+        sdts_count,
+        webpanels_count,
+        total_objects,
+        skipped,
+        not_generated,
+        not_targeted,
+        refused,
+        definitions,
+        errors,
+        warnings,
+        navigation_reports,
+        emitted_files,
+        main_project,
+        read_ms,
+        spec_ms,
+        emit_ms,
+    } = generation;
+    let mut findings = Findings { errors, warnings };
+
+    // Phase 3: Parallel Compilation Driver (`dotnet build`)
+    let (compile_ms, built) = match &main_project {
+        Some(main_csproj_path) if !options.skip_compile => {
+            compile_phase(main_csproj_path, worker_concurrency, &mut findings)
+        }
+        _ => (0, false),
     };
 
     let total_ms = total_start.elapsed().as_millis() as u64;
@@ -397,16 +508,11 @@ pub fn rebuild_all(
     // kind has no generator, or the project did not build. A partial run is never success.
     let status = if !final_errors.is_empty() {
         RebuildStatus::Failed
-    } else if !built || !manifest.skipped.is_empty() || !manifest.not_generated.is_empty() {
+    } else if !built || !skipped.is_empty() || !not_generated.is_empty() {
         RebuildStatus::Partial
     } else {
         RebuildStatus::Complete
     };
-    let webpanels_count = manifest
-        .skipped
-        .iter()
-        .filter(|skipped| skipped.kind == "WebPanel")
-        .count();
 
     Ok(RebuildReport {
         read_ms,
@@ -415,6 +521,140 @@ pub fn rebuild_all(
         compile_ms,
         total_ms,
         catalog_load_ms: 0,
+        procedures_count,
+        transactions_count,
+        sdts_count,
+        webpanels_count,
+        total_objects,
+        status,
+        generated_count,
+        compiled_count: if built { generated_count } else { 0 },
+        skipped_count: skipped.len(),
+        skipped_objects: skipped,
+        not_generated_count: not_generated.len(),
+        not_generated_objects: not_generated,
+        not_targeted_count: not_targeted.len(),
+        not_targeted_objects: not_targeted,
+        refused_count: refused.len(),
+        refused_objects: refused,
+        definition_kinds: definitions,
+        errors: final_errors,
+        warnings: final_warnings,
+        emitted_files,
+        navigation_reports,
+        reuse,
+    })
+}
+
+/// One line for the build log: what this run reused.
+fn describe_reuse(reuse: &ReuseSummary) -> String {
+    match reuse.mode.as_str() {
+        "unchanged" => "skipped, the model is unchanged since the previous run".to_string(),
+        "full" => format!(
+            "full ({}), {} artifact cache entries restored",
+            reuse.reason.as_deref().unwrap_or("nothing to reuse"),
+            reuse.cache_entries_restored
+        ),
+        _ => format!(
+            "incremental, {} Procedures kept and {} emitted, {} specifications kept and {} computed, SDT files {}, {} stale files removed, {} artifact cache entries restored",
+            reuse.procedures_kept,
+            reuse.procedures_emitted,
+            reuse.specifications_kept,
+            reuse.specifications_computed,
+            if reuse.sdts_kept { "kept" } else { "written" },
+            reuse.stale_files_removed,
+            reuse.cache_entries_restored
+        ),
+    }
+}
+
+/// Phases 0 to 2: classifies, specifies and emits the model, reusing what `session` allows, and records
+/// the outcome for the next run.
+fn generate(
+    catalog: &Catalog,
+    output_dir: &Path,
+    options: &RebuildOptions,
+    worker_concurrency: usize,
+    session: &mut Session<'_>,
+) -> Result<Generation, String> {
+    // Phase 0: Object Classification
+    let (manifest, read_ms) =
+        classify_objects(catalog, &options.web_environment, &options.runtime_sdts);
+
+    let mut findings = Findings::default();
+
+    // A refused object was requested and cannot be built from this catalog: it is an error. The message names
+    // the object's own kind: a refused Transaction is not a Procedure.
+    for refused in &manifest.refused {
+        findings.errors.push(format!(
+            "refused to build {} '{}': {}",
+            refused.kind, refused.name, refused.reason
+        ));
+    }
+
+    // Phase 1: Parallel Specification
+    let (nav_reports, spec_ms, mut specifications) = specify_phase(
+        &manifest,
+        catalog,
+        worker_concurrency,
+        options,
+        &mut findings,
+        session,
+    )?;
+
+    if options.fail_fast && !findings.errors.is_empty() {
+        return Err(findings.errors.join("; "));
+    }
+
+    // A closure build starts at `Main` of its entry. When classification left nothing to generate (the
+    // entry is stored as not main and nothing reaches it, so the SDK does not generate it), that class does
+    // not exist: emitting a project that starts there only fails `dotnet build` with CS1555 (#675).
+    let nothing_to_generate = manifest.procedures.is_empty()
+        && manifest.transactions.is_empty()
+        && manifest.sdts.is_empty()
+        && manifest.webpanels.is_empty();
+    let emission = if options.startup_object.is_some() && nothing_to_generate {
+        findings.warnings.push(
+            "nothing to generate: the closure entry is not targeted (see not_targeted_objects), so no project was emitted or compiled"
+                .to_string(),
+        );
+        None
+    } else {
+        // Phase 2: Parallel C# & Project Code Emission
+        let found = (findings.errors.len(), findings.warnings.len());
+        let mut emission = emission_phase(
+            &manifest,
+            output_dir,
+            worker_concurrency,
+            options,
+            &mut findings,
+            session,
+        )?;
+        // Two objects wrote one file, and the later write decides it. A step that kept its files of the
+        // previous run did not write, so the order of this run is not the order of a run that reuses
+        // nothing: the model is emitted again without the previous run.
+        if session.kept_any() && reuse::writes_one_file_twice(&emission.files) {
+            findings.errors.truncate(found.0);
+            findings.warnings.truncate(found.1);
+            session.forget_previous("two generated objects write the same file");
+            emission = emission_phase(
+                &manifest,
+                output_dir,
+                worker_concurrency,
+                options,
+                &mut findings,
+                session,
+            )?;
+        }
+        Some(emission)
+    };
+
+    let webpanels_count = manifest
+        .skipped
+        .iter()
+        .filter(|skipped| skipped.kind == "WebPanel")
+        .count();
+    let mut generation = Generation {
         // Every Procedure in the catalog: buildable, refused and not-generated alike. It counts Procedures
         // only; refused SDTs are reported under `refused_count`, and `sdts_count` is the SDTs emitted.
         procedures_count: catalog
@@ -425,23 +665,39 @@ pub fn rebuild_all(
         sdts_count: manifest.sdts.len(),
         webpanels_count,
         total_objects: manifest.total_objects,
-        status,
-        generated_count,
-        compiled_count: if built { generated_count } else { 0 },
-        skipped_count: manifest.skipped.len(),
-        skipped_objects: manifest.skipped,
-        not_generated_count: manifest.not_generated.len(),
-        not_generated_objects: manifest.not_generated,
-        not_targeted_count: manifest.not_targeted.len(),
-        not_targeted_objects: manifest.not_targeted,
-        refused_count: manifest.refused.len(),
-        refused_objects: manifest.refused,
-        definition_kinds: manifest.definitions,
-        errors: final_errors,
-        warnings: final_warnings,
-        emitted_files,
+        skipped: manifest.skipped,
+        not_generated: manifest.not_generated,
+        not_targeted: manifest.not_targeted,
+        refused: manifest.refused,
+        definitions: manifest.definitions,
+        errors: findings.errors,
+        warnings: findings.warnings,
         navigation_reports: nav_reports,
-    })
+        emitted_files: Vec::new(),
+        main_project: None,
+        read_ms,
+        spec_ms,
+        emit_ms: 0,
+    };
+    if let Some(emission) = emission {
+        let mut procedures = emission.procedures;
+        for record in &mut procedures {
+            record.spec = specifications.remove(&record.id);
+        }
+        session.commit(reuse::Commit {
+            emitted: &emission.files,
+            main_project: &emission.main_project,
+            generation: &generation,
+            procedures,
+            sdts: emission.sdts,
+            call_key: emission.call_key,
+            io_failed: emission.io_failed,
+        });
+        generation.emitted_files = emission.files;
+        generation.main_project = Some(emission.main_project);
+        generation.emit_ms = emission.emit_ms;
+    }
+    Ok(generation)
 }
 
 /// The entry point of a single-object closure build: the `Main` of the Procedure's core class, the class

@@ -1,7 +1,16 @@
 //! Set-wise prefetch of a model parts, and the coverage that lets later reads answer from memory.
 
-use super::live_rows::{entity_version_from_fields, parse_live_int, parse_live_rows};
+use super::live_rows::{parse_live_int, parse_live_rows, part_payload_columns};
 use super::*;
+
+/// The identity a part row leads with: its entity type, entity and version.
+fn part_key(fields: &[&str]) -> Result<(i32, i32, i32), String> {
+    Ok((
+        parse_live_int(fields[0], "EntityTypeId")?,
+        parse_live_int(fields[1], "EntityId")?,
+        parse_live_int(fields[2], "EntityVersionId")?,
+    ))
+}
 
 impl UdmClient {
     /// Reads, with three set-based queries, the compositions of every object of `model_id`
@@ -50,39 +59,18 @@ impl UdmClient {
         // Module's `ModuleContent`, each up to tens of MB) is left out and stays uncovered, so a caller that
         // asks for one still reads it live.
         let served = self.entity_type_resolver()?.served_type_ids();
-        let parts_sql = |shard: usize| Self::model_parts_sql(model_id, &served, shard);
-        let read_shard = |shard: usize, sql: String| -> Result<Vec<EntityVersionRecord>, String> {
-            let raw = if self.consistent_read {
-                // A read view cannot fan out into independently committed SQL sessions.
-                self.execute_live_sql(&sql)?
-            } else {
-                match (shard, &self.connection_info, &self.read_session) {
-                    (0, _, _) | (_, None, _) => self.execute_live_sql(&sql)?,
-                    (_, Some(info), Some(_)) => live::ReadSession::start(info)?.query(&sql)?,
-                    (_, Some(info), None) => live::execute_sqlcmd(info, &sql)?,
-                }
-            };
-            parse_live_rows(&raw, 7)?
-                .into_iter()
-                .map(|row| {
-                    entity_version_from_fields(
-                        parse_live_int(row[0], "EntityTypeId")?,
-                        parse_live_int(row[1], "EntityId")?,
-                        parse_live_int(row[2], "EntityVersionId")?,
-                        row[3],
-                        row[4],
-                        row[5],
-                        row[6],
-                    )
-                })
-                .collect()
+        // Shard 0 reads on the session this client's reads share; the others on their own.
+        let read_shard = |shard: usize| -> Result<Vec<EntityVersionRecord>, String> {
+            self.read_part_records(
+                shard != 0,
+                3,
+                |binary| Self::model_parts_sql(model_id, &served, shard, binary),
+                part_key,
+            )
         };
         let mut parts = std::thread::scope(|scope| -> Result<Vec<EntityVersionRecord>, String> {
             let shards: Vec<_> = (0..PART_READ_SHARDS)
-                .map(|shard| {
-                    let sql = parts_sql(shard);
-                    scope.spawn(move || read_shard(shard, sql))
-                })
+                .map(|shard| scope.spawn(move || read_shard(shard)))
                 .collect();
             let mut parts = Vec::new();
             for shard in shards {
@@ -155,8 +143,14 @@ impl UdmClient {
     }
 
     /// The `EntityVersion` read of one shard of `model_id`'s objects and their components, restricted to the
-    /// `served` entity types. With no served type the read selects nothing.
-    pub(super) fn model_parts_sql(model_id: i32, served: &[i32], shard: usize) -> String {
+    /// `served` entity types. With no served type the read selects nothing. `binary` selects the payloads as
+    /// bytes instead of hex text (see `part_payload_columns`).
+    pub(super) fn model_parts_sql(
+        model_id: i32,
+        served: &[i32],
+        shard: usize,
+        binary: bool,
+    ) -> String {
         let types = if served.is_empty() {
             "1 = 0".to_string()
         } else {
@@ -169,8 +163,9 @@ impl UdmClient {
                     .join(", ")
             )
         };
+        let payloads = part_payload_columns("e.", binary);
         format!(
-            "SET NOCOUNT ON; SELECT e.EntityTypeId, e.EntityId, e.EntityVersionId, ISNULL(DATALENGTH(e.EntityVersionData), 0), CONVERT(VARCHAR(MAX), e.EntityVersionData, 2), ISNULL(DATALENGTH(e.EntityVersionProperties), 0), CONVERT(VARCHAR(MAX), CAST(e.EntityVersionProperties AS VARBINARY(MAX)), 2) FROM EntityVersion e WHERE (EXISTS (SELECT 1 FROM ModelEntityVersion m WHERE m.ModelId = {model_id} AND m.EntityTypeId = e.EntityTypeId AND m.EntityId = e.EntityId AND m.EntityVersionId = e.EntityVersionId) OR EXISTS (SELECT 1 FROM EntityVersionComposition c JOIN ModelEntityVersion m ON m.EntityTypeId = c.CompoundEntityTypeId AND m.EntityId = c.CompoundEntityId AND m.EntityVersionId = c.CompoundEntityVersionId WHERE m.ModelId = {model_id} AND c.ComponentEntityTypeId = e.EntityTypeId AND c.ComponentEntityId = e.EntityId AND c.ComponentEntityVersionId = e.EntityVersionId)) AND {types} AND e.EntityId % {PART_READ_SHARDS} = {shard}"
+            "SET NOCOUNT ON; SELECT e.EntityTypeId, e.EntityId, e.EntityVersionId, {payloads} FROM EntityVersion e WHERE (EXISTS (SELECT 1 FROM ModelEntityVersion m WHERE m.ModelId = {model_id} AND m.EntityTypeId = e.EntityTypeId AND m.EntityId = e.EntityId AND m.EntityVersionId = e.EntityVersionId) OR EXISTS (SELECT 1 FROM EntityVersionComposition c JOIN ModelEntityVersion m ON m.EntityTypeId = c.CompoundEntityTypeId AND m.EntityId = c.CompoundEntityId AND m.EntityVersionId = c.CompoundEntityVersionId WHERE m.ModelId = {model_id} AND c.ComponentEntityTypeId = e.EntityTypeId AND c.ComponentEntityId = e.EntityId AND c.ComponentEntityVersionId = e.EntityVersionId)) AND {types} AND e.EntityId % {PART_READ_SHARDS} = {shard}"
         )
     }
 
@@ -250,22 +245,18 @@ impl UdmClient {
         let version_keys = Self::distinct_keys(&version_keys);
         let mut versions = Vec::new();
         for chunk in version_keys.chunks(KEYS_PER_QUERY) {
-            let sql = format!(
-                "SET NOCOUNT ON; SELECT e.EntityTypeId, e.EntityId, e.EntityVersionId, ISNULL(DATALENGTH(e.EntityVersionData), 0), CONVERT(VARCHAR(MAX), e.EntityVersionData, 2), ISNULL(DATALENGTH(e.EntityVersionProperties), 0), CONVERT(VARCHAR(MAX), CAST(e.EntityVersionProperties AS VARBINARY(MAX)), 2) FROM EntityVersion e JOIN (VALUES {}) AS k(t, i, v) ON e.EntityTypeId = k.t AND e.EntityId = k.i AND e.EntityVersionId = k.v",
-                Self::values_list(chunk)
-            );
-            let raw = self.execute_live_sql(&sql)?;
-            for row in parse_live_rows(&raw, 7)? {
-                versions.push(entity_version_from_fields(
-                    parse_live_int(row[0], "EntityTypeId")?,
-                    parse_live_int(row[1], "EntityId")?,
-                    parse_live_int(row[2], "EntityVersionId")?,
-                    row[3],
-                    row[4],
-                    row[5],
-                    row[6],
-                )?);
-            }
+            let keys = Self::values_list(chunk);
+            versions.extend(self.read_part_records(
+                false,
+                3,
+                |binary| {
+                    format!(
+                        "SET NOCOUNT ON; SELECT e.EntityTypeId, e.EntityId, e.EntityVersionId, {} FROM EntityVersion e JOIN (VALUES {keys}) AS k(t, i, v) ON e.EntityTypeId = k.t AND e.EntityId = k.i AND e.EntityVersionId = k.v",
+                        part_payload_columns("e.", binary)
+                    )
+                },
+                part_key,
+            )?);
         }
 
         {

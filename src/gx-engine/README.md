@@ -44,6 +44,65 @@ when this credential preflight fails. The Gateway can safely use SDK fallback
 for that exact refusal; generic failures/timeouts after start cannot replay builds.
 See [SQL authentication and auto routing](../../docs/engine_backend.md#sql-authentication-issue-635).
 
+## SQL transport (experimental, opt-in)
+
+Generated KB reads go through a `sqlcmd` subprocess, with part payloads as hex text. An
+alternative transport speaks the SQL Server wire protocol (TDS) directly, reads part payloads
+as bytes and needs no `sqlcmd` for those reads. It is off unless both hold:
+
+- the engine was built with the cargo feature: `cargo build --features tds` (the default build
+  and the shipped binary do not have it, and do not compile its dependencies);
+- `GXMCP_ENGINE_SQL_TRANSPORT=tds` is set for the engine process.
+
+**Not verified against a real server.** No SQL Server or LocalDB was available where this was
+written: the protocol handling is tested against an in-process endpoint built from the protocol
+specification, which cannot prove interoperability. Run
+`pwsh scripts/validate-engine-tds-live.ps1 -KbPath C:\KBs\<test KB>` on a machine with a test
+Knowledge Base before relying on it; it compares both transports byte for byte and is read-only.
+
+What it uses: the [`tiberius`](https://crates.io/crates/tiberius) client behind a blocking
+adapter (`src/udm/tds`), NTLMv2 through Windows SSPI for integrated authentication (the
+`winauth` backend of `tiberius`; it does not negotiate Kerberos, so a login that needs
+Kerberos, or a domain that forbids NTLM, fails before any read and `sqlcmd` takes over), and
+the Windows TLS stack (schannel).
+
+| Connection (`knowledgebase.connection`) | Over TDS |
+| :--- | :--- |
+| `(LocalDB)\name`, integrated | Named pipe found with `sqllocaldb info` (a stopped instance is started, as connecting does). |
+| `host`, `host,port`, `host\instance` | TCP; a named instance without a port is resolved through the SQL Server Browser. |
+| `np:\\host\pipe\...` | That named pipe. |
+| `lpc:` (shared memory), or a local server with TCP disabled | Not reachable: `sqlcmd` reads it. |
+
+Rules it keeps:
+
+- **Fallback only before any read.** The first session of a connection decides. If TDS cannot
+  connect or log in, that connection's reads use `sqlcmd` for the rest of the process and the
+  reason is kept (printed on stderr as `gx-engine: SQL transport: reads used sqlcmd: ...`, except
+  under `--diagnostics=json`, whose stderr is one diagnostic line by contract). After a TDS
+  session has served a read, any failure, including a later connection failure, is an error:
+  rows of one read never come from two transports.
+- **Same statements, same decoding.** Every read returns the text the callers already parse;
+  only the part reads select `EntityVersionData` / `EntityVersionProperties` as `varbinary`
+  instead of hex, and both forms go through the same length check and the same envelope/GZip
+  decoder. Only integer, bit, character and binary columns are served; a date, decimal, float
+  or GUID column fails the read by name instead of being formatted differently from `sqlcmd`.
+  One known difference: non-ASCII text in a plain character column arrives as stored over TDS,
+  while `sqlcmd` output passes through the console code page.
+- **Credentials.** The same as above: `SQLCMDUSER` / `SQLCMDPASSWORD` from the environment
+  override the connection file, a missing one is refused, and neither is logged or put in an
+  error (the server's own login-failure text is redacted).
+- **Encryption.** Over TCP or a remote pipe the session is TLS from the login to the last row,
+  with the server certificate validated against the Windows trust store. A server that offers
+  no encryption, or whose certificate does not validate, is not read over TDS: nothing is sent
+  in clear text and `sqlcmd` takes over. `GXMCP_ENGINE_SQL_TRUST_SERVER_CERTIFICATE=1` accepts
+  an unvalidated certificate, still under TLS. A LocalDB pipe never leaves the machine: it is
+  asked for TLS without validating its self-signed certificate, and if that fails with a
+  Windows-integrated login (no password travels) it is read without TLS. A server that requires
+  encryption gets it in every case.
+
+Writes, and any statement that is not a generated `SET NOCOUNT ON; SELECT` read, still use
+`sqlcmd`.
+
 ## SDK-form output
 
 What a whole-KB run writes, and from what:
@@ -103,6 +162,77 @@ packaged binary was smoke-tested, not benchmarked; its hash differs from the tim
 binary. See
 [Plan 131](../../plans/131-sdk-performance-benchmark.md) for commands, all
 samples, output checks, cache conditions, failures and outstanding gates.
+
+## Incremental rebuild and artifact cache
+
+`rebuild-all` into a directory that holds a previous run reuses that run's generation. Before this,
+a run specified and emitted every object every time; only the file writes (a file whose bytes are
+unchanged is not rewritten) and the compile (`csc-direct (up to date)`) were skipped. Now the run
+records what each reusable step read (`obj/gx-incremental/manifest.json` in the output directory,
+replaced as a whole by rename) and the next run skips the steps whose inputs are the same:
+
+| Reused | When this is unchanged (SHA-256 fingerprint) |
+| :--- | :--- |
+| The whole generation: nothing is classified, specified or emitted | the engine binary, every option that reaches the output, every object of the catalog |
+| One Procedure's specification | the engine binary, the Procedure, the tables derived from the model, the SQL dialect |
+| One Procedure's emission and files | the engine binary, the Procedure, every structured data type of the build, the call signature of every Procedure of the build, the target framework |
+| The structured data type files | the engine binary, every structured data type of the build |
+
+So a changed Procedure body emits that Procedure only; a changed call signature or structured data
+type emits every Procedure again (any of them may read it); a changed Transaction, Attribute or
+Domain specifies every Procedure again. Web classes, business components, enumerated-Domain classes,
+support files, Transaction formula checks and the classification read the catalog at large and are
+redone whenever anything changed. The fingerprint is deliberately wider than the true dependency: it
+never has to prove what an emitter did not read.
+
+Rules that keep the output equal to a rebuild into an empty directory:
+
+- The engine's identity is the SHA-256 of its executable, so a rebuilt engine reuses nothing an
+  earlier build of it wrote, even under the same version number.
+- Only successful results are reused. A Procedure that is refused or fails to generate is emitted
+  again on every run that generates anything, and a caller of a Procedure that is not generated is
+  refused by name whatever was reused.
+- A reused step does not rewrite its files, so each must be on disk with the length and
+  modification time the previous run left (the test `csc_direct` applies to its outputs); otherwise
+  the step runs again. A file changed in place with both preserved is not detected: use `--clean`.
+- Files a previous run wrote that the model no longer produces (a deleted or renamed object, a
+  changed assembly name) are removed. Files no run recorded are never touched.
+- The record is marked unusable before the first file of a run is written and written again at the
+  end. A run that is cut off, or that could not write a file, may leave files no record lists, so the
+  next run empties the output directory (as `--clean` does) and generates everything. A run in which
+  two objects write the same file is followed by a full generation too.
+- A missing, unreadable or other-format record, a record written by another engine binary, and
+  `--clean` all mean a full generation.
+- A web class holds its generation time. As before, a file that differs from the new output only by
+  that stamp keeps its earlier stamp, so a directory built over several runs can differ from a fresh
+  one in those 14 digits. `GXMCP_ENGINE_GENERATION_STAMP` fixes the stamp for a byte-for-byte check.
+
+The report's `reuse` object and one `generation: ...` line on stderr say what a run reused
+(`mode`: `unchanged`, `incremental` or `full` with the reason).
+
+**Artifact cache** (opt-in, `GXMCP_ENGINE_BUILD_CACHE_DIR=<dir>`; unset, nothing is read or written).
+It stores, under the fingerprints above, each Procedure's emitted C# (`emit`), each Procedure's
+navigation report (`spec`) and the structured data type files (`sdts`), so a rebuild into an empty
+directory, or on another machine with the same engine binary, restores them instead of generating:
+
+```text
+<dir>/v1/<kind>/<first two hex digits of the key>/<key>
+entry = "gx-artifact-1 <key> <payload length> <payload SHA-256>\n" + payload (JSON)
+```
+
+The directory may be shared: an entry is written to a temporary file beside it and renamed over it,
+and a restore checks the key, the length and the SHA-256 before decoding. An entry that fails a check
+is ignored, recomputed and replaced. Refusals and errors are never stored. Compiled assemblies are not
+cached: a C# compile was measured byte-identical for the same inputs in the same folder and different
+in another folder (the assembly and PDB embed the folder's path; plain `net10.0` class library, SDK
+10.0.404, not the generated project), so an assembly is not a function of the fingerprint. There is no
+eviction: an entry is roughly the size of the C# file or report it holds, one per distinct object
+version built, and any entry or the whole directory can be deleted at any time.
+
+Tests: `tests/rebuild_incremental.rs` rebuilds a model after each kind of edit (and after sixty
+pseudo-random ones) and compares every file and the report with a rebuild into an empty directory.
+`scripts/validate-engine-incremental-live.ps1` runs the same comparison on a real `C:\KBs\*teste*`
+Knowledge Base; it has not been run yet (no Knowledge Base on the development machine).
 
 ## Local use
 

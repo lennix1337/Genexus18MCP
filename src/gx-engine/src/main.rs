@@ -854,7 +854,9 @@ fn execute_rebuild_all(
     options = options
         .with_client_config(client_config)
         .with_model_files(model_files)
-        .with_web_environment(web_environment);
+        .with_web_environment(web_environment)
+        // The artifact cache directory and the fixed generation stamp, both opt-in.
+        .with_process_environment()?;
 
     let catalog_load_ms = catalog_started.elapsed().as_millis() as u64;
     // A library SDT the KB's runtime assemblies define is never emitted (the SDK uses the runtime class).
@@ -994,6 +996,12 @@ fn main() -> ExitCode {
         execute(args, &mut category, json_errors)
             .map(|()| gx_engine::rebuild::RebuildStatus::Complete)
     };
+    // Not with --diagnostics=json: the host reads that stderr as exactly one diagnostic line.
+    if !json_errors {
+        for reason in gx_engine::udm::live::transport_fallbacks() {
+            eprintln!("gx-engine: SQL transport: reads used sqlcmd: {reason}");
+        }
+    }
     match outcome {
         Ok(gx_engine::rebuild::RebuildStatus::Complete) => ExitCode::SUCCESS,
         Ok(gx_engine::rebuild::RebuildStatus::Partial) => ExitCode::from(EXIT_PARTIAL),
