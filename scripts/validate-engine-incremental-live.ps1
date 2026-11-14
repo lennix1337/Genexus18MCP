@@ -170,7 +170,8 @@ function Compare-Tree($Left, $Right, [string]$LeftName, [string]$RightName) {
     foreach ($name in $Right.Keys) {
         if (-not $Left.ContainsKey($name)) { $differences.Add("only in ${RightName}: $name") }
     }
-    $differences
+    # The comma keeps an empty list a list: unrolled, it would arrive as $null and .Count fails under StrictMode.
+    , $differences
 }
 
 function Format-Differences($Differences) {
