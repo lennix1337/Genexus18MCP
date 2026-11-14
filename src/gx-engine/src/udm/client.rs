@@ -24,6 +24,8 @@ mod inspect;
 mod kb_facts;
 mod listing;
 mod live_rows;
+#[cfg(debug_assertions)]
+pub mod mock_kb;
 mod model_pin;
 mod model_reads;
 mod prefetch;
@@ -118,6 +120,11 @@ impl UdmClient {
 
     /// Creates a UDM client connected to a Knowledge Base directory containing `knowledgebase.connection`.
     pub fn connect_kb<P: AsRef<Path>>(kb_dir: P) -> Result<Self, String> {
+        // Test seam of debug builds only; a folder with a connection file never takes it.
+        #[cfg(debug_assertions)]
+        if let Some(mock) = mock_kb::open(kb_dir.as_ref())? {
+            return Ok(mock);
+        }
         let info = KbConnectionInfo::from_kb_dir(kb_dir)?;
         Ok(Self::from_connection_info(info))
     }

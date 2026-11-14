@@ -32,6 +32,10 @@ name = "bench_suite"
 harness = false
 
 [[bench]]
+name = "serve_vs_spawn"
+harness = false
+
+[[bench]]
 name = "rebuild_reuse"
 harness = false
 
