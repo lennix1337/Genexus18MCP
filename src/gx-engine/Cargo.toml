@@ -12,6 +12,16 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 flate2 = "1.0"
 sha2 = "0.11.1"
+# Only with the `tds` feature (see `src/udm/tds`). The default build compiles none of these.
+tiberius = { version = "0.13", default-features = false, features = ["tds73", "native-tls", "winauth", "sql-browser-tokio"], optional = true }
+tokio = { version = "1", features = ["rt", "net", "time", "io-util"], optional = true }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }
+
+[features]
+# Native TDS read transport for live Knowledge Base reads (`GXMCP_ENGINE_SQL_TRANSPORT=tds`).
+# Off by default: the default binary keeps reading through `sqlcmd` and has no async runtime,
+# TLS or SSPI dependency.
+tds = ["dep:tiberius", "dep:tokio", "dep:tokio-util"]
 
 [[bench]]
 name = "str_format"

@@ -992,6 +992,12 @@ fn main() -> ExitCode {
         execute(args, &mut category, json_errors)
             .map(|()| gx_engine::rebuild::RebuildStatus::Complete)
     };
+    // Not with --diagnostics=json: the host reads that stderr as exactly one diagnostic line.
+    if !json_errors {
+        for reason in gx_engine::udm::live::transport_fallbacks() {
+            eprintln!("gx-engine: SQL transport: reads used sqlcmd: {reason}");
+        }
+    }
     match outcome {
         Ok(gx_engine::rebuild::RebuildStatus::Complete) => ExitCode::SUCCESS,
         Ok(gx_engine::rebuild::RebuildStatus::Partial) => ExitCode::from(EXIT_PARTIAL),
