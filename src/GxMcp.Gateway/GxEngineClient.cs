@@ -185,6 +185,21 @@ namespace GxMcp.Gateway
                 return GxEngineInvocation.Failure(null, "EngineNotFound", detail);
             }
 
+            // Opt-in resident process (GXMCP_ENGINE_RESIDENT); null while it is off, which is the default.
+            GxEngineResidentPool? residentPool = GxEngineResidentPool.Current;
+            if (residentPool != null)
+            {
+                GxEngineResidentOutcome resident = await residentPool.TryRunAsync(
+                    executable, arguments, settings.TimeoutSeconds, cancellationToken).ConfigureAwait(false);
+                // A build whose end was not observed: an unknown outcome, like a failed observation
+                // of a one-shot process, so it is never run again below.
+                if (resident.UnobservedMessage != null)
+                    return GxEngineInvocation.Failure(executable, "EngineObservationFailed", resident.UnobservedMessage);
+                if (resident.Run is GxEngineProcessRun served)
+                    return ToInvocation(executable, served, cancellationToken);
+                // Not served and nothing started: the one-shot process below runs the call.
+            }
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = executable,
@@ -225,6 +240,15 @@ namespace GxMcp.Gateway
                     $"gx-engine started, but observing its completion failed: {ex.Message} "
                     + (stopped ? "Process exit observed after cleanup." : "Process termination could not be confirmed; reconcile before another build."));
             }
+            return ToInvocation(executable, run, cancellationToken);
+        }
+
+        /// <summary>
+        /// The invocation outcome of one finished run. One-shot and resident runs both pass
+        /// through here, so the same output and exit code always give the same outcome.
+        /// </summary>
+        private static GxEngineInvocation ToInvocation(string executable, GxEngineProcessRun run, CancellationToken cancellationToken)
+        {
             if (cancellationToken.IsCancellationRequested)
             {
                 return GxEngineInvocation.Failure(
