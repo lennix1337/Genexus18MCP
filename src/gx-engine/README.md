@@ -553,6 +553,38 @@ not a matching case. `scripts/validate_text.py` checks authored inputs, complete
 native readback/execution, and fresh Rust output; it reports the divergence.
 These are local procedure semantics, not database-column or all-generator parity.
 
+## Whole-KB static analysis (`kb-analyze`)
+
+`gx-engine [--diagnostics=json] kb-analyze <kb-path> [--design-model <id> --kb-version <id>]` reads the
+catalog of the selected Design model once and checks every Procedure the front end admits
+(`frontend::parse_body`). It is read-only and prints one line of JSON:
+`{analyzer, summary, rules, findings, skipped, withheld}`. A finding is
+`{rule, severity, object, part, line?, column?, message}`; `line`/`column` are one-based into the Source
+and absent when the finding is not about a Source position (a declared variable lives in the Variables
+part). A Procedure the pass cannot judge is listed under `skipped` with a `category` (`unparsed` with the
+parser's own message, `refused`, `not_generated`, `no_source`, `library`) and a reason; it is never
+reported as clean. `withheld` names an analyzed Procedure whose variable rules were not run because its
+Variables part was unreadable. The output is deterministic (stable ordering, no timings), so the same
+catalog gives byte-identical JSON.
+
+| Rule | Title | Same meaning as the Worker linter |
+| --- | --- | --- |
+| `GX008` | Unused variable | Yes (`LinterService`, Warning) |
+| `GX009` | Unused subroutine | Yes (Warning) |
+| `GXE001` | Variable assigned but never read | Engine only |
+| `GXE002` | Unreachable statement after `Return`/`Exit` in the same block | Engine only |
+| `GXE003` | Wrong number of arguments to a Procedure with an unambiguous `parm` | Engine only |
+| `GXE004` | Not-main Procedure no generated object reaches (`reachability.rs`, SDK spc0217) | Engine only |
+
+Every rule prefers a missed problem over a false report; what each deliberately does not flag is written
+on its entry in `analyze::RULES`. Not reported at all: a call to a name the catalog does not hold
+(GeneXus ships functions this engine has no list of, so absence is not provable). Blind spots: the
+catalog does not serve a Layout, Help or Documentation part, so a variable used only there looks unused
+(the front end admits no print blocks, which keeps most report Procedures among the skipped), and
+references from object kinds the reader does not serve are invisible to `GXE004`. A clean result is
+"nothing found by these rules", not a verdict on the object. Live check on a disposable test KB:
+`scripts/validate-engine-analyze-live.ps1`. The command is not exposed through the MCP.
+
 ## Incremental analysis, not an executable cache
 
 The library's `IncrementalCompiler` supports both formats and maintains a transactional parse session. It compares exact canonical procedure identities, parameter lists and source bodies; unchanged bodies reuse parsed ASTs. Typed declaration/return-signature changes invalidate the procedure and its transitive callers without reparsing unchanged syntax. Format changes invalidate all current procedures. Changes propagate through the union of old/new reverse call graphs so renames/deletions do not lose old dependents. Every candidate revision still undergoes full backend semantic validation. A failed candidate does not replace the last accepted session.

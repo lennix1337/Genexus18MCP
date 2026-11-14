@@ -854,12 +854,10 @@ pub fn analyze(catalog: &Catalog) -> Analysis {
                 withheld.extend(held);
             }
         }
-        // GXE004 needs no Source: it is decided on the reference graph alone.
-        if !object.library
-            && object.not_generated.is_none()
-            && object.main == Some(false)
-            && !targeted.contains(&object.id)
-        {
+        // GXE004 needs no Source: it is decided on the reference graph alone. Every generated Procedure that
+        // is not stored as not main is a root of `targeted_objects`, so what is left untargeted here is
+        // exactly a Procedure stored as not main that no root reaches.
+        if !object.library && object.not_generated.is_none() && !targeted.contains(&object.id) {
             findings.push(finding(
                 UNREACHABLE_PROCEDURE,
                 object,

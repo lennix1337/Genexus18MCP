@@ -1987,6 +1987,9 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// One-based `(line, column)` pairs.
+pub type SourcePositions = Vec<(usize, usize)>;
+
 fn record_unreachable(location: Location) {
     UNREACHABLE.with(|log| {
         if let Some(log) = log.borrow_mut().as_mut() {
@@ -2000,9 +2003,7 @@ fn record_unreachable(location: Location) {
 /// definition after the `Return` is not code that runs in line, so it is not reported. Only the sequence
 /// inside one block is judged; a `Return` under a condition ends nothing outside its own block. The
 /// positions are in source order of completion of their blocks, not sorted.
-pub fn parse_body_with_unreachable(
-    source: &str,
-) -> Result<(Vec<Stmt>, Vec<(usize, usize)>), String> {
+pub fn parse_body_with_unreachable(source: &str) -> Result<(Vec<Stmt>, SourcePositions), String> {
     let previous = UNREACHABLE.with(|log| log.replace(Some(Vec::new())));
     let result = parse_body(source);
     let found = UNREACHABLE

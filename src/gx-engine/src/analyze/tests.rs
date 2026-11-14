@@ -221,12 +221,26 @@ fn a_parameter_that_is_assigned_is_not_flagged() {
 
 #[test]
 fn a_record_or_collection_changed_in_place_is_not_flagged() {
-    let result = analysis(vec![procedure(
-        "P",
-        "&Items.Clear()\n&Items.Add(1)",
-        &["Items"],
-        "",
-    )]);
+    for source in [
+        "&Items = &Other\n&Items.Clear()",
+        "&Items = &Other\n&Items.Add(1)",
+        "&Items = &Other\n&Items.Remove(1)",
+    ] {
+        let result = analysis(vec![procedure("P", source, &["Items", "Other"], "")]);
+        assert_eq!(result.summary.analyzed, 1, "{source}: {:?}", result.skipped);
+        assert!(
+            only(&result, ASSIGNED_NEVER_READ).is_empty(),
+            "{source}: {:?}",
+            result.findings
+        );
+    }
+}
+
+#[test]
+fn a_loop_variable_that_is_also_assigned_is_not_flagged() {
+    let source = "&I = 0\nFor &I = 1 to 3\n  Msg('x', status)\nEndFor";
+    let result = analysis(vec![procedure("P", source, &["I"], "")]);
+    assert_eq!(result.summary.analyzed, 1, "{:?}", result.skipped);
     assert!(
         only(&result, ASSIGNED_NEVER_READ).is_empty(),
         "{:?}",
@@ -427,16 +441,28 @@ fn a_call_to_a_name_the_catalog_does_not_hold_is_not_reported() {
 }
 
 #[test]
-fn a_typed_builtin_or_a_method_with_a_procedure_name_is_not_a_call_to_that_procedure() {
-    let shadow = procedure("Trim", "Return", &[], "parm(in:&A);");
-    let method = procedure("Sizeit", "Return", &[], "parm(in:&A);");
-    let caller = procedure(
-        "Caller",
-        "&T = Trim(&T, 1, 2)\n&C.Add(1)\n&D.Sizeit(1, 2)",
-        &["T", "C", "D"],
-        "",
+fn a_typed_builtin_with_a_procedure_name_is_not_a_call_to_that_procedure() {
+    let shadow = procedure("Trim", "Return", &[], "parm(in:&A, in:&B);");
+    let caller = procedure("Caller", "&T = Trim(&T)", &["T"], "");
+    let result = analysis(vec![shadow, caller]);
+    // The caller must be analyzed, otherwise the absence of a finding proves nothing.
+    assert_eq!(result.summary.analyzed, 2, "{:?}", result.skipped);
+    assert!(
+        only(&result, WRONG_ARGUMENT_COUNT).is_empty(),
+        "{:?}",
+        result.findings
     );
-    let result = analysis(vec![shadow, method, caller]);
+}
+
+#[test]
+fn a_statement_keyword_that_is_also_a_procedure_name_is_not_a_call_to_it() {
+    // `Msg('x', status)` and `Print(...)` are statements the parser does not turn into calls, so the token
+    // scan and the parser tree disagree and the site is dropped instead of being read as a call.
+    let msg = procedure("Msg", "Return", &[], "parm(in:&A);");
+    let print = procedure("Print", "Return", &[], "parm(in:&A, in:&B);");
+    let caller = procedure("Caller", "Msg('hello', status)\nPrint('x')", &[], "");
+    let result = analysis(vec![msg, print, caller]);
+    assert_eq!(result.summary.analyzed, 3, "{:?}", result.skipped);
     assert!(
         only(&result, WRONG_ARGUMENT_COUNT).is_empty(),
         "{:?}",
@@ -697,4 +723,79 @@ fn the_scan_counts_lines_and_columns_like_the_front_end() {
         })
         .collect();
     assert_eq!(vars, [("X".into(), 2, 6), ("W".into(), 3, 3)]);
+}
+
+// ----- synthetic scale measurement (not a real-KB number) ---------------------------------------
+
+/// A generated catalog: every 20th Procedure has a Source the parser refuses, the others hold a loop,
+/// a branch, two subroutines (one never called), a call to the previous Procedure and a few variables.
+fn synthetic_catalog(procedures: usize) -> Catalog {
+    let mut objects = Vec::with_capacity(procedures);
+    for index in 0..procedures {
+        let name = format!("Synth{index:05}");
+        let source = if index % 20 == 19 {
+            "&A = (\n".to_string()
+        } else {
+            let call = if index > 0 {
+                format!("Synth{:05}(&A, &B)\n", index - 1)
+            } else {
+                String::new()
+            };
+            format!(
+                "&A = {index}\n&B = &A + 1\nIf &B > 3\n  Msg(&B, status)\nEndIf\nFor &I = 1 to 3\n  &A = &A + &I\nEndFor\nDo 'Helper'\n{call}Return\nSub 'Helper'\n  &C = 1\nEndSub\nSub 'Unused'\n  Msg('x', status)\nEndSub\n"
+            )
+        };
+        let mut object = procedure(
+            &name,
+            &source,
+            &["A", "B", "C", "D", "I"],
+            "parm(in:&A, out:&B);",
+        );
+        object.main = Some(index % 7 != 3);
+        objects.push(object);
+    }
+    catalog(objects)
+}
+
+#[test]
+fn the_synthetic_catalog_is_analyzed_as_designed() {
+    let run = analyze(&synthetic_catalog(40));
+    assert_eq!(run.summary.procedures, 40);
+    assert_eq!(run.summary.skipped, 2);
+    assert_eq!(run.summary.analyzed, 38);
+    // &D is never used, &C is assigned and never read, 'Unused' is never called, in every analyzed one.
+    assert_eq!(run.summary.findings_by_rule[UNUSED_VARIABLE], 38);
+    assert_eq!(run.summary.findings_by_rule[ASSIGNED_NEVER_READ], 38);
+    assert_eq!(run.summary.findings_by_rule[UNUSED_SUBROUTINE], 38);
+    assert!(
+        !run.summary
+            .findings_by_rule
+            .contains_key(WRONG_ARGUMENT_COUNT)
+    );
+}
+
+#[test]
+#[ignore = "measurement, run with --ignored --nocapture"]
+fn measure_synthetic_catalogs() {
+    for size in [300, 3000] {
+        let catalog = synthetic_catalog(size);
+        let mut best = f64::MAX;
+        let mut result = None;
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let run = analyze(&catalog);
+            let json = serde_json::to_string(&run).unwrap();
+            best = best.min(started.elapsed().as_secs_f64());
+            result = Some((run, json.len()));
+        }
+        let (run, bytes) = result.unwrap();
+        println!(
+            "SYNTHETIC catalog, {size} Procedures: analyze + JSON {:.1} ms (best of 5), analyzed {}, skipped {}, findings {}, JSON {} bytes",
+            best * 1000.0,
+            run.summary.analyzed,
+            run.summary.skipped,
+            run.summary.findings,
+            bytes
+        );
+    }
 }
