@@ -25,6 +25,10 @@ use std::{
 /// The artifact cache kind of a Procedure's navigation report.
 const SPEC_KIND: &str = "spec";
 
+/// What [`specify_phase`] returns: the navigation reports, the elapsed milliseconds, and each successful
+/// specification by object id.
+type SpecifyOutcome = (Vec<NavigationReport>, u64, HashMap<String, SpecRecord>);
+
 /// The navigation reports, the elapsed milliseconds, and each successful specification by object id under
 /// the fingerprint of what it read, for the next run to reuse.
 pub(super) fn specify_phase(
@@ -34,7 +38,7 @@ pub(super) fn specify_phase(
     options: &RebuildOptions,
     findings: &mut Findings,
     session: &Session<'_>,
-) -> Result<(Vec<NavigationReport>, u64, HashMap<String, SpecRecord>), String> {
+) -> Result<SpecifyOutcome, String> {
     let spec_start = Instant::now();
 
     // Each Transaction derives or is refused on its own. A refused one is an error naming it, and the tables

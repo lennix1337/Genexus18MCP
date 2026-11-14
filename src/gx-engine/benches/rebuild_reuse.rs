@@ -81,7 +81,7 @@ fn procedure(index: usize, revision: usize, sdts: usize) -> KbObject {
     }
     object.source_parts.push(part("SOURCE", source));
     object.source_parts.push(part("VARIABLES", variables));
-    if index % 5 == 0 {
+    if index.is_multiple_of(5) {
         object
             .source_parts
             .push(part("RULES", "Parm(in:&I);".to_string()));
