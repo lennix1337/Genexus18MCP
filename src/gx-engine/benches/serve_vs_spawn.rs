@@ -107,7 +107,10 @@ impl Resident {
                 .map_err(|_| "gx-engine serve ended inside an answer".to_string())?;
             if line.starts_with(end.as_bytes()) {
                 bytes.pop();
-                return Ok((bytes, String::from_utf8_lossy(&line[end.len()..]).into_owned()));
+                return Ok((
+                    bytes,
+                    String::from_utf8_lossy(&line[end.len()..]).into_owned(),
+                ));
             }
             bytes.extend_from_slice(&line);
         }
@@ -156,7 +159,10 @@ fn one_shot(no_tools: &Path, args: &[String]) -> Result<(Vec<u8>, Vec<u8>, i32),
 struct Samples(Vec<Duration>);
 
 impl Samples {
-    fn of(count: usize, mut request: impl FnMut(usize) -> Result<(), String>) -> Result<Self, String> {
+    fn of(
+        count: usize,
+        mut request: impl FnMut(usize) -> Result<(), String>,
+    ) -> Result<Self, String> {
         let mut samples = Vec::with_capacity(count);
         for index in 0..count {
             let started = Instant::now();
@@ -228,12 +234,20 @@ fn run() -> Result<(), String> {
     std::fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
     let text = |path: &Path| path.to_string_lossy().into_owned();
 
-    println!("SYNTHETIC benchmark: one process per call vs one resident `gx-engine serve` process.");
-    println!("No Knowledge Base, SQL Server, sqlcmd or Gateway is involved; these are not real-KB numbers.");
+    println!(
+        "SYNTHETIC benchmark: one process per call vs one resident `gx-engine serve` process."
+    );
+    println!(
+        "No Knowledge Base, SQL Server, sqlcmd or Gateway is involved; these are not real-KB numbers."
+    );
     println!("Engine binary: {ENGINE}");
     println!(
         "Build profile of this run: {}",
-        if cfg!(debug_assertions) { "debug" } else { "release" }
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
     );
 
     let ready_started = Instant::now();
@@ -256,7 +270,9 @@ fn run() -> Result<(), String> {
     if resident.request(&refusal)? != expected || expected.2 != 1 {
         return Err("the refusal differs between the two paths".into());
     }
-    println!("\nWorkload `refusal` (process start and argument handling only), {requests} requests each:");
+    println!(
+        "\nWorkload `refusal` (process start and argument handling only), {requests} requests each:"
+    );
     let spawned = Samples::of(requests, |_| one_shot(&scratch, &refusal).map(|_| ()))?;
     let served = Samples::of(requests, |_| resident.request(&refusal).map(|_| ()))?;
     spawned.report("one process per call");
@@ -284,12 +300,16 @@ fn run() -> Result<(), String> {
     let (spawn_out, serve_out) = (scratch.join("out-spawn"), scratch.join("out-serve"));
     let warm = one_shot(&scratch, &build(&spawn_out))?;
     if warm.2 != 3 || resident.request(&build(&serve_out))?.2 != 3 {
-        return Err("the catalog build did not end as a partial (not compiled) run on both paths".into());
+        return Err(
+            "the catalog build did not end as a partial (not compiled) run on both paths".into(),
+        );
     }
     println!(
         "\nWorkload `catalog-build` (rebuild-all --skip-compile, {procedures} generated Procedures), {builds} requests each:"
     );
-    let spawned = Samples::of(builds, |_| one_shot(&scratch, &build(&spawn_out)).map(|_| ()))?;
+    let spawned = Samples::of(builds, |_| {
+        one_shot(&scratch, &build(&spawn_out)).map(|_| ())
+    })?;
     let served = Samples::of(builds, |_| resident.request(&build(&serve_out)).map(|_| ()))?;
     spawned.report("one process per call");
     served.report("resident process");

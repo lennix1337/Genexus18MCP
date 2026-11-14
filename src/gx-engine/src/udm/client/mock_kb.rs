@@ -10,6 +10,9 @@ use super::*;
 /// The file a mock Knowledge Base folder holds.
 pub const MOCK_KB_FILE: &str = "gxe-mock-udm.json";
 
+/// (model, entity type, entity id) of a child mapped to its parent.
+type ModelParentKey = (i32, i32, i32);
+
 /// Every table of `InMemoryDatabase`; keyed tables are stored as entry lists.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct MockKb {
@@ -20,7 +23,7 @@ struct MockKb {
     model_cross_references: Vec<ModelCrossReferenceRecord>,
     state_locks: Vec<StateLockRecord>,
     entity_guids: Vec<((i32, i32), String)>,
-    model_parents: Vec<((i32, i32, i32), (i32, i32))>,
+    model_parents: Vec<(ModelParentKey, (i32, i32))>,
     object_saved_timestamps: Vec<((i32, i32, i32, i32), i64)>,
     model_entity_version_timestamps: Vec<((i32, i32, i32, i32), i64)>,
     generate_flags: Vec<((i32, i32, i32), String)>,
