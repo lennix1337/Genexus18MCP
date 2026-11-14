@@ -176,12 +176,10 @@ fn load(path: &str) -> Result<Project, String> {
     use std::io::Read;
     let file = std::fs::File::open(path).map_err(|e| format!("cannot open project: {e}"))?;
     let mut text = String::new();
+    // One byte past the bound, so `from_json` reports an oversized project instead of a truncated one.
     file.take(MAX_PROJECT_BYTES + 1)
         .read_to_string(&mut text)
         .map_err(|e| format!("cannot read project: {e}"))?;
-    if text.len() as u64 > MAX_PROJECT_BYTES {
-        return Err("portable project exceeds 1 MiB".into());
-    }
     Project::from_json(&text)
 }
 

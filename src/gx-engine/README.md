@@ -114,8 +114,17 @@ cargo run --manifest-path src/gx-engine/Cargo.toml -- check src/gx-engine/fixtur
 cargo run --manifest-path src/gx-engine/Cargo.toml -- emit src/gx-engine/fixtures/demo.json
 cargo run --manifest-path src/gx-engine/Cargo.toml -- explain previous.json next.json
 cargo run --manifest-path src/gx-engine/Cargo.toml -- run src/gx-engine/fixtures/demo.json
+cargo run --manifest-path src/gx-engine/Cargo.toml -- interpret src/gx-engine/fixtures/demo.json
 cargo run --manifest-path src/gx-engine/Cargo.toml -- --version
 ```
+
+`interpret <project.json>` runs the entry Procedure with a tree-walking interpreter instead of
+emitting Rust and calling `rustc`: same stdout and success exit status as `run`, in milliseconds
+instead of seconds. It admits exactly what `check` admits (it runs `compile` first), and refuses by
+name what it does not implement (`For Each`, `New`, `Delete`, attribute reads and writes, database
+aggregate formulas). Execution is bounded by the compiled program's 100000-step budget, its call and
+subroutine depth limits, and a 10-second wall-clock deadline. `tests/interpreter_differential.rs`
+holds the compiled program as the oracle for every fixture and for targeted edge programs.
 
 On Windows two tests of `tests/csc_direct.rs` depend on the host. The symlink test needs Developer Mode or the symlink privilege and skips locally on `ERROR_PRIVILEGE_NOT_HELD`. The relative-project-path test builds under the temp folder, or under the nearest parent of the checkout that has no ambient MSBuild or analyzer file when the temp folder is on another drive (the checkout itself sits under `Directory.Build.props`, which the direct path refuses), and skips locally when none shares a root with the crate folder. A skip is a message on stderr, not an ignored test; when `CI` is set both fail instead of skipping, so the coverage cannot quietly disappear from the pipeline.
 
