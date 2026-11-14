@@ -850,7 +850,9 @@ fn execute_rebuild_all(
     options = options
         .with_client_config(client_config)
         .with_model_files(model_files)
-        .with_web_environment(web_environment);
+        .with_web_environment(web_environment)
+        // The artifact cache directory and the fixed generation stamp, both opt-in.
+        .with_process_environment()?;
 
     let catalog_load_ms = catalog_started.elapsed().as_millis() as u64;
     // A library SDT the KB's runtime assemblies define is never emitted (the SDK uses the runtime class).
