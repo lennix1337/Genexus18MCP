@@ -600,6 +600,10 @@ impl Parser {
 
     fn parse_block(&mut self, nesting: usize) -> Result<(Vec<Stmt>, BlockEnd), String> {
         let mut statements = Vec::new();
+        // Whether a Return or Exit already ended this block, and whether the dead code that follows it
+        // was reported (one report per block).
+        let mut terminated = false;
+        let mut dead_reported = false;
         loop {
             self.skip_separators();
             let end = if self.at_keyword("ELSE") {
@@ -638,7 +642,15 @@ impl Parser {
             }
 
             let start = self.cursor;
-            statements.push(self.parse_statement(nesting)?);
+            let location = self.current().location;
+            let statement = self.parse_statement(nesting)?;
+            // A subroutine definition is a declaration reached by `Do`, not code that runs in line.
+            if terminated && !dead_reported && !matches!(statement, Stmt::Sub(..)) {
+                dead_reported = true;
+                record_unreachable(location);
+            }
+            terminated |= matches!(statement, Stmt::Return(_) | Stmt::ReturnVoid | Stmt::Exit);
+            statements.push(statement);
             if self.cursor == start {
                 return Err(self.current().location.error("parser made no progress"));
             }
@@ -1968,6 +1980,36 @@ pub fn parse_body(source: &str) -> Result<Vec<Stmt>, String> {
     let stripped = strip_block_comments(source)?;
     let tokens = Lexer::new(&stripped)?.lex()?;
     Parser::new(tokens).parse_body()
+}
+
+thread_local! {
+    static UNREACHABLE: std::cell::RefCell<Option<Vec<(usize, usize)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// One-based `(line, column)` pairs.
+pub type SourcePositions = Vec<(usize, usize)>;
+
+fn record_unreachable(location: Location) {
+    UNREACHABLE.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut() {
+            log.push((location.line, location.column));
+        }
+    });
+}
+
+/// Like `parse_body`, and also returns the one-based `(line, column)` of the first statement of each block
+/// that follows a `Return` or `Exit` of the same block: code that can never execute. A subroutine
+/// definition after the `Return` is not code that runs in line, so it is not reported. Only the sequence
+/// inside one block is judged; a `Return` under a condition ends nothing outside its own block. The
+/// positions are in source order of completion of their blocks, not sorted.
+pub fn parse_body_with_unreachable(source: &str) -> Result<(Vec<Stmt>, SourcePositions), String> {
+    let previous = UNREACHABLE.with(|log| log.replace(Some(Vec::new())));
+    let result = parse_body(source);
+    let found = UNREACHABLE
+        .with(|log| log.replace(previous))
+        .unwrap_or_default();
+    result.map(|body| (body, found))
 }
 
 /// Replace each `/* ... */` block comment with spaces, keeping its line breaks, so every later token
