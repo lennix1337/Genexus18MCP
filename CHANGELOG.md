@@ -62,6 +62,7 @@
 ### Internal
 
 - `cli/lib/client-adapters.test.js` no longer depends on the real home for the neutral launcher config: `applyLauncherConfigOrExit` is called with an injected `homedir`, so the test cannot create or reuse `~/.genexus-mcp/config.json`.
+- `SourceSearchPerfGuardTests.GetCachedRegex_SamePattern_SameInstance` no longer depends on test order. The compiled-regex cache is static and bounded to 16 entries, so regexes compiled by tests that ran earlier in the same process could fill it, and the test then got a fresh instance on each call. It now starts from an empty cache, and a new test pins the overflow rule.
 - Split `DispatchToolCallCoreAsync` into stage methods (`Program.ToolDispatch.*.cs`) and moved the `WriteObjectInternal` success envelope into `BuildWriteAppliedResponse`; no behaviour change.
 - Removed unused code: the Gateway middleware pipeline and `DiagnosticAndHealingEngine`, the Worker `MultiObjectUnitOfWork` helper and `WritePipeline.PreWriteSnapshot`, and the gxwire `memmap2` and `rayon` dependencies.
 - CI also runs on pushes to `main`, runs the Python metadata, manifest and replay unit tests in the contracts job, and audits both Cargo lockfiles with a SHA-pinned cargo-audit. The Rust toolchain is pinned to 1.97.1.
