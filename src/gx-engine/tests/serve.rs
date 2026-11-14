@@ -667,6 +667,7 @@ fn a_catalog_build_reports_and_emits_the_same_one_shot_and_resident() {
         };
         (scrub(&outcome.stdout), scrub(&outcome.stderr), outcome.exit)
     };
+    // The incremental build state records file modification times, which differ between two runs.
     let tree = |root: &Path| {
         let mut files = BTreeMap::new();
         let mut pending = vec![root.to_path_buf()];
@@ -674,6 +675,9 @@ fn a_catalog_build_reports_and_emits_the_same_one_shot_and_resident() {
             for entry in std::fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
+                    if path.ends_with("obj/gx-incremental") {
+                        continue;
+                    }
                     pending.push(path);
                 } else {
                     let name = path
