@@ -150,6 +150,14 @@ followed by a pointer to `genexus://kb/tool-help/<tool>`; read that resource
 when full constraints, rationale, or examples are needed. The original
 description and complete input schema remain available there.
 
+Every profile except `all` also leaves the advanced inputs of `genexus_edit`,
+`genexus_lifecycle`, `genexus_io` and `genexus_create` out of `tools/list`:
+aliases of an input that stays listed, tuning caps, paging and wait refinements,
+verification overrides and experimental flags (`ToolProfileFilter.AdvancedInputs`).
+They are still accepted, validated and documented in the tool-help resource, so a
+call that sends one behaves as before. A client that only lets the model send
+listed inputs needs the `all` profile to reach them.
+
 `initialize` and `server/discover` return `instructions`: a short
 intent-to-tool routing guide built from the active profile, so it only names
 tools the client can call.

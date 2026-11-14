@@ -435,7 +435,7 @@ Not every client should load 60 schemas up front. New configurations written by 
 | `db` | 19 | Core plus database and data-view tools |
 | `all` | 60 | Every canonical tool |
 
-Profiles combine with `+` (for example `standard+db`). Set `Server.ToolProfile` in `config.json` or `GXMCP_PROFILE` in the process environment, then restart the client. Calling a tool outside the active profile returns `ToolNotInProfile` with the profile that exposes it. Details: [LLM CLI/MCP playbook](docs/llm_cli_mcp_playbook.md#tool-profiles-and-schema-budgets).
+Profiles combine with `+` (for example `standard+db`). Set `Server.ToolProfile` in `config.json` or `GXMCP_PROFILE` in the process environment, then restart the client. Calling a tool outside the active profile returns `ToolNotInProfile` with the profile that exposes it. Every profile except `all` lists only the common inputs of `genexus_edit`, `genexus_lifecycle`, `genexus_io` and `genexus_create`; the advanced ones are still accepted and are documented in `genexus://kb/tool-help/<tool>`. Details: [LLM CLI/MCP playbook](docs/llm_cli_mcp_playbook.md#tool-profiles-and-schema-budgets).
 
 **Orientation & health**
 - `genexus_whoami` — KB context, version, worker/index/database health, self-update check, next-step hints

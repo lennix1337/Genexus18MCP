@@ -442,10 +442,6 @@
           "content": {
             "type": "string"
           },
-          "contentPath": {
-            "type": "string",
-            "description": "mode=full, instead of content: absolute…"
-          },
           "ops": {
             "type": "array",
             "description": "GeneXus semantic ops (NOT RFC 6902…",
@@ -521,14 +517,6 @@
               }
             }
           },
-          "scope": {
-            "type": "object",
-            "description": "Top-level alias of patch.scope, honored…"
-          },
-          "indentation": {
-            "type": "object",
-            "description": "Top-level alias of patch.indentation,…"
-          },
           "context": {
             "type": "string",
             "description": "Exact existing text to find (Replace)…"
@@ -554,13 +542,6 @@
           "async": {
             "type": "boolean",
             "description": "Run as a background job. Result returns…"
-          },
-          "estimated_seconds": {
-            "type": "integer",
-            "description": "When async=true, expected runtime used…"
-          },
-          "verifyRollback": {
-            "type": "boolean"
           },
           "targets": {
             "type": "array",
@@ -593,18 +574,6 @@
           "type": {
             "type": "string"
           },
-          "return_post_state": {
-            "type": "boolean",
-            "description": "Omit post_state.diff (default true)."
-          },
-          "includePersistedText": {
-            "type": "boolean",
-            "description": "Full text; default false."
-          },
-          "verbose": {
-            "type": "boolean",
-            "description": "Add ±15-line slices to post_state."
-          },
           "validate": {
             "type": "string",
             "enum": [
@@ -626,46 +595,9 @@
             "type": "boolean",
             "description": "Explicit rollback only. Full Source…"
           },
-          "requireObjectSave": {
-            "type": "boolean",
-            "default": false,
-            "description": "Full Source requires transactional…"
-          },
-          "forceWrite": {
-            "type": "boolean",
-            "default": false,
-            "description": "WebForm only: persist despite SDK…"
-          },
-          "verifyMode": {
-            "type": "string",
-            "enum": [
-              "semantic",
-              "normalized",
-              "exact"
-            ],
-            "description": "Omitted: semantic for Structure and…"
-          },
-          "visualVerify": {
-            "type": "boolean",
-            "default": false,
-            "description": "Post-edit headless screenshot +…"
-          },
           "baseVersion": {
             "type": "string",
             "description": "Optimistic concurrency: the…"
-          },
-          "expectedVersion": {
-            "type": "string",
-            "description": "Concurrency alias of baseVersion;…"
-          },
-          "concurrencyPolicy": {
-            "type": "string",
-            "enum": [
-              "warn",
-              "fail_if_open"
-            ],
-            "default": "warn",
-            "description": "warn (default) or fail_if_open if open…"
           },
           "autoDeclareVariables": {
             "type": "boolean",
@@ -1369,17 +1301,9 @@
             "type": "string",
             "description": "specify_only: GUID of the object to…"
           },
-          "expectedVersion": {
-            "type": "string",
-            "description": "specify_only: refuse if the object's…"
-          },
           "job_id": {
             "type": "string",
             "description": "Gateway operation id or Worker task id…"
-          },
-          "jobId": {
-            "type": "string",
-            "description": "Legacy alias for job_id."
           },
           "code": {
             "type": "string",
@@ -1393,10 +1317,6 @@
             "type": "string",
             "description": "snapshots-restore: path to pattern…"
           },
-          "estimated_seconds": {
-            "type": "integer",
-            "description": "Build: <20 sync, >=20 async (default…"
-          },
           "wait_seconds": {
             "type": "integer",
             "description": "Status/build long-poll cap, 0-600s."
@@ -1405,30 +1325,9 @@
             "type": "boolean",
             "description": "Build/build_all/rebuild/specify_only:…"
           },
-          "until": {
-            "type": "string",
-            "enum": [
-              "change",
-              "terminal"
-            ],
-            "description": "Status wait stop condition: change…"
-          },
           "wait": {
             "type": "integer",
             "description": "Status block, 0-600s. With a build…"
-          },
-          "since": {
-            "type": "string",
-            "description": "Status: prior _meta.snapshot for…"
-          },
-          "freshness": {
-            "type": "string",
-            "enum": [
-              "current",
-              "stale",
-              "refreshing"
-            ],
-            "description": "Status: freshness target for the wait.…"
           },
           "compact": {
             "type": "boolean",
@@ -1460,17 +1359,9 @@
             "type": "boolean",
             "description": "compile_check: expand transitive…"
           },
-          "callerCap": {
-            "type": "integer",
-            "description": "compile_check: max callers to pull into…"
-          },
           "deploy": {
             "type": "boolean",
             "description": "Build: force the full deploy…"
-          },
-          "buildPlanCap": {
-            "type": "integer",
-            "description": "Build: max nodes before…"
           },
           "kb": {
             "type": "string",
@@ -1479,41 +1370,6 @@
           "part": {
             "type": "string",
             "description": "validate: specific object part to check…"
-          },
-          "page": {
-            "type": "integer",
-            "description": "status/result: 1-based page number for…"
-          },
-          "pageSize": {
-            "type": "integer",
-            "description": "status/result: page size for paginated…"
-          },
-          "page_size": {
-            "type": "integer",
-            "description": "status/result: snake_case alias for…"
-          },
-          "log_offset": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "status/result: 0-based log line to page…"
-          },
-          "log_limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200,
-            "description": "status/result: log lines per page."
-          },
-          "notifyOnFailure": {
-            "type": "string",
-            "description": "build: Slack/Discord webhook URL to…"
-          },
-          "skipFullDeploy": {
-            "type": "boolean",
-            "description": "build: skip full deployment stage to…"
-          },
-          "fastIncremental": {
-            "type": "boolean",
-            "description": "build: experimental fast incremental…"
           },
           "operationKey": {
             "type": "string",

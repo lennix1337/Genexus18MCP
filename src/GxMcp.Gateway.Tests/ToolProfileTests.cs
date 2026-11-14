@@ -330,6 +330,73 @@ namespace GxMcp.Gateway.Tests
             Assert.DoesNotContain("genexus_gxserver", names);
         }
 
+        [Theory]
+        [InlineData("core")]
+        [InlineData("standard")]
+        [InlineData("standard+db")]
+        public void LeanProfilesPublishNoAdvancedInput_AllAndToolHelpKeepEveryInput(string profile)
+        {
+            var tools = LoadCanonicalToolDefinitions();
+            var lean = ToolProfileFilter.Filter(tools, profile).OfType<JObject>().ToList();
+            var all = ToolProfileFilter.Filter(tools, "all").OfType<JObject>().ToList();
+            int checkedTools = 0;
+
+            foreach (var (toolName, hidden) in ToolProfileFilter.AdvancedInputs)
+            {
+                var published = lean.FirstOrDefault(t => t["name"]!.ToString() == toolName);
+                if (published == null) continue; // the profile does not carry the tool
+                checkedTools++;
+
+                var leanInputs = (JObject)published["inputSchema"]!["properties"]!;
+                var allInputs = (JObject)all.Single(t => t["name"]!.ToString() == toolName)["inputSchema"]!["properties"]!;
+                var source = (JObject)tools.OfType<JObject>().Single(t => t["name"]!.ToString() == toolName);
+                string help = ToolHelpCatalog.Get(toolName, (JObject)source.DeepClone())!;
+
+                foreach (string input in hidden)
+                {
+                    Assert.False(leanInputs.ContainsKey(input), $"{toolName}.{input} is published by '{profile}'.");
+                    Assert.True(allInputs.ContainsKey(input), $"{toolName}.{input} is missing from 'all'.");
+                    Assert.Contains("\"" + input + "\"", help);
+                }
+
+                Assert.Equal(allInputs.Count - hidden.Length, leanInputs.Count);
+            }
+
+            Assert.True(checkedTools > 0, $"'{profile}' carries none of the tools with advanced inputs.");
+        }
+
+        [Fact]
+        public void AdaptiveProfilePublishesNoAdvancedInput()
+        {
+            var tools = LoadCanonicalToolDefinitions();
+            var edit = ToolProfileFilter.FilterAdaptive(tools, Array.Empty<string>())
+                .OfType<JObject>().Single(t => t["name"]!.ToString() == "genexus_edit");
+
+            var inputs = (JObject)edit["inputSchema"]!["properties"]!;
+            Assert.All(ToolProfileFilter.AdvancedInputs["genexus_edit"], input => Assert.False(inputs.ContainsKey(input)));
+        }
+
+        [Fact]
+        public void AdvancedInputsAreDeclaredOptionalInputsOfTheirTool()
+        {
+            var tools = LoadCanonicalToolDefinitions();
+
+            foreach (var (toolName, hidden) in ToolProfileFilter.AdvancedInputs)
+            {
+                var schema = (JObject)tools.OfType<JObject>().Single(t => t["name"]!.ToString() == toolName)["inputSchema"]!;
+                var declared = (JObject)schema["properties"]!;
+                var required = (schema["required"] as JArray)?.Select(t => t.ToString()).ToList() ?? new List<string>();
+
+                Assert.Equal(hidden.Length, hidden.Distinct(StringComparer.Ordinal).Count());
+                foreach (string input in hidden)
+                {
+                    // A name that is not declared would no longer be validated; a required one could not be sent.
+                    Assert.True(declared.ContainsKey(input), $"{toolName}.{input} is not declared in tool_definitions.json.");
+                    Assert.DoesNotContain(input, required);
+                }
+            }
+        }
+
         [Fact]
         public void ToolOutsideActiveProfileReturnsTypedActionableError()
         {

@@ -348,12 +348,17 @@ namespace GxMcp.Gateway.Tests
         // devops 53050 -> 53250 (measured 53146), ui 51100 -> 51300 (measured 51168); standard and db stay within
         // their budgets.
         [InlineData("all", 104300)]
-        [InlineData("core", 27250)]
-        [InlineData("standard", 61000)]
-        [InlineData("authoring", 72550)]
-        [InlineData("devops", 53250)]
-        [InlineData("ui", 51300)]
-        [InlineData("db", 40000)]
+        // Every profile except "all" stops publishing the advanced inputs of genexus_edit, genexus_lifecycle,
+        // genexus_io and genexus_create (ToolProfileFilter.AdvancedInputs), so their budgets move down to the new
+        // measured size plus ~170 bytes: core 27250 -> 24550 (measured 24381, was 27188), standard 61000 -> 40100
+        // (39947, was 44724), authoring 72550 -> 69550 (69362, was 72457), devops 53250 -> 48750 (48569, was
+        // 53058), ui 51300 -> 48650 (48478, was 51285), db 40000 -> 32550 (32391, was 35198). "all" is unchanged.
+        [InlineData("core", 24550)]
+        [InlineData("standard", 40100)]
+        [InlineData("authoring", 69550)]
+        [InlineData("devops", 48750)]
+        [InlineData("ui", 48650)]
+        [InlineData("db", 32550)]
         public void PublishedToolProfileStaysWithinItsByteBudget(string profile, int maxBytes)
         {
             var tools = JArray.Parse(File.ReadAllText(FindToolDefinitionsJson()));
