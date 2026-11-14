@@ -2,7 +2,13 @@ param(
     [string]$OutputRoot = "",
     [string]$GxPath = "",
     # Required for an output directory outside artifacts and the runner's temporary roots.
-    [string]$AllowedOutputRoot = ""
+    [string]$AllowedOutputRoot = "",
+    # Opt-in: run the Gateway and the Worker suites at the same time instead of one
+    # after the other. They are separate test processes with separate build outputs
+    # and reports, so a machine with the GeneXus SDK waits for the slower suite, not
+    # for both. Without the SDK the Worker suite is skipped and this changes nothing.
+    # The Gateway per-test durations are then measured with the Worker suite running.
+    [switch]$Parallel
 )
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -68,7 +74,7 @@ if (-not (Test-Path -LiteralPath $gxwirePublish)) {
     }
 }
 
-function Invoke-CoverageTest {
+function Get-CoverageTestArguments {
     param(
         [Parameter(Mandatory = $true)][string]$ProjectPath,
         [Parameter(Mandatory = $true)][string]$Label,
@@ -80,8 +86,7 @@ function Invoke-CoverageTest {
     $resultsDir = Join-Path $OutputRoot $Label
     New-Item -ItemType Directory -Path $resultsDir -Force | Out-Null
 
-    Write-Host "Running $Label tests with coverage..."
-    $testArguments = @(
+    return @(
         "test",
         $ProjectPath,
         "-v", "minimal",
@@ -93,11 +98,20 @@ function Invoke-CoverageTest {
         # Per-test durations for scripts/ci/assert-test-durations.ps1 (CI time budget).
         "--logger", "trx;LogFileName=$Label.trx"
     )
-    & dotnet @testArguments
-    if ($LASTEXITCODE -ne 0) {
+}
+
+# Judges a finished suite and publishes its report next to the other one.
+function Complete-CoverageTest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][int]$ExitCode
+    )
+
+    if ($ExitCode -ne 0) {
         throw "$Label tests failed."
     }
 
+    $resultsDir = Join-Path $OutputRoot $Label
     $coverage = Get-ChildItem -Path $resultsDir -Recurse -Filter coverage.cobertura.xml -File |
         Select-Object -First 1
 
@@ -107,6 +121,71 @@ function Invoke-CoverageTest {
 
     Copy-Item -LiteralPath $coverage.FullName -Destination (Join-Path $OutputRoot "$Label.cobertura.xml") -Force
     Copy-Item -LiteralPath (Join-Path $resultsDir "$Label.trx") -Destination (Join-Path $OutputRoot "$Label.trx") -Force
+}
+
+function Invoke-CoverageTest {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectPath,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$BaseOutputPath,
+        [Parameter(Mandatory = $true)][string]$SettingsPath,
+        [string[]]$BuildProperties = @()
+    )
+
+    Write-Host "Running $Label tests with coverage..."
+    $testArguments = Get-CoverageTestArguments @PSBoundParameters
+    & dotnet @testArguments
+    Complete-CoverageTest -Label $Label -ExitCode $LASTEXITCODE
+}
+
+# -Parallel: starts one suite as its own process. The environment overrides apply
+# to that process only; the output is collected and printed when the suite ends,
+# so the two logs do not interleave. -FileName is a test seam.
+function Start-CoverageTest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [hashtable]$Environment = @{},
+        [string]$FileName = "dotnet"
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new($FileName)
+    foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+    $startInfo.WorkingDirectory = (Get-Location).Path
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($name in $Environment.Keys) {
+        if ($null -eq $Environment[$name]) {
+            $null = $startInfo.Environment.Remove($name)
+        } else {
+            $startInfo.Environment[$name] = [string]$Environment[$name]
+        }
+    }
+
+    Write-Host "Running $Label tests with coverage (in parallel)..."
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    return @{
+        Label   = $Label
+        Process = $process
+        Output  = $process.StandardOutput.ReadToEndAsync()
+        Error   = $process.StandardError.ReadToEndAsync()
+        Watch   = [System.Diagnostics.Stopwatch]::StartNew()
+    }
+}
+
+# Waits for a suite started by Start-CoverageTest, prints its log and keeps a copy
+# beside the reports. Returns the exit code of the test process.
+function Wait-CoverageTest {
+    param([Parameter(Mandatory = $true)][hashtable]$Run)
+
+    $Run.Process.WaitForExit()
+    $log = $Run.Output.GetAwaiter().GetResult() + $Run.Error.GetAwaiter().GetResult()
+    $Run.Watch.Stop()
+    [System.IO.File]::WriteAllText((Join-Path $OutputRoot "$($Run.Label).console.log"), $log)
+    Write-Host "----- $($Run.Label) tests, $([int]$Run.Watch.Elapsed.TotalSeconds)s -----"
+    Write-Host $log.TrimEnd()
+    return $Run.Process.ExitCode
 }
 
 function Get-BaseOutputPath {
@@ -143,37 +222,69 @@ foreach ($warmUp in @(
     & $warmUp.File @($warmUp.Arguments) *> $null
     Write-Host ("Process warm-up, {0}: {1} ms (exit {2})" -f $warmUp.Name, $watch.ElapsedMilliseconds, $LASTEXITCODE)
 }
-try {
-    Invoke-CoverageTest `
-        -ProjectPath (Join-Path $repoRoot "src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj") `
-        -Label "gateway" `
-        -BaseOutputPath (Get-BaseOutputPath -Label "gateway") `
-        -SettingsPath (Join-Path $PSScriptRoot "gateway.runsettings")
-} finally {
-    $env:GXMCP_SHAREDHOST_TESTHOST_EXE = $previousTestHostExe
+$gatewayTest = @{
+    ProjectPath    = (Join-Path $repoRoot "src\GxMcp.Gateway.Tests\GxMcp.Gateway.Tests.csproj")
+    Label          = "gateway"
+    BaseOutputPath = (Get-BaseOutputPath -Label "gateway")
+    SettingsPath   = (Join-Path $PSScriptRoot "gateway.runsettings")
 }
-
+$workerTest = @{
+    ProjectPath     = (Join-Path $repoRoot "src\GxMcp.Worker.Tests\GxMcp.Worker.Tests.csproj")
+    Label           = "worker"
+    BaseOutputPath  = (Get-BaseOutputPath -Label "worker")
+    SettingsPath    = (Join-Path $PSScriptRoot "worker.runsettings")
+    BuildProperties = @("-p:Platform=x86", "-p:GX_PATH=$resolvedGxPath")
+}
 $previousGxPath = $env:GX_PATH
-if ($resolvedGxPath) {
+
+# 7. Run the suites.
+if ($Parallel -and $resolvedGxPath) {
+    # Both at once. Each process gets the environment the sequential path gives its
+    # suite: the test host only for the Gateway, GX_PATH only for the Worker.
+    $testHostExe = $env:GXMCP_SHAREDHOST_TESTHOST_EXE
+    $env:GXMCP_SHAREDHOST_TESTHOST_EXE = $previousTestHostExe
     Write-Host "Using GeneXus SDK from '$resolvedGxPath'."
-    $env:GX_PATH = $resolvedGxPath
+    $gatewayRun = Start-CoverageTest -Label "gateway" -Arguments (Get-CoverageTestArguments @gatewayTest) `
+        -Environment @{ GXMCP_SHAREDHOST_TESTHOST_EXE = $testHostExe }
+    $workerRun = Start-CoverageTest -Label "worker" -Arguments (Get-CoverageTestArguments @workerTest) `
+        -Environment @{ GX_PATH = $resolvedGxPath }
+    $gatewayExit = Wait-CoverageTest -Run $gatewayRun
+    $workerExit = Wait-CoverageTest -Run $workerRun
+
+    # Same verdicts as the sequential path: a Worker failure is recorded for
+    # assert-threshold.ps1, a Gateway failure stops the script.
     try {
-        Invoke-CoverageTest `
-            -ProjectPath (Join-Path $repoRoot "src\GxMcp.Worker.Tests\GxMcp.Worker.Tests.csproj") `
-            -Label "worker" `
-            -BaseOutputPath (Get-BaseOutputPath -Label "worker") `
-            -SettingsPath (Join-Path $PSScriptRoot "worker.runsettings") `
-            -BuildProperties @("-p:Platform=x86", "-p:GX_PATH=$resolvedGxPath")
+        Complete-CoverageTest -Label "worker" -ExitCode $workerExit
     } catch {
         New-Item -ItemType File -Path (Join-Path $OutputRoot "worker.failed.txt") -Force | Out-Null
         Write-Host $_.Exception.Message -ForegroundColor Yellow
-    } finally {
-        $env:GX_PATH = $previousGxPath
     }
+    Complete-CoverageTest -Label "gateway" -ExitCode $gatewayExit
 } else {
-    New-Item -ItemType File -Path (Join-Path $OutputRoot "worker.skipped.txt") -Force | Out-Null
-    Write-Host "GeneXus SDK for primary major $(Get-GxPrimaryMajor -Catalog $gxCatalog) not found. Set GX_PATH or pass -GxPath to include Worker.Tests."
+    try {
+        Invoke-CoverageTest @gatewayTest
+    } finally {
+        $env:GXMCP_SHAREDHOST_TESTHOST_EXE = $previousTestHostExe
+    }
+
+    if ($resolvedGxPath) {
+        Write-Host "Using GeneXus SDK from '$resolvedGxPath'."
+        $env:GX_PATH = $resolvedGxPath
+        try {
+            Invoke-CoverageTest @workerTest
+        } catch {
+            New-Item -ItemType File -Path (Join-Path $OutputRoot "worker.failed.txt") -Force | Out-Null
+            Write-Host $_.Exception.Message -ForegroundColor Yellow
+        } finally {
+            $env:GX_PATH = $previousGxPath
+        }
+    } else {
+        New-Item -ItemType File -Path (Join-Path $OutputRoot "worker.skipped.txt") -Force | Out-Null
+        Write-Host "GeneXus SDK for primary major $(Get-GxPrimaryMajor -Catalog $gxCatalog) not found. Set GX_PATH or pass -GxPath to include Worker.Tests."
+    }
 }
+
+# 8. List what was produced.
 
 Get-ChildItem -Path $OutputRoot -Recurse | ForEach-Object {
     Write-Host $_.FullName

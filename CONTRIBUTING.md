@@ -101,6 +101,8 @@ $env:GX_PATH = 'C:\GeneXus\GeneXus18U16'
 
 An explicitly configured path that does not contain `Artech.Architecture.Common.dll` fails immediately instead of silently skipping Worker coverage. When no path is configured and the default installation is absent, the script drops a `worker.skipped.txt` marker and `assert-threshold.ps1` enforces only the Gateway floor — the same behavior as a GitHub-hosted runner.
 
+With an SDK configured the Gateway suite and the Worker suite run one after the other, and the Worker suite is the longer one. `collect.ps1 -Parallel` runs both at once, each as its own test process with its own build output, environment and report, so the run waits for the slower suite instead of for both; the verdicts and the files `assert-threshold.ps1` reads are the same. Each suite's log is printed when that suite ends, and kept as `gateway.console.log` and `worker.console.log` in the output directory, instead of streaming. The Gateway per-test durations are then measured while the Worker suite is running. Without an SDK the Worker suite is skipped and the switch changes nothing.
+
 Do not add coverage exclusions merely to satisfy a floor. Add tests that execute the affected contract, run the complete command above, and confirm the current component baselines before pushing: at least 60% for Gateway and 45% for Worker when an SDK is configured. Raise each floor as its exercised surface grows; never lower it or skip tests to make a change pass.
 
 ### Before every PR push

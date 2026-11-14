@@ -16,6 +16,7 @@ $tests = @(
     'test-build-publish-config.ps1',
     'test-rust-artifact-cache.ps1',
     'test-coverage-output.ps1',
+    'test-coverage-parallel.ps1',
     'test-live-build-all.ps1',
     'test-live-fixture-manifest.ps1',
     'test-live.test.ps1',
