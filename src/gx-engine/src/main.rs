@@ -95,6 +95,9 @@ fn execute(
     ) {
         return execute_kb_ops(raw_command, &args[1..], category);
     }
+    if raw_command == "interpret" {
+        return gx_engine::interpreter::interpret_command(&args[1..], category);
+    }
     let from_xml = raw_command.starts_with("xml-");
     let (command, from_objects) = match raw_command
         .strip_prefix("kb-")
