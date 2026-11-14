@@ -73,5 +73,32 @@ namespace GxMcp.Worker.Tests
             Assert.False(engine.IsFrameworkProtected("CustomUserVar", out _));
             Assert.True(engine.ShouldSkipUnusedCheck("&Today"));
         }
+
+        [Theory]
+        [InlineData("Line")]
+        [InlineData("Output")]
+        [InlineData("Page")]
+        [InlineData("&Msg")]
+        [InlineData("Err")]
+        [InlineData("Errmsg")]
+        [InlineData("GxRemove")]
+        [InlineData("Mr")]
+        [InlineData("Op")]
+        [InlineData("Outdev")]
+        [InlineData("RestMethod")]
+        [InlineData("RestCode")]
+        public void SdkStandardVariables_AreNeverReportedAsUnused(string name)
+        {
+            Assert.True(GxMcp.Worker.Helpers.FrameworkManagedVariables.ShouldSkipUnusedCheck(name));
+        }
+
+        [Theory]
+        [InlineData("I")]
+        [InlineData("Hits")]
+        [InlineData("Abc")]
+        public void UserVariables_StillGetTheUnusedCheck(string name)
+        {
+            Assert.False(GxMcp.Worker.Helpers.FrameworkManagedVariables.ShouldSkipUnusedCheck(name));
+        }
     }
 }
