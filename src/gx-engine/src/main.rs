@@ -2,6 +2,7 @@
 
 mod analyze_command;
 mod kb_command;
+mod serve;
 
 use gx_engine::{
     build,
@@ -975,7 +976,16 @@ fn status_label(status: gx_engine::rebuild::RebuildStatus) -> &'static str {
 }
 
 fn main() -> ExitCode {
-    let mut args: Vec<String> = env::args().skip(1).collect();
+    let args: Vec<String> = env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        // The resident mode (see `serve.rs`) runs `run_command` once per request.
+        Some("serve") => serve::run(&args[1..], run_command),
+        _ => run_command(args),
+    }
+}
+
+/// One command line, from its arguments to its exit code.
+fn run_command(mut args: Vec<String>) -> ExitCode {
     let json_errors = args.first().is_some_and(|arg| arg == "--diagnostics=json");
     if json_errors {
         args.remove(0);

@@ -73,6 +73,7 @@ is the only authority there. Equivalent config keys: `Engine.Backend`,
 | `GXMCP_ENGINE_FALLBACK` | What happens when a routed capability is not at parity: `sdk` keeps the GeneXus SDK; `error` refuses the call with `EngineCapabilityNotParity`. | `sdk` |
 | `GXMCP_ENGINE_EXE` | Absolute path to the `gx-engine` executable. Authoritative: a missing file reports `EngineNotFound` instead of searching further. | unset (Gateway directory → `publish/` → checkout cargo output → `PATH`) |
 | `GXMCP_ENGINE_TIMEOUT_SECONDS` | Wall-clock budget for one engine invocation. | `120` |
+| `GXMCP_ENGINE_RESIDENT` | `1` or `true`: the Gateway keeps one `gx-engine serve` process per Knowledge Base identity (path, design model, KB version) instead of starting one process per engine-routed call. Each request is a line of JSON and runs the same command as the one-shot process, with the same output and exit code; nothing read from the KB is kept between requests. A read that the resident process does not answer (exit, protocol error, timeout, version mismatch) kills it and runs as a one-shot process; a build whose end was not observed is reported as an unknown outcome and never run again. Idle processes end after 120 s and with the Gateway. Anything else: off, and every call behaves as before. | unset (off) |
 
 The next four are read by the `gx-engine` executable itself, which inherits the
 Gateway's environment: setting them for the Gateway sets them for every engine run.
