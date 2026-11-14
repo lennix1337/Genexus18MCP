@@ -74,6 +74,15 @@ is the only authority there. Equivalent config keys: `Engine.Backend`,
 | `GXMCP_ENGINE_EXE` | Absolute path to the `gx-engine` executable. Authoritative: a missing file reports `EngineNotFound` instead of searching further. | unset (Gateway directory → `publish/` → checkout cargo output → `PATH`) |
 | `GXMCP_ENGINE_TIMEOUT_SECONDS` | Wall-clock budget for one engine invocation. | `120` |
 
+The next two are read by the `gx-engine` executable itself, which inherits the
+Gateway's environment. They are not Gateway configuration, have no config key,
+and are not among the structural overrides a strict document rejects.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_ENGINE_SQL_TRANSPORT` | How gx-engine's generated KB reads reach the database. `sqlcmd`: the `sqlcmd` subprocess. `tds`: the native TDS transport, which needs an engine built with the `tds` cargo feature (the shipped binary is not). When `tds` cannot connect or log in, or the binary lacks the feature, the reads of that connection use `sqlcmd` and the reason is kept; after a TDS session has served a read, a failure is an error and `sqlcmd` does not take over. Writes and non-generated statements always use `sqlcmd`. Any other value reads through `sqlcmd` and says so. See [SQL transport](../src/gx-engine/README.md#sql-transport-experimental-opt-in). | `sqlcmd` |
+| `GXMCP_ENGINE_SQL_TRUST_SERVER_CERTIFICATE` | `1`: the TDS transport accepts the server certificate of a TCP or remote-pipe connection without validating it (the session is still TLS). Unset, the certificate must chain to the Windows trust store, and a server with a self-signed certificate is not read over TDS (`sqlcmd` reads it). No effect on a LocalDB pipe or on `sqlcmd`. | unset |
+
 ## Generated documentation artifacts (`genexus_doc`)
 
 `genexus_doc action=wiki` and `action=visualize` write durable files outside the installed Worker directory. The default root is `%LOCALAPPDATA%\GxMcp\Artifacts`; each open KB gets a stable `kb-<identity>` child with separate `docs` and `html` directories. This per-KB scope is applied even when a custom root is configured, so two KBs cannot silently share `Customer.md` or a graph file. Package upgrades can replace the Worker installation without moving this output.
