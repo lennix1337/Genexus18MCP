@@ -175,11 +175,7 @@ impl TdsSession {
                 check_column_types(first.columns())?;
             }
             for row in set {
-                rows.push(
-                    row.into_iter()
-                        .map(value)
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
+                rows.push(row.into_iter().map(value).collect::<Result<Vec<_>, _>>()?);
             }
         }
         Ok(rows)
@@ -283,7 +279,9 @@ async fn open(
                 .await
                 .map_err(|_| "the server did not accept a TCP connection in time".to_string())?
                 .map_err(|error| error.to_string())?;
-            stream.set_nodelay(true).map_err(|error| error.to_string())?;
+            stream
+                .set_nodelay(true)
+                .map_err(|error| error.to_string())?;
             Transport::Tcp(stream)
         }
         Endpoint::Pipe { path } => {

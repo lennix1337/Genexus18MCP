@@ -73,10 +73,12 @@ fn binary_payload(
     column: &str,
 ) -> Result<Vec<u8>, String> {
     let live::Value::Int(declared) = declared else {
-        return Err(format!("the database returned a non-integer value for {column}"));
+        return Err(format!(
+            "the database returned a non-integer value for {column}"
+        ));
     };
-    let declared = usize::try_from(*declared)
-        .map_err(|_| format!("{column} {declared} is negative"))?;
+    let declared =
+        usize::try_from(*declared).map_err(|_| format!("{column} {declared} is negative"))?;
     let bytes = match payload {
         live::Value::Null => Vec::new(),
         live::Value::Bytes(bytes) => bytes,
@@ -178,15 +180,15 @@ impl PartRows {
                     let props_len = row.pop().expect("length checked above");
                     let data = row.pop().expect("length checked above");
                     let data_len = row.pop().expect("length checked above");
-                    let fields = row.iter().map(leading_text).collect::<Result<Vec<_>, _>>()?;
+                    let fields = row
+                        .iter()
+                        .map(leading_text)
+                        .collect::<Result<Vec<_>, _>>()?;
                     let fields: Vec<&str> = fields.iter().map(|field| field.trim()).collect();
                     let (entity_type, entity_id, version_id) = key(&fields)?;
                     let data = binary_payload(&data_len, data, "EntityVersion DATALENGTH")?;
-                    let props_bytes = binary_payload(
-                        &props_len,
-                        props,
-                        "EntityVersionProperties DATALENGTH",
-                    )?;
+                    let props_bytes =
+                        binary_payload(&props_len, props, "EntityVersionProperties DATALENGTH")?;
                     entity_version_from_payloads(
                         entity_type,
                         entity_id,
@@ -483,7 +485,9 @@ mod tests {
         };
         let length = |payload: Option<&[u8]>| payload.map_or(0, <[u8]>::len) as i64;
         let bytes = |payload: Option<&[u8]>| {
-            payload.map_or(live::Value::Null, |bytes| live::Value::Bytes(bytes.to_vec()))
+            payload.map_or(live::Value::Null, |bytes| {
+                live::Value::Bytes(bytes.to_vec())
+            })
         };
         (
             format!(
@@ -508,7 +512,8 @@ mod tests {
     #[test]
     fn hex_text_and_binary_rows_of_the_same_parts_decode_to_the_same_records() {
         let blob: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
-        let stored: [(Option<&[u8]>, Option<&[u8]>); 4] = [
+        type StoredParts<'a> = (Option<&'a [u8]>, Option<&'a [u8]>);
+        let stored: [StoredParts; 4] = [
             (Some(&blob), Some(b"<Properties/>")),
             (Some(b""), None),
             (None, Some(b"")),
@@ -527,8 +532,14 @@ mod tests {
         assert_eq!(from_binary[0].data, blob);
         assert_eq!(from_binary[0].properties.as_deref(), Some("<Properties/>"));
         // A NULL payload and an empty one are both no bytes, in either form.
-        assert_eq!((from_binary[1].data.len(), &from_binary[1].properties), (0, &None));
-        assert_eq!((from_binary[2].data.len(), &from_binary[2].properties), (0, &None));
+        assert_eq!(
+            (from_binary[1].data.len(), &from_binary[1].properties),
+            (0, &None)
+        );
+        assert_eq!(
+            (from_binary[2].data.len(), &from_binary[2].properties),
+            (0, &None)
+        );
     }
 
     #[test]

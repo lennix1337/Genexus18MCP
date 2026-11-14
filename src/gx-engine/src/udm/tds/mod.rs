@@ -155,7 +155,11 @@ mod unit_tests {
     fn rows_render_as_the_tab_separated_text_sqlcmd_prints() {
         let rows = vec![
             vec![Value::Int(31), Value::Text("Procedure".into()), Value::Null],
-            vec![Value::Int(-7), Value::Text(String::new()), Value::Text("a b".into())],
+            vec![
+                Value::Int(-7),
+                Value::Text(String::new()),
+                Value::Text("a b".into()),
+            ],
         ];
         assert_eq!(
             render_text(&rows).unwrap(),
@@ -208,7 +212,10 @@ mod unit_tests {
     #[test]
     fn credentials_are_removed_from_error_text() {
         assert_eq!(
-            redact("Login failed for user 'gxuser' (pw gxuser-secret)", &["gxuser", "gxuser-secret", ""]),
+            redact(
+                "Login failed for user 'gxuser' (pw gxuser-secret)",
+                &["gxuser", "gxuser-secret", ""]
+            ),
             "Login failed for user '<redacted>' (pw <redacted>)"
         );
     }

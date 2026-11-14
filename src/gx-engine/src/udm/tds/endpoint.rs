@@ -166,13 +166,18 @@ fn sqllocaldb_command(
 
 /// `SqlLocalDB.exe` of the newest SQL Server version under Program Files, for a PATH that lacks it.
 fn installed_sqllocaldb() -> Option<std::path::PathBuf> {
-    let root = std::path::Path::new(&std::env::var_os("ProgramFiles")?).join("Microsoft SQL Server");
+    let root =
+        std::path::Path::new(&std::env::var_os("ProgramFiles")?).join("Microsoft SQL Server");
     std::fs::read_dir(root)
         .ok()?
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let version = entry.file_name().to_str()?.parse::<u32>().ok()?;
-            let exe = entry.path().join("Tools").join("Binn").join("SqlLocalDB.exe");
+            let exe = entry
+                .path()
+                .join("Tools")
+                .join("Binn")
+                .join("SqlLocalDB.exe");
             exe.is_file().then_some((version, exe))
         })
         .max_by_key(|(version, _)| *version)
@@ -211,11 +216,17 @@ mod tests {
         for (server, expected) in [
             ("srv", tcp("srv", None, None)),
             ("tcp:srv,1444", tcp("srv", Some(1444), None)),
-            ("192.168.1.100\\SQLEXPRESS", tcp("192.168.1.100", None, Some("SQLEXPRESS"))),
+            (
+                "192.168.1.100\\SQLEXPRESS",
+                tcp("192.168.1.100", None, Some("SQLEXPRESS")),
+            ),
             // A port already identifies the instance: the Browser is not asked.
             ("srv\\INST, 1500", tcp("srv", Some(1500), None)),
             (".", tcp("localhost", None, None)),
-            ("(local)\\SQLEXPRESS", tcp("localhost", None, Some("SQLEXPRESS"))),
+            (
+                "(local)\\SQLEXPRESS",
+                tcp("localhost", None, Some("SQLEXPRESS")),
+            ),
             (
                 "(LocalDB)\\MSSQLLocalDB",
                 Endpoint::LocalDb {
@@ -241,7 +252,14 @@ mod tests {
 
     #[test]
     fn unreachable_server_names_are_refused_by_name() {
-        for server in ["lpc:srv", "ADMIN:srv", "srv,port", "srv\\", "(localdb)\\", "np:srv"] {
+        for server in [
+            "lpc:srv",
+            "ADMIN:srv",
+            "srv,port",
+            "srv\\",
+            "(localdb)\\",
+            "np:srv",
+        ] {
             assert!(Endpoint::parse(server).is_err(), "{server}");
         }
     }
@@ -269,8 +287,10 @@ mod tests {
         );
         // A localized label, and the value as the last line without a line break.
         assert_eq!(
-            pipe_from_info("Nome do pipe da inst\u{e2}ncia: NP:\\\\.\\pipe\\LOCALDB#AB12\\tsql\\query")
-                .as_deref(),
+            pipe_from_info(
+                "Nome do pipe da inst\u{e2}ncia: NP:\\\\.\\pipe\\LOCALDB#AB12\\tsql\\query"
+            )
+            .as_deref(),
             Some("\\\\.\\pipe\\LOCALDB#AB12\\tsql\\query")
         );
         assert_eq!(pipe_from_info(STOPPED), None);
@@ -292,7 +312,11 @@ mod tests {
         assert_eq!(pipe, "\\\\.\\pipe\\LOCALDB#2D07B6E0\\tsql\\query");
         assert_eq!(
             calls,
-            ["info MSSQLLocalDB", "start MSSQLLocalDB", "info MSSQLLocalDB"]
+            [
+                "info MSSQLLocalDB",
+                "start MSSQLLocalDB",
+                "info MSSQLLocalDB"
+            ]
         );
 
         // A running instance is neither started nor asked twice.
@@ -326,7 +350,10 @@ mod tests {
             .flat_map(u16::to_le_bytes)
             .collect();
         assert_eq!(decode_tool_output(&utf16), "np:\\\\.\\pipe\\X\r\n");
-        assert_eq!(decode_tool_output(b"np:\\\\.\\pipe\\X"), "np:\\\\.\\pipe\\X");
+        assert_eq!(
+            decode_tool_output(b"np:\\\\.\\pipe\\X"),
+            "np:\\\\.\\pipe\\X"
+        );
         assert_eq!(decode_tool_output(b""), "");
     }
 }

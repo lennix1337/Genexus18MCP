@@ -278,7 +278,9 @@ impl SqlTransport {
             .clone();
         let (used, fallback_reason, encryption) = match decision {
             None => (None, None, None),
-            Some(Decision::Tds { encryption }) => (Some(TransportKind::Tds), None, Some(encryption)),
+            Some(Decision::Tds { encryption }) => {
+                (Some(TransportKind::Tds), None, Some(encryption))
+            }
             Some(Decision::Sqlcmd { fallback_reason }) => {
                 (Some(TransportKind::Sqlcmd), fallback_reason, None)
             }
@@ -398,7 +400,10 @@ fn connect_tds(
     _: &KbConnectionInfo,
     _: &tds::ConnectOptions,
 ) -> Result<(TdsHandle, tds::Encryption), String> {
-    Err("this gx-engine build has no TDS transport (it was built without the `tds` cargo feature)".into())
+    Err(
+        "this gx-engine build has no TDS transport (it was built without the `tds` cargo feature)"
+            .into(),
+    )
 }
 
 #[cfg(feature = "tds")]
@@ -812,11 +817,22 @@ mod tests {
         // A value that names nothing is not guessed: sqlcmd reads, and the report says why.
         let (kind, refused) = requested_transport(Some("tedious"));
         assert_eq!(kind, TransportKind::Sqlcmd);
-        assert!(refused.unwrap().contains("GXMCP_ENGINE_SQL_TRANSPORT='tedious'"));
-        let unrecognized = SqlTransport::new(kind, tds::ConnectOptions::default(), Some("why".into()));
-        let opened = unrecognized.open(|_| -> Opened { panic!("TDS was not requested") }, || Ok("sqlcmd"));
+        assert!(
+            refused
+                .unwrap()
+                .contains("GXMCP_ENGINE_SQL_TRANSPORT='tedious'")
+        );
+        let unrecognized =
+            SqlTransport::new(kind, tds::ConnectOptions::default(), Some("why".into()));
+        let opened = unrecognized.open(
+            |_| -> Opened { panic!("TDS was not requested") },
+            || Ok("sqlcmd"),
+        );
         assert_eq!(opened, Ok("sqlcmd"));
-        assert_eq!(unrecognized.report().fallback_reason.as_deref(), Some("why"));
+        assert_eq!(
+            unrecognized.report().fallback_reason.as_deref(),
+            Some("why")
+        );
     }
 
     #[test]
@@ -824,7 +840,10 @@ mod tests {
         let transport = transport(TransportKind::Sqlcmd);
         assert_eq!(transport.report().used, None);
         for _ in 0..2 {
-            let opened = transport.open(|_| -> Opened { panic!("TDS was not requested") }, || Ok("sqlcmd"));
+            let opened = transport.open(
+                |_| -> Opened { panic!("TDS was not requested") },
+                || Ok("sqlcmd"),
+            );
             assert_eq!(opened, Ok("sqlcmd"));
         }
         assert_eq!(

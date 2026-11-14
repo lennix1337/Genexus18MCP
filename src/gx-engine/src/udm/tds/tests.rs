@@ -63,7 +63,12 @@ fn text(value: &str) -> Value {
 #[test]
 fn prelogin_login_and_a_batch_return_typed_rows_and_the_sqlcmd_text() {
     let server = replying(result_set(
-        &[Column::Int, Column::NVarChar, Column::VarChar, Column::BigIntN],
+        &[
+            Column::Int,
+            Column::NVarChar,
+            Column::VarChar,
+            Column::BigIntN,
+        ],
         &[
             row(&[
                 Cell::Int(31),
@@ -106,7 +111,11 @@ fn prelogin_login_and_a_batch_return_typed_rows_and_the_sqlcmd_text() {
     assert_eq!(log.batches, [sql]);
     let login = &log.logins[0];
     assert_eq!(
-        (login.user.as_str(), login.password.as_str(), login.database.as_str()),
+        (
+            login.user.as_str(),
+            login.password.as_str(),
+            login.database.as_str()
+        ),
         (USER, PASSWORD, "GX_KB_Fake")
     );
     assert!(!login.integrated);
@@ -116,28 +125,57 @@ fn prelogin_login_and_a_batch_return_typed_rows_and_the_sqlcmd_text() {
 fn max_values_arrive_whole_across_chunks_and_packets() {
     // 100 000 bytes: 25 packets, sent as chunks that never align with them.
     let blob: Vec<u8> = (0..100_000u32).map(|n| (n * 7 % 251) as u8).collect();
-    let hex: String = blob[..5000].iter().map(|byte| format!("{byte:02X}")).collect();
+    let hex: String = blob[..5000]
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect();
     let server = replying(result_set(
         &[Column::IntN, Column::VarBinaryMax, Column::VarCharMax],
         &[
             row(&[
                 Cell::IntN(Some(1)),
-                Cell::Plp { value: Some(&blob), chunk: 3001, sized: false },
-                Cell::Plp { value: Some(hex.as_bytes()), chunk: 777, sized: true },
+                Cell::Plp {
+                    value: Some(&blob),
+                    chunk: 3001,
+                    sized: false,
+                },
+                Cell::Plp {
+                    value: Some(hex.as_bytes()),
+                    chunk: 777,
+                    sized: true,
+                },
             ]),
             row(&[
                 Cell::IntN(Some(2)),
-                Cell::Plp { value: Some(b""), chunk: 1, sized: true },
-                Cell::Plp { value: None, chunk: 1, sized: true },
+                Cell::Plp {
+                    value: Some(b""),
+                    chunk: 1,
+                    sized: true,
+                },
+                Cell::Plp {
+                    value: None,
+                    chunk: 1,
+                    sized: true,
+                },
             ]),
             row(&[
                 Cell::IntN(Some(3)),
-                Cell::Plp { value: None, chunk: 1, sized: false },
-                Cell::Plp { value: Some(b"00FF"), chunk: 1, sized: false },
+                Cell::Plp {
+                    value: None,
+                    chunk: 1,
+                    sized: false,
+                },
+                Cell::Plp {
+                    value: Some(b"00FF"),
+                    chunk: 1,
+                    sized: false,
+                },
             ]),
         ],
     ));
-    let rows = connect(&server).query_rows("SET NOCOUNT ON; SELECT 1").expect("rows");
+    let rows = connect(&server)
+        .query_rows("SET NOCOUNT ON; SELECT 1")
+        .expect("rows");
     assert_eq!(
         rows,
         vec![
@@ -150,26 +188,56 @@ fn max_values_arrive_whole_across_chunks_and_packets() {
 
 #[test]
 fn nulls_are_read_from_rows_and_from_null_bitmap_rows() {
-    let metadata = [Column::IntN, Column::NVarChar, Column::VarBinary, Column::IntN];
+    let metadata = [
+        Column::IntN,
+        Column::NVarChar,
+        Column::VarBinary,
+        Column::IntN,
+    ];
     let server = replying(result_set(
         &metadata,
         &[
-            row(&[Cell::IntN(None), Cell::Short(None), Cell::Short(None), Cell::IntN(Some(4))]),
-            nbc_row(&[Cell::IntN(None), Cell::Short(Some(&wide("x"))), Cell::Short(None), Cell::IntN(None)]),
-            nbc_row(&[Cell::IntN(Some(9)), Cell::Short(None), Cell::Short(Some(b"\x00\x01")), Cell::IntN(Some(8))]),
+            row(&[
+                Cell::IntN(None),
+                Cell::Short(None),
+                Cell::Short(None),
+                Cell::IntN(Some(4)),
+            ]),
+            nbc_row(&[
+                Cell::IntN(None),
+                Cell::Short(Some(&wide("x"))),
+                Cell::Short(None),
+                Cell::IntN(None),
+            ]),
+            nbc_row(&[
+                Cell::IntN(Some(9)),
+                Cell::Short(None),
+                Cell::Short(Some(b"\x00\x01")),
+                Cell::IntN(Some(8)),
+            ]),
         ],
     ));
-    let rows = connect(&server).query_rows("SET NOCOUNT ON; SELECT 1").expect("rows");
+    let rows = connect(&server)
+        .query_rows("SET NOCOUNT ON; SELECT 1")
+        .expect("rows");
     assert_eq!(
         rows,
         vec![
             vec![Value::Null, Value::Null, Value::Null, Value::Int(4)],
             vec![Value::Null, text("x"), Value::Null, Value::Null],
-            vec![Value::Int(9), Value::Null, Value::Bytes(vec![0, 1]), Value::Int(8)],
+            vec![
+                Value::Int(9),
+                Value::Null,
+                Value::Bytes(vec![0, 1]),
+                Value::Int(8)
+            ],
         ]
     );
     // The text form spells a null the way sqlcmd does; a binary column has no text form.
-    assert_eq!(render_text(&rows[..2]).unwrap(), "NULL\tNULL\tNULL\t4\r\nNULL\tx\tNULL\tNULL\r\n");
+    assert_eq!(
+        render_text(&rows[..2]).unwrap(),
+        "NULL\tNULL\tNULL\t4\r\nNULL\tx\tNULL\tNULL\r\n"
+    );
     assert!(render_text(&rows).is_err());
 }
 
@@ -188,13 +256,25 @@ fn the_rows_of_every_result_set_are_returned_in_order() {
     ));
     let server = replying(tokens);
     let mut session = connect(&server);
-    let rows = session.query_rows("SET NOCOUNT ON; SELECT 1").expect("rows");
+    let rows = session
+        .query_rows("SET NOCOUNT ON; SELECT 1")
+        .expect("rows");
     assert_eq!(
         rows,
-        vec![vec![Value::Int(1)], vec![Value::Int(2)], vec![text("last"), Value::Int(3)]]
+        vec![
+            vec![Value::Int(1)],
+            vec![Value::Int(2)],
+            vec![text("last"), Value::Int(3)]
+        ]
     );
     // The session is still usable: each batch is answered on the same connection.
-    assert_eq!(session.query_rows("SET NOCOUNT ON; SELECT 2").expect("second batch").len(), 3);
+    assert_eq!(
+        session
+            .query_rows("SET NOCOUNT ON; SELECT 2")
+            .expect("second batch")
+            .len(),
+        3
+    );
     assert_eq!(server.log().logins.len(), 1);
 }
 
@@ -213,9 +293,17 @@ fn a_server_error_fails_the_read_and_ends_the_session() {
         }
     }));
     let mut session = connect(&server);
-    assert_eq!(session.query_rows("SET NOCOUNT ON; SELECT 7").unwrap(), [[Value::Int(7)]]);
-    let failure = session.query_rows("SET NOCOUNT ON; SELECT * FROM Absent").unwrap_err();
-    assert!(failure.contains("Invalid object name 'Absent'"), "{failure}");
+    assert_eq!(
+        session.query_rows("SET NOCOUNT ON; SELECT 7").unwrap(),
+        [[Value::Int(7)]]
+    );
+    let failure = session
+        .query_rows("SET NOCOUNT ON; SELECT * FROM Absent")
+        .unwrap_err();
+    assert!(
+        failure.contains("Invalid object name 'Absent'"),
+        "{failure}"
+    );
     // Mutation check: a session that kept answering after a failed batch would let a caller
     // read on from a stream it cannot trust.
     let after = session.query_rows("SET NOCOUNT ON; SELECT 7").unwrap_err();
@@ -230,12 +318,20 @@ fn a_connection_cut_mid_stream_is_an_error_not_a_short_result() {
         let mut tokens = columns(&[Column::Int, Column::VarBinaryMax]);
         tokens.extend(row(&[
             Cell::Int(1),
-            Cell::Plp { value: Some(&blob), chunk: 4000, sized: true },
+            Cell::Plp {
+                value: Some(&blob),
+                chunk: 4000,
+                sized: true,
+            },
         ]));
         let whole_row = tokens.len();
         tokens.extend(row(&[
             Cell::Int(2),
-            Cell::Plp { value: Some(&blob), chunk: 4000, sized: true },
+            Cell::Plp {
+                value: Some(&blob),
+                chunk: 4000,
+                sized: true,
+            },
         ]));
         // The first row arrives whole; the second ends inside its payload.
         tokens.truncate(whole_row + 9000);
@@ -253,12 +349,17 @@ fn a_column_type_without_an_agreed_text_form_is_refused() {
         &[Column::Int, Column::DateTime],
         &[row(&[Cell::Int(1), Cell::DateTime([0; 8])])],
     ));
-    let failure = connect(&server).query_rows("SET NOCOUNT ON; SELECT 1").unwrap_err();
+    let failure = connect(&server)
+        .query_rows("SET NOCOUNT ON; SELECT 1")
+        .unwrap_err();
     assert!(
         failure.contains("column 2") && failure.contains("Datetime"),
         "{failure}"
     );
-    assert!(failure.contains("GXMCP_ENGINE_SQL_TRANSPORT=sqlcmd"), "{failure}");
+    assert!(
+        failure.contains("GXMCP_ENGINE_SQL_TRANSPORT=sqlcmd"),
+        "{failure}"
+    );
 }
 
 #[test]
@@ -288,10 +389,16 @@ fn a_refused_login_reports_neither_the_login_nor_the_password() {
         )),
         ..Script::replying(|_| Reply::Tokens(Vec::new()))
     });
-    let failure =
-        TdsSession::connect(&sql_info(&server), Some((USER, PASSWORD)), &unencrypted()).unwrap_err();
-    assert!(failure.contains("Login failed for user '<redacted>'"), "{failure}");
-    assert!(!failure.contains(USER) && !failure.contains(PASSWORD), "{failure}");
+    let failure = TdsSession::connect(&sql_info(&server), Some((USER, PASSWORD)), &unencrypted())
+        .unwrap_err();
+    assert!(
+        failure.contains("Login failed for user '<redacted>'"),
+        "{failure}"
+    );
+    assert!(
+        !failure.contains(USER) && !failure.contains(PASSWORD),
+        "{failure}"
+    );
     assert_eq!(server.log().logins.len(), 1);
 }
 
@@ -303,12 +410,18 @@ fn a_local_pipe_is_reached_by_its_name_and_through_the_localdb_instance() {
     }));
     // The explicit `np:` form.
     let mut session = connect(&server);
-    assert_eq!(session.query_rows("SET NOCOUNT ON; SELECT 42").unwrap(), [[Value::Int(42)]]);
+    assert_eq!(
+        session.query_rows("SET NOCOUNT ON; SELECT 42").unwrap(),
+        [[Value::Int(42)]]
+    );
 
     // `(LocalDB)\name`: the pipe comes from what `sqllocaldb info` prints for the instance.
     let localdb = info(
         "(LocalDB)\\GxeFake",
-        AuthMode::SqlServer { user: USER.into(), password: None },
+        AuthMode::SqlServer {
+            user: USER.into(),
+            password: None,
+        },
     );
     let mut asked = Vec::new();
     let mut session = TdsSession::connect_with(
@@ -322,7 +435,10 @@ fn a_local_pipe_is_reached_by_its_name_and_through_the_localdb_instance() {
     )
     .expect("connect through the instance pipe");
     assert_eq!(asked, ["info GxeFake"]);
-    assert_eq!(session.query_rows("SET NOCOUNT ON; SELECT 42").unwrap(), [[Value::Int(42)]]);
+    assert_eq!(
+        session.query_rows("SET NOCOUNT ON; SELECT 42").unwrap(),
+        [[Value::Int(42)]]
+    );
     assert_eq!(server.log().logins.len(), 2);
 
     // An instance that cannot be resolved fails before anything is opened.
@@ -341,11 +457,10 @@ fn an_integrated_login_on_a_local_pipe_asks_for_tls_first_and_sends_no_password(
     let localdb = info("(LocalDB)\\GxeFake", AuthMode::Integrated);
     // The endpoint offers no TLS and cannot answer SSPI, so the login is refused; what
     // matters is what the client sent on the way.
-    let failure =
-        TdsSession::connect_with(&localdb, None, &ConnectOptions::default(), &mut |_| {
-            Ok(server.sqllocaldb_info())
-        })
-        .unwrap_err();
+    let failure = TdsSession::connect_with(&localdb, None, &ConnectOptions::default(), &mut |_| {
+        Ok(server.sqllocaldb_info())
+    })
+    .unwrap_err();
     assert!(failure.contains("encryption none"), "{failure}");
     let log = server.log();
     // First TLS; only when that is refused, and only because no password travels, without it.
@@ -353,7 +468,10 @@ fn an_integrated_login_on_a_local_pipe_asks_for_tls_first_and_sends_no_password(
     assert_eq!(log.logins.len(), 1);
     let login = &log.logins[0];
     assert!(login.integrated && login.sspi_bytes > 0, "{login:?}");
-    assert!(login.user.is_empty() && login.password.is_empty(), "{login:?}");
+    assert!(
+        login.user.is_empty() && login.password.is_empty(),
+        "{login:?}"
+    );
 }
 
 #[cfg(windows)]
@@ -362,7 +480,10 @@ fn a_sql_login_on_a_local_pipe_is_never_sent_without_tls() {
     let server = FakeServer::pipe(Script::replying(|_| Reply::Tokens(Vec::new())));
     let localdb = info(
         "(LocalDB)\\GxeFake",
-        AuthMode::SqlServer { user: USER.into(), password: None },
+        AuthMode::SqlServer {
+            user: USER.into(),
+            password: None,
+        },
     );
     let failure = TdsSession::connect_with(
         &localdb,
@@ -371,7 +492,10 @@ fn a_sql_login_on_a_local_pipe_is_never_sent_without_tls() {
         &mut |_| Ok(server.sqllocaldb_info()),
     )
     .unwrap_err();
-    assert!(failure.contains("encryption tls-unverified-certificate"), "{failure}");
+    assert!(
+        failure.contains("encryption tls-unverified-certificate"),
+        "{failure}"
+    );
     let log = server.log();
     assert_eq!(log.client_encryption, [ENCRYPT_REQ]);
     assert!(log.logins.is_empty());
@@ -389,13 +513,27 @@ fn part_reply(sql: &str, data: &[u8], properties: &[u8]) -> Reply {
         "a part read over TDS selects the payload as bytes: {sql}"
     );
     Reply::Tokens(result_set(
-        &[Column::VarChar, Column::IntN, Column::VarBinaryMax, Column::IntN, Column::VarBinaryMax],
+        &[
+            Column::VarChar,
+            Column::IntN,
+            Column::VarBinaryMax,
+            Column::IntN,
+            Column::VarBinaryMax,
+        ],
         &[row(&[
             Cell::Short(Some(b"PRESENT")),
             Cell::IntN(Some(data.len() as i32)),
-            Cell::Plp { value: Some(data), chunk: 1500, sized: true },
+            Cell::Plp {
+                value: Some(data),
+                chunk: 1500,
+                sized: true,
+            },
             Cell::IntN(Some(properties.len() as i32)),
-            Cell::Plp { value: Some(properties), chunk: 1500, sized: true },
+            Cell::Plp {
+                value: Some(properties),
+                chunk: 1500,
+                sized: true,
+            },
         ])],
     ))
 }
@@ -405,13 +543,20 @@ fn a_client_reads_a_part_as_bytes_and_the_existing_decoder_reads_it() {
     let part = stored_part();
     let served = part.clone();
     let server = FakeServer::tcp(Script::replying(move |sql| {
-        part_reply(sql, &served, b"<Properties><Name>IsDefault</Name></Properties>")
+        part_reply(
+            sql,
+            &served,
+            b"<Properties><Name>IsDefault</Name></Properties>",
+        )
     }));
     let info = sql_info(&server);
     SqlTransport::request_tds_for_test(&info, unencrypted());
     let client = UdmClient::from_connection_info(info.clone()).with_persistent_reads();
 
-    let record = client.get_entity_version(38, 7, 2).expect("read").expect("a row");
+    let record = client
+        .get_entity_version(38, 7, 2)
+        .expect("read")
+        .expect("a row");
     assert_eq!(record.data, part);
     assert_eq!(
         record.properties.as_deref(),
@@ -430,12 +575,23 @@ fn a_client_reads_a_part_as_bytes_and_the_existing_decoder_reads_it() {
 #[test]
 fn a_client_reads_text_rows_over_tds_through_the_same_parsers() {
     let server = FakeServer::tcp(Script::replying(|sql| {
-        assert!(sql.starts_with("SET NOCOUNT ON; SELECT EntityTypeId, EntityTypeName"), "{sql}");
+        assert!(
+            sql.starts_with("SET NOCOUNT ON; SELECT EntityTypeId, EntityTypeName"),
+            "{sql}"
+        );
         Reply::Tokens(result_set(
             &[Column::Int, Column::NVarChar, Column::NVarChar],
             &[
-                row(&[Cell::Int(38), Cell::Short(Some(&wide("Procedure"))), Cell::Short(Some(&wide("Objects")))]),
-                row(&[Cell::Int(81), Cell::Short(Some(&wide("Variables"))), Cell::Short(Some(&wide("")))]),
+                row(&[
+                    Cell::Int(38),
+                    Cell::Short(Some(&wide("Procedure"))),
+                    Cell::Short(Some(&wide("Objects"))),
+                ]),
+                row(&[
+                    Cell::Int(81),
+                    Cell::Short(Some(&wide("Variables"))),
+                    Cell::Short(Some(&wide(""))),
+                ]),
             ],
         ))
     }));
@@ -477,7 +633,12 @@ fn a_failure_after_the_first_tds_session_is_an_error_and_sqlcmd_is_not_started()
     let info = sql_info(&server);
     SqlTransport::request_tds_for_test(&info, unencrypted());
     let client = UdmClient::from_connection_info(info.clone()).with_persistent_reads();
-    assert!(client.get_entity_version(38, 7, 2).expect("first read").is_some());
+    assert!(
+        client
+            .get_entity_version(38, 7, 2)
+            .expect("first read")
+            .is_some()
+    );
 
     // Mid-read: the error is the transport's, and no row of the cut read is kept.
     let failure = client.get_entity_version(38, 8, 2).unwrap_err();
@@ -490,7 +651,10 @@ fn a_failure_after_the_first_tds_session_is_an_error_and_sqlcmd_is_not_started()
     closed.store(true, std::sync::atomic::Ordering::Relaxed);
     let failure = client.get_entity_version(38, 9, 2).unwrap_err();
     assert!(failure.contains("already reads over TDS"), "{failure}");
-    assert!(!failure.contains("sqlcmd reader") && !failure.contains("invoke sqlcmd"), "{failure}");
+    assert!(
+        !failure.contains("sqlcmd reader") && !failure.contains("invoke sqlcmd"),
+        "{failure}"
+    );
     let report = transport_report(&info);
     assert_eq!((report.used, report.fallback_reason), (Some("tds"), None));
 }
@@ -510,14 +674,19 @@ fn a_consistent_read_session_keeps_its_transaction_over_tds() {
     SqlTransport::request_tds_for_test(&info, unencrypted());
     let mut session = ReadSession::start_consistent(&info).expect("consistent session");
     assert!(session.binary_payloads());
-    assert_eq!(session.query("SET NOCOUNT ON; SELECT 42;").unwrap(), "42\r\n");
+    assert_eq!(
+        session.query("SET NOCOUNT ON; SELECT 42;").unwrap(),
+        "42\r\n"
+    );
     // A kept session refuses what a kept sqlcmd session refuses, on either transport.
     assert!(session.query("DELETE FROM EntityVersion").is_err());
     assert!(session.query_rows("SET NOCOUNT ON; SELECT 1;\nGO").is_err());
 
     let log = server.log();
     assert_eq!(log.batches.len(), 2);
-    assert!(log.batches[0].contains("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; BEGIN TRANSACTION;"));
+    assert!(
+        log.batches[0].contains("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; BEGIN TRANSACTION;")
+    );
     // The read runs inside the transaction the first batch began, on the same login.
     assert_eq!(log.transactions, [0, 0x1122_3344_5566_7788]);
     assert_eq!(log.logins.len(), 1);
@@ -529,7 +698,10 @@ fn a_session_that_does_not_report_its_transaction_is_not_a_consistent_one() {
     let info = sql_info(&server);
     SqlTransport::request_tds_for_test(&info, unencrypted());
     let failure = ReadSession::start_consistent(&info).unwrap_err();
-    assert_eq!(failure, "tds did not establish the consistent read transaction");
+    assert_eq!(
+        failure,
+        "tds did not establish the consistent read transaction"
+    );
 }
 
 /// Synthetic benchmark: part rows read as bytes from the in-process endpoint over loopback TCP,
@@ -551,14 +723,30 @@ fn synthetic_benchmark_tds_rows_from_the_fake_endpoint() {
                     Cell::Int(id as i32),
                     Cell::Int(1),
                     Cell::IntN(Some(ROW_PAYLOAD as i32)),
-                    Cell::Plp { value: Some(&payload), chunk: ROW_PAYLOAD, sized: true },
+                    Cell::Plp {
+                        value: Some(&payload),
+                        chunk: ROW_PAYLOAD,
+                        sized: true,
+                    },
                     Cell::IntN(Some(0)),
-                    Cell::Plp { value: None, chunk: 1, sized: true },
+                    Cell::Plp {
+                        value: None,
+                        chunk: 1,
+                        sized: true,
+                    },
                 ])
             })
             .collect();
         let tokens = result_set(
-            &[Column::Int, Column::Int, Column::Int, Column::IntN, Column::VarBinaryMax, Column::IntN, Column::VarBinaryMax],
+            &[
+                Column::Int,
+                Column::Int,
+                Column::Int,
+                Column::IntN,
+                Column::VarBinaryMax,
+                Column::IntN,
+                Column::VarBinaryMax,
+            ],
             &encoded,
         );
         let server = replying(tokens);
@@ -566,7 +754,9 @@ fn synthetic_benchmark_tds_rows_from_the_fake_endpoint() {
         let mut samples: Vec<f64> = (0..iterations)
             .map(|_| {
                 let started = std::time::Instant::now();
-                let read = session.query_rows("SET NOCOUNT ON; SELECT 1").expect("rows");
+                let read = session
+                    .query_rows("SET NOCOUNT ON; SELECT 1")
+                    .expect("rows");
                 let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                 assert_eq!(read.len(), rows);
                 elapsed
@@ -585,8 +775,14 @@ fn synthetic_benchmark_tds_rows_from_the_fake_endpoint() {
 #[test]
 fn a_model_part_prefetch_reads_every_shard_over_tds() {
     // The vocabulary of a real Knowledge Base, so the client serves the part types it asks for.
-    let types = UdmClient::new_in_memory().get_entity_types().expect("seed vocabulary");
-    let procedure = types.iter().find(|t| t.name == "Procedure").expect("Procedure type").entity_type_id;
+    let types = UdmClient::new_in_memory()
+        .get_entity_types()
+        .expect("seed vocabulary");
+    let procedure = types
+        .iter()
+        .find(|t| t.name == "Procedure")
+        .expect("Procedure type")
+        .entity_type_id;
     let part = stored_part();
     let (served_types, served_part) = (types.clone(), part.clone());
     let server = FakeServer::tcp(Script::replying(move |sql| {
@@ -614,11 +810,17 @@ fn a_model_part_prefetch_reads_every_shard_over_tds() {
                     ])
                 })
                 .collect();
-            result_set(&[Column::Int, Column::Int, Column::Int, Column::NVarChar], &rows)
+            result_set(
+                &[Column::Int, Column::Int, Column::Int, Column::NVarChar],
+                &rows,
+            )
         } else if sql.contains("SELECT c.CompoundEntityTypeId") {
             result_set(&[Column::Int; 6], &[])
         } else {
-            assert!(sql.contains(", e.EntityVersionData, ") && !sql.contains("CONVERT(VARCHAR(MAX)"), "{sql}");
+            assert!(
+                sql.contains(", e.EntityVersionData, ") && !sql.contains("CONVERT(VARCHAR(MAX)"),
+                "{sql}"
+            );
             let shard: i32 = sql.rsplit(" = ").next().unwrap().parse().expect("shard");
             let rows: Vec<Vec<u8>> = (1..=8)
                 .filter(|id| id % 4 == shard)
@@ -628,14 +830,30 @@ fn a_model_part_prefetch_reads_every_shard_over_tds() {
                         Cell::Int(id),
                         Cell::Int(1),
                         Cell::IntN(Some(served_part.len() as i32)),
-                        Cell::Plp { value: Some(&served_part), chunk: 900, sized: false },
+                        Cell::Plp {
+                            value: Some(&served_part),
+                            chunk: 900,
+                            sized: false,
+                        },
                         Cell::IntN(Some(0)),
-                        Cell::Plp { value: None, chunk: 1, sized: true },
+                        Cell::Plp {
+                            value: None,
+                            chunk: 1,
+                            sized: true,
+                        },
                     ])
                 })
                 .collect();
             result_set(
-                &[Column::Int, Column::Int, Column::Int, Column::IntN, Column::VarBinaryMax, Column::IntN, Column::VarBinaryMax],
+                &[
+                    Column::Int,
+                    Column::Int,
+                    Column::Int,
+                    Column::IntN,
+                    Column::VarBinaryMax,
+                    Column::IntN,
+                    Column::VarBinaryMax,
+                ],
                 &rows,
             )
         })
@@ -648,13 +866,22 @@ fn a_model_part_prefetch_reads_every_shard_over_tds() {
     // Every part is in memory now: no statement is sent for them.
     let statements = server.log().batches.len();
     for id in 1..=8 {
-        let record = client.get_entity_version(procedure, id, 1).expect("read").expect("part");
+        let record = client
+            .get_entity_version(procedure, id, 1)
+            .expect("read")
+            .expect("part");
         assert_eq!(record.data, part, "part {id}");
         assert_eq!(record.properties, None);
     }
     let log = server.log();
     assert_eq!(log.batches.len(), statements);
-    assert_eq!(log.batches.iter().filter(|sql| sql.contains("e.EntityVersionData")).count(), 4);
+    assert_eq!(
+        log.batches
+            .iter()
+            .filter(|sql| sql.contains("e.EntityVersionData"))
+            .count(),
+        4
+    );
     // The shared session and one session per other shard, all of them TDS logins.
     assert_eq!(log.logins.len(), 4);
 }

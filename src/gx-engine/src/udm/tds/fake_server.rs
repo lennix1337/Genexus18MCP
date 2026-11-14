@@ -87,18 +87,24 @@ impl FakeServer {
     /// Listens on a loopback TCP port.
     pub fn tcp(script: Script) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        listener.set_nonblocking(true).expect("nonblocking listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
         let port = listener.local_addr().expect("local address").port();
-        Self::run(format!("tcp:127.0.0.1,{port}"), script, move |context| async move {
-            let listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
-            while !context.stop.load(Ordering::Relaxed) {
-                if let Ok(Ok((stream, _))) =
-                    tokio::time::timeout(Duration::from_millis(20), listener.accept()).await
-                {
-                    tokio::spawn(context.clone().serve(stream));
+        Self::run(
+            format!("tcp:127.0.0.1,{port}"),
+            script,
+            move |context| async move {
+                let listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+                while !context.stop.load(Ordering::Relaxed) {
+                    if let Ok(Ok((stream, _))) =
+                        tokio::time::timeout(Duration::from_millis(20), listener.accept()).await
+                    {
+                        tokio::spawn(context.clone().serve(stream));
+                    }
                 }
-            }
-        })
+            },
+        )
     }
 
     /// Listens on a named pipe of this machine, as a LocalDB instance does.
@@ -376,7 +382,11 @@ fn batch_sql(message: &[u8]) -> String {
 /// The transaction descriptor of a SQL batch: the first header of `ALL_HEADERS` is the
 /// transaction descriptor header (total length, header length, type 2, descriptor, request count).
 fn batch_transaction(message: &[u8]) -> u64 {
-    assert_eq!(u16::from_le_bytes([message[8], message[9]]), 2, "transaction descriptor header");
+    assert_eq!(
+        u16::from_le_bytes([message[8], message[9]]),
+        2,
+        "transaction descriptor header"
+    );
     u64::from_le_bytes(message[10..18].try_into().expect("eight bytes"))
 }
 
@@ -515,7 +525,10 @@ impl Cell<'_> {
     fn is_null(&self) -> bool {
         matches!(
             self,
-            Cell::IntN(None) | Cell::BigIntN(None) | Cell::Short(None) | Cell::Plp { value: None, .. }
+            Cell::IntN(None)
+                | Cell::BigIntN(None)
+                | Cell::Short(None)
+                | Cell::Plp { value: None, .. }
         )
     }
 
@@ -542,7 +555,11 @@ impl Cell<'_> {
                 chunk,
                 sized,
             } => {
-                let total = if *sized { value.len() as u64 } else { u64::MAX - 1 };
+                let total = if *sized {
+                    value.len() as u64
+                } else {
+                    u64::MAX - 1
+                };
                 bytes.extend(total.to_le_bytes());
                 for part in value.chunks(*chunk) {
                     bytes.extend((part.len() as u32).to_le_bytes());

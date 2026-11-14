@@ -34,7 +34,9 @@ fn main() -> std::process::ExitCode {
 
 fn run() -> Result<String, String> {
     let mut args = std::env::args().skip(1);
-    let kb = args.next().ok_or("usage: udm_transport_probe <kb-path> [--runs <n>] [--parts <n>] [--dump <directory>]")?;
+    let kb = args.next().ok_or(
+        "usage: udm_transport_probe <kb-path> [--runs <n>] [--parts <n>] [--dump <directory>]",
+    )?;
     let (mut runs, mut parts, mut dump) = (3usize, 40usize, None);
     while let Some(flag) = args.next() {
         let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
