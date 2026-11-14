@@ -14,7 +14,14 @@ param(
     # Release builds: fail when gx-engine.exe or gxwire.exe was not produced.
     # Engine.Backend defaults to gxengine, so a package without them cannot run
     # its default backend. Plain developer builds keep only warning.
-    [switch]$RequireEngineBinaries
+    [switch]$RequireEngineBinaries,
+
+    # Opt-in: directory that keeps gxwire.exe and gx-engine.exe keyed by the
+    # committed crate source and the toolchain (scripts\rust-artifact-cache.ps1).
+    # A clean checkout of the same source, such as another worktree or a build
+    # against a second GeneXus installation, restores them instead of compiling.
+    # Refused together with -RequireEngineBinaries.
+    [string]$RustArtifactCache
 )
 
 Set-StrictMode -Version Latest
@@ -27,10 +34,17 @@ $workerProject = Join-Path $root "src\GxMcp.Worker\GxMcp.Worker.csproj"
 . (Join-Path $root "scripts\gx-version-catalog.ps1")
 $gxCatalog = Get-GxVersionCatalog -Root $root
 . (Join-Path $root "scripts\publish-config.ps1")
+. (Join-Path $root "scripts\rust-artifact-cache.ps1")
 
 function Fail-Build([string]$message, [int]$exitCode = 1) {
     Write-Host "[build] $message" -ForegroundColor Red
     exit $exitCode
+}
+
+# 0.0 A release compiles its own Rust binaries. The artifact cache serves
+# developer and validation builds, so the combination is refused before any work.
+if ($RequireEngineBinaries -and -not [string]::IsNullOrWhiteSpace($RustArtifactCache)) {
+    Fail-Build "-RustArtifactCache cannot be combined with -RequireEngineBinaries: a release build compiles its own Rust binaries."
 }
 
 function Invoke-DotNet([string[]]$arguments, [string]$failureMessage) {
@@ -291,18 +305,29 @@ $gxwireDir = Join-Path $root "src\gxwire"
 if (Test-Path (Join-Path $gxwireDir "Cargo.toml")) {
     $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
     if ($cargoCmd) {
-        Write-Host "   > Building GxWire (Rust release)..."
-        Push-Location $gxwireDir
-        try {
-            & cargo build --release
-            if ($LASTEXITCODE -eq 0 -and (Test-Path "target\release\gxwire.exe")) {
-                Copy-Item "target\release\gxwire.exe" -Destination "$publishDir\gxwire.exe" -Force
-                Write-Host "   > Deployed gxwire.exe to publish." -ForegroundColor Green
-            } else {
-                Write-Host "   > Warning: GxWire build failed with exit code $LASTEXITCODE" -ForegroundColor Yellow
+        $gxwireCache = Get-RustArtifactCacheEntry -CacheRoot $RustArtifactCache -RepositoryRoot $root -CrateRelativePath "src/gxwire" -BinaryName "gxwire.exe"
+        if ($gxwireCache.Reason) {
+            Write-Host "   > Rust artifact cache not used for gxwire.exe: $($gxwireCache.Reason)." -ForegroundColor Yellow
+        }
+        if (Restore-RustArtifact -Entry $gxwireCache -Destination "$publishDir\gxwire.exe") {
+            Write-Host "   > Reused gxwire.exe from the Rust artifact cache (key $($gxwireCache.Key.Substring(0, 12)))." -ForegroundColor Green
+        } else {
+            Write-Host "   > Building GxWire (Rust release)..."
+            Push-Location $gxwireDir
+            try {
+                & cargo build --release
+                if ($LASTEXITCODE -eq 0 -and (Test-Path "target\release\gxwire.exe")) {
+                    Copy-Item "target\release\gxwire.exe" -Destination "$publishDir\gxwire.exe" -Force
+                    Write-Host "   > Deployed gxwire.exe to publish." -ForegroundColor Green
+                    if (Save-RustArtifact -Entry $gxwireCache -Source (Join-Path $gxwireDir "target\release\gxwire.exe")) {
+                        Write-Host "   > Stored gxwire.exe in the Rust artifact cache (key $($gxwireCache.Key.Substring(0, 12)))." -ForegroundColor Gray
+                    }
+                } else {
+                    Write-Host "   > Warning: GxWire build failed with exit code $LASTEXITCODE" -ForegroundColor Yellow
+                }
+            } finally {
+                Pop-Location
             }
-        } finally {
-            Pop-Location
         }
     }
 }
@@ -312,25 +337,37 @@ $gxEngineDir = Join-Path $root "src\gx-engine"
 if (Test-Path (Join-Path $gxEngineDir "Cargo.toml")) {
     $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
     if ($cargoCmd) {
-        Write-Host "   > Building gx-engine (Rust release)..."
-        Push-Location $gxEngineDir
-        try {
-            & cargo build --release
-            if ($LASTEXITCODE -eq 0 -and (Test-Path "target\release\gx-engine.exe")) {
-                Copy-Item "target\release\gx-engine.exe" -Destination "$publishDir\gx-engine.exe" -Force
-                Write-Host "   > Deployed gx-engine.exe to publish." -ForegroundColor Green
-            } else {
-                Write-Host "   > Warning: gx-engine build failed with exit code $LASTEXITCODE" -ForegroundColor Yellow
+        $gxEngineCache = Get-RustArtifactCacheEntry -CacheRoot $RustArtifactCache -RepositoryRoot $root -CrateRelativePath "src/gx-engine" -BinaryName "gx-engine.exe"
+        if ($gxEngineCache.Reason) {
+            Write-Host "   > Rust artifact cache not used for gx-engine.exe: $($gxEngineCache.Reason)." -ForegroundColor Yellow
+        }
+        if (Restore-RustArtifact -Entry $gxEngineCache -Destination "$publishDir\gx-engine.exe") {
+            Write-Host "   > Reused gx-engine.exe from the Rust artifact cache (key $($gxEngineCache.Key.Substring(0, 12)))." -ForegroundColor Green
+        } else {
+            Write-Host "   > Building gx-engine (Rust release)..."
+            Push-Location $gxEngineDir
+            try {
+                & cargo build --release
+                if ($LASTEXITCODE -eq 0 -and (Test-Path "target\release\gx-engine.exe")) {
+                    Copy-Item "target\release\gx-engine.exe" -Destination "$publishDir\gx-engine.exe" -Force
+                    Write-Host "   > Deployed gx-engine.exe to publish." -ForegroundColor Green
+                    if (Save-RustArtifact -Entry $gxEngineCache -Source (Join-Path $gxEngineDir "target\release\gx-engine.exe")) {
+                        Write-Host "   > Stored gx-engine.exe in the Rust artifact cache (key $($gxEngineCache.Key.Substring(0, 12)))." -ForegroundColor Gray
+                    }
+                } else {
+                    Write-Host "   > Warning: gx-engine build failed with exit code $LASTEXITCODE" -ForegroundColor Yellow
+                }
+            } finally {
+                Pop-Location
             }
-        } finally {
-            Pop-Location
         }
     }
 }
 
 # 6.07 Release builds must ship the default backend (Engine.Backend = gxengine)
 # and the wire tool. publish\ was emptied at the start, so presence means this
-# build produced them.
+# build produced them (-RustArtifactCache, which can restore them, is refused
+# for a release build in step 0.0).
 if ($RequireEngineBinaries) {
     foreach ($engineBinary in @('gx-engine.exe', 'gxwire.exe')) {
         if (-not (Test-Path -LiteralPath (Join-Path $publishDir $engineBinary) -PathType Leaf)) {
