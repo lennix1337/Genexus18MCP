@@ -117,7 +117,12 @@ fn benchmark_scale_50k_nodes() {
         search_latency,
         search_res.hits.len()
     );
-    let max_search_ms = if cfg!(debug_assertions) { 200 } else { 50 };
+    // A debug build is not what ships and its timing follows the toolchain and the
+    // machine, so the debug ceiling is a smoke check with headroom. The best of 3
+    // measured 184-232 ms on a developer machine (5 of 12 runs over the previous
+    // 200 ms) and 202 ms once on a hosted runner. 300 ms still fails a 1.6x
+    // slowdown; the release ceiling is the performance contract.
+    let max_search_ms = if cfg!(debug_assertions) { 300 } else { 50 };
     assert!(
         search_latency.as_millis() < max_search_ms,
         "Search query should be < {}ms",

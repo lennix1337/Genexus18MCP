@@ -60,6 +60,7 @@
 
 ### Internal
 
+- gxwire `benchmark_scale_50k_nodes`: the debug-build ceiling of the search and pack-task queries is 300 ms instead of 200 ms. The best of 3 sat at 184-232 ms on a developer machine, where 5 of 12 runs failed, and had measured 202 ms on a hosted runner. The release ceiling (50 ms) is unchanged.
 - `cli/lib/client-adapters.test.js` no longer depends on the real home for the neutral launcher config: `applyLauncherConfigOrExit` is called with an injected `homedir`, so the test cannot create or reuse `~/.genexus-mcp/config.json`.
 - Split `DispatchToolCallCoreAsync` into stage methods (`Program.ToolDispatch.*.cs`) and moved the `WriteObjectInternal` success envelope into `BuildWriteAppliedResponse`; no behaviour change.
 - Removed unused code: the Gateway middleware pipeline and `DiagnosticAndHealingEngine`, the Worker `MultiObjectUnitOfWork` helper and `WritePipeline.PreWriteSnapshot`, and the gxwire `memmap2` and `rayon` dependencies.
