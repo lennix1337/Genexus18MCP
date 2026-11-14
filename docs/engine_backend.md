@@ -722,6 +722,12 @@ A `build` whose generated files and compiler inputs are all unchanged skips the
 compile (`compile path: csc-direct (up to date)`); a web class that differs only in
 its generation stamp keeps its earlier stamp. Directed `compile_check` builds
 run the same pipeline only on the admitted target closure.
+A `build` also reuses the previous run's generation in the same output directory:
+an unchanged model is not specified or emitted again, and a changed one emits only
+the Procedures whose inputs changed (`generation: ...` on stderr and `reuse` in the
+report say which). Files of objects that no longer exist are removed, so the
+directory holds what a `rebuild` would write. `rebuild` (`--clean`) reuses nothing.
+See [Incremental rebuild and artifact cache](../src/gx-engine/README.md#incremental-rebuild-and-artifact-cache).
 
 ### Documented v1 deviations
 

@@ -104,6 +104,77 @@ binary. See
 [Plan 131](../../plans/131-sdk-performance-benchmark.md) for commands, all
 samples, output checks, cache conditions, failures and outstanding gates.
 
+## Incremental rebuild and artifact cache
+
+`rebuild-all` into a directory that holds a previous run reuses that run's generation. Before this,
+a run specified and emitted every object every time; only the file writes (a file whose bytes are
+unchanged is not rewritten) and the compile (`csc-direct (up to date)`) were skipped. Now the run
+records what each reusable step read (`obj/gx-incremental/manifest.json` in the output directory,
+replaced as a whole by rename) and the next run skips the steps whose inputs are the same:
+
+| Reused | When this is unchanged (SHA-256 fingerprint) |
+| :--- | :--- |
+| The whole generation: nothing is classified, specified or emitted | the engine binary, every option that reaches the output, every object of the catalog |
+| One Procedure's specification | the engine binary, the Procedure, the tables derived from the model, the SQL dialect |
+| One Procedure's emission and files | the engine binary, the Procedure, every structured data type of the build, the call signature of every Procedure of the build, the target framework |
+| The structured data type files | the engine binary, every structured data type of the build |
+
+So a changed Procedure body emits that Procedure only; a changed call signature or structured data
+type emits every Procedure again (any of them may read it); a changed Transaction, Attribute or
+Domain specifies every Procedure again. Web classes, business components, enumerated-Domain classes,
+support files, Transaction formula checks and the classification read the catalog at large and are
+redone whenever anything changed. The fingerprint is deliberately wider than the true dependency: it
+never has to prove what an emitter did not read.
+
+Rules that keep the output equal to a rebuild into an empty directory:
+
+- The engine's identity is the SHA-256 of its executable, so a rebuilt engine reuses nothing an
+  earlier build of it wrote, even under the same version number.
+- Only successful results are reused. A Procedure that is refused or fails to generate is emitted
+  again on every run that generates anything, and a caller of a Procedure that is not generated is
+  refused by name whatever was reused.
+- A reused step does not rewrite its files, so each must be on disk with the length and
+  modification time the previous run left (the test `csc_direct` applies to its outputs); otherwise
+  the step runs again. A file changed in place with both preserved is not detected: use `--clean`.
+- Files a previous run wrote that the model no longer produces (a deleted or renamed object, a
+  changed assembly name) are removed. Files no run recorded are never touched.
+- The record is marked unusable before the first file of a run is written and written again at the
+  end. A run that is cut off, or that could not write a file, may leave files no record lists, so the
+  next run empties the output directory (as `--clean` does) and generates everything. A run in which
+  two objects write the same file is followed by a full generation too.
+- A missing, unreadable or other-format record, a record written by another engine binary, and
+  `--clean` all mean a full generation.
+- A web class holds its generation time. As before, a file that differs from the new output only by
+  that stamp keeps its earlier stamp, so a directory built over several runs can differ from a fresh
+  one in those 14 digits. `GXMCP_ENGINE_GENERATION_STAMP` fixes the stamp for a byte-for-byte check.
+
+The report's `reuse` object and one `generation: ...` line on stderr say what a run reused
+(`mode`: `unchanged`, `incremental` or `full` with the reason).
+
+**Artifact cache** (opt-in, `GXMCP_ENGINE_BUILD_CACHE_DIR=<dir>`; unset, nothing is read or written).
+It stores, under the fingerprints above, each Procedure's emitted C# (`emit`), each Procedure's
+navigation report (`spec`) and the structured data type files (`sdts`), so a rebuild into an empty
+directory, or on another machine with the same engine binary, restores them instead of generating:
+
+```text
+<dir>/v1/<kind>/<first two hex digits of the key>/<key>
+entry = "gx-artifact-1 <key> <payload length> <payload SHA-256>\n" + payload (JSON)
+```
+
+The directory may be shared: an entry is written to a temporary file beside it and renamed over it,
+and a restore checks the key, the length and the SHA-256 before decoding. An entry that fails a check
+is ignored, recomputed and replaced. Refusals and errors are never stored. Compiled assemblies are not
+cached: a C# compile was measured byte-identical for the same inputs in the same folder and different
+in another folder (the assembly and PDB embed the folder's path; plain `net10.0` class library, SDK
+10.0.404, not the generated project), so an assembly is not a function of the fingerprint. There is no
+eviction: an entry is roughly the size of the C# file or report it holds, one per distinct object
+version built, and any entry or the whole directory can be deleted at any time.
+
+Tests: `tests/rebuild_incremental.rs` rebuilds a model after each kind of edit (and after sixty
+pseudo-random ones) and compares every file and the report with a rebuild into an empty directory.
+`scripts/validate-engine-incremental-live.ps1` runs the same comparison on a real `C:\KBs\*teste*`
+Knowledge Base; it has not been run yet (no Knowledge Base on the development machine).
+
 ## Local use
 
 Requirements: Cargo/rustc (edition 2024 support), plus the native linker required by your Rust toolchain. No global install or client configuration changes.

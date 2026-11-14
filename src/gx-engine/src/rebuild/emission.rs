@@ -4,17 +4,33 @@ use super::{
     RebuildOptions,
     classify::ObjectManifest,
     parallel::{Findings, map_chunks},
+    reuse::{
+        EmitRecord, ProcedureRecord, RecordedSignature, SdtRecord, Session, digest_of, key_of,
+    },
 };
-use crate::csharp::{
-    CsprojConfig, CsprojEmitter, ProcedureClass, SdtClass, calls::CallSignatures,
-    procedure::CheckedEmit, sdt::SdtIndex, webform,
+use crate::{
+    catalog::KbObject,
+    csharp::{
+        CsprojConfig, CsprojEmitter, ProcedureClass, SdtClass,
+        calls::{CallParam, CallSignatures, CallTarget},
+        procedure::CheckedEmit,
+        sdt::SdtIndex,
+        webform,
+    },
+    model::ParamMode,
 };
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock, atomic::Ordering},
     time::Instant,
 };
+
+/// The artifact cache kind of a Procedure's emitted C#.
+const EMIT_KIND: &str = "emit";
+/// The artifact cache kind of the files of a model's structured data types.
+const SDTS_KIND: &str = "sdts";
 
 /// The support classes of the model, as the SDK writes them (see the support step of the emitter).
 const SUPPORT_FILES: [(&str, &str); 5] = [
@@ -46,6 +62,9 @@ struct OutputTree<'a> {
     dir: &'a Path,
     files: Vec<PathBuf>,
     errors: Vec<String>,
+    /// A file could not be written. The output is then not what the model generates, so the run records
+    /// nothing a later run could reuse.
+    io_failed: bool,
 }
 
 impl<'a> OutputTree<'a> {
@@ -54,12 +73,19 @@ impl<'a> OutputTree<'a> {
             dir,
             files: Vec::new(),
             errors: Vec::new(),
+            io_failed: false,
         }
     }
 
     fn merge(&mut self, other: OutputTree<'_>) {
         self.files.extend(other.files);
         self.errors.extend(other.errors);
+        self.io_failed |= other.io_failed;
+    }
+
+    /// Lists a file the previous run wrote and this run keeps as it is (see `Session::is_intact`).
+    fn keep_file(&mut self, file_name: &str) {
+        self.files.push(self.dir.join(file_name));
     }
 
     /// Writes one model file as the given bytes (no newline or encoding rewriting), creating its folder.
@@ -71,7 +97,10 @@ impl<'a> OutputTree<'a> {
             .and_then(|()| std::fs::write(&file_path, bytes));
         match written {
             Ok(()) => self.files.push(file_path),
-            Err(e) => self.errors.push(format!("{relative}: not written: {e}")),
+            Err(e) => {
+                self.io_failed = true;
+                self.errors.push(format!("{relative}: not written: {e}"));
+            }
         }
     }
 
@@ -109,15 +138,23 @@ impl<'a> OutputTree<'a> {
             std::fs::write(&file_path, bytes)
         } {
             Ok(()) => self.files.push(file_path),
-            Err(e) => self
-                .errors
-                .push(format!("failed to write '{}': {e}", file_path.display())),
+            Err(e) => {
+                self.io_failed = true;
+                self.errors
+                    .push(format!("failed to write '{}': {e}", file_path.display()));
+            }
         }
     }
 }
 
 /// One Procedure's emission, settled before any file is written.
 struct ProcedureEmission {
+    /// The object's identity, and the fingerprint its written files are recorded under.
+    id: String,
+    key: String,
+    /// The files the previous run wrote for this emission stand: nothing is written, and `emitted.code`
+    /// and `wrapper` hold no text.
+    kept: bool,
     name: String,
     /// The class name, upper-cased: the key a call site records for this Procedure.
     class: String,
@@ -138,47 +175,258 @@ struct ProcedureContext {
     call_table: Arc<CallSignatures>,
 }
 
-/// Emits the whole model into `output_dir`. Returns the written files (sorted), the main project path and
-/// the elapsed milliseconds; write and generation failures are added to `findings`.
+/// What the emission wrote, and what the next run may reuse of it.
+pub(super) struct Emission {
+    /// The written and kept files, sorted.
+    pub files: Vec<PathBuf>,
+    pub main_project: PathBuf,
+    pub emit_ms: u64,
+    /// One record per Procedure of the build, in build order, without its specification.
+    pub procedures: Vec<ProcedureRecord>,
+    pub sdts: Option<SdtRecord>,
+    pub call_key: Option<String>,
+    pub io_failed: bool,
+}
+
+/// One Procedure of the build with what identifies it to the others.
+struct ProcedurePlan<'a> {
+    proc: &'a KbObject,
+    /// Digest of the object.
+    content: String,
+    /// The call target other Procedures see, or `None` when the class does not build (such a Procedure
+    /// is absent from the call table).
+    target: Option<CallTarget>,
+}
+
+fn record_signature(target: &CallTarget) -> RecordedSignature {
+    let CallTarget {
+        class_name,
+        namespace,
+        params,
+    } = target;
+    RecordedSignature {
+        class_name: class_name.clone(),
+        namespace: namespace.clone(),
+        params: params
+            .iter()
+            .map(|CallParam { mode, data_type }| {
+                let mode = match mode {
+                    ParamMode::In => 0,
+                    ParamMode::Out => 1,
+                    ParamMode::InOut => 2,
+                };
+                (mode, data_type.clone())
+            })
+            .collect(),
+    }
+}
+
+/// The call target a record holds, or `None` when it holds a mode this build does not know.
+fn recorded_target(signature: &RecordedSignature) -> Option<CallTarget> {
+    let params = signature
+        .params
+        .iter()
+        .map(|(mode, data_type)| {
+            let mode = match mode {
+                0 => ParamMode::In,
+                1 => ParamMode::Out,
+                2 => ParamMode::InOut,
+                _ => return None,
+            };
+            Some(CallParam {
+                mode,
+                data_type: data_type.clone(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(CallTarget {
+        class_name: signature.class_name.clone(),
+        namespace: signature.namespace.clone(),
+        params,
+    })
+}
+
+/// Plans each Procedure. A Procedure the previous run recorded with the same content has the call target
+/// it had; any other is read once, here.
+fn plan_procedures<'a>(
+    procedures: &[&'a KbObject],
+    concurrency: usize,
+    session: &Session<'_>,
+) -> Vec<ProcedurePlan<'a>> {
+    map_chunks(procedures, concurrency, |chunk| {
+        chunk
+            .iter()
+            .map(|proc| {
+                let content = session.content(proc);
+                let recorded = session
+                    .previous_procedure(proc.id.as_str())
+                    .filter(|record| record.content == content)
+                    .map(|record| match &record.signature {
+                        Some(signature) => recorded_target(signature).map(Some),
+                        None => Some(None),
+                    });
+                let target = match recorded {
+                    Some(Some(target)) => target,
+                    _ => ProcedureClass::from_kb_object(proc)
+                        .ok()
+                        .map(|class| class.call_target()),
+                };
+                ProcedurePlan {
+                    proc,
+                    content,
+                    target,
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The classes and tables every Procedure emission resolves against, with the errors of building them.
+struct BuiltContext {
+    sdt_classes: Vec<SdtClass>,
+    procedure: ProcedureContext,
+    sdt_errors: Vec<String>,
+    call_errors: Vec<String>,
+}
+
+/// The context of the build, built on first use: a run that keeps every Procedure and the SDT files of
+/// the previous run reads no class at all.
+struct LazyContext<'m> {
+    manifest: &'m ObjectManifest<'m>,
+    plans: &'m [ProcedurePlan<'m>],
+    built: OnceLock<BuiltContext>,
+}
+
+impl LazyContext<'_> {
+    fn get(&self) -> &BuiltContext {
+        self.built.get_or_init(|| {
+            // The SDT classes are built before any Procedure: a Procedure resolves its member accesses
+            // against exactly the SDTs emitted here. An SDT that does not build is absent from the index,
+            // so a member of it fails closed in every Procedure that uses it.
+            let mut sdt_errors = Vec::new();
+            let (sdt_classes, sdt_usings) = build_sdt_classes(self.manifest, &mut sdt_errors);
+            let sdt_index = build_sdt_index(&sdt_classes, &mut sdt_errors);
+            let mut call_errors = Vec::new();
+            let call_table = build_call_table(self.plans, &mut call_errors);
+            BuiltContext {
+                sdt_classes,
+                procedure: ProcedureContext {
+                    sdt_usings,
+                    sdt_index,
+                    call_table,
+                },
+                sdt_errors,
+                call_errors,
+            }
+        })
+    }
+}
+
+/// Where the files of the build's structured data types come from in this run.
+enum SdtSource {
+    /// The previous run's files stand.
+    Kept(Vec<String>),
+    /// The artifact cache holds them, as (file name, text).
+    Restored(Vec<(String, String)>),
+    /// They are emitted from the classes.
+    Emitted,
+}
+
+/// Emits the whole model into `output_dir`: the written files (sorted), the main project path and the
+/// elapsed milliseconds, with the records of what a later run may reuse. Write and generation failures
+/// are added to `findings`.
 pub(super) fn emission_phase(
     manifest: &ObjectManifest<'_>,
     output_dir: &Path,
     concurrency: usize,
     options: &RebuildOptions,
     findings: &mut Findings,
-) -> Result<(Vec<PathBuf>, PathBuf, u64), String> {
+    session: &Session<'_>,
+) -> Result<Emission, String> {
     let emit_start = Instant::now();
 
-    prepare_output_dir(output_dir, options.clean)?;
+    prepare_output_dir(output_dir, options.clean || session.needs_clean())?;
+    // Before the first file: a run cut off from here on leaves a record that is not a state to build on.
+    session.begin_writing();
     let mut out = OutputTree::new(output_dir);
 
-    // The SDT classes are built before any Procedure: a Procedure resolves its member accesses against
-    // exactly the SDTs emitted here. An SDT that does not build is absent from the index, so a member of
-    // it fails closed in every Procedure that uses it.
-    let (sdt_classes, sdt_usings) = build_sdt_classes(manifest, &mut out.errors);
-    let sdt_index = build_sdt_index(&sdt_classes, &mut out.errors);
-    let call_table = build_call_table(manifest, &mut out.errors);
-    let context = ProcedureContext {
-        sdt_usings,
-        sdt_index,
-        call_table,
+    // What an emission reads besides its own object: every SDT of the build (the index and the imported
+    // namespaces) and the signature of every Procedure of the build (the call table).
+    let sdt_contents: Vec<String> = manifest
+        .sdts
+        .iter()
+        .map(|sdt| session.content(sdt))
+        .collect();
+    let sdt_key = key_of(
+        "sdts",
+        std::iter::once(session.engine_key()).chain(sdt_contents.iter().map(String::as_str)),
+    );
+    let plans = plan_procedures(&manifest.procedures, concurrency, session);
+    let signatures: Vec<(&str, &Option<CallTarget>)> = plans
+        .iter()
+        .map(|plan| (plan.proc.name.as_str(), &plan.target))
+        .collect();
+    let call_key = key_of(
+        "calls",
+        [session.engine_key(), digest_of(&signatures).as_str()],
+    );
+    let inputs = key_of(
+        "emission inputs",
+        [session.engine_key(), sdt_key.as_str(), call_key.as_str()],
+    );
+
+    let sdt_source = match session.previous_sdts() {
+        Some(record)
+            if record.key == sdt_key && record.files.iter().all(|name| session.is_intact(name)) =>
+        {
+            session.sdts_kept.fetch_add(1, Ordering::Relaxed);
+            SdtSource::Kept(record.files.clone())
+        }
+        _ => match session
+            .cache()
+            .and_then(|cache| cache.get(SDTS_KIND, &sdt_key))
+        {
+            Some(files) => SdtSource::Restored(files),
+            None => SdtSource::Emitted,
+        },
     };
+    let context = LazyContext {
+        manifest,
+        plans: &plans,
+        built: OnceLock::new(),
+    };
+    // Only a build that had no error is recorded or cached, so the classes and the call table are built
+    // again unless a clean build of exactly these inputs is on record.
+    let calls_known = plans.is_empty() || session.previous_call_key() == Some(call_key.as_str());
+    if matches!(sdt_source, SdtSource::Emitted) || !calls_known {
+        context.get();
+    }
 
     // 1. Emit every Procedure. Nothing is written yet: a caller is generated only if every Procedure it
     // calls is generated (csc would fail on a call to a class that is not written), so the outcomes are
     // settled first.
-    let mut emissions: Vec<ProcedureEmission> =
-        map_chunks(&manifest.procedures, concurrency, |chunk| {
-            chunk
-                .iter()
-                .map(|proc| emit_procedure(proc, &context))
-                .collect::<Vec<_>>()
-        })
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut emissions: Vec<ProcedureEmission> = map_chunks(&plans, concurrency, |chunk| {
+        chunk
+            .iter()
+            .map(|plan| reuse_or_emit(plan, &inputs, &options.target_framework, session, &context))
+            .collect::<Vec<_>>()
+    })
+    .into_iter()
+    .flatten()
+    .collect();
     emissions.sort_by(|a, b| a.name.cmp(&b.name));
     refuse_callers_of_ungenerated(&mut emissions);
+
+    // The errors of the classes and the call table come first, as when they were built before any emission.
+    // A context that was never built has none: its inputs are those of a build that had no error.
+    let built = context.built.get();
+    if let Some(built) = built {
+        out.errors.extend(built.sdt_errors.iter().cloned());
+        out.errors.extend(built.call_errors.iter().cloned());
+    }
 
     // 2. Write the Procedures that are generated; each refusal is reported by name.
     write_procedures(&mut out, &emissions, &options.target_framework);
@@ -195,19 +443,189 @@ pub(super) fn emission_phase(
     // (`transaction_form`); any other is skipped by name (see SkippedObject).
 
     // 3. Emit SDTs (the classes built above, the same ones the Procedures resolved against)
-    write_sdts(&mut out, &sdt_classes, concurrency);
+    let first_sdt_file = out.files.len();
+    match &sdt_source {
+        SdtSource::Kept(files) => {
+            for file_name in files {
+                out.keep_file(file_name);
+            }
+        }
+        SdtSource::Restored(files) => {
+            for (file_name, text) in files {
+                out.write_generated_file(file_name, text);
+            }
+        }
+        SdtSource::Emitted => {
+            let built = context.get();
+            let cache = session.cache().filter(|_| built.sdt_errors.is_empty());
+            let texts = write_sdts(&mut out, &built.sdt_classes, concurrency, cache.is_some());
+            if let Some(cache) = cache {
+                cache.put(SDTS_KIND, &sdt_key, &texts);
+            }
+        }
+    }
+    let sdt_files: Option<Vec<String>> = out.files[first_sdt_file..]
+        .iter()
+        .map(|path| {
+            path.strip_prefix(output_dir)
+                .ok()
+                .and_then(Path::to_str)
+                .map(str::to_string)
+        })
+        .collect();
 
     // 5. Emit Main Unified Project File (.csproj)
     let main_csproj_path = write_main_project(&mut out, options)?;
 
+    let built = context.built.get();
+    let by_id: HashMap<&str, &ProcedureEmission> = emissions
+        .iter()
+        .map(|emission| (emission.id.as_str(), emission))
+        .collect();
+    let procedures = plans
+        .iter()
+        .map(|plan| ProcedureRecord {
+            id: plan.proc.id.as_str().to_string(),
+            content: plan.content.clone(),
+            signature: plan.target.as_ref().map(record_signature),
+            spec: None,
+            // Only a written emission is recorded: a refusal is emitted again on every run.
+            emit: by_id
+                .get(plan.proc.id.as_str())
+                .filter(|emission| emission.emitted.code.is_ok())
+                .map(|emission| EmitRecord {
+                    key: emission.key.clone(),
+                    stem: emission.stem.clone(),
+                    class_name: emission.class_name.clone(),
+                    wrapper: emission.wrapper.is_some(),
+                    callees: emission.emitted.callees.clone(),
+                }),
+        })
+        .collect();
+
     findings.errors.append(&mut out.errors);
     let mut emitted_files = out.files;
     emitted_files.sort();
-    Ok((
-        emitted_files,
-        main_csproj_path,
-        emit_start.elapsed().as_millis() as u64,
-    ))
+    Ok(Emission {
+        files: emitted_files,
+        main_project: main_csproj_path,
+        emit_ms: emit_start.elapsed().as_millis() as u64,
+        procedures,
+        sdts: sdt_files
+            .filter(|_| built.is_none_or(|built| built.sdt_errors.is_empty()))
+            .map(|files| SdtRecord {
+                key: sdt_key,
+                files,
+            }),
+        call_key: built
+            .is_none_or(|built| built.call_errors.is_empty())
+            .then_some(call_key),
+        io_failed: out.io_failed,
+    })
+}
+
+/// The files `write_procedures` writes for one generated Procedure.
+fn procedure_file_names(stem: &str, class_name: &str, wrapper: bool) -> Vec<String> {
+    let mut names = vec![format!("{stem}.cs")];
+    if wrapper {
+        names.push(format!("{class_name}.cs"));
+        names.push(format!("{stem}.exe.config"));
+        names.push(format!("{class_name}.exe.config"));
+    }
+    names.push(format!("{class_name}.csproj"));
+    names
+}
+
+/// A Procedure's emitted C#, as the artifact cache stores it. Only a successful emission is stored.
+#[derive(Serialize, Deserialize)]
+struct CachedEmission {
+    stem: String,
+    class_name: String,
+    wrapper: Option<String>,
+    code: String,
+    callees: BTreeSet<String>,
+}
+
+/// One Procedure's emission: the files of the previous run when they were written from the same inputs
+/// and are still on disk as written, else the artifact cache's entry for those inputs, else the emitter.
+fn reuse_or_emit(
+    plan: &ProcedurePlan<'_>,
+    inputs: &str,
+    target_framework: &str,
+    session: &Session<'_>,
+    context: &LazyContext<'_>,
+) -> ProcedureEmission {
+    let proc = plan.proc;
+    // The emitted text reads the object and the build's SDTs and signatures; its files also read the
+    // target framework (the Procedure's own project).
+    let emit_key = key_of("emission", [plan.content.as_str(), inputs]);
+    let key = key_of("written emission", [emit_key.as_str(), target_framework]);
+    let emission = |kept, stem, class_name, wrapper, emitted| ProcedureEmission {
+        id: proc.id.as_str().to_string(),
+        key: key.clone(),
+        kept,
+        name: proc.name.clone(),
+        class: proc.name.to_ascii_uppercase(),
+        stem,
+        class_name,
+        wrapper,
+        emitted,
+    };
+
+    let recorded = session
+        .previous_procedure(proc.id.as_str())
+        .and_then(|record| record.emit.as_ref())
+        .filter(|record| record.key == key)
+        .filter(|record| {
+            procedure_file_names(&record.stem, &record.class_name, record.wrapper)
+                .iter()
+                .all(|name| session.is_intact(name))
+        });
+    if let Some(record) = recorded {
+        session.procedures_kept.fetch_add(1, Ordering::Relaxed);
+        return emission(
+            true,
+            record.stem.clone(),
+            record.class_name.clone(),
+            record.wrapper.then(String::new),
+            CheckedEmit {
+                code: Ok(String::new()),
+                callees: record.callees.clone(),
+            },
+        );
+    }
+
+    session.procedures_emitted.fetch_add(1, Ordering::Relaxed);
+    if let Some(cached) = session
+        .cache()
+        .and_then(|cache| cache.get::<CachedEmission>(EMIT_KIND, &emit_key))
+    {
+        return emission(
+            false,
+            cached.stem,
+            cached.class_name,
+            cached.wrapper,
+            CheckedEmit {
+                code: Ok(cached.code),
+                callees: cached.callees,
+            },
+        );
+    }
+    let (stem, class_name, wrapper, emitted) = emit_procedure(proc, &context.get().procedure);
+    if let (Some(cache), Ok(code)) = (session.cache(), &emitted.code) {
+        cache.put(
+            EMIT_KIND,
+            &emit_key,
+            &CachedEmission {
+                stem: stem.clone(),
+                class_name: class_name.clone(),
+                wrapper: wrapper.clone(),
+                code: code.clone(),
+                callees: emitted.callees.clone(),
+            },
+        );
+    }
+    emission(false, stem, class_name, wrapper, emitted)
 }
 
 /// Removes the previous output when `clean` is set and creates the directory. A directory that is already
@@ -248,6 +666,11 @@ fn clean_output_dir(output_dir: &Path) -> std::io::Result<()> {
                     .join(crate::csc_direct::CACHE_DIR)
                     .join(crate::csc_direct::BUILT_FILE);
                 match std::fs::remove_file(record) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                    _ => {}
+                }
+                // The record of what the removed files were generated from goes with them.
+                match std::fs::remove_dir_all(output_dir.join(super::reuse::MANIFEST_DIR)) {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
                     _ => {}
                 }
@@ -311,61 +734,51 @@ fn build_sdt_index(sdt_classes: &[SdtClass], errors: &mut Vec<String>) -> Arc<Sd
 
 /// The parameters of every Procedure this build emits. A call site is written from its callee's
 /// parameters (`ref`/`out` keywords and temporaries), so the table is complete before any emission.
-fn build_call_table(
-    manifest: &ObjectManifest<'_>,
-    errors: &mut Vec<String>,
-) -> Arc<CallSignatures> {
+fn build_call_table(plans: &[ProcedurePlan<'_>], errors: &mut Vec<String>) -> Arc<CallSignatures> {
     let mut call_table = CallSignatures::new();
-    for proc in &manifest.procedures {
-        if let Ok(class) = ProcedureClass::from_kb_object(proc) {
-            if let Err(e) = call_table.insert(class.call_target()) {
-                errors.push(format!("Procedure '{}': {e}", proc.name));
+    for plan in plans {
+        if let Some(target) = &plan.target {
+            if let Err(e) = call_table.insert(target.clone()) {
+                errors.push(format!("Procedure '{}': {e}", plan.proc.name));
             }
         }
     }
     Arc::new(call_table)
 }
 
+/// Emits one Procedure: the stem of its main file, its plain class name, the wrapper of a split main
+/// program, and the checked emission.
 fn emit_procedure(
-    proc: &crate::catalog::KbObject,
+    proc: &KbObject,
     context: &ProcedureContext,
-) -> ProcedureEmission {
-    let (stem, class_name, wrapper, emitted) =
-        match ProcedureClass::from_kb_object(proc).and_then(|class| {
-            if proc.kind == crate::catalog::ObjectKind::DataProvider {
-                crate::csharp::data_provider::resolve_collection_calls(class, &context.call_table)
-            } else {
-                Ok(class)
-            }
-        }) {
-            Ok(class) => {
-                let stem = class.emitted_class_name();
-                let class_name = class.class_name();
-                let wrapper = class.emit_wrapper();
-                let emitted = class
-                    .with_usings(context.sdt_usings.clone())
-                    .with_sdts(context.sdt_index.clone())
-                    .with_calls(context.call_table.clone())
-                    .emit_detailed();
-                (stem, class_name, wrapper, emitted)
-            }
-            Err(e) => (
-                String::new(),
-                String::new(),
-                None,
-                CheckedEmit {
-                    code: Err(e),
-                    callees: BTreeSet::new(),
-                },
-            ),
-        };
-    ProcedureEmission {
-        name: proc.name.clone(),
-        class: proc.name.to_ascii_uppercase(),
-        stem,
-        class_name,
-        wrapper,
-        emitted,
+) -> (String, String, Option<String>, CheckedEmit) {
+    match ProcedureClass::from_kb_object(proc).and_then(|class| {
+        if proc.kind == crate::catalog::ObjectKind::DataProvider {
+            crate::csharp::data_provider::resolve_collection_calls(class, &context.call_table)
+        } else {
+            Ok(class)
+        }
+    }) {
+        Ok(class) => {
+            let stem = class.emitted_class_name();
+            let class_name = class.class_name();
+            let wrapper = class.emit_wrapper();
+            let emitted = class
+                .with_usings(context.sdt_usings.clone())
+                .with_sdts(context.sdt_index.clone())
+                .with_calls(context.call_table.clone())
+                .emit_detailed();
+            (stem, class_name, wrapper, emitted)
+        }
+        Err(e) => (
+            String::new(),
+            String::new(),
+            None,
+            CheckedEmit {
+                code: Err(e),
+                callees: BTreeSet::new(),
+            },
+        ),
     }
 }
 
@@ -428,6 +841,16 @@ fn write_procedures(
                 continue;
             }
         };
+        if emission.kept {
+            for file_name in procedure_file_names(
+                &emission.stem,
+                &emission.class_name,
+                emission.wrapper.is_some(),
+            ) {
+                out.keep_file(&file_name);
+            }
+            continue;
+        }
         out.write_generated_file(&format!("{}.cs", emission.stem), code);
         let mut includes = vec![format!("{}.cs", emission.stem)];
         if let Some(wrapper) = &emission.wrapper {
@@ -467,8 +890,12 @@ fn write_web_classes(
     manifest: &ObjectManifest<'_>,
     options: &RebuildOptions,
 ) {
-    // The stamp is the generation time, the token the SDK writes into a panel's script URLs.
-    let stamp = webform::current_stamp();
+    // The stamp is the generation time, the token the SDK writes into a panel's script URLs, unless the
+    // run fixes it.
+    let stamp = options
+        .generation_stamp
+        .clone()
+        .unwrap_or_else(webform::current_stamp);
     for panel in &manifest.webpanels {
         out.write_stamped_file(&panel.file_name(), &panel.emit(&stamp), &stamp);
         match panel.script() {
@@ -535,30 +962,39 @@ fn write_model_support(out: &mut OutputTree<'_>, options: &RebuildOptions) {
     }
 }
 
-/// Writes each SDT in parallel; a thread fills its own tree and the trees merge in chunk order.
-fn write_sdts(out: &mut OutputTree<'_>, sdt_classes: &[SdtClass], concurrency: usize) {
+/// Writes each SDT in parallel; a thread fills its own tree and the trees merge in chunk order. With
+/// `collect`, returns every file as (file name, text) in write order, for the artifact cache.
+fn write_sdts(
+    out: &mut OutputTree<'_>,
+    sdt_classes: &[SdtClass],
+    concurrency: usize,
+    collect: bool,
+) -> Vec<(String, String)> {
     let dir = out.dir;
-    for tree in map_chunks(sdt_classes, concurrency, |chunk| {
+    let mut texts = Vec::new();
+    for (tree, chunk_texts) in map_chunks(sdt_classes, concurrency, |chunk| {
         let mut tree = OutputTree::new(dir);
+        let mut texts = Vec::new();
         for sdt_class in chunk {
             // The SDK's form (`type_Sdt<class>.cs`, one file per class) when the SDT is a shape the
             // SDK evidence covers; otherwise the portable class, one file for the SDT and its levels.
-            match crate::csharp::sdt_sdk::sdk_files(sdt_class) {
-                Ok(files) => {
-                    for (file_name, text) in files {
-                        tree.write_generated_file(&file_name, &text);
-                    }
+            let files = match crate::csharp::sdt_sdk::sdk_files(sdt_class) {
+                Ok(files) => files,
+                Err(_) => vec![(format!("{}.cs", sdt_class.class_name()), sdt_class.emit())],
+            };
+            for (file_name, text) in files {
+                tree.write_generated_file(&file_name, &text);
+                if collect {
+                    texts.push((file_name, text));
                 }
-                Err(_) => tree.write_generated_file(
-                    &format!("{}.cs", sdt_class.class_name()),
-                    &sdt_class.emit(),
-                ),
             }
         }
-        tree
+        (tree, texts)
     }) {
         out.merge(tree);
+        texts.extend(chunk_texts);
     }
+    texts
 }
 
 /// Writes the main unified project file (.csproj) that compiles every emitted `.cs` file.

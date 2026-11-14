@@ -4,6 +4,7 @@ use super::{
     RebuildOptions,
     classify::ObjectManifest,
     parallel::{Findings, map_chunks},
+    reuse::{Session, SpecRecord, digest_of, key_of},
 };
 use crate::{
     catalog::{Catalog, KbObject, ObjectKind},
@@ -16,17 +17,24 @@ use crate::{
     transaction::{TransactionLevel, TransactionStructure},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::atomic::Ordering,
     time::Instant,
 };
 
+/// The artifact cache kind of a Procedure's navigation report.
+const SPEC_KIND: &str = "spec";
+
+/// The navigation reports, the elapsed milliseconds, and each successful specification by object id under
+/// the fingerprint of what it read, for the next run to reuse.
 pub(super) fn specify_phase(
     manifest: &ObjectManifest<'_>,
     catalog: &Catalog,
     concurrency: usize,
     options: &RebuildOptions,
     findings: &mut Findings,
-) -> Result<(Vec<NavigationReport>, u64), String> {
+    session: &Session<'_>,
+) -> Result<(Vec<NavigationReport>, u64, HashMap<String, SpecRecord>), String> {
     let spec_start = Instant::now();
 
     // Each Transaction derives or is refused on its own. A refused one is an error naming it, and the tables
@@ -45,12 +53,41 @@ pub(super) fn specify_phase(
     let extended_tables = compute_extended_tables(&tables);
     let dialect = options.sql_dialect;
 
+    // A Procedure's specification reads the Procedure, the tables and the dialect, and nothing else.
+    let inputs = key_of(
+        "specification inputs",
+        [
+            session.engine_key(),
+            digest_of(&tables).as_str(),
+            digest_of(&dialect).as_str(),
+        ],
+    );
+
     let mut reports = Vec::new();
-    for (chunk_reports, chunk_findings) in map_chunks(&manifest.procedures, concurrency, |chunk| {
-        specify_procedures(chunk, &tables, &extended_tables, dialect)
-    }) {
-        reports.extend(chunk_reports);
-        findings.merge(chunk_findings);
+    let mut records = HashMap::new();
+    for specified in map_chunks(&manifest.procedures, concurrency, |chunk| {
+        specify_procedures(chunk, &tables, &extended_tables, dialect, session, &inputs)
+    })
+    .into_iter()
+    .flatten()
+    {
+        match specified.outcome {
+            Ok(report) => {
+                findings.warnings.extend(report.warnings.iter().cloned());
+                records.insert(
+                    specified.id,
+                    SpecRecord {
+                        key: specified.key,
+                        report: report.clone(),
+                    },
+                );
+                reports.push(report);
+            }
+            Err(err) => findings.errors.push(format!(
+                "Procedure '{}' specification error: {err}",
+                specified.name
+            )),
+        }
     }
 
     // A Transaction whose web class is emitted checks its referenced keys there.
@@ -69,35 +106,66 @@ pub(super) fn specify_phase(
         findings.merge(chunk_findings);
     }
 
-    Ok((reports, spec_start.elapsed().as_millis() as u64))
+    Ok((reports, spec_start.elapsed().as_millis() as u64, records))
 }
 
+/// One Procedure's specification, as computed or as reused, under its fingerprint.
+struct Specified {
+    id: String,
+    name: String,
+    key: String,
+    outcome: Result<NavigationReport, String>,
+}
+
+/// Specifies each Procedure, in order. A report the previous run recorded, or the artifact cache holds,
+/// under the same fingerprint is that Procedure's report; an error is never reused.
 fn specify_procedures(
     procedures: &[&KbObject],
     tables: &[Table],
     extended_tables: &BTreeMap<String, ExtendedTable>,
     dialect: SqlDialect,
-) -> (Vec<NavigationReport>, Findings) {
-    let mut reports = Vec::new();
-    let mut findings = Findings::default();
+    session: &Session<'_>,
+    inputs: &str,
+) -> Vec<Specified> {
+    let mut specified = Vec::new();
     for proc in procedures {
         // Admitted DataProviders have no database navigation: their typed AST was
         // validated during classification and uses the checked Procedure emitter.
         if proc.kind == ObjectKind::DataProvider {
             continue;
         }
-        match specify_procedure_with_tables(proc, tables, extended_tables, dialect) {
-            Ok(report) => {
-                findings.warnings.extend(report.warnings.iter().cloned());
-                reports.push(report);
+        let key = key_of("specification", [session.content(proc).as_str(), inputs]);
+        let recorded = session
+            .previous_procedure(proc.id.as_str())
+            .and_then(|record| record.spec.as_ref())
+            .filter(|spec| spec.key == key);
+        let outcome = if let Some(spec) = recorded {
+            session.specifications_kept.fetch_add(1, Ordering::Relaxed);
+            Ok(spec.report.clone())
+        } else {
+            session
+                .specifications_computed
+                .fetch_add(1, Ordering::Relaxed);
+            match session.cache().and_then(|cache| cache.get(SPEC_KIND, &key)) {
+                Some(report) => Ok(report),
+                None => {
+                    let outcome =
+                        specify_procedure_with_tables(proc, tables, extended_tables, dialect);
+                    if let (Some(cache), Ok(report)) = (session.cache(), &outcome) {
+                        cache.put(SPEC_KIND, &key, report);
+                    }
+                    outcome
+                }
             }
-            Err(err) => findings.errors.push(format!(
-                "Procedure '{}' specification error: {err}",
-                proc.name
-            )),
-        }
+        };
+        specified.push(Specified {
+            id: proc.id.as_str().to_string(),
+            name: proc.name.clone(),
+            key,
+            outcome,
+        });
     }
-    (reports, findings)
+    specified
 }
 
 /// Verifies the formulas of each Transaction and warns about what its STRUCTURE part leaves unchecked.

@@ -21,6 +21,10 @@ harness = false
 name = "bench_suite"
 harness = false
 
+[[bench]]
+name = "rebuild_reuse"
+harness = false
+
 [profile.dev]
 # Keep file/line backtraces but drop full debug info; dependencies get none.
 # Cuts target/ size substantially for every worktree.

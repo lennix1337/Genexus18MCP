@@ -74,6 +74,16 @@ is the only authority there. Equivalent config keys: `Engine.Backend`,
 | `GXMCP_ENGINE_EXE` | Absolute path to the `gx-engine` executable. Authoritative: a missing file reports `EngineNotFound` instead of searching further. | unset (Gateway directory → `publish/` → checkout cargo output → `PATH`) |
 | `GXMCP_ENGINE_TIMEOUT_SECONDS` | Wall-clock budget for one engine invocation. | `120` |
 
+The next two are read by the `gx-engine` process itself (`rebuild-all`), not by the
+Gateway configuration: the Gateway starts the engine with its own environment, so
+setting them for the Gateway sets them for every engine build. They have no config
+key and a strict document does not reject them.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GXMCP_ENGINE_BUILD_CACHE_DIR` | Directory of the content-addressed artifact cache of `rebuild-all`: the emitted C# of each Procedure, each Procedure's navigation report and the structured data type files, stored under the fingerprint of everything that produced them and restored into any output directory whose inputs match. It may be a shared folder used by several machines running the same engine binary. Entries are published by rename and checked (key, length, SHA-256) on every restore; a damaged entry is recomputed and replaced. Compiled assemblies are not cached. Nothing is evicted: delete entries or the directory at any time. Layout and limits: [`src/gx-engine/README.md`](../src/gx-engine/README.md#incremental-rebuild-and-artifact-cache). The kept compiler command is keyed on the whole environment, so the first compile after setting or changing this variable goes through `dotnet build` once. | unset (no cache is read or written) |
+| `GXMCP_ENGINE_GENERATION_STAMP` | Fixes the generation stamp written into every web class to the given 14 digits (`yyyyMMddHHmmss`) instead of the current time, so two rebuilds of one model compare byte for byte. For validation (`scripts/validate-engine-incremental-live.ps1`); any other value is refused. Leave it unset in normal use: a browser caches a panel's scripts by this stamp. | unset (current UTC time) |
+
 ## Generated documentation artifacts (`genexus_doc`)
 
 `genexus_doc action=wiki` and `action=visualize` write durable files outside the installed Worker directory. The default root is `%LOCALAPPDATA%\GxMcp\Artifacts`; each open KB gets a stable `kb-<identity>` child with separate `docs` and `html` directories. This per-KB scope is applied even when a custom root is configured, so two KBs cannot silently share `Customer.md` or a graph file. Package upgrades can replace the Worker installation without moving this output.
