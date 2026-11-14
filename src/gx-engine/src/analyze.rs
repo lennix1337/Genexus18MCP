@@ -542,9 +542,10 @@ impl Facts {
 // The per-object pass.
 // ---------------------------------------------------------------------------------------------------
 
-/// Names the Worker linter never reports as unused (`FrameworkManagedVariables`): re-injected by the
-/// SDK or pattern engines, or built in.
-const FRAMEWORK_VARIABLES: [&str; 12] = [
+/// Names never reported as unused: the Worker linter's `FrameworkManagedVariables` (re-injected by the
+/// SDK or pattern engines, or built in), plus the SDK's standard variables (`VariableDefinition.IsStandard`:
+/// GeneXus creates them in every object and the user cannot remove them).
+const FRAMEWORK_VARIABLES: [&str; 24] = [
     "ISAUTHORIZED",
     "SECURITYFUNCTIONALITYKEYS",
     "TIME",
@@ -557,6 +558,18 @@ const FRAMEWORK_VARIABLES: [&str; 12] = [
     "MESSAGE",
     "EVENTNAME",
     "CTLNAME",
+    "LINE",
+    "OUTPUT",
+    "PAGE",
+    "ERR",
+    "ERRMSG",
+    "GXREMOVE",
+    "MR",
+    "MSG",
+    "OP",
+    "OUTDEV",
+    "RESTMETHOD",
+    "RESTCODE",
 ];
 
 fn part<'a>(object: &'a KbObject, name: &str) -> Option<&'a str> {

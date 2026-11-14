@@ -133,6 +133,38 @@ fn variables_are_matched_case_insensitively_and_framework_variables_are_skipped(
     );
 }
 
+/// GeneXus creates its standard variables (`VariableDefinition.IsStandard` in the SDK: &Line, &Output,
+/// &Page...) in every Procedure and the user cannot remove them, so an unused one is not a problem.
+/// On KBTeste they were 550 of the 640 unused-variable findings.
+#[test]
+fn sdk_standard_variables_are_never_reported_unused() {
+    let result = analysis(vec![procedure(
+        "P",
+        "&Abc = 1\nMsg(&Abc, status)",
+        &[
+            "Abc",
+            "Line",
+            "Output",
+            "Page",
+            "Err",
+            "Errmsg",
+            "GxRemove",
+            "Mr",
+            "Msg",
+            "Op",
+            "Outdev",
+            "RestMethod",
+            "RestCode",
+        ],
+        "",
+    )]);
+    assert!(
+        only(&result, UNUSED_VARIABLE).is_empty(),
+        "{:?}",
+        result.findings
+    );
+}
+
 #[test]
 fn a_mention_in_a_comment_or_a_text_literal_is_not_a_use() {
     let source = "// &Ghost\n/* &Ghost */\nMsg('&Ghost', status)";
