@@ -1,4 +1,6 @@
-use gxwire::analysis::{analyze_callers, analyze_impact, pack_task, search_for_task};
+use gxwire::analysis::{
+    analyze_callers, analyze_impact, pack_task, search_for_task, search_for_task_ext,
+};
 use gxwire::graph::CsrGraph;
 use gxwire::model::{CallMode, EdgeKind, EntityKind, EntityNode, RawEdge};
 use gxwire::parser::parse_genexus_source;
@@ -156,4 +158,57 @@ fn test_edge_case_nonexistent_symbols() {
 
     let search = search_for_task(&graph, "nada", 10);
     assert_eq!(search.hits.len(), 0);
+}
+
+#[test]
+fn test_edge_case_search_limit_keeps_full_ranking_order() {
+    // Equal scores keep graph order, and a limited search returns the head of the
+    // full ranking, synonym prefixes included ("fat" expands to "pedido"...).
+    let names = [
+        "PFaturaGerar",
+        "Order_A",
+        "TrnPedido",
+        "Order_B",
+        "WPFatura",
+        "Order_C",
+        "Order_D",
+        "PPedidoCalc",
+        "Order_E",
+        "Other",
+    ];
+    let nodes = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| EntityNode {
+            id: i as u32,
+            name: name.to_string(),
+            kind: EntityKind::Procedure,
+            module: None,
+            description: Some("order of fatura".to_string()),
+            parm_rule: None,
+            path: None,
+            lines: 10,
+            complexity: 1,
+        })
+        .collect::<Vec<_>>();
+    let graph = CsrGraph::build(nodes, &[]);
+
+    let full: Vec<String> = search_for_task_ext(&graph, "order fat", 0, true)
+        .hits
+        .into_iter()
+        .map(|h| h.name)
+        .collect();
+    let order_ties: Vec<&String> = full.iter().filter(|n| n.starts_with("Order_")).collect();
+    assert_eq!(
+        order_ties,
+        ["Order_A", "Order_B", "Order_C", "Order_D", "Order_E"]
+    );
+    for limit in 0..=full.len() + 1 {
+        let limited: Vec<String> = search_for_task(&graph, "order fat", limit)
+            .hits
+            .into_iter()
+            .map(|h| h.name)
+            .collect();
+        assert_eq!(limited, full[..limit.min(full.len())], "limit {limit}");
+    }
 }

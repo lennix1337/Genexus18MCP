@@ -125,6 +125,15 @@ impl CsrGraph {
         res
     }
 
+    /// Number of callers without copying them (search scores every match).
+    pub fn caller_count(&self, node_id: u32) -> usize {
+        let idx = node_id as usize;
+        if idx >= self.nodes.len() {
+            return 0;
+        }
+        (self.backward_offsets[idx + 1] - self.backward_offsets[idx]) as usize
+    }
+
     pub fn get_callees(&self, node_id: u32) -> Vec<(u32, EdgeKind, u32)> {
         let idx = node_id as usize;
         if idx >= self.nodes.len() {

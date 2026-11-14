@@ -29,18 +29,26 @@ pub struct SearchResult {
 
 #[inline]
 fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
-    let needle_bytes = needle.as_bytes();
-    let n_len = needle_bytes.len();
-    if n_len == 0 {
+    let needle = needle.as_bytes();
+    let Some((&first, rest)) = needle.split_first() else {
         return true;
-    }
-    let h_bytes = haystack.as_bytes();
-    if h_bytes.len() < n_len {
+    };
+    let haystack = haystack.as_bytes();
+    if haystack.len() < needle.len() {
         return false;
     }
-    h_bytes
-        .windows(n_len)
-        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
+    let first = first.to_ascii_lowercase();
+    let last_start = haystack.len() - needle.len();
+    let mut i = 0;
+    while i <= last_start {
+        if haystack[i].to_ascii_lowercase() == first
+            && haystack[i + 1..i + needle.len()].eq_ignore_ascii_case(rest)
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 #[inline]
@@ -118,10 +126,19 @@ pub fn search_for_task_ext(
     let query_trimmed = query.trim();
     let terms: Vec<&str> = query_trimmed.split_whitespace().collect();
     let synonyms = expand_synonyms(&terms);
+    let synonym_prefixes: Vec<(&str, [String; 5])> = synonyms
+        .iter()
+        .map(|syn| {
+            (
+                *syn,
+                ["p", "trn", "t", "wp", "w"].map(|kind| format!("{kind}{syn}")),
+            )
+        })
+        .collect();
 
-    let mut scored_nodes = Vec::new();
+    let mut scored_nodes: Vec<(usize, &crate::model::EntityNode, f32, usize)> = Vec::new();
 
-    for node in &graph.nodes {
+    for (order, node) in graph.nodes.iter().enumerate() {
         let mut score = 0.0f32;
 
         // Exact & substring match
@@ -149,40 +166,53 @@ pub fn search_for_task_ext(
         }
 
         // Domain synonym matching
-        for syn in &synonyms {
-            if contains_case_insensitive(&node.name, syn) {
-                score += 25.0;
-            }
+        if !synonyms.is_empty() {
             let node_lower = node.name.to_ascii_lowercase();
-            if node_lower.starts_with(&format!("p{}", syn))
-                || node_lower.starts_with(&format!("trn{}", syn))
-                || node_lower.starts_with(&format!("t{}", syn))
-                || node_lower.starts_with(&format!("wp{}", syn))
-                || node_lower.starts_with(&format!("w{}", syn))
-            {
-                score += 35.0;
+            for (syn, prefixes) in &synonym_prefixes {
+                if contains_case_insensitive(&node.name, syn) {
+                    score += 25.0;
+                }
+                if prefixes
+                    .iter()
+                    .any(|prefix| node_lower.starts_with(prefix.as_str()))
+                {
+                    score += 35.0;
+                }
             }
         }
 
         if score > 0.0 {
             // Apply PageRank boost
             let pr = graph.pagerank.get(node.id as usize).copied().unwrap_or(1.0);
-            let callers_count = graph.get_callers(node.id).len();
+            let callers_count = graph.caller_count(node.id);
             let total_score = score * (1.0 + pr * 5.0) + (callers_count as f32 * 0.5);
 
-            scored_nodes.push((node, total_score, callers_count));
+            scored_nodes.push((order, node, total_score, callers_count));
         }
     }
 
-    scored_nodes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
     let total = scored_nodes.len();
     let take_count = if full { total } else { limit };
+    // Highest score first; equal scores keep graph order, as the former stable sort did.
+    // Only the hits that are returned get sorted.
+    let by_score = |a: &(usize, &crate::model::EntityNode, f32, usize),
+                    b: &(usize, &crate::model::EntityNode, f32, usize)| {
+        b.2.partial_cmp(&a.2)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    };
+    if take_count < total {
+        if take_count > 0 {
+            scored_nodes.select_nth_unstable_by(take_count - 1, by_score);
+        }
+        scored_nodes.truncate(take_count);
+    }
+    scored_nodes.sort_unstable_by(by_score);
     let hits: Vec<SearchHit> = scored_nodes
         .into_iter()
         .take(take_count)
         .enumerate()
-        .map(|(idx, (node, score, callers_count))| SearchHit {
+        .map(|(idx, (_, node, score, callers_count))| SearchHit {
             name: node.name.clone(),
             kind: node.kind.as_str().to_string(),
             rank: idx + 1,
