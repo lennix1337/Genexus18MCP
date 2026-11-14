@@ -68,6 +68,7 @@
 - CI also runs on pushes to `main`, runs the Python metadata, manifest and replay unit tests in the contracts job, and audits both Cargo lockfiles with a SHA-pinned cargo-audit. The Rust toolchain is pinned to 1.97.1.
 - Stopped tracking files that `.gitignore` already excludes and two committed `.trx` test results; trimmed `AGENTS.md` to under 200 lines by moving task-specific guidance into the linked documents; moved releases older than v4 into `docs/changelog/`.
 - Gateway logging no longer stats the log file on every line, and failed SDK transaction rollbacks in the write path are logged instead of silently swallowed.
+- `SharedHostProcessHarnessTests.New_gateway_recovers_after_forced_termination_without_stopping_an_unrelated_process` no longer fails when Windows hands the PID of the killed broker to another process before the recovery looks at its record. The test expected the log entry of that record to end with `reason=owner-not-running`, but when the PID already names another process the same recovery removes the record with `reason=start-time-mismatch`. Both reasons mean that the owner is gone, remove the record and stop nothing, and `SharedWorkerHostLauncherV2Tests` already pins each of them with a fake process probe, so the integration test now accepts either; the entry for the sentinel process still has to say `start-time-mismatch` and no process may be stopped. No production code changed.
 
 ## v4.6.0 - 2026-11-13
 
