@@ -106,6 +106,25 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void SupervisionTracker_DescribeIdle_ReportsTheInputsOfTheIdleDecision()
+        {
+            var tracker = new WorkerSupervisionTracker();
+            var grace = TimeSpan.FromSeconds(90);
+            tracker.LastActivityUtc = DateTime.UtcNow.AddMinutes(-31);
+
+            string neverBuilt = tracker.DescribeIdle(TimeSpan.FromMinutes(30), queuedCommands: 0, inFlightCommands: 0, grace);
+            Assert.Contains("idleSec=18", neverBuilt);
+            Assert.Contains("idleTimeoutSec=1800", neverBuilt);
+            Assert.Contains("buildActiveAgeSec=none", neverBuilt);
+            Assert.Contains("indexActiveAgeSec=none", neverBuilt);
+            Assert.Contains("queued=0", neverBuilt);
+            Assert.Contains("inFlight=0", neverBuilt);
+
+            tracker.MarkBuildActive(DateTime.UtcNow.AddSeconds(-120));
+            Assert.Contains("buildActiveAgeSec=12", tracker.DescribeIdle(TimeSpan.FromMinutes(30), 0, 0, grace));
+        }
+
+        [Fact]
         public void WorkerProcess_IntegratesStateMachine_AndSupervisionTracker()
         {
             var worker = new WorkerProcess(new Configuration(), new KbHandle("test", "C:\\fake"));

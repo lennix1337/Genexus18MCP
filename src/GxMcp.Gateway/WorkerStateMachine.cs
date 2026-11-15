@@ -204,6 +204,22 @@ namespace GxMcp.Gateway
             return oldestAge >= timeout;
         }
 
+        /// <summary>
+        /// The inputs of <see cref="ShouldStopForIdle"/> as one log fragment, so an idle stop
+        /// that surprises its owner (a build was running) can be checked against the exact
+        /// values the decision used instead of being re-derived from the code.
+        /// </summary>
+        public string DescribeIdle(TimeSpan idleTimeout, int queuedCommands, int inFlightCommands, TimeSpan backgroundGraceWindow)
+        {
+            static string Age(long ticks) => ticks == 0
+                ? "none"
+                : ((int)(DateTime.UtcNow - new DateTime(ticks, DateTimeKind.Utc)).TotalSeconds).ToString();
+            return $"idleSec={(int)(DateTime.UtcNow - LastActivityUtc).TotalSeconds} idleTimeoutSec={(int)idleTimeout.TotalSeconds}"
+                + $" buildActiveAgeSec={Age(Interlocked.Read(ref _lastBuildActiveTicks))}"
+                + $" indexActiveAgeSec={Age(Interlocked.Read(ref _lastIndexActiveTicks))}"
+                + $" graceSec={(int)backgroundGraceWindow.TotalSeconds} queued={queuedCommands} inFlight={inFlightCommands}";
+        }
+
         public bool ShouldStopForIdle(TimeSpan idleTimeout, int queuedCommands, int inFlightCommands, bool isStarting, TimeSpan backgroundGraceWindow)
         {
             if (idleTimeout <= TimeSpan.Zero) return false;
