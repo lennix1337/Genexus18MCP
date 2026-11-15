@@ -57,7 +57,11 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Theory]
+        [InlineData("events-u16-wwp16.2-189158-audit.json")]
+        [InlineData("events-u16-wwp16.2-189513-audit.json")]
+        [InlineData("events-u16-wwp16.2-189552-audit.json")]
         [InlineData("events-u16-wwp16.2-audit.json")]
+        [InlineData("events-u16-wwp16.2-189647-audit.json")]
         [InlineData("events-u11-wwp16.1-audit.json")]
         [InlineData("events-u10-audit.json")]
         public void HardReload_CopiesTheImmutableEventsAuditManifestsWhenPresent(string manifest)
