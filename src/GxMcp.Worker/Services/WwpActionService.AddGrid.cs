@@ -62,6 +62,10 @@ namespace GxMcp.Worker.Services
                 return Error("MissingGridSdt", "sdt (the SDT behind the collection) is required.");
             if (string.IsNullOrWhiteSpace(args["containerName"]?.ToString()))
                 return Error("MissingGridContainer", "containerName is required (a table of the instance).");
+            JToken gridName = args["gridName"];
+            if (gridName != null && gridName.Type != JTokenType.Null
+                && (gridName.Type != JTokenType.String || !Regex.IsMatch(gridName.ToString().Trim(), "^[A-Za-z_][A-Za-z0-9_]*$")))
+                return Error("InvalidGridName", "gridName must be a GeneXus control identifier.");
             JToken delete = args["deleteAction"];
             if (delete != null && delete.Type != JTokenType.Boolean && delete.Type != JTokenType.Null)
                 return Error("InvalidDeleteAction", "deleteAction must be true or false.");
@@ -106,7 +110,18 @@ namespace GxMcp.Worker.Services
 
             XNamespace ns = container.GetDefaultNamespace();
             string variableName = collection.Substring(1);
+            // Every grid needs its own name: an unnamed one projects as "Grid" (with GridPaginationBar,
+            // Grid_Empowerer...), so a second unnamed grid repeats those controls and the object no longer saves.
+            var taken = new HashSet<string>(document.Descendants().Where(e => Is(e, "grid")).SelectMany(ProjectedGridControlNames),
+                StringComparer.OrdinalIgnoreCase);
+            taken.UnionWith(TakenControlNames(document));
+            string gridName = args["gridName"]?.Type == JTokenType.String ? args["gridName"].ToString().Trim()
+                : taken.Contains("Grid") ? "Grid" + variableName : "Grid";
+            if (taken.Contains(gridName))
+                return Error("GridAlreadyExists", "A control named '" + gridName + "' already exists; pass another gridName.");
+            args["_gridName"] = gridName;
             var grid = new XElement(ns + "grid",
+                new XAttribute("name", gridName),
                 new XAttribute("cellThemeClass", "SectionGrid GridNoBorderCell"),
                 new XAttribute("SDTCollection", collection));
             foreach (GridColumn column in columns)
@@ -132,7 +147,8 @@ namespace GxMcp.Worker.Services
         }
 
         /// <summary>The re-read grid must hold every column in order, the SDT reference and (when asked) the delete action.</summary>
-        internal static JObject VerifyAddGrid(XDocument after, string collection, string reference, IList<GridColumn> columns, bool deleteAction)
+        internal static JObject VerifyAddGrid(XDocument after, string collection, string reference, IList<GridColumn> columns, bool deleteAction,
+            string gridName = null)
         {
             XElement grid = FindGridOver(after, collection);
             if (grid == null) return FormActionError("WwpGridNotPersisted", "The re-read PatternInstance has no grid over " + collection + ".");
@@ -146,6 +162,8 @@ namespace GxMcp.Worker.Services
                 return FormActionError("WwpGridNotPersisted", "The re-read grid changed a column description.");
             if (deleteAction && !grid.Elements().Any(e => Is(e, "userAction") && Attr(e, "name") == DeleteActionName))
                 return FormActionError("WwpGridNotPersisted", "The re-read grid lost the delete action.");
+            if (gridName != null && !ProjectedGridControlNames(grid).Contains(gridName, StringComparer.OrdinalIgnoreCase))
+                return FormActionError("WwpGridNotPersisted", "The re-read grid is not named " + gridName + ".");
             return new JObject { ["confirmed"] = true };
         }
 
@@ -264,6 +282,7 @@ namespace GxMcp.Worker.Services
             Action mutation = () =>
             {
                 object grid = CreateNativeChild(container, "grid");
+                SetNativeAttribute(grid, "name", args["_gridName"]?.ToString() ?? "Grid");
                 SetNativeAttribute(grid, "SDTCollection", collection);
                 SetNativeDropDown(grid, "cellThemeClass", "SectionGrid GridNoBorderCell");
                 foreach (GridColumn column in columns)
@@ -403,7 +422,7 @@ namespace GxMcp.Worker.Services
                     XDocument persistedDocument = XDocument.Parse(persistedXml, LoadOptions.PreserveWhitespace);
                     JObject verification = IsVariableGrid(args)
                         ? VerifyVariableGrid(persistedDocument, args, columns)
-                        : VerifyAddGrid(persistedDocument, collection, reference, columns, deleteAction);
+                        : VerifyAddGrid(persistedDocument, collection, reference, columns, deleteAction, args["_gridName"]?.ToString());
                     if (verification["confirmed"]?.ToObject<bool?>() != true)
                         throw new WwpTabException("WwpGridNotPersisted", verification["error"]?.ToString() ?? "The requested grid was not confirmed after re-read.");
 
@@ -426,7 +445,7 @@ namespace GxMcp.Worker.Services
                         ["collection"] = collection,
                         ["columns"] = new JArray(columns.Select(c => c.Item)),
                         ["deleteAction"] = deleteAction,
-                        ["gridName"] = IsVariableGrid(args) ? VariableGridName(args) : null,
+                        ["gridName"] = IsVariableGrid(args) ? VariableGridName(args) : args["_gridName"]?.ToString(),
                         ["diff"] = new JObject { ["before"] = Project(lockedBefore), ["after"] = Project(persistedDocument), ["grid"] = ProjectAddedGrid(persistedDocument, args, collection) },
                         ["versionToken"] = WriteService.ComputeContentVersionToken(persistedInstance ?? currentInstance, persistedXml),
                         ["persisted"] = true,

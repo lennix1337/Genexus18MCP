@@ -92,6 +92,57 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("GridAlreadyExists", Code(WwpActionService.ApplyAddGridXml(doc, Args())));
         }
 
+        // #961: a WorkWithPlus grid left without a name projects as the default control 'Grid'; a second
+        // unnamed grid repeated Grid/GridPaginationBar/Grid_Empowerer and left the WebPanel unsaveable.
+        [Fact]
+        public void ASecondGridGetsItsOwnNameInsteadOfRepeatingTheDefault()
+        {
+            var doc = XDocument.Parse("<instance><table name='TableContent'><grid><gridVariable name='gSit'/></grid></table></instance>");
+            var args = Args();
+            Assert.Null(WwpActionService.ApplyAddGridXml(doc, args)["error"]);
+            XElement added = doc.Descendants("grid").Single(g => g.Attribute("SDTCollection") != null);
+            Assert.Equal("GridLines", added.Attribute("name")!.Value);
+            Assert.Equal("GridLines", args["_gridName"]!.ToString());
+        }
+
+        [Fact]
+        public void TheFirstGridKeepsTheDefaultNameAndAnExplicitNameIsHonoured()
+        {
+            var doc = Instance();
+            Assert.Null(WwpActionService.ApplyAddGridXml(doc, Args())["error"]);
+            Assert.Equal("Grid", doc.Descendants("grid").Single().Attribute("name")!.Value);
+
+            var named = Instance();
+            Assert.Null(WwpActionService.ApplyAddGridXml(named, Args(",gridName:'GridPedidos'"))["error"]);
+            Assert.Equal("GridPedidos", named.Descendants("grid").Single().Attribute("name")!.Value);
+        }
+
+        [Fact]
+        public void AGridNameAlreadyOnTheFormIsRefused()
+        {
+            var unnamed = XDocument.Parse("<instance><table name='TableContent'><grid/></table></instance>");
+            Assert.Equal("GridAlreadyExists", Code(WwpActionService.ApplyAddGridXml(unnamed, Args(",gridName:'Grid'"))));
+            Assert.Equal("InvalidGridName", Code(WwpActionService.ApplyAddGridXml(Instance(), Args(",gridName:'1x'"))));
+        }
+
+        [Fact]
+        public void VerificationRejectsAGridThatLostItsName()
+        {
+            var (doc, columns) = Written();
+            Assert.True((bool)WwpActionService.VerifyAddGrid(doc, "&Lines", Reference, columns, true, "Grid")["confirmed"]!);
+            doc.Descendants("grid").Single().SetAttributeValue("name", null);
+            Assert.True((bool)WwpActionService.VerifyAddGrid(doc, "&Lines", Reference, columns, true, "Grid")["confirmed"]!);
+            Assert.Null(WwpActionService.VerifyAddGrid(doc, "&Lines", Reference, columns, true, "GridLines")["confirmed"]);
+        }
+
+        [Fact]
+        public void AnUnnamedGridIsProjectedAsTheDefaultGridControl()
+        {
+            Assert.Equal(new[] { "Grid" }, WwpActionService.ProjectedGridControlNames(XElement.Parse("<grid/>")));
+            Assert.Equal(new[] { "GridX" }, WwpActionService.ProjectedGridControlNames(XElement.Parse("<grid name='GridX'/>")));
+            Assert.Equal(new[] { "C", "N" }, WwpActionService.ProjectedGridControlNames(XElement.Parse("<grid name='N' controlName='C'/>")));
+        }
+
         private static (XDocument doc, List<WwpActionService.GridColumn> columns) Written()
         {
             var doc = Instance();
