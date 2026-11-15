@@ -203,7 +203,7 @@ fn excluded_fixtures_exist_and_are_refused_by_the_interpreter() {
 /// The portable projects the other test suites build and run (captured from `build::build` calls
 /// across the suite; every one ran to success under `gx-engine run` when captured).
 #[test]
-#[ignore = "compiles about 125 programs (roughly ten minutes); run with --ignored"]
+#[ignore = "compiles about 125 programs; run with --ignored"]
 fn every_project_the_existing_suites_build_matches_the_compiled_program() {
     let corpus: Vec<Value> = serde_json::from_str(
         &fs::read_to_string(
@@ -213,13 +213,32 @@ fn every_project_the_existing_suites_build_matches_the_compiled_program() {
     )
     .unwrap();
     let scratch = Scratch::new();
-    let mut failures = Vec::new();
-    for (index, project) in corpus.iter().enumerate() {
-        let path = write_project(&scratch, &format!("corpus-{index}"), project);
-        for difference in compare(&path) {
-            failures.push(format!("corpus[{index}]: {difference}"));
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(4);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failures = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= corpus.len() {
+                        break;
+                    }
+                    let path = write_project(&scratch, &format!("corpus-{index}"), &corpus[index]);
+                    let diffs = compare(&path);
+                    if !diffs.is_empty() {
+                        let mut guard = failures.lock().unwrap();
+                        for difference in diffs {
+                            guard.push(format!("corpus[{index}]: {difference}"));
+                        }
+                    }
+                }
+            });
         }
-    }
+    });
+    let failures = failures.into_inner().unwrap();
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
