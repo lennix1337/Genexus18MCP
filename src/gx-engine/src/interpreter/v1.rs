@@ -38,7 +38,7 @@ impl Machine<'_, '_> {
             .checked_sub(1)
             .ok_or("execution step limit exceeded")?;
         self.ticks = self.ticks.wrapping_add(1);
-        if self.ticks % 256 == 0 && Instant::now() >= self.deadline {
+        if self.ticks.is_multiple_of(256) && Instant::now() >= self.deadline {
             return Err("execution exceeded the wall-clock deadline".into());
         }
         Ok(())
