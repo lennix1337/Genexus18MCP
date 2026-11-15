@@ -1,0 +1,376 @@
+{
+  "generatedAt": "2026-11-13T12:48:47-03:00",
+  "note": "Resultado SANITIZADO da prova nativa do bundle GeneXus 18 U16 build 189158 + WorkWithPlus 16.2.0.8386, numa KB descartavel U16 que tem instancia de padrao (WorkWithPlus carregado; nenhum host WorkWithPlus persistido pode ser criado ali: a KB nao tem Design System). O SDK rodou a partir de uma copia extraida do zip do instalador do fabricante da build, completada com os arquivos do pacote WorkWithPlus 16.2.0.8386 da instalacao do usuario (mesmos bytes em toda build). Nome da verificacao e ok/falhou; o resultado bruto ficou fora do repositorio. A verificacao 'idempotencia (contrato atual)' caracteriza o contrato documentado (o no-op executa o ForceSave protegido) e nao e prova de seguranca.",
+  "sets": {
+    "stage1-seed-e-previas": {
+      "total": 21,
+      "failed": 0,
+      "checks": [
+        {
+          "check": "KB pronta para leitura (lista por data devolve objetos)",
+          "ok": true
+        },
+        {
+          "check": "versao ativa da KB (SDK) = pin",
+          "ok": true
+        },
+        {
+          "check": "a KB tem instancia de padrao WorkWithPlus (WorkWithPlusHome existe)",
+          "ok": true
+        },
+        {
+          "check": "nao existe objeto McpU16Audit189158Probe01 antes da criacao",
+          "ok": true
+        },
+        {
+          "check": "nao existe objeto McpU16Audit189158Probe02 antes da criacao",
+          "ok": true
+        },
+        {
+          "check": "WebPanel McpU16Audit189158Probe01 criado e legivel",
+          "ok": true
+        },
+        {
+          "check": "Events de McpU16Audit189158Probe01 com o texto da ancora",
+          "ok": true
+        },
+        {
+          "check": "WebPanel McpU16Audit189158Probe02 criado e legivel",
+          "ok": true
+        },
+        {
+          "check": "Events de McpU16Audit189158Probe02 com o texto da ancora",
+          "ok": true
+        },
+        {
+          "check": "nenhum objeto que nao seja sintetico foi tocado na janela",
+          "ok": true
+        },
+        {
+          "check": "sintetico: previa pode aplicar (canApply=true)",
+          "ok": true
+        },
+        {
+          "check": "sintetico: bundle 189158 reconhecido (auditedSdkBuild)",
+          "ok": true
+        },
+        {
+          "check": "sintetico: verificacao completa do bundle com prova pendente e objeto sintetico",
+          "ok": true
+        },
+        {
+          "check": "sintetico: o manifesto nao declara escopo (prova do cenario com WWP carregado)",
+          "ok": true
+        },
+        {
+          "check": "sintetico: todos os arquivos instalados do manifesto conferem e as assemblies carregadas estao cobertas",
+          "ok": true
+        },
+        {
+          "check": "sintetico: a assembly do WWP esta carregada e o alvo expoe a parte de padrao (nao prova host)",
+          "ok": true
+        },
+        {
+          "check": "sintetico: pins verificados contra o SDK",
+          "ok": true
+        },
+        {
+          "check": "sintetico: previa nao grava (writeAttempted=false)",
+          "ok": true
+        },
+        {
+          "check": "outro WebPanel: previa recusada (canApply=false) com SdkBundleAuditFailed",
+          "ok": true
+        },
+        {
+          "check": "outro WebPanel: o bloqueio diz que a verificacao nativa esta pendente",
+          "ok": true
+        },
+        {
+          "check": "sinteticos: token e fonte inalterados depois das previas",
+          "ok": true
+        }
+      ]
+    },
+    "pipeline-kb-com-instancias-de-padrao": {
+      "total": 62,
+      "failed": 0,
+      "checks": [
+        {
+          "check": "prévia: status/code ok/Applied",
+          "ok": true
+        },
+        {
+          "check": "prévia: canApply=true e sem applyBlockers",
+          "ok": true
+        },
+        {
+          "check": "prévia: isolationEligible=true e sem writeBlocker",
+          "ok": true
+        },
+        {
+          "check": "prévia: não valida nem grava (validationExecuted/saveExecuted/persistabilityVerified=false)",
+          "ok": true
+        },
+        {
+          "check": "prévia: semanticValidation.performed=false",
+          "ok": true
+        },
+        {
+          "check": "prévia: bundle 189158 reconhecido (auditedSdkBuild = 18.0.16.189158+wwp16.2.0.8386)",
+          "ok": true
+        },
+        {
+          "check": "prévia: pins verificados contra o SDK (identidade em hash e versão ativa)",
+          "ok": true
+        },
+        {
+          "check": "prévia: evidência de pins igual à de uma recusa (present/present e revisão do Hub do ambiente)",
+          "ok": true
+        },
+        {
+          "check": "prévia: o relatório de isolamento não repete o caminho do pin",
+          "ok": true
+        },
+        {
+          "check": "prévia: sem next_legal_actions",
+          "ok": true
+        },
+        {
+          "check": "prévia: previewSummary diz que pode aplicar e que o SDK não validou",
+          "ok": true
+        },
+        {
+          "check": "prévia: token e fonte inalterados (nenhum Save)",
+          "ok": true
+        },
+        {
+          "check": "prévia sem baseVersion: canApply=false com BaseVersionRequired",
+          "ok": true
+        },
+        {
+          "check": "zero ocorrências recusado conforme expectedCount",
+          "ok": true
+        },
+        {
+          "check": "múltiplas ocorrências recusadas conforme expectedCount=1",
+          "ok": true
+        },
+        {
+          "check": "indentação divergente (prévia): status/code ainda ok/Applied e evidência validated=false",
+          "ok": true
+        },
+        {
+          "check": "indentação divergente (prévia): canApply=false com IndentationMismatch na camada patch",
+          "ok": true
+        },
+        {
+          "check": "indentação divergente (prévia): o isolamento continua elegível (não é recusa de isolamento) e nada foi escrito",
+          "ok": true
+        },
+        {
+          "check": "indentação divergente (prévia): sem next_legal_actions",
+          "ok": true
+        },
+        {
+          "check": "indentação correta (prévia): validated=true e canApply=true",
+          "ok": true
+        },
+        {
+          "check": "indentação divergente (escrita real): recusada com IndentationMismatch, igual ao que a prévia anunciou",
+          "ok": true
+        },
+        {
+          "check": "indentação divergente (escrita real): token e fonte inalterados",
+          "ok": true
+        },
+        {
+          "check": "baseVersion desatualizado: VersionConflict com currentVersion",
+          "ok": true
+        },
+        {
+          "check": "operação aceita: estados observados (queued/running -> terminal)",
+          "ok": true
+        },
+        {
+          "check": "operação aceita: next_legal_actions só aponta o poll de status, nunca build",
+          "ok": true
+        },
+        {
+          "check": "aplicação real terminou Applied",
+          "ok": true
+        },
+        {
+          "check": "recibo: objectSaved=true",
+          "ok": true
+        },
+        {
+          "check": "recibo: partPersisted=true",
+          "ok": true
+        },
+        {
+          "check": "recibo: otherPartsIntact=true",
+          "ok": true
+        },
+        {
+          "check": "recibo: otherObjectMetadataIntact=true",
+          "ok": true
+        },
+        {
+          "check": "recibo: verificationCompleted=true",
+          "ok": true
+        },
+        {
+          "check": "recibo: implicitOperations vazio (nenhum Build/Generate/reorg)",
+          "ok": true
+        },
+        {
+          "check": "recibo: inventário completo comparado (inventoryComplete=true)",
+          "ok": true
+        },
+        {
+          "check": "recibo: revisão do objeto avançou depois do Save",
+          "ok": true
+        },
+        {
+          "check": "recibo: revisão avançou exatamente 1 (um Save, sem retry automático)",
+          "ok": true
+        },
+        {
+          "check": "releitura: fonte contém o novo comentário",
+          "ok": true
+        },
+        {
+          "check": "releitura: token mudou",
+          "ok": true
+        },
+        {
+          "check": "releitura: fonte igual ao esperado (apenas o comentário mudou)",
+          "ok": true
+        },
+        {
+          "check": "partes preservadas: Rules",
+          "ok": true
+        },
+        {
+          "check": "partes preservadas: Variables",
+          "ok": true
+        },
+        {
+          "check": "Worker reiniciado: fonte e token iguais à releitura anterior",
+          "ok": true
+        },
+        {
+          "check": "Worker reiniciado: Rules preservada",
+          "ok": true
+        },
+        {
+          "check": "Worker reiniciado: Variables preservada",
+          "ok": true
+        },
+        {
+          "check": "idempotência: Applied com sourceChanged=false e idempotent=true",
+          "ok": true
+        },
+        {
+          "check": "idempotência: o recibo diz noContentChange=true",
+          "ok": true
+        },
+        {
+          "check": "idempotência: fonte e hash do conteúdo idênticos",
+          "ok": true
+        },
+        {
+          "check": "idempotência (contrato atual): o ForceSave protegido roda e a revisão avança, com conteúdo igual",
+          "ok": true
+        },
+        {
+          "check": "erro de sintaxe: ObjectSaveIncomplete",
+          "ok": true
+        },
+        {
+          "check": "erro de sintaxe: savePhase part-save e diagnostics[] com código, objeto, parte e linha",
+          "ok": true
+        },
+        {
+          "check": "erro de sintaxe: não se declara salvo (persisted/saved/partPersisted=false)",
+          "ok": true
+        },
+        {
+          "check": "erro de sintaxe: releitura fresca sem alteração (rollback verificado)",
+          "ok": true
+        },
+        {
+          "check": "erro de sintaxe: rollback transacional registrado",
+          "ok": true
+        },
+        {
+          "check": "fila: as duas operações foram aceitas com operationId distinto",
+          "ok": true
+        },
+        {
+          "check": "fila: exatamente uma das duas operações aplicou",
+          "ok": true
+        },
+        {
+          "check": "fila: a perdedora recusou com VersionConflict antes de gravar (writeAttempted=false)",
+          "ok": true
+        },
+        {
+          "check": "fila: a fonte reflete só a operação vencedora",
+          "ok": true
+        },
+        {
+          "check": "fila: Rules preservada",
+          "ok": true
+        },
+        {
+          "check": "fila: Variables preservada",
+          "ok": true
+        },
+        {
+          "check": "outro objeto (previa): canApply=false e SdkBundleAuditFailed entre os bloqueios",
+          "ok": true
+        },
+        {
+          "check": "outro objeto (previa): o bloqueio diz que a verificacao nativa esta pendente",
+          "ok": true
+        },
+        {
+          "check": "outro objeto (previa): nada foi gravado (writeAttempted=false)",
+          "ok": true
+        },
+        {
+          "check": "outro objeto (previa): token e fonte inalterados",
+          "ok": true
+        }
+      ]
+    },
+    "stage3-desfazer": {
+      "total": 5,
+      "failed": 0,
+      "checks": [
+        {
+          "check": "KB pronta para leitura",
+          "ok": true
+        },
+        {
+          "check": "objeto McpU16Audit189158Probe01 nao existe mais",
+          "ok": true
+        },
+        {
+          "check": "objeto McpU16Audit189158Probe02 nao existe mais",
+          "ok": true
+        },
+        {
+          "check": "total de objetos igual ao da linha de base",
+          "ok": true
+        },
+        {
+          "check": "nenhum objeto com data posterior a linha de base",
+          "ok": true
+        }
+      ]
+    }
+  }
+}

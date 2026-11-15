@@ -194,7 +194,11 @@ namespace GxMcp.Gateway
         {
             "GxMcp.Worker.pdb",
             "GxMcp.Worker.dll",
+            "events-u16-wwp16.2-189158-audit.json",
+            "events-u16-wwp16.2-189513-audit.json",
+            "events-u16-wwp16.2-189552-audit.json",
             "events-u16-wwp16.2-audit.json",
+            "events-u16-wwp16.2-189647-audit.json",
             "events-u11-wwp16.1-audit.json",
             "events-u10-audit.json",
         };

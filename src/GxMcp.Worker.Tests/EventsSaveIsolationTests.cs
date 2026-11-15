@@ -41,6 +41,44 @@ namespace GxMcp.Worker.Tests
             Assert.Null(EventsSaveIsolation.MatchAuditedBuild(bundle));
         }
 
+        // GeneXus 18 U16 build 189647 with the same WorkWithPlus 16.2.0.8386 (the four DVelop hashes equal those of NewWwpBundle).
+        private static Dictionary<string, string> NewWwpBundleOnBuild189647() => new Dictionary<string, string>
+        {
+            ["Artech.Architecture.Common"] = "160b59afdab14c160711de46f60e6644a2ec88f420a1cf2b86d97219fa3464c6",
+            ["Artech.Genexus.Common"] = "f5be031ba5b656713fc759936ef7550e8698124ceeaebf676f65ad2c1cbbe996",
+            ["Artech.Udm.Framework"] = "1e449aa0b8f1f2c80b081f635e43f7430df22f5d12ec2cb510f430f0d39127a2",
+            ["Artech.Common.Properties"] = "35c62b0eab14b6948c6606fc56b968fb7330e5f9063161191ee0a16359ad9dc7",
+            ["Artech.Packages.Patterns"] = "10154641bc0fa9a1019f3981e2680a59130c82ada2391254166221a69dfce991",
+            ["DVelop.Patterns.WorkWithPlus"] = "3c2ccea639862d7773ed10210aa9283d3c55949dbdb930aeb557c4c3c8441f38",
+            ["DVelop.Extensions.WWPPackagesCommon"] = "cb343ab63adf5a41289bbb24d243616582cf7a8b7b89c4df24e04d231c7a4794",
+            ["DVelop.Extensions.UserControls"] = "3bafe1786151c1389173281b4bc68013216f11aa8d31f3b85d3f238bf3836bc2",
+            ["DVelop.Extensions.WWPPackages"] = "c61c891602067adfd5e1d8cf9f93d279fce6be2bc75ed580b8c099d323f5400f"
+        };
+
+        [Fact]
+        public void NewWwpBundleOnBuild189647_RequiresEveryExactAssembly_RejectsMixturesWithTheEarlierBuild()
+        {
+            var bundle = NewWwpBundleOnBuild189647();
+            Assert.Equal("18.0.16.189647+wwp16.2.0.8386", EventsSaveIsolation.MatchAuditedBuild(bundle));
+            Assert.Contains("18.0.16.189647+wwp16.2.0.8386", EventsSaveIsolation.AuditedBundleIds);
+            foreach (var name in new List<string>(bundle.Keys))
+            {
+                var missing = NewWwpBundleOnBuild189647(); missing.Remove(name);
+                Assert.Null(EventsSaveIsolation.MatchAuditedBuild(missing));
+                var changed = NewWwpBundleOnBuild189647(); changed[name] = "changed";
+                Assert.Null(EventsSaveIsolation.MatchAuditedBuild(changed));
+                // One SDK assembly of the earlier build in the newer bundle is neither build.
+                var earlier = NewWwpBundle();
+                if (earlier[name] != bundle[name])
+                {
+                    var mixed = NewWwpBundleOnBuild189647(); mixed[name] = earlier[name];
+                    Assert.Null(EventsSaveIsolation.MatchAuditedBuild(mixed));
+                }
+            }
+            // The earlier build keeps being recognized as itself, never as the newer one.
+            Assert.Equal("18.0.16.189595+wwp16.2.0.8386", EventsSaveIsolation.MatchAuditedBuild(NewWwpBundle()));
+        }
+
         [Fact]
         public void CompleteBundle_PendingProofCannotAuthorizeBusinessObjectsOrUnknownStatus()
         {
