@@ -1,8 +1,17 @@
-//! Live SQL Server / LocalDB subprocess driver for GeneXus physical storage.
+//! Live SQL Server / LocalDB driver for GeneXus physical storage.
+//!
+//! Statements run through a `sqlcmd` subprocess. Generated reads can instead use the native TDS
+//! transport of `udm::tds` when `GXMCP_ENGINE_SQL_TRANSPORT=tds` selects it; [`SqlTransport`]
+//! decides which one a connection's reads use, once, and never mixes the two.
 
 #![forbid(unsafe_code)]
 
 use crate::udm::connection::{AuthMode, KbConnectionInfo};
+use crate::udm::tds;
+use std::ffi::OsString;
+use std::sync::{Arc, Mutex, OnceLock};
+
+pub use crate::udm::tds::Value;
 
 fn sqlcmd_command(info: &KbConnectionInfo) -> Result<std::process::Command, String> {
     sqlcmd_command_with_credentials(
@@ -35,28 +44,42 @@ fn sqlcmd_command_with_credentials(
     cmd.arg("-y").arg("0");
     cmd.arg("-s").arg("\t"); // tab delimited
 
-    match &info.auth_mode {
-        AuthMode::Integrated => {
+    match sql_credentials(info, user_env, password_env)? {
+        None => {
             cmd.arg("-E");
             // Inherited SQL-auth variables must not conflict with explicit Windows auth.
             cmd.env_remove("SQLCMDUSER").env_remove("SQLCMDPASSWORD");
         }
-        AuthMode::SqlServer { user, password } => {
-            let user = user_env.unwrap_or_else(|| user.into());
-            let password = password_env.or_else(|| password.as_ref().map(Into::into));
-            if user.to_string_lossy().trim().is_empty()
-                || password.as_ref().is_none_or(|value| value.is_empty())
-            {
-                return Err("SQL authentication requires a non-empty user and password. Set SQLCMDUSER and SQLCMDPASSWORD in the gx-engine/Gateway process environment; the GeneXus private credential store is not read. sqlcmd was not started.".into());
-            }
+        Some((user, password)) => {
             // Never let sqlcmd prompt on stdin (which carries SELECT batches in ReadSession).
             // Credentials travel in the child's environment, never argv or error text.
             cmd.env("SQLCMDUSER", user);
-            cmd.env("SQLCMDPASSWORD", password.expect("validated password"));
+            cmd.env("SQLCMDPASSWORD", password);
         }
     }
 
     Ok(cmd)
+}
+
+/// The login and password of a SQL-authenticated connection, `None` for Windows integrated
+/// authentication. The environment values override the connection file; both transports take
+/// their credentials from here, so neither accepts what the other refuses.
+fn sql_credentials(
+    info: &KbConnectionInfo,
+    user_env: Option<OsString>,
+    password_env: Option<OsString>,
+) -> Result<Option<(OsString, OsString)>, String> {
+    let AuthMode::SqlServer { user, password } = &info.auth_mode else {
+        return Ok(None);
+    };
+    let user = user_env.unwrap_or_else(|| user.into());
+    let password = password_env.or_else(|| password.as_ref().map(Into::into));
+    match password {
+        Some(password) if !user.to_string_lossy().trim().is_empty() && !password.is_empty() => {
+            Ok(Some((user, password)))
+        }
+        _ => Err("SQL authentication requires a non-empty user and password. Set SQLCMDUSER and SQLCMDPASSWORD in the gx-engine/Gateway process environment; the GeneXus private credential store is not read. sqlcmd was not started.".into()),
+    }
 }
 
 /// Windows rejects a command line longer than this many UTF-16 units (CreateProcess).
@@ -122,10 +145,388 @@ pub fn execute_sqlcmd(info: &KbConnectionInfo, sql: &str) -> Result<String, Stri
     Ok(result)
 }
 
-/// One sqlcmd connection, scoped to a reader and never shared across Knowledge Bases.
-/// Only generated SELECT batches use this path; writes retain their one-shot execution.
+/// Selects the transport of generated reads: `sqlcmd` (the default) or `tds`.
+pub const SQL_TRANSPORT_ENV: &str = "GXMCP_ENGINE_SQL_TRANSPORT";
+
+/// A way to reach the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    Sqlcmd,
+    Tds,
+}
+
+impl TransportKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sqlcmd => "sqlcmd",
+            Self::Tds => "tds",
+        }
+    }
+}
+
+/// What the generated reads of one connection asked for and what serves them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TransportReport {
+    pub requested: &'static str,
+    /// `None` until the connection's first session is opened.
+    pub used: Option<&'static str>,
+    /// Why `sqlcmd` serves reads that asked for `tds`.
+    pub fallback_reason: Option<String>,
+    /// What the TDS sessions asked of the server: `tls`, `tls-unverified-certificate` or `none`.
+    pub encryption: Option<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+enum Decision {
+    Tds { encryption: &'static str },
+    Sqlcmd { fallback_reason: Option<String> },
+}
+
+/// The transport of one connection's generated reads, decided by its first session. When `tds`
+/// is requested and that session cannot connect or log in, nothing has been read yet: the
+/// connection reads through `sqlcmd` from then on and the reason is kept. Once a TDS session
+/// has been opened no later failure changes transport, so the rows of one read never come from
+/// two transports and a failed read is an error.
+#[derive(Debug, Clone)]
+pub struct SqlTransport {
+    state: Arc<TransportState>,
+}
+
+#[derive(Debug)]
+struct TransportState {
+    requested: TransportKind,
+    options: tds::ConnectOptions,
+    decision: Mutex<Option<Decision>>,
+}
+
+/// Reads the transport variable. Only `tds` leaves `sqlcmd`; a value that is neither is
+/// reported instead of guessed.
+fn requested_transport(value: Option<&str>) -> (TransportKind, Option<String>) {
+    match value.map(str::trim) {
+        None | Some("") => (TransportKind::Sqlcmd, None),
+        Some(value) if value.eq_ignore_ascii_case("sqlcmd") => (TransportKind::Sqlcmd, None),
+        Some(value) if value.eq_ignore_ascii_case("tds") => (TransportKind::Tds, None),
+        Some(value) => (
+            TransportKind::Sqlcmd,
+            Some(format!(
+                "{SQL_TRANSPORT_ENV}='{value}' names no transport (sqlcmd or tds)"
+            )),
+        ),
+    }
+}
+
+fn registry() -> &'static Mutex<Vec<(String, SqlTransport)>> {
+    static REGISTRY: OnceLock<Mutex<Vec<(String, SqlTransport)>>> = OnceLock::new();
+    REGISTRY.get_or_init(Default::default)
+}
+
+fn connection_key(info: &KbConnectionInfo) -> String {
+    format!("{}\n{}", info.server_instance, info.db_name)
+}
+
+impl SqlTransport {
+    fn new(
+        requested: TransportKind,
+        options: tds::ConnectOptions,
+        refused: Option<String>,
+    ) -> Self {
+        let decision = refused.map(|reason| Decision::Sqlcmd {
+            fallback_reason: Some(reason),
+        });
+        Self {
+            state: Arc::new(TransportState {
+                requested,
+                options,
+                decision: Mutex::new(decision),
+            }),
+        }
+    }
+
+    /// The transport of `info`'s reads in this process, read from the environment on first use.
+    /// Every client of the same database shares it, so they cannot decide differently.
+    pub fn for_connection(info: &KbConnectionInfo) -> Self {
+        let key = connection_key(info);
+        let mut registry = registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((_, transport)) = registry.iter().find(|(known, _)| *known == key) {
+            return transport.clone();
+        }
+        let (requested, refused) =
+            requested_transport(std::env::var(SQL_TRANSPORT_ENV).ok().as_deref());
+        let transport = Self::new(requested, tds::ConnectOptions::from_environment(), refused);
+        registry.push((key, transport.clone()));
+        transport
+    }
+
+    /// Makes `info`'s reads use the TDS transport with `options`, whatever the environment says.
+    #[cfg(all(test, feature = "tds"))]
+    pub(crate) fn request_tds_for_test(info: &KbConnectionInfo, options: tds::ConnectOptions) {
+        let transport = Self::new(TransportKind::Tds, options, None);
+        registry()
+            .lock()
+            .unwrap()
+            .push((connection_key(info), transport));
+    }
+
+    pub fn report(&self) -> TransportReport {
+        let decision = self
+            .state
+            .decision
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let (used, fallback_reason, encryption) = match decision {
+            None => (None, None, None),
+            Some(Decision::Tds { encryption }) => {
+                (Some(TransportKind::Tds), None, Some(encryption))
+            }
+            Some(Decision::Sqlcmd { fallback_reason }) => {
+                (Some(TransportKind::Sqlcmd), fallback_reason, None)
+            }
+        };
+        TransportReport {
+            requested: self.state.requested.label(),
+            used: used.map(TransportKind::label),
+            fallback_reason,
+            encryption,
+        }
+    }
+
+    /// Opens one session on the decided transport, deciding it when this is the first.
+    /// `connect_tds` connects and logs in without reading anything; `start_sqlcmd` is the
+    /// `sqlcmd` session of the same kind.
+    fn open<S>(
+        &self,
+        connect_tds: impl FnOnce(&tds::ConnectOptions) -> Result<(S, tds::Encryption), String>,
+        start_sqlcmd: impl FnOnce() -> Result<S, String>,
+    ) -> Result<S, String> {
+        // Held through the first connection: sessions opened in parallel wait for one decision.
+        let mut decision = self
+            .state
+            .decision
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match decision.clone() {
+            Some(Decision::Sqlcmd { .. }) => {
+                drop(decision);
+                start_sqlcmd()
+            }
+            Some(Decision::Tds { .. }) => {
+                drop(decision);
+                connect_tds(&self.state.options)
+                    .map(|(session, _)| session)
+                    .map_err(|error| {
+                        format!(
+                            "{error}. This connection already reads over TDS, so sqlcmd does not take over; set {SQL_TRANSPORT_ENV}=sqlcmd to read through sqlcmd"
+                        )
+                    })
+            }
+            None if self.state.requested == TransportKind::Sqlcmd => {
+                *decision = Some(Decision::Sqlcmd {
+                    fallback_reason: None,
+                });
+                drop(decision);
+                start_sqlcmd()
+            }
+            None => match connect_tds(&self.state.options) {
+                Ok((session, encryption)) => {
+                    *decision = Some(Decision::Tds {
+                        encryption: encryption.label(),
+                    });
+                    Ok(session)
+                }
+                Err(reason) => {
+                    *decision = Some(Decision::Sqlcmd {
+                        fallback_reason: Some(reason.clone()),
+                    });
+                    drop(decision);
+                    // Without sqlcmd on the machine this is the only place the cause is visible.
+                    start_sqlcmd().map_err(|error| {
+                        format!("{error} (the TDS transport was tried first and was unavailable: {reason})")
+                    })
+                }
+            },
+        }
+    }
+}
+
+/// What `info`'s generated reads asked for and what serves them in this process.
+pub fn transport_report(info: &KbConnectionInfo) -> TransportReport {
+    SqlTransport::for_connection(info).report()
+}
+
+/// Why each connection that could not use the requested transport reads through `sqlcmd`.
+pub fn transport_fallbacks() -> Vec<String> {
+    registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter_map(|(_, transport)| transport.report().fallback_reason)
+        .collect()
+}
+
+#[cfg(feature = "tds")]
+type TdsHandle = Box<tds::TdsSession>;
+/// Without the `tds` feature no TDS session exists: the variant that would hold one is empty.
+#[cfg(not(feature = "tds"))]
+type TdsHandle = std::convert::Infallible;
+
+#[cfg(feature = "tds")]
+fn connect_tds(
+    info: &KbConnectionInfo,
+    options: &tds::ConnectOptions,
+) -> Result<(TdsHandle, tds::Encryption), String> {
+    let credentials = sql_credentials(
+        info,
+        std::env::var_os("SQLCMDUSER"),
+        std::env::var_os("SQLCMDPASSWORD"),
+    )?;
+    let credentials = match &credentials {
+        None => None,
+        Some((user, password)) => Some(
+            user.to_str()
+                .zip(password.to_str())
+                .ok_or("the SQL login or password is not valid Unicode")?,
+        ),
+    };
+    let session = tds::TdsSession::connect(info, credentials, options)?;
+    let encryption = session.encryption();
+    Ok((Box::new(session), encryption))
+}
+
+#[cfg(not(feature = "tds"))]
+fn connect_tds(
+    _: &KbConnectionInfo,
+    _: &tds::ConnectOptions,
+) -> Result<(TdsHandle, tds::Encryption), String> {
+    Err(
+        "this gx-engine build has no TDS transport (it was built without the `tds` cargo feature)"
+            .into(),
+    )
+}
+
+#[cfg(feature = "tds")]
+fn tds_rows(session: &mut TdsHandle, sql: &str) -> Result<Vec<Vec<Value>>, String> {
+    session.query_rows(sql)
+}
+
+#[cfg(not(feature = "tds"))]
+fn tds_rows(session: &mut TdsHandle, _: &str) -> Result<Vec<Vec<Value>>, String> {
+    match *session {}
+}
+
+/// One connection for a reader's generated SELECT batches, never shared across Knowledge Bases.
+/// Writes retain their one-shot `sqlcmd` execution.
 #[derive(Debug)]
 pub struct ReadSession {
+    kind: SessionKind,
+    /// A session kept across statements refuses anything but one generated SELECT per batch.
+    kept: bool,
+}
+
+#[derive(Debug)]
+enum SessionKind {
+    /// A `sqlcmd` process fed batches on its standard input.
+    Sqlcmd(SqlcmdSession),
+    /// One `sqlcmd -Q` process per statement, for a client that keeps no session.
+    SqlcmdPerStatement(KbConnectionInfo),
+    Tds(TdsHandle),
+}
+
+impl ReadSession {
+    pub fn start_consistent(info: &KbConnectionInfo) -> Result<Self, String> {
+        let mut session = Self::start(info)?;
+        let state = session.run(CONSISTENT_READ_START)?;
+        if state.trim() != "1" {
+            return Err(format!(
+                "{} did not establish the consistent read transaction",
+                session.transport().label()
+            ));
+        }
+        Ok(session)
+    }
+
+    pub fn start(info: &KbConnectionInfo) -> Result<Self, String> {
+        let kept = true;
+        SqlTransport::for_connection(info).open(
+            |options| {
+                let (session, encryption) = connect_tds(info, options)?;
+                let kind = SessionKind::Tds(session);
+                Ok((Self { kind, kept }, encryption))
+            },
+            || {
+                let kind = SessionKind::Sqlcmd(SqlcmdSession::start(info)?);
+                Ok(Self { kind, kept })
+            },
+        )
+    }
+
+    /// The session of one statement, for a client that keeps none: `sqlcmd -Q` as before, or a
+    /// TDS connection that ends with the statement.
+    pub fn per_statement(info: &KbConnectionInfo) -> Result<Self, String> {
+        let kept = false;
+        SqlTransport::for_connection(info).open(
+            |options| {
+                let (session, encryption) = connect_tds(info, options)?;
+                let kind = SessionKind::Tds(session);
+                Ok((Self { kind, kept }, encryption))
+            },
+            || {
+                let kind = SessionKind::SqlcmdPerStatement(info.clone());
+                Ok(Self { kind, kept })
+            },
+        )
+    }
+
+    pub fn transport(&self) -> TransportKind {
+        match self.kind {
+            SessionKind::Sqlcmd(_) | SessionKind::SqlcmdPerStatement(_) => TransportKind::Sqlcmd,
+            SessionKind::Tds(_) => TransportKind::Tds,
+        }
+    }
+
+    /// Whether part payloads are read as bytes with [`Self::query_rows`] instead of as hex text.
+    pub fn binary_payloads(&self) -> bool {
+        self.transport() == TransportKind::Tds
+    }
+
+    /// Runs one generated read and returns its rows as `sqlcmd -y 0 -s <tab>` prints them.
+    pub fn query(&mut self, sql: &str) -> Result<String, String> {
+        self.check(sql)?;
+        self.run(sql)
+    }
+
+    /// Runs one generated read and returns its rows typed, so a `varbinary` column arrives as
+    /// bytes. Only a session with [`Self::binary_payloads`] serves this.
+    pub fn query_rows(&mut self, sql: &str) -> Result<Vec<Vec<Value>>, String> {
+        self.check(sql)?;
+        match &mut self.kind {
+            SessionKind::Tds(session) => tds_rows(session, sql),
+            _ => Err("typed rows are read over the TDS transport only".into()),
+        }
+    }
+
+    fn check(&self, sql: &str) -> Result<(), String> {
+        if self.kept {
+            // Validate before sending; only the private startup path accepts transaction control.
+            read_batch(sql, "validate")?;
+        }
+        Ok(())
+    }
+
+    fn run(&mut self, sql: &str) -> Result<String, String> {
+        match &mut self.kind {
+            SessionKind::Sqlcmd(session) => session.exchange(sql),
+            SessionKind::SqlcmdPerStatement(info) => execute_sqlcmd(info, sql),
+            SessionKind::Tds(session) => tds::render_text(&tds_rows(session, sql)?),
+        }
+    }
+}
+
+/// One sqlcmd connection: a process that reads batches until it is dropped.
+#[derive(Debug)]
+struct SqlcmdSession {
     child: std::process::Child,
     input: std::process::ChildStdin,
     output: std::io::BufReader<std::process::ChildStdout>,
@@ -143,17 +544,8 @@ fn read_batch(sql: &str, marker: &str) -> Result<String, String> {
 // coherent even when snapshot isolation is unavailable; lock waits are bounded.
 const CONSISTENT_READ_START: &str = "SET NOCOUNT ON; SET XACT_ABORT ON; SET LOCK_TIMEOUT 10000; SET DEADLOCK_PRIORITY LOW; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; BEGIN TRANSACTION; SELECT @@TRANCOUNT;";
 
-impl ReadSession {
-    pub fn start_consistent(info: &KbConnectionInfo) -> Result<Self, String> {
-        let mut session = Self::start(info)?;
-        let state = session.exchange(CONSISTENT_READ_START)?;
-        if state.trim() != "1" {
-            return Err("sqlcmd did not establish the consistent read transaction".into());
-        }
-        Ok(session)
-    }
-
-    pub fn start(info: &KbConnectionInfo) -> Result<Self, String> {
+impl SqlcmdSession {
+    fn start(info: &KbConnectionInfo) -> Result<Self, String> {
         use std::io::Read;
         use std::process::Stdio;
         let mut command = sqlcmd_command(info)?;
@@ -179,12 +571,6 @@ impl ReadSession {
             output,
             stderr: Some(stderr),
         })
-    }
-
-    pub fn query(&mut self, sql: &str) -> Result<String, String> {
-        // Validate before sending; only the private startup path accepts transaction control.
-        read_batch(sql, "validate")?;
-        self.exchange(sql)
     }
 
     fn exchange(&mut self, sql: &str) -> Result<String, String> {
@@ -241,7 +627,7 @@ impl ReadSession {
     }
 }
 
-impl Drop for ReadSession {
+impl Drop for SqlcmdSession {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -410,6 +796,147 @@ mod tests {
         assert!(message.contains(&error.chars.to_string()) && message.contains("32767"));
     }
 
+    fn transport(requested: TransportKind) -> SqlTransport {
+        SqlTransport::new(requested, tds::ConnectOptions::default(), None)
+    }
+
+    type Opened = Result<(&'static str, tds::Encryption), String>;
+
+    #[test]
+    fn the_transport_variable_selects_tds_only_by_name() {
+        for value in [None, Some(""), Some("  "), Some("sqlcmd"), Some("SQLCMD")] {
+            assert_eq!(
+                requested_transport(value),
+                (TransportKind::Sqlcmd, None),
+                "{value:?}"
+            );
+        }
+        for value in ["tds", " TDS "] {
+            assert_eq!(requested_transport(Some(value)), (TransportKind::Tds, None));
+        }
+        // A value that names nothing is not guessed: sqlcmd reads, and the report says why.
+        let (kind, refused) = requested_transport(Some("tedious"));
+        assert_eq!(kind, TransportKind::Sqlcmd);
+        assert!(
+            refused
+                .unwrap()
+                .contains("GXMCP_ENGINE_SQL_TRANSPORT='tedious'")
+        );
+        let unrecognized =
+            SqlTransport::new(kind, tds::ConnectOptions::default(), Some("why".into()));
+        let opened = unrecognized.open(
+            |_| -> Opened { panic!("TDS was not requested") },
+            || Ok("sqlcmd"),
+        );
+        assert_eq!(opened, Ok("sqlcmd"));
+        assert_eq!(
+            unrecognized.report().fallback_reason.as_deref(),
+            Some("why")
+        );
+    }
+
+    #[test]
+    fn sqlcmd_serves_every_session_unless_tds_is_requested() {
+        let transport = transport(TransportKind::Sqlcmd);
+        assert_eq!(transport.report().used, None);
+        for _ in 0..2 {
+            let opened = transport.open(
+                |_| -> Opened { panic!("TDS was not requested") },
+                || Ok("sqlcmd"),
+            );
+            assert_eq!(opened, Ok("sqlcmd"));
+        }
+        assert_eq!(
+            transport.report(),
+            TransportReport {
+                requested: "sqlcmd",
+                used: Some("sqlcmd"),
+                fallback_reason: None,
+                encryption: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_tds_connection_failure_before_any_read_falls_back_to_sqlcmd_and_keeps_the_reason() {
+        let transport = transport(TransportKind::Tds);
+        let mut tds_attempts = 0;
+        for _ in 0..3 {
+            let opened = transport.open(
+                |_| -> Opened {
+                    tds_attempts += 1;
+                    Err("login failed".into())
+                },
+                || Ok("sqlcmd"),
+            );
+            assert_eq!(opened, Ok("sqlcmd"));
+        }
+        // The decision is made once: later sessions of the connection do not try TDS again,
+        // so one read never has some sessions on each transport.
+        assert_eq!(tds_attempts, 1);
+        assert_eq!(
+            transport.report(),
+            TransportReport {
+                requested: "tds",
+                used: Some("sqlcmd"),
+                fallback_reason: Some("login failed".into()),
+                encryption: None,
+            }
+        );
+    }
+
+    #[test]
+    fn once_tds_served_a_session_a_later_failure_is_an_error_and_sqlcmd_is_not_started() {
+        let transport = transport(TransportKind::Tds);
+        let opened = transport.open(
+            |_| Ok(("tds", tds::Encryption::TlsVerified)),
+            || panic!("TDS connected"),
+        );
+        assert_eq!(opened, Ok("tds"));
+        // Mutation check: a fallback here would hand a read rows from both transports.
+        let mut sqlcmd_started = false;
+        let failure = transport
+            .open(
+                |_| -> Opened { Err("connection reset".into()) },
+                || {
+                    sqlcmd_started = true;
+                    Ok("sqlcmd")
+                },
+            )
+            .unwrap_err();
+        assert!(!sqlcmd_started);
+        assert!(
+            failure.contains("connection reset") && failure.contains("already reads over TDS"),
+            "{failure}"
+        );
+        let report = transport.report();
+        assert_eq!((report.used, report.fallback_reason), (Some("tds"), None));
+        assert_eq!(report.encryption, Some("tls"));
+    }
+
+    #[test]
+    fn a_sqlcmd_that_cannot_start_after_the_fallback_names_why_tds_was_not_used() {
+        let transport = transport(TransportKind::Tds);
+        let failure = transport
+            .open(
+                |_| -> Opened { Err("no TLS on the server".into()) },
+                || Err("cannot start sqlcmd reader: program not found".into()),
+            )
+            .unwrap_err();
+        assert!(
+            failure.starts_with("cannot start sqlcmd reader: program not found")
+                && failure.contains("no TLS on the server"),
+            "{failure}"
+        );
+    }
+
+    #[cfg(not(feature = "tds"))]
+    #[test]
+    fn a_build_without_the_tds_feature_falls_back_and_says_so() {
+        let reason = connect_tds(&sql_info(), &tds::ConnectOptions::default()).unwrap_err();
+        assert!(reason.contains("`tds` cargo feature"), "{reason}");
+    }
+
     #[test]
     fn persistent_select_batches_reject_sqlcmd_directives() {
         let batch = read_batch("SET NOCOUNT ON; SELECT 42;", "finished").unwrap();
@@ -432,13 +959,19 @@ mod tests {
     fn live_read_session_reuses_connection_and_fails_closed() {
         let info = KbConnectionInfo::from_kb_dir("C:/KBs/KBTeste").unwrap();
         let mut session = ReadSession::start(&info).unwrap();
-        let pid = session.child.id();
+        fn child(session: &mut ReadSession) -> &mut std::process::Child {
+            match &mut session.kind {
+                SessionKind::Sqlcmd(sqlcmd) => &mut sqlcmd.child,
+                _ => panic!("this test reads through a kept sqlcmd session"),
+            }
+        }
+        let pid = child(&mut session).id();
         for value in [42, 73] {
             let output = session
                 .query(&format!("SET NOCOUNT ON; SELECT {value};"))
                 .unwrap();
             assert_eq!(output.trim(), value.to_string());
-            assert_eq!(session.child.id(), pid);
+            assert_eq!(child(&mut session).id(), pid);
         }
         for sql in [
             "SET NOCOUNT ON; SELECT REPLICATE('a', 4096), NULL, 73;",
@@ -456,7 +989,7 @@ mod tests {
                 .is_err()
         );
         assert!(
-            session.child.try_wait().unwrap().is_some(),
+            child(&mut session).try_wait().unwrap().is_some(),
             "failed query process must be reaped"
         );
     }

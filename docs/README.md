@@ -62,8 +62,12 @@ also read [`AGENTS.md`](../AGENTS.md).
 - [Tool identity registry](tool-identity-registry.md) and the generated
   [operation contract inventory](operation-contract-inventory.json).
 - [Required Events save isolation](events-object-save-isolation.md) (audited SDK
-  bundles, their manifests and the
-  [sanitized U11 native-proof result](evidence/events-u11-wwp16.1-native-proof.json))
+  bundles, their manifests and the sanitized native-proof results of
+  [U11](evidence/events-u11-wwp16.1-native-proof.json) and of the U16 builds
+  [189158](evidence/events-u16-wwp16.2-189158-native-proof.json),
+  [189513](evidence/events-u16-wwp16.2-189513-native-proof.json),
+  [189552](evidence/events-u16-wwp16.2-189552-native-proof.json) and
+  [189647](evidence/events-u16-wwp16.2-189647-native-proof.json))
   and the [restricted U16 Events save candidate](events-save-u16-candidate.md).
 - [Snapshot canônico de Events](events-canonical-snapshot.md) — captura de Rules, verificação de Save e rollback.
 

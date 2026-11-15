@@ -61,6 +61,39 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(expected, error.ToString(Formatting.None));
         }
 
+        // An unrequested exit (stopReason None) used to read "crashed/exited (None)" with no way to
+        // tell why; the exit code the gateway saw now travels with the error.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void UnrequestedExitReportsTheProcessExitCode(bool delivered)
+        {
+            JObject error = Program.BuildWorkerExitError(Alias, WorkerStopReason.None, delivered, exitCode: -1073741819);
+
+            Assert.Contains("(None; exit code -1073741819)", (string?)error["message"]);
+            Assert.Contains("crashed/exited", (string?)error["message"]);
+            Assert.Equal(-1073741819, (int?)error["data"]!["exitCode"]);
+            Assert.Equal("None", (string?)error["data"]!["stopReason"]);
+        }
+
+        [Fact]
+        public void SharedExitErrorCarriesTheExitCodeInData()
+        {
+            JObject error = Program.BuildWorkerExitError(Alias, WorkerStopReason.None, delivered: true,
+                sharedWorker: true, "kb", "Open", QueueWaitMs, exitCode: 3);
+
+            Assert.Equal(3, (int?)error["data"]!["exitCode"]);
+        }
+
+        [Fact]
+        public void AnExplainedStopKeepsItsMessageAndAddsOnlyTheCode()
+        {
+            JObject error = Program.BuildWorkerExitError(Alias, WorkerStopReason.IdleTimeout, delivered: false, exitCode: 0);
+
+            Assert.Contains("(IdleTimeout)", (string?)error["message"]);
+            Assert.Equal(0, (int?)error["data"]!["exitCode"]);
+        }
+
         // ---------------------------------------------------------------- Shared_Host_Mode
 
         public static IEnumerable<object?[]> Commands()

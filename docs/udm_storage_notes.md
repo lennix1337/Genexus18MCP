@@ -235,6 +235,12 @@ Two behaviors are load-bearing:
   `decode_hex_column` rather than decoded short, so a future display-width
   regression fails loudly instead of surfacing later as a corrupt part.
 
+`sqlcmd` remains the default and the only transport measured in these notes. An
+opt-in alternative (`udm/tds`, `GXMCP_ENGINE_SQL_TRANSPORT=tds`, cargo feature
+`tds`) reads the same statements over TDS and the part payloads as `varbinary`
+bytes; it has not been run against a real server yet
+(`scripts/validate-engine-tds-live.ps1` is how it gets verified).
+
 ## Fail-closed reads
 
 The live read helpers used to swallow a `sqlcmd` failure (`if let Ok(raw) = …`)

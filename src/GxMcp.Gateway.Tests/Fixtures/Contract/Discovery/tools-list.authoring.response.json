@@ -3617,7 +3617,7 @@
           },
           "gridName": {
             "type": "string",
-            "description": "add_grid without collection/sdt:…"
+            "description": "add_grid grid control name. Variable…"
           }
         }
       }

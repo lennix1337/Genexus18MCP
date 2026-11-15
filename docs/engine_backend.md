@@ -290,6 +290,12 @@ after changing inherited credentials. `IntegratedSecurity=True` keeps Windows
 authentication (`-E`) and ignores SQLCMD credential variables. The engine does
 not silently change authentication identity or retry with Windows authentication.
 
+The opt-in native TDS read transport (`GXMCP_ENGINE_SQL_TRANSPORT=tds`, an engine
+built with the `tds` cargo feature) resolves credentials by the same rules and
+from the same variables, and never sends a SQL login outside TLS. Its fallback
+to `sqlcmd`, encryption behavior and unverified status are in
+[`src/gx-engine/README.md`](../src/gx-engine/README.md#sql-transport-experimental-opt-in).
+
 For `rebuild-all`, missing credentials produce exit **5**, empty stdout, and a
 single JSON diagnostic on stderr under `--diagnostics=json`:
 `category=sql_credentials_unavailable`, an actionable `message`, and `location=null`.
@@ -722,6 +728,12 @@ A `build` whose generated files and compiler inputs are all unchanged skips the
 compile (`compile path: csc-direct (up to date)`); a web class that differs only in
 its generation stamp keeps its earlier stamp. Directed `compile_check` builds
 run the same pipeline only on the admitted target closure.
+A `build` also reuses the previous run's generation in the same output directory:
+an unchanged model is not specified or emitted again, and a changed one emits only
+the Procedures whose inputs changed (`generation: ...` on stderr and `reuse` in the
+report say which). Files of objects that no longer exist are removed, so the
+directory holds what a `rebuild` would write. `rebuild` (`--clean`) reuses nothing.
+See [Incremental rebuild and artifact cache](../src/gx-engine/README.md#incremental-rebuild-and-artifact-cache).
 
 ### Documented v1 deviations
 

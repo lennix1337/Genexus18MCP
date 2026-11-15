@@ -52,8 +52,16 @@
 
   <ItemGroup>
     <None Include="$(GxMcpSdkManifest)" Link="sdk-compatibility.json" TargetPath="sdk-compatibility.json" CopyToOutputDirectory="Always" />
+    <EmbeddedResource Include="..\..\config\events-u16-wwp16.2-189158-audit.json" LogicalName="events-u16-wwp16.2-189158-audit.json" />
+    <None Include="..\..\config\events-u16-wwp16.2-189158-audit.json" Link="events-u16-wwp16.2-189158-audit.json" TargetPath="events-u16-wwp16.2-189158-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
+    <EmbeddedResource Include="..\..\config\events-u16-wwp16.2-189513-audit.json" LogicalName="events-u16-wwp16.2-189513-audit.json" />
+    <None Include="..\..\config\events-u16-wwp16.2-189513-audit.json" Link="events-u16-wwp16.2-189513-audit.json" TargetPath="events-u16-wwp16.2-189513-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
+    <EmbeddedResource Include="..\..\config\events-u16-wwp16.2-189552-audit.json" LogicalName="events-u16-wwp16.2-189552-audit.json" />
+    <None Include="..\..\config\events-u16-wwp16.2-189552-audit.json" Link="events-u16-wwp16.2-189552-audit.json" TargetPath="events-u16-wwp16.2-189552-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
     <EmbeddedResource Include="..\..\config\events-u16-wwp16.2-audit.json" LogicalName="events-u16-wwp16.2-audit.json" />
     <None Include="..\..\config\events-u16-wwp16.2-audit.json" Link="events-u16-wwp16.2-audit.json" TargetPath="events-u16-wwp16.2-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
+    <EmbeddedResource Include="..\..\config\events-u16-wwp16.2-189647-audit.json" LogicalName="events-u16-wwp16.2-189647-audit.json" />
+    <None Include="..\..\config\events-u16-wwp16.2-189647-audit.json" Link="events-u16-wwp16.2-189647-audit.json" TargetPath="events-u16-wwp16.2-189647-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
     <EmbeddedResource Include="..\..\config\events-u11-wwp16.1-audit.json" LogicalName="events-u11-wwp16.1-audit.json" />
     <None Include="..\..\config\events-u11-wwp16.1-audit.json" Link="events-u11-wwp16.1-audit.json" TargetPath="events-u11-wwp16.1-audit.json" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
     <EmbeddedResource Include="..\..\config\events-u10-audit.json" LogicalName="events-u10-audit.json" />

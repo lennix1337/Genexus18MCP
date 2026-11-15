@@ -142,7 +142,7 @@ fn a_rollback_drops_the_composition_coverage_of_a_prefetch_inside_the_transactio
 
 #[test]
 fn the_model_part_read_takes_served_types_only() {
-    let sql = UdmClient::model_parts_sql(2, &[38, 81, 201], 1);
+    let sql = UdmClient::model_parts_sql(2, &[38, 81, 201], 1, false);
     assert!(sql.contains("m.ModelId = 2"), "{sql}");
     assert!(sql.contains("AND e.EntityTypeId IN (38, 81, 201)"), "{sql}");
     assert!(
@@ -150,7 +150,25 @@ fn the_model_part_read_takes_served_types_only() {
         "{sql}"
     );
     // A Knowledge Base serving no type reads no part.
-    assert!(UdmClient::model_parts_sql(2, &[], 0).contains("AND 1 = 0"));
+    assert!(UdmClient::model_parts_sql(2, &[], 0, false).contains("AND 1 = 0"));
+}
+
+#[test]
+fn the_model_part_read_differs_between_transports_only_in_its_payload_columns() {
+    // The statement sqlcmd receives is the one it received before the TDS transport existed.
+    let hex = UdmClient::model_parts_sql(2, &[38], 1, false);
+    assert!(
+        hex.starts_with("SET NOCOUNT ON; SELECT e.EntityTypeId, e.EntityId, e.EntityVersionId, ISNULL(DATALENGTH(e.EntityVersionData), 0), CONVERT(VARCHAR(MAX), e.EntityVersionData, 2), ISNULL(DATALENGTH(e.EntityVersionProperties), 0), CONVERT(VARCHAR(MAX), CAST(e.EntityVersionProperties AS VARBINARY(MAX)), 2) FROM EntityVersion e WHERE (EXISTS "),
+        "{hex}"
+    );
+    // The binary form selects the same rows; only the two payloads lose their hex conversion.
+    let binary = UdmClient::model_parts_sql(2, &[38], 1, true);
+    assert!(
+        binary.starts_with("SET NOCOUNT ON; SELECT e.EntityTypeId, e.EntityId, e.EntityVersionId, ISNULL(DATALENGTH(e.EntityVersionData), 0), e.EntityVersionData, ISNULL(DATALENGTH(e.EntityVersionProperties), 0), CAST(e.EntityVersionProperties AS VARBINARY(MAX)) FROM EntityVersion e WHERE (EXISTS "),
+        "{binary}"
+    );
+    let from = |sql: &str| sql[sql.find(" FROM EntityVersion e ").unwrap()..].to_string();
+    assert_eq!(from(&hex), from(&binary));
 }
 
 #[test]

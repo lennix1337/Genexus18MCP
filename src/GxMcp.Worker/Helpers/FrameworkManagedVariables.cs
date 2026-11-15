@@ -18,7 +18,9 @@ namespace GxMcp.Worker.Helpers
         // SDK builtins always present in generated code — neither user nor framework managed.
         private static readonly HashSet<string> _sdkBuiltins = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "Pgmname", "Pgmdesc", "Mode", "Today", "UserId", "Message", "EventName", "CtlName"
+            "Pgmname", "Pgmdesc", "Mode", "Today", "UserId", "Message", "EventName", "CtlName",
+            // Reported True by VariableDefinition.IsStandard (GeneXus 18 SDK, read by reflection 14/11).
+            "Line", "Output", "Page", "Err", "Errmsg", "GxRemove", "Mr", "Msg", "Op", "Outdev", "RestMethod", "RestCode"
         };
 
         public static string GetManagedBy(string variableName)

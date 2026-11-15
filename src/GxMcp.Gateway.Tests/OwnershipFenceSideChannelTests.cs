@@ -24,6 +24,38 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void Tasks_GetOwnTaskAfterKbContextChange_NamesTheContextChange()
+        {
+            var registry = new BackgroundJobRegistry();
+            var started = new OwnershipFence("session-a", "kb-a", 1);
+            var now = new OwnershipFence("session-a", "kb-a", 2);
+            var job = registry.Start("session-a", "build", 10, started);
+
+            var get = McpTasksProtocol.Handle(TaskRequest("tasks/get", job.Id), "session-a", registry, true, now);
+
+            Assert.Equal(-32003, get!["error"]!["code"]!.Value<int>());
+            var data = (JObject)get["error"]!["data"]!;
+            Assert.Equal("kb_context_changed", data["reason"]!.ToString());
+            Assert.Equal(1, data["taskGeneration"]!.Value<long>());
+            Assert.Equal(2, data["currentGeneration"]!.Value<long>());
+            Assert.Equal("running", data["taskStatus"]!.ToString());
+        }
+
+        [Fact]
+        public void Tasks_GetAnotherSessionsTask_DoesNotRevealItsContext()
+        {
+            var registry = new BackgroundJobRegistry();
+            var job = registry.Start("session-a", "build", 10, new OwnershipFence("session-a", "kb-a", 7));
+
+            var get = McpTasksProtocol.Handle(TaskRequest("tasks/get", job.Id), "session-b", registry, true,
+                new OwnershipFence("session-b", "kb-a", 7));
+
+            var data = (JObject)get!["error"]!["data"]!;
+            Assert.Null(data["reason"]);
+            Assert.Null(data["taskKbId"]);
+        }
+
+        [Fact]
         public void Subscription_DropsDelayedEventFromDifferentGeneration()
         {
             var registry = new McpModernSubscriptionRegistry();

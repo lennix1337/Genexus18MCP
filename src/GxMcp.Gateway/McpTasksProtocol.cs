@@ -59,9 +59,27 @@ namespace GxMcp.Gateway
             if (job == null)
                 return Error(id, modern ? -32602 : -32001, "Task not found", new JObject { ["taskId"] = taskId });
             ownership ??= new OwnershipFence(sessionId, string.Empty, 0);
-            if (!string.Equals(job.Session, sessionId, StringComparison.Ordinal)
-                || !registry.BelongsTo(job, ownership))
+            bool sameSession = string.Equals(job.Session, sessionId, StringComparison.Ordinal);
+            if (!sameSession || !registry.BelongsTo(job, ownership))
             {
+                // The caller's own task whose KB context changed since it started (another
+                // KB selected, context renewed): say so, so the client does not read it as a
+                // lost task. Another session's task stays an opaque handle.
+                if (sameSession)
+                {
+                    return Error(id, modern ? -32602 : -32003,
+                        modern ? "Invalid taskId." : "Task belongs to another MCP session",
+                        new JObject
+                        {
+                            ["taskId"] = taskId,
+                            ["reason"] = "kb_context_changed",
+                            ["taskKbId"] = job.KbId,
+                            ["taskGeneration"] = job.Generation,
+                            ["currentKbId"] = ownership.KbId,
+                            ["currentGeneration"] = ownership.Generation,
+                            ["taskStatus"] = job.Status
+                        });
+                }
                 // Do not turn a task handle into a cross-session existence oracle for
                 // modern clients. Legacy callers retain the historical error code.
                 return Error(id, modern ? -32602 : -32003,

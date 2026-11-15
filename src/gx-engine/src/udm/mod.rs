@@ -16,6 +16,7 @@ pub mod row;
 pub mod stored_sdt;
 pub mod stored_transaction;
 pub mod stored_variables;
+pub mod tds;
 pub mod type_evidence;
 pub mod version_scope;
 pub mod writer;

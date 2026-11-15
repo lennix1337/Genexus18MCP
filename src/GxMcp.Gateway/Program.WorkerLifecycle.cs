@@ -53,8 +53,8 @@ namespace GxMcp.Gateway
                         // undelivered command is re-sent in both modes.
                         var exitError = pending.Worker?.IsSharedWorker == true
                             ? BuildWorkerExitError(kb.Alias, stopReason, delivered, sharedWorker: true,
-                                pending.WorkerMethod, pending.WorkerAction, config.EffectiveSharedHost.QueueWaitMs)
-                            : BuildWorkerExitError(kb.Alias, stopReason, delivered);
+                                pending.WorkerMethod, pending.WorkerAction, config.EffectiveSharedHost.QueueWaitMs, pending.Worker?.LastExitCode)
+                            : BuildWorkerExitError(kb.Alias, stopReason, delivered, pending.Worker?.LastExitCode);
                         _operationTracker.MarkFailedByRequest(id, exitError["message"]!.ToString());
                         var errorJson = new JObject
                         {
@@ -194,7 +194,11 @@ namespace GxMcp.Gateway
         {
             "GxMcp.Worker.pdb",
             "GxMcp.Worker.dll",
+            "events-u16-wwp16.2-189158-audit.json",
+            "events-u16-wwp16.2-189513-audit.json",
+            "events-u16-wwp16.2-189552-audit.json",
             "events-u16-wwp16.2-audit.json",
+            "events-u16-wwp16.2-189647-audit.json",
             "events-u11-wwp16.1-audit.json",
             "events-u10-audit.json",
         };
@@ -755,14 +759,26 @@ namespace GxMcp.Gateway
         /// command safe to dispatch again. A delivered but unanswered command may have
         /// executed, so it carries <c>reconcileRequired</c> and is never re-sent.
         /// </summary>
-        internal static JObject BuildWorkerExitError(string kbAlias, WorkerStopReason stopReason, bool delivered)
+        internal static JObject BuildWorkerExitError(string kbAlias, WorkerStopReason stopReason, bool delivered, int? exitCode = null)
+        {
+            // An exit nobody asked for has stopReason None: "(None)" alone tells the caller nothing,
+            // so the process exit code (when the gateway saw it) goes in the message and in data.
+            string reasonText = stopReason == WorkerStopReason.None && exitCode.HasValue
+                ? $"None; exit code {exitCode.Value}"
+                : stopReason.ToString();
+            JObject exitError = BuildWorkerExitErrorCore(kbAlias, reasonText, stopReason, delivered);
+            if (exitCode.HasValue) ((JObject)exitError["data"]!)["exitCode"] = exitCode.Value;
+            return exitError;
+        }
+
+        private static JObject BuildWorkerExitErrorCore(string kbAlias, string stopReasonText, WorkerStopReason stopReason, bool delivered)
         {
             if (!delivered)
             {
                 return new JObject
                 {
                     ["code"] = -32603,
-                    ["message"] = $"Worker for KB '{kbAlias}' crashed/exited ({stopReason}) before the command was delivered; it was not executed.",
+                    ["message"] = $"Worker for KB '{kbAlias}' crashed/exited ({stopReasonText}) before the command was delivered; it was not executed.",
                     ["data"] = new JObject
                     {
                         ["dispatchState"] = WorkerDispatchState.NotDelivered,
@@ -773,7 +789,7 @@ namespace GxMcp.Gateway
             return new JObject
             {
                 ["code"] = -32603,
-                ["message"] = $"Worker for KB '{kbAlias}' crashed/exited ({stopReason}) after the command was delivered and before it answered; it may have executed. Read the target back before retrying.",
+                ["message"] = $"Worker for KB '{kbAlias}' crashed/exited ({stopReasonText}) after the command was delivered and before it answered; it may have executed. Read the target back before retrying.",
                 ["data"] = new JObject
                 {
                     ["dispatchState"] = WorkerDispatchState.DeliveredUnanswered,
@@ -793,9 +809,9 @@ namespace GxMcp.Gateway
         /// names the local stop reason in both shared cases.
         /// </summary>
         internal static JObject BuildWorkerExitError(string kbAlias, WorkerStopReason stopReason, bool delivered,
-            bool sharedWorker, string? method, string? action, int queueWaitMs)
+            bool sharedWorker, string? method, string? action, int queueWaitMs, int? exitCode = null)
         {
-            if (!sharedWorker) return BuildWorkerExitError(kbAlias, stopReason, delivered);
+            if (!sharedWorker) return BuildWorkerExitError(kbAlias, stopReason, delivered, exitCode);
 
             JObject error;
             if (delivered)
@@ -820,6 +836,7 @@ namespace GxMcp.Gateway
                 };
             }
             ((JObject)error["data"]!)["stopReason"] = stopReason.ToString();
+            if (exitCode.HasValue) ((JObject)error["data"]!)["exitCode"] = exitCode.Value;
             return error;
         }
 

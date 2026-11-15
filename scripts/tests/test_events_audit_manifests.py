@@ -11,6 +11,21 @@ MANIFESTS = sorted(CONFIG.glob("events-*-audit.json"))
 U11_MANIFEST = CONFIG / "events-u11-wwp16.1-audit.json"
 # The U16 proof (2026-10-14) predates the sanitized result kept in the repository; later proofs ship theirs.
 U16_MANIFEST = CONFIG / "events-u16-wwp16.2-audit.json"
+# The same WorkWithPlus 16.2.0.8386 on every other audited GeneXus 18 U16 SDK build: a bundle (and a manifest) of its own each.
+U16_189158_MANIFEST = CONFIG / "events-u16-wwp16.2-189158-audit.json"
+U16_189513_MANIFEST = CONFIG / "events-u16-wwp16.2-189513-audit.json"
+U16_189552_MANIFEST = CONFIG / "events-u16-wwp16.2-189552-audit.json"
+U16_189647_MANIFEST = CONFIG / "events-u16-wwp16.2-189647-audit.json"
+# Every audited U16 build, oldest first, with the manifest that audits it.
+U16_BUILD_MANIFESTS = {
+    "189158": U16_189158_MANIFEST,
+    "189513": U16_189513_MANIFEST,
+    "189552": U16_189552_MANIFEST,
+    "189595": U16_MANIFEST,
+    "189647": U16_189647_MANIFEST,
+}
+U16_PROVEN_MANIFESTS = [U16_189158_MANIFEST, U16_189513_MANIFEST, U16_189552_MANIFEST, U16_189647_MANIFEST]
+SDK_CORE = "Artech.Architecture.Common"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 CRITICAL = (
     "Artech.Architecture.Common",
@@ -58,11 +73,60 @@ class EventsAuditManifestTests(unittest.TestCase):
     lane that always runs keeps the manifests and the native proof they cite well formed.
     """
 
-    def test_the_repository_ships_the_three_audited_bundles(self):
+    def test_the_repository_ships_the_seven_audited_bundles(self):
         self.assertEqual(
-            ["events-u10-audit.json", "events-u11-wwp16.1-audit.json", "events-u16-wwp16.2-audit.json"],
+            [
+                "events-u10-audit.json",
+                "events-u11-wwp16.1-audit.json",
+                "events-u16-wwp16.2-189158-audit.json",
+                "events-u16-wwp16.2-189513-audit.json",
+                "events-u16-wwp16.2-189552-audit.json",
+                "events-u16-wwp16.2-189647-audit.json",
+                "events-u16-wwp16.2-audit.json",
+            ],
             [manifest.name for manifest in MANIFESTS],
         )
+
+    def test_the_sdk_core_names_one_bundle_and_only_a_workwithplus_assembly_may_be_shared(self):
+        # One WorkWithPlus release is installed on every SDK build (the five U16 builds carry the same bytes), so the
+        # Worker tells such bundles apart by the exact bytes of the SDK core: no two manifests may share it, and the Artech
+        # critical assemblies of one bundle belong to that bundle alone.
+        cores = {}
+        owners = {}
+        for manifest in MANIFESTS:
+            data = _load(manifest)
+            hashes = {entry["name"]: entry["sha256"] for entry in data["assemblies"] if entry["name"] in data["criticalAssemblies"]}
+            self.assertNotIn(hashes[SDK_CORE], cores, f"{manifest.name} shares its SDK core with {cores.get(hashes[SDK_CORE])}")
+            cores[hashes[SDK_CORE]] = manifest.name
+            for name, sha in hashes.items():
+                owners.setdefault(sha, []).append((manifest.name, name))
+        for sha, users in owners.items():
+            if len(users) > 1:
+                with self.subTest(sha256=sha[:12]):
+                    self.assertTrue(all(name.startswith("DVelop.") for _, name in users), users)
+
+    def test_the_u16_manifests_name_their_build_and_share_the_workwithplus_release_they_audited(self):
+        manifests = {build: _load(path) for build, path in U16_BUILD_MANIFESTS.items()}
+        for build, data in manifests.items():
+            with self.subTest(build=build):
+                entries = {entry["name"]: entry for entry in data["assemblies"]}
+                core_build = entries[SDK_CORE]["productVersion"].split("+")[0]
+                wwp = entries["DVelop.Patterns.WorkWithPlus"]["productVersion"]
+                self.assertEqual(f"{core_build}+wwp{wwp}", data["bundleId"])
+                self.assertEqual(f"18.0.16.{build}+wwp16.2.0.8386", data["bundleId"])
+        hashes = {build: {e["name"]: e["sha256"] for e in data["assemblies"]} for build, data in manifests.items()}
+        builds = list(manifests)
+        for first in builds:
+            for second in builds:
+                if first == second:
+                    continue
+                with self.subTest(first=first, second=second):
+                    shared = {name for name in manifests[first]["criticalAssemblies"] if hashes[first][name] == hashes[second][name]}
+                    self.assertEqual(
+                        {"DVelop.Patterns.WorkWithPlus", "DVelop.Extensions.WWPPackagesCommon", "DVelop.Extensions.UserControls", "DVelop.Extensions.WWPPackages"},
+                        shared,
+                    )
+                    self.assertEqual(manifests[first]["criticalAssemblies"], manifests[second]["criticalAssemblies"])
 
     def test_bundle_ids_are_distinct_and_name_the_workwithplus_release_when_the_bundle_has_it(self):
         ids = [_load(manifest)["bundleId"] for manifest in MANIFESTS]
@@ -95,12 +159,17 @@ class EventsAuditManifestTests(unittest.TestCase):
                 for critical in expected:
                     self.assertEqual(1, names.count(critical), critical)
 
-    def test_the_u10_and_u11_manifests_are_verified_by_a_sanitized_result(self):
-        self.assertEqual([CONFIG / "events-u10-audit.json", U11_MANIFEST], _verified_manifests())
+    def test_the_u10_u11_and_four_u16_build_manifests_are_verified_by_a_sanitized_result(self):
+        # Build 189595 predates the sanitized results kept in the repository; every later U16 build ships a proof of its own.
+        self.assertEqual([CONFIG / "events-u10-audit.json", U11_MANIFEST] + U16_PROVEN_MANIFESTS, _verified_manifests())
 
     def test_each_verified_proof_digest_is_the_sha256_of_the_sanitized_result_kept_in_the_repository(self):
         verified = _verified_manifests()
         self.assertIn(U11_MANIFEST, verified)
+        for manifest in U16_PROVEN_MANIFESTS:
+            self.assertIn(manifest, verified)
+        digests = [_load(manifest)["nativeVerification"]["proofEvidenceSha256"] for manifest in verified]
+        self.assertEqual(len(digests), len(set(digests)), "two manifests cite the same proof")
         for manifest in verified:
             with self.subTest(manifest=manifest.name):
                 raw = _proof_path(manifest).read_bytes()

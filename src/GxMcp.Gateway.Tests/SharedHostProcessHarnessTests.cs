@@ -358,9 +358,16 @@ namespace GxMcp.Gateway.Tests
                 .Where(t => t.Contains("stale-ownership-recovery", StringComparison.Ordinal))
                 .ToList();
             foreach (string line in recovery) _output.WriteLine("recovery log: " + line);
+            // The record of the killed broker names a process that is gone, and its log entry says why: owner-not-running
+            // when the PID is free by the time the recovery looks at it, start-time-mismatch when Windows has already given
+            // that PID to another process (it hands a freed PID to a new process very soon, and this test starts a new
+            // broker and a new Worker right after the kill). Either way the record is removed and nothing is stopped,
+            // which is the contract; SharedWorkerHostLauncherV2Tests pins each reason with a fake process probe, so the
+            // reason is not pinned here.
             Assert.Contains(recovery, t => t.Contains("action=removed-record registry=SharedWorkerRegistry", StringComparison.Ordinal)
                 && t.Contains(" pid=" + oldHostPid + " ", StringComparison.Ordinal)
-                && t.EndsWith(" reason=owner-not-running", StringComparison.Ordinal));
+                && (t.EndsWith(" reason=owner-not-running", StringComparison.Ordinal)
+                    || t.EndsWith(" reason=start-time-mismatch", StringComparison.Ordinal)));
             // The sentinel's PID runs with another start time, so the record names another process; nothing was stopped.
             Assert.Contains(recovery, t => t.Contains("action=removed-record registry=WorkerOwnershipRegistry", StringComparison.Ordinal)
                 && t.Contains(" pid=" + sentinel.Pid + " ", StringComparison.Ordinal)

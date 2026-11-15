@@ -793,6 +793,8 @@ namespace GxMcp.Gateway
                 }
                 catch { }
                 try { _workerPool?.StopAll(WorkerStopReason.GatewayShutdown); } catch { }
+                // Resident gx-engine processes (GXMCP_ENGINE_RESIDENT) end with the Gateway.
+                try { GxEngineResidentPool.Shared.Dispose(); } catch { }
                 if (useSharedLease && _activeConfig != null)
                 {
                     GatewayProcessLease.ReleaseCurrentProcess(_activeConfig);
