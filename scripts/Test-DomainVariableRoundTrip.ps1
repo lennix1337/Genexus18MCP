@@ -5,6 +5,9 @@ param(
     [Parameter(Mandatory)] [string] $SourceKbPath,
     [string] $ImportKbPath,
     [string] $OutputFile = (Join-Path $env:TEMP 'GxMcp-DomainVariableRoundTrip.xpz'),
+    # Regular expression, matched without case against the resolved path of each KB, of the KB
+    # paths this destructive regression must never touch. Empty protects no path.
+    [string] $ProtectedKbPathPattern = $env:GXMCP_TEST_PROTECTED_KB_PATTERN,
     [Parameter(Mandatory)] [switch] $ConfirmDisposableKbs
 )
 
@@ -12,8 +15,18 @@ $ErrorActionPreference = 'Stop'
 
 function Assert-DisposableKb([string] $Path) {
     $resolved = (Resolve-Path -LiteralPath $Path).Path
-    if ($resolved -match '(?i)Memphis') {
-        throw "Refusing to run the destructive regression against a Memphis KB: $resolved"
+    if (-not [string]::IsNullOrWhiteSpace($ProtectedKbPathPattern)) {
+        # A pattern that cannot be evaluated stops the run: it was written to protect something.
+        try {
+            $protected = [regex]::IsMatch($resolved, $ProtectedKbPathPattern,
+                [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        }
+        catch {
+            throw "ProtectedKbPathPattern is not a valid regular expression: $($_.Exception.Message)"
+        }
+        if ($protected) {
+            throw "Refusing to run the destructive regression against a protected KB path: $resolved"
+        }
     }
     if (-not (Test-Path -LiteralPath (Join-Path $resolved 'knowledgebase.connection'))) {
         throw "Not a GeneXus KB directory: $resolved"

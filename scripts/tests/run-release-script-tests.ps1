@@ -51,6 +51,7 @@ $tests = @(
     'test-check-whitespace.ps1',
     'test-live-matrix.test.ps1',
     'test-live-shared-host.test.ps1',
+    'test-domain-variable-roundtrip-guard.ps1',
     'test-workwith-persistence-smoke.ps1',
     'test-workwith-persistence-smoke-behavior.ps1',
     'test-run-gate.ps1'
