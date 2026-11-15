@@ -536,7 +536,8 @@ namespace GxMcp.Gateway
 
                         if (mayRecycle && ShouldStopForIdle() && !sdkProgressing)
                         {
-                            Program.Log($"[Gateway] worker_idle_shutdown id={workerLabel} idleTimeoutMinutes={_workerIdleTimeout.TotalMinutes}");
+                            Program.Log($"[Gateway] worker_idle_shutdown id={workerLabel} idleTimeoutMinutes={_workerIdleTimeout.TotalMinutes} "
+                                + _supervisionTracker.DescribeIdle(_workerIdleTimeout, Volatile.Read(ref _queuedCommands), Volatile.Read(ref _inFlightCommands), BuildActiveGraceWindow));
                             StopProcess(WorkerStopReason.IdleTimeout);
                             continue;
                         }
