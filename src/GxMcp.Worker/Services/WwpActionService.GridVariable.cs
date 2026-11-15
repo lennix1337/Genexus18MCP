@@ -90,7 +90,7 @@ namespace GxMcp.Worker.Services
                     return McpResponse.Err(code: gridError["code"]?.ToString() ?? "GridNotFound",
                         message: gridError["error"].ToString(), target: target, extra: gridError);
                 // The projection renders the WorkWithPlus grid as the WebForm grid control named after it.
-                string[] gridControlNames = { Attr(requestedGrid, "controlName"), Attr(requestedGrid, "name") };
+                string[] gridControlNames = ProjectedGridControlNames(requestedGrid);
 
                 string parentWebFormBefore = ReadPart(parent, "WebForm");
                 byte[] nativeBytes = ReadPartBytes(currentPart);
@@ -340,6 +340,13 @@ namespace GxMcp.Worker.Services
             if (others.Count != beforeChildren.Count || others.Where((e, i) => !XNode.DeepEquals(e, beforeChildren[i])).Any())
                 return Error("WwpGridVariableNotPersisted", "The re-read grid changed or reordered a column that was not part of the request.");
             return new JObject { ["confirmed"] = true };
+        }
+
+        /// <summary>WorkWithPlus projects a grid without name or controlName as the WebForm control "Grid".</summary>
+        internal static string[] ProjectedGridControlNames(XElement grid)
+        {
+            string[] names = new[] { Attr(grid, "controlName"), Attr(grid, "name") }.Where(n => n.Length > 0).ToArray();
+            return names.Length > 0 ? names : new[] { "Grid" };
         }
 
         /// <summary>
