@@ -454,16 +454,11 @@ fn kind(data_type: &DataType) -> R<Kind> {
     })
 }
 
-fn zero() -> R<Decimal> {
-    "0".parse::<Decimal>()
-}
-
 fn decimal_of(value: usize) -> R<Decimal> {
-    value.to_string().parse::<Decimal>()
-}
-
-fn decimal_i64(value: i64) -> R<Decimal> {
-    value.to_string().parse::<Decimal>()
+    match i64::try_from(value) {
+        Ok(n) => Ok(Decimal::from(n)),
+        Err(_) => value.to_string().parse::<Decimal>(),
+    }
 }
 
 /// The declared-type boundary: a Numeric assignment is checked against its precision/scale.
@@ -664,7 +659,7 @@ impl<'p, 'o> Machine<'p, 'o> {
     /// which spends one step per record field where it builds a default through `r{n}(steps)`.
     fn default_for(&mut self, data_type: &DataType, charge: bool) -> R<Field> {
         Ok(match data_type {
-            DataType::Numeric { .. } => Field::Numeric(zero()?),
+            DataType::Numeric { .. } => Field::Numeric(Decimal::from(0_i64)),
             DataType::Character { .. }
             | DataType::Varchar { .. }
             | DataType::LongVarchar { .. } => Field::Text(Text::new("")?),
@@ -748,7 +743,7 @@ impl<'p, 'o> Machine<'p, 'o> {
             return match expected {
                 Kind::Date => Ok(Field::Date(Date::empty())),
                 Kind::DateTime => Ok(Field::DateTime(DateTime::empty())),
-                Kind::Numeric => Ok(Field::Numeric(zero()?)),
+                Kind::Numeric => Ok(Field::Numeric(Decimal::from(0_i64))),
                 Kind::Text => txt(""),
                 Kind::Boolean => Ok(Field::Boolean(false)),
                 Kind::Record | Kind::Collection => Err("typed value mismatch".into()),
@@ -884,7 +879,7 @@ impl<'p, 'o> Machine<'p, 'o> {
         match expression {
             Expr::Paren(inner) => self.pure(f, inner, h),
             Expr::EmptyDate => Ok(Field::Date(Date::empty())),
-            Expr::Integer(value) => Ok(Field::Numeric(decimal_i64(*value)?)),
+            Expr::Integer(value) => Ok(Field::Numeric(Decimal::from(*value))),
             Expr::Decimal(literal) => Ok(Field::Numeric(literal.parse::<Decimal>()?)),
             Expr::Boolean(value) => Ok(Field::Boolean(*value)),
             Expr::Text(value) => txt(value),
@@ -986,9 +981,9 @@ impl<'p, 'o> Machine<'p, 'o> {
                 };
                 Ok(Field::Date(date.add_days(days)?))
             }
-            (Field::Date(a), Field::Date(b)) if operator == BinOp::Subtract => Ok(Field::Numeric(
-                a.difference(b).to_string().parse::<Decimal>()?,
-            )),
+            (Field::Date(a), Field::Date(b)) if operator == BinOp::Subtract => {
+                Ok(Field::Numeric(Decimal::from(a.difference(b))))
+            }
             (Field::Text(a), Field::Text(b)) if operator == BinOp::Add => {
                 Ok(Field::Text(a.checked_concat(b)?))
             }
@@ -1035,7 +1030,8 @@ impl<'p, 'o> Machine<'p, 'o> {
                 return self.default_for(&data_type, false);
             }
             "STR" => {
-                let value = num(self.pure(f, &args[0], h)?)?;
+                let first = args.first().ok_or("Str expects at least one argument")?;
+                let value = num(self.pure(f, first, h)?)?;
                 let literal = |index: usize, default: u8| -> R<u8> {
                     match args.get(index) {
                         None => Ok(default),
@@ -1231,11 +1227,16 @@ impl<'p, 'o> Machine<'p, 'o> {
                 }
                 let start = self.eval_expect(f, initial, Kind::Numeric)?;
                 f.set(name, store(data_type, start)?)?;
-                let step = decimal_i64(*step)?;
+                let forward = *step > 0;
+                let step = Decimal::from(*step);
                 loop {
                     let limit = num(self.eval_expect(f, limit, Kind::Numeric)?)?;
-                    let order = num(f.get(name)?.clone())?.checked_cmp(limit)?;
-                    if !(if step.checked_cmp(zero()?)?.is_gt() {
+                    let current = match f.get(name)? {
+                        Field::Numeric(n) => *n,
+                        _ => return Err("typed value mismatch: expected Numeric".into()),
+                    };
+                    let order = current.checked_cmp(limit)?;
+                    if !(if forward {
                         order.is_le()
                     } else {
                         order.is_ge()
@@ -1248,7 +1249,11 @@ impl<'p, 'o> Machine<'p, 'o> {
                         Flow::Break => break,
                         ret @ Flow::Return(_) => return Ok(ret),
                     }
-                    let next = num(f.get(name)?.clone())?.checked_add(step)?;
+                    let current = match f.get(name)? {
+                        Field::Numeric(n) => *n,
+                        _ => return Err("typed value mismatch: expected Numeric".into()),
+                    };
+                    let next = current.checked_add(step)?;
                     f.set(name, store(data_type, Field::Numeric(next))?)?;
                 }
             }

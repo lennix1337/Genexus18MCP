@@ -712,6 +712,36 @@ fn short_circuit_hoists_calls_but_not_pure_operands() {
 }
 
 #[test]
+fn field_assignment_evaluates_value_before_receiver() {
+    let n = numeric(8, 0);
+    case(
+        "field_eval_order",
+        json!({
+            "format_version": 2,
+            "entry": "Main",
+            "record_types": [
+                {"name":"Row","fields":{"Amount":n}}
+            ],
+            "procedures": [
+                {"name":"Main","params":[],
+                 "variables":{"Rows":{"kind":"collection","schema":"Row"},"Item":{"kind":"record","schema":"Row"}},
+                 "source": lines(&[
+                    "&Rows = new()",
+                    "&Item = new()",
+                    "&Item.Amount = 10",
+                    "&Rows.Add(&Item)",
+                    "&Rows.Item(Noisy(1)).Amount = Noisy(20)",
+                    "Print(&Rows.Item(1).Amount)",
+                 ])},
+                {"name":"Noisy","params":["in:V"],"variables":{"V":n},"return_type":n,
+                 "source":"Print(&V)\nReturn &V"}
+            ]
+        }),
+        true,
+    );
+}
+
+#[test]
 fn format_one_integer_procedures_match() {
     case(
         "format_one",

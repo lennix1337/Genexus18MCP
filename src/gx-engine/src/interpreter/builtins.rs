@@ -11,15 +11,15 @@ use crate::{
 
 type R<T> = Result<T, String>;
 
-struct Args {
-    name: String,
+struct Args<'a> {
+    name: &'a str,
     items: std::vec::IntoIter<Field>,
 }
 
-impl Args {
-    fn new(name: &str, items: Vec<Field>) -> Self {
+impl<'a> Args<'a> {
+    fn new(name: &'a str, items: Vec<Field>) -> Self {
         Self {
-            name: name.to_owned(),
+            name,
             items: items.into_iter(),
         }
     }
@@ -97,7 +97,7 @@ pub(super) fn is_empty(value: Field) -> R<Field> {
         Field::Date(d) => d.is_empty(),
         Field::DateTime(d) => d.is_empty(),
         Field::Collection(c) => c.is_empty(),
-        Field::Numeric(n) => n.checked_cmp("0".parse::<Decimal>()?)?.is_eq(),
+        Field::Numeric(n) => n.checked_cmp(Decimal::from(0_i64))?.is_eq(),
         Field::Text(t) => t.trim_end_spaces().utf16_length() == 0,
         Field::Boolean(b) => !b,
         Field::Record(_) => return Err("IsEmpty is not supported on records directly".into()),
@@ -231,7 +231,7 @@ pub(super) fn builtin_values(name: &str, values: Vec<Field>, window: Option<u16>
             let start = match a.opt() {
                 Some(Field::Numeric(start)) => start.to_i64()?,
                 Some(_) => return Err("StrSearch start must be Numeric".into()),
-                None => Decimal::from(1).to_i64()?,
+                None => 1,
             };
             Ok(Field::Numeric(
                 first.str_search(&second, start).to_string().parse::<Decimal>()?,
