@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- **WWP grid diff:** a grid with no explicit name now shows its projected name instead of an empty string. The reported empty `controlName` and `id` remain the actual XML attributes. Verified with an in-memory instance; not yet validated on a live WorkWithPlus KB. https://github.com/lennix1337/Genexus18MCP/issues/1036
+
 ### Internal
 
 ## v4.6.1 - 2026-11-16

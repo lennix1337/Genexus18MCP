@@ -835,13 +835,19 @@ namespace GxMcp.Worker.Tests
                 "<instance><grid name='Main' controlName='MainGrid'>" +
                 "<gridVariable variable='11111111-1111-1111-1111-111111111111-Name' length='10' />" +
                 "<gridAttribute attribute='2-Code' description='Code' />" +
-                "</grid></instance>");
+                "</grid><grid SDTCollection='&amp;Lines'/><grid name='GridHist'/><grid controlName='NamedControl'/><simplegrid/></instance>");
             var project = typeof(WwpActionService).GetMethod("Project",
                 System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
             var catalog = (JObject)project.Invoke(null, new object[] { document });
 
             var grid = (JObject)catalog["grids"]![0]!;
             Assert.Equal("Main", grid["name"]?.ToString());
+            Assert.Equal("Grid", catalog["grids"]![1]!["name"]!.ToString());
+            Assert.Equal("GridHist", catalog["grids"]![2]!["name"]!.ToString());
+            Assert.Equal("NamedControl", catalog["grids"]![3]!["name"]!.ToString());
+            Assert.Equal("", catalog["grids"]![4]!["name"]!.ToString());
+            Assert.Equal("", catalog["grids"]![1]!["controlName"]!.ToString());
+            Assert.Equal("", catalog["grids"]![1]!["id"]!.ToString());
             Assert.Equal(2, ((JArray)grid["columns"]!).Count);
             Assert.Equal("gridVariable", grid["columns"]![0]!["kind"]?.ToString());
             Assert.Equal("11111111-1111-1111-1111-111111111111-Name",
