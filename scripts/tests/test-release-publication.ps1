@@ -6,7 +6,7 @@ $scriptPath = Join-Path $root 'scripts/verify-release-publication.ps1'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw $errors[0] }
-foreach ($name in @('Protect-PublicationMessage', 'Write-AtomicJson', 'Get-RequiredAssetNames')) {
+foreach ($name in @('Protect-PublicationMessage', 'Write-AtomicJson', 'Get-RequiredAssetNames', 'Invoke-GhJson')) {
     $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if (-not $definition) { throw "Missing publication helper: $name" }
     . ([scriptblock]::Create($definition.Extent.Text))
@@ -46,6 +46,14 @@ if (([string](Protect-PublicationMessage $longMessage)).Length -gt 601) {
     throw 'The publication cap of 600 characters must survive the delegation.'
 }
 if ([string](Protect-PublicationMessage '   ') -ne '') { throw 'A blank publication message must stay blank.' }
+
+# A failing gh call must name its arguments, exit code and stderr; the message
+# used to read "gh  failed." (a malformed ${(...)} expansion), hiding the cause.
+function gh { Write-Error 'HTTP 502 Bad Gateway' -ErrorAction Continue; $global:LASTEXITCODE = 1 }
+$ghMessage = ''
+try { Invoke-GhJson -Arguments @('release', 'view', 'v9.9.9') | Out-Null } catch { $ghMessage = $_.Exception.Message }
+Remove-Item Function:\gh
+if ($ghMessage -notmatch 'gh release view v9\.9\.9 failed \(exit 1\): .*HTTP 502') { throw "gh failure message lost its arguments or exit code: '$ghMessage'" }
 
 $temp = Join-Path $env:TEMP ('gxmcp-publication-test-' + [guid]::NewGuid().ToString('N') + '.json')
 $artifactRoot = Join-Path $env:TEMP ('gxmcp-publication-artifacts-' + [guid]::NewGuid().ToString('N'))
