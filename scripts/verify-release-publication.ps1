@@ -76,10 +76,15 @@ function Save-Evidence {
 
 function Invoke-GhJson {
     param([string[]]$Arguments)
-    $raw = @(& gh @Arguments 2>$null)
-    if ($LASTEXITCODE -ne 0) { throw "gh ${($Arguments -join ' ')} failed." }
+    $all = @(& gh @Arguments 2>&1)
+    $exit = $LASTEXITCODE
+    $raw = @($all | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+    if ($exit -ne 0) {
+        $detail = (@($all | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" }) -join ' ').Trim()
+        throw "gh $($Arguments -join ' ') failed (exit $exit)$(if ($detail) { ": $detail" })."
+    }
     $text = ($raw -join [Environment]::NewLine)
-    if ([string]::IsNullOrWhiteSpace($text)) { throw "gh ${($Arguments -join ' ')} returned no JSON." }
+    if ([string]::IsNullOrWhiteSpace($text)) { throw "gh $($Arguments -join ' ') returned no JSON." }
     return ($text | ConvertFrom-Json)
 }
 
