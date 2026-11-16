@@ -901,7 +901,7 @@ namespace GxMcp.Worker.Services
             }
             return new JObject
             {
-                ["name"] = Attr(grid, "name"),
+                ["name"] = Is(grid, "grid") && string.IsNullOrEmpty(Attr(grid, "name")) ? ProjectedGridControlNames(grid)[0] : Attr(grid, "name"),
                 ["controlName"] = Attr(grid, "controlName"),
                 ["id"] = Attr(grid, "id"),
                 ["columns"] = columns,
