@@ -67,6 +67,20 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void Record_KeepsTheStopDetail_SoAnIdleStopCanBeJudgedFromTheLedgerAlone()
+        {
+            const string detail = "idleSec=1800 idleTimeoutSec=1800 buildActiveAgeSec=none indexActiveAgeSec=none graceSec=90 queued=0 inFlight=0";
+            CrashLedger.Record("kbA", WorkerStopReason.IdleTimeout, -1, 100, 320.3, 147L * 1024 * 1024, "Build (ID: x)", 45, 3, true, detail: detail);
+            CrashLedger.Record("kbA", WorkerStopReason.None, 139, 101, 1.0, 1024, "op", 1, 1, true);
+
+            var recent = (Newtonsoft.Json.Linq.JArray)CrashLedger.Summarize(recentN: 5)["recent"]!;
+
+            Assert.Equal(2, recent.Count);
+            Assert.Null(recent[0]!["detail"]);
+            Assert.Equal(detail, recent[1]!["detail"]!.ToString());
+        }
+
+        [Fact]
         public void Record_RingCaps_KeepsMostRecent()
         {
             int n = CrashLedger.MaxRecords + 150;

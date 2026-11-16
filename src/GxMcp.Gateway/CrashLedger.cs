@@ -104,7 +104,8 @@ namespace GxMcp.Gateway
             long? spawnMs,
             long? sdkInitMs,
             bool sdkReady,
-            string? ledgerPath = null)
+            string? ledgerPath = null,
+            string? detail = null)
         {
             try
             {
@@ -123,6 +124,9 @@ namespace GxMcp.Gateway
                     ["sdkInitMs"] = sdkInitMs.HasValue ? new JValue(sdkInitMs.Value) : JValue.CreateNull(),
                     ["sdkReady"] = sdkReady
                 };
+                // What the decision that ended the worker saw (idle stop: the idle inputs), so a
+                // ledger line alone says whether the stop was justified.
+                if (!string.IsNullOrEmpty(detail)) rec["detail"] = detail;
 
                 string line = rec.ToString(Formatting.None);
 

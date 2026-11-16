@@ -114,6 +114,7 @@ namespace GxMcp.Gateway
         public Task SdkReadyTask => _sdkReady.Task;
         public bool IsSdkReady => _sdkReady.Task.IsCompleted;
         private string _lastOperationInfo = "None";
+        private volatile string? _stopDetail;
         private bool _isStarting => _stateMachine.IsStarting;
         private WorkerStopReason _stopReason
         {
@@ -536,8 +537,9 @@ namespace GxMcp.Gateway
 
                         if (mayRecycle && ShouldStopForIdle() && !sdkProgressing)
                         {
-                            Program.Log($"[Gateway] worker_idle_shutdown id={workerLabel} idleTimeoutMinutes={_workerIdleTimeout.TotalMinutes} "
-                                + _supervisionTracker.DescribeIdle(_workerIdleTimeout, Volatile.Read(ref _queuedCommands), Volatile.Read(ref _inFlightCommands), BuildActiveGraceWindow));
+                            string idleInputs = _supervisionTracker.DescribeIdle(_workerIdleTimeout, Volatile.Read(ref _queuedCommands), Volatile.Read(ref _inFlightCommands), BuildActiveGraceWindow);
+                            _stopDetail = idleInputs;
+                            Program.Log($"[Gateway] worker_idle_shutdown id={workerLabel} idleTimeoutMinutes={_workerIdleTimeout.TotalMinutes} " + idleInputs);
                             StopProcess(WorkerStopReason.IdleTimeout);
                             continue;
                         }
@@ -1151,6 +1153,7 @@ namespace GxMcp.Gateway
             try
             {
                 _stopReason = WorkerStopReason.None;
+                _stopDetail = null;
                 _startupDiagnostic = null;
                 _lastFailureDiagnostic = null;
                 Volatile.Write(ref _exitConfirmed, 0);
@@ -1764,7 +1767,8 @@ namespace GxMcp.Gateway
                     spawnMs: SpawnMs,
                     sdkInitMs: SdkInitMs,
                     sdkReady: IsSdkReady,
-                    ledgerPath: Kb == null ? null : ScopedCrashLedgerPath());
+                    ledgerPath: Kb == null ? null : ScopedCrashLedgerPath(),
+                    detail: _stopDetail);
             }
             catch (Exception ex) { Program.Log($"[Gateway] CrashLedger.Record threw: {ex.Message}"); }
             try { OnWorkerExited?.Invoke(reason); }
