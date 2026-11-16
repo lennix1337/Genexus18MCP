@@ -5,20 +5,45 @@ param(
     [Parameter(Mandatory)] [string] $SourceKbPath,
     [string] $ImportKbPath,
     [string] $OutputFile = (Join-Path $env:TEMP 'GxMcp-DomainVariableRoundTrip.xpz'),
+    # Optional. Regular expression, matched without case against the full path of each KB, of KB paths to
+    # refuse besides the ones the fixed rule already refuses. It only adds refusals: the fixed rule (a
+    # directory directly under C:\KBs whose name contains 'teste') is always on.
+    [string] $ProtectedKbPathPattern = $env:GXMCP_TEST_PROTECTED_KB_PATTERN,
     [Parameter(Mandatory)] [switch] $ConfirmDisposableKbs
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Assert-DisposableKb([string] $Path) {
-    $resolved = (Resolve-Path -LiteralPath $Path).Path
-    if ($resolved -match '(?i)Memphis') {
-        throw "Refusing to run the destructive regression against a Memphis KB: $resolved"
+# Pure: reads nothing on disk, so the contract test calls it directly.
+function Resolve-DisposableKbPath([string] $Path, [string] $ProtectedPattern) {
+    # Same rule as Resolve-TestKbPath in scripts/sdk-local-build.ps1: a directory
+    # directly under C:\KBs whose name contains 'teste'.
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $parent = Split-Path -Parent $full
+    $leaf = Split-Path -Leaf $full
+    if ($parent -ine 'C:\KBs' -or $leaf -notlike '*teste*') {
+        throw "Refused KB '$full': only disposable test KBs directly under C:\KBs whose name contains 'teste' are allowed."
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $resolved 'knowledgebase.connection'))) {
-        throw "Not a GeneXus KB directory: $resolved"
+    if (-not [string]::IsNullOrWhiteSpace($ProtectedPattern)) {
+        # A pattern that cannot be evaluated stops the run: it was written to protect something.
+        try {
+            $protected = [regex]::IsMatch($full, $ProtectedPattern,
+                [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        }
+        catch {
+            throw "ProtectedKbPathPattern is not a valid regular expression: $($_.Exception.Message)"
+        }
+        if ($protected) {
+            throw "Refused KB '$full': it matches the protected KB path pattern."
+        }
     }
-    return $resolved
+    return $full
+}
+
+function Assert-KbDirectory([string] $Path) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Path 'knowledgebase.connection'))) {
+        throw "Not a GeneXus KB directory: $Path"
+    }
 }
 
 function Get-KbDatabaseName([string] $Path) {
@@ -122,8 +147,11 @@ function Assert-VariablesResponse($Response, [string[]] $DomainNames) {
     }
 }
 
-$source = Assert-DisposableKb $SourceKbPath
-$import = if ($ImportKbPath) { Assert-DisposableKb $ImportKbPath } else { $source }
+# Both paths are judged before anything on disk is read, and so before any Worker is started.
+$source = Resolve-DisposableKbPath $SourceKbPath $ProtectedKbPathPattern
+$import = if ($ImportKbPath) { Resolve-DisposableKbPath $ImportKbPath $ProtectedKbPathPattern } else { $source }
+Assert-KbDirectory $source
+if ($ImportKbPath) { Assert-KbDirectory $import }
 if ($ImportKbPath -and (Get-KbDatabaseName $source) -eq (Get-KbDatabaseName $import)) {
     throw 'SourceKbPath and ImportKbPath point to the same KB database; use genuinely distinct disposable KBs.'
 }
