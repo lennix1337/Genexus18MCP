@@ -38,6 +38,7 @@ pub mod gam;
 pub mod gxtest;
 pub mod impact;
 pub mod incremental;
+pub mod interpreter;
 pub mod kb;
 pub mod kb_ops;
 pub mod locks;
