@@ -28,7 +28,8 @@ function readPackManifest(runner = spawnSync) {
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`npm pack --dry-run failed (exit ${result.status}): ${result.stderr}`);
     const parsed = JSON.parse(result.stdout);
-    const manifest = Array.isArray(parsed) ? parsed[0] : parsed;
+    // npm <= 11 prints an array; npm 12 prints an object keyed by package name.
+    const manifest = Array.isArray(parsed) ? parsed[0] : (Array.isArray(parsed && parsed.files) ? parsed : Object.values(parsed || {})[0]);
     if (!manifest || !Array.isArray(manifest.files)) throw new Error('npm pack --json returned no file list.');
     return manifest;
 }
