@@ -7,6 +7,20 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Internal
+
+## v4.6.1 - 2026-11-16
+
+
+<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+     subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
+
+### Added
+
 - **`gx-engine interpret <project.json>`: run a Procedure project without `rustc`.** A tree-walking interpreter over the parsed program (`src/interpreter.rs`) that reuses the engine's own `Decimal`, `Text`, `Date`, `DateTime`, record and collection code and mirrors the emitted program's call hoisting, parameter copy-back, 100000-step budget and call/subroutine depth limits, plus a 10-second wall-clock deadline. It first runs the compiler's admission check (`compile`, no `rustc`), then refuses by name what it does not implement: `For Each`, `New`, `Delete`, attribute reads and writes, database aggregate formulas, and `Exit` outside a loop. The compiled path stays the oracle: `tests/interpreter_differential.rs` compares stdout and success of `interpret` against `run` for every runnable fixture and for targeted programs (numeric rounding and overflow, string padding, dates, parameter modes, nested records, subroutines, limits). `gxtest.rs` has no executor seam (its assertions carry already evaluated values), so it is not wired. Verified on the development machine only through these tests and the fixture timings; no Knowledge Base, GeneXus install or database was involved.
 - **`build.ps1 -RustArtifactCache <directory>` reuses the Rust binaries across clean checkouts (opt-in).** `gxwire.exe` and `gx-engine.exe` do not depend on the GeneXus SDK, yet every clean checkout compiled both from scratch, which is most of a cold `build.ps1`. With the switch, each binary is kept in the given directory under a key made of the committed crate source, the toolchain pin, the compiler, and the cargo configuration and flags in effect; another worktree of the same commit, or the same commit built against a second GeneXus installation, restores it instead of compiling. A crate with uncommitted or untracked files is always compiled and never stored, a stored binary is hashed against its record before it is reused, and the switch is refused together with `-RequireEngineBinaries`, so a release still compiles its own binaries. Without the switch the build is unchanged.
 - **`gx-engine kb-analyze <kb>`: whole-KB static analysis in one engine run (engine command only, not an MCP tool).** Reads the catalog once and checks every Procedure the engine front end admits, printing deterministic JSON (`findings`, `skipped` with a reason per Procedure the parser or reader cannot judge, `withheld`). Rules: `GX008` unused variable and `GX009` unused subroutine (same ids and meaning as the Worker linter), and engine-only `GXE001` variable assigned but never read, `GXE002` statement after a `Return`/`Exit` of the same block, `GXE003` wrong argument count to a Procedure with an unambiguous `parm`, `GXE004` not-main Procedure no generated object reaches. A call to a name the catalog does not hold is deliberately not reported (GeneXus functions cannot be enumerated). Verified: 44 unit tests on in-memory catalogs and source snippets (every rule has positive and negative cases; each guard was disabled one at a time and a test went red), byte-identical JSON across runs and insertion orders, and on a synthetic generated catalog (not a real KB, release build, catalog already in memory, analysis plus JSON) 300 Procedures in 18.5 ms and 3000 in 186.7 ms. Not verified: any run against a real Knowledge Base, the correctness of any finding in the GeneXus IDE, and the live path through `scripts/validate-engine-analyze-live.ps1` (no KB on the authoring machine). Blind spots: Layout/Help parts are not served by the reader, so a variable used only there looks unused. Exposing it through `genexus_analyze` is not done.
