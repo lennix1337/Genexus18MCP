@@ -300,9 +300,12 @@ dotnet GxMcp.Gateway.dll
 '@
 Set-Content -Path "$publishDir\start_mcp.bat" -Value $batContent -Encoding Ascii
 
+# 6.05 Build and bundle GxWire (Rust engine)
 function Resolve-CargoExecutable {
     $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
     if (-not $cargoCmd) { return $null }
+    # A cargo that is not an executable file (a test double, an alias) is invoked by name.
+    if ($cargoCmd.CommandType -ne 'Application') { return $cargoCmd.Name }
     $source = $cargoCmd.Source
     try {
         $item = Get-Item -LiteralPath $source -ErrorAction SilentlyContinue
@@ -321,7 +324,6 @@ function Resolve-CargoExecutable {
     return $source
 }
 
-# 6.05 Build and bundle GxWire (Rust engine)
 $cargoExe = Resolve-CargoExecutable
 $gxwireDir = Join-Path $root "src\gxwire"
 if (Test-Path (Join-Path $gxwireDir "Cargo.toml")) {
