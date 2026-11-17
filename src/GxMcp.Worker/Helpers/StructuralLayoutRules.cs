@@ -73,7 +73,9 @@ namespace GxMcp.Worker.Helpers
                 // A form button or grid row action.
                 { "userAction", new Kind("name",
                     "name", "caption", "description", "visible", "styleClass", "themeClass", "class", "callObject",
-                    "popup", "parameters", "gxobject", "disabled", "confirm", "confirmText", "order", "image", "disabledImage", "controlName") },
+                    "popup", "parameters", "gxobject", "disabled", "confirm", "confirmText", "confirmMessage",
+                    "confirmTitle", "condition", "visibleCondition", "fontIcon", "imageType", "tooltip",
+                    "buttonClass", "multiRowSelection", "order", "image", "disabledImage", "controlName") },
 
                 // issue #408: a variable (or attribute) shown as a control - edit, combo box, radio.
                 // This is the element PopupLayoutBuilder emits for a combo bound to a variable, with the

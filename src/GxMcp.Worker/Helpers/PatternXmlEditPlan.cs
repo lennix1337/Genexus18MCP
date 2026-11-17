@@ -226,7 +226,8 @@ namespace GxMcp.Worker.Helpers
             + " reordered by identity inside a table, actionGroup, tabs or tab, and a <prompt>"
             + " added to or removed from an <attribute>; it still refuses identity and"
             + " childrenOrderedList edits, container-valued or nested additions except a"
-            + " specification-validated Selection table subtree, more than one addition per"
+            + " specification-validated Selection table subtree or an actionGroup with"
+            + " userAction children, more than one addition per"
             + " container, and a reorder next to a sibling without an identity"
             + " attribute.";
 
@@ -454,7 +455,14 @@ namespace GxMcp.Worker.Helpers
                     return true;
                 }
                 if (!StructuralLayoutRules.IsPermittedKind(kind)) return false;
-                if (inserted.HasElements) return false;
+                if (inserted.HasElements)
+                {
+                    if (!string.Equals(kind, "actionGroup", StringComparison.OrdinalIgnoreCase))
+                        return false;
+                    if (!ValidateInsertedActionGroupChildren(inserted, path))
+                        return false;
+                    if (ErrorCode != null) return true;
+                }
 
                 var declared = DeclaredAttributes(container, kind);
                 string offender = StructuralLayoutRules.FirstDisallowedAttribute(kind, inserted, declared);
@@ -521,6 +529,57 @@ namespace GxMcp.Worker.Helpers
             // attribute, and a null key throws out of the plan instead of planning the
             // removal.
             if (removedIdentity != null) _removedIdentities[removedIdentity] = removedKind;
+            return true;
+        }
+
+        private bool ValidateInsertedActionGroupChildren(XElement actionGroup, string path)
+        {
+            var significant = actionGroup.Nodes().Where(Significant).ToArray();
+            if (significant.Length == 0) return false;
+            var childDeclared = DeclaredAttributes(actionGroup, "userAction");
+            var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string groupPath = path + "actionGroup[@name='" + (string)actionGroup.Attribute("name") + "']/";
+
+            foreach (XNode node in significant)
+            {
+                if (!(node is XElement child)) return false;
+                if (!string.Equals(child.Name.LocalName, "userAction", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                if (child.HasElements || child.Nodes().Where(Significant).Any())
+                    return false;
+
+                string offender = StructuralLayoutRules.FirstDisallowedAttribute("userAction", child, childDeclared);
+                if (offender != null)
+                {
+                    Reject("PatternStructureChangeUnsupported",
+                        "Attribute '" + offender + "' is not permitted on a <userAction> added at "
+                        + groupPath + ". Permitted: "
+                        + string.Join(", ", StructuralLayoutRules.AllowedAttributes("userAction")
+                            .Concat(childDeclared ?? Enumerable.Empty<string>())
+                            .Where(a => !StructuralLayoutRules.IsSdkOwnedAttribute(a))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .OrderBy(a => a, StringComparer.OrdinalIgnoreCase))
+                        + ".");
+                    return true;
+                }
+
+                string childIdentity = StructuralLayoutRules.Identity("userAction", child);
+                if (childIdentity == null)
+                {
+                    Reject("PatternStructureChangeUnsupported",
+                        "A <userAction> added at " + groupPath + " needs "
+                        + StructuralLayoutRules.RequiredIdentityAttribute("userAction") + ".");
+                    return true;
+                }
+
+                if (!seenNames.Add(childIdentity))
+                {
+                    Reject("PatternStructureChangeUnsupported",
+                        "Duplicate <userAction> name '" + childIdentity + "' inside <actionGroup> at " + groupPath + ".");
+                    return true;
+                }
+            }
+
             return true;
         }
 

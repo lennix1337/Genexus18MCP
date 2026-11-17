@@ -1083,5 +1083,53 @@ namespace GxMcp.Worker.Tests
             var change = Assert.Single(plan.Changes);
             Assert.EndsWith("@caption", (string)change["path"], StringComparison.Ordinal);
         }
+
+        [Fact]
+        public void Adding_An_ActionGroup_With_First_UserAction_Into_A_Grid_Is_Permitted()
+        {
+            const string beforeGrid = Header
+                + "<webPanel name=\"WP\"><table name=\"TableMain\">"
+                + "<grid name=\"Grid1\"><gridVariable name=\"&amp;Item\" /></grid>"
+                + "</table></webPanel></instance>";
+            const string afterGrid = Header
+                + "<webPanel name=\"WP\"><table name=\"TableMain\">"
+                + "<grid name=\"Grid1\"><gridVariable name=\"&amp;Item\" />"
+                + "<actionGroup name=\"GridActionGroup1\" caption=\"GridActionGroup1\">"
+                + "<userAction name=\"Approve\" caption=\"Approve\" condition=\"Status = 1\" />"
+                + "</actionGroup></grid>"
+                + "</table></webPanel></instance>";
+
+            var plan = PatternXmlEditPlan.Create(beforeGrid, afterGrid, allowGridStructure: true);
+
+            Assert.Null(plan.ErrorCode);
+            var change = Assert.Single(plan.Changes);
+            Assert.Equal("Insert", (string)change["operation"]);
+            Assert.Equal("actionGroup", (string)change["element"]);
+            Assert.Equal("GridActionGroup1", (string)change["identity"]);
+        }
+
+        [Fact]
+        public void Adding_An_ActionGroup_With_Invalid_Child_Or_Unknown_UserAction_Attribute_Is_Rejected()
+        {
+            const string beforeGrid = Header
+                + "<webPanel name=\"WP\"><table name=\"TableMain\">"
+                + "<grid name=\"Grid1\"><gridVariable name=\"&amp;Item\" /></grid>"
+                + "</table></webPanel></instance>";
+
+            var withTable = PatternXmlEditPlan.Create(beforeGrid,
+                beforeGrid.Replace("</grid>", "<actionGroup name=\"G\"><table name=\"T\" /></actionGroup></grid>"),
+                allowGridStructure: true);
+            var withBadAttr = PatternXmlEditPlan.Create(beforeGrid,
+                beforeGrid.Replace("</grid>", "<actionGroup name=\"G\"><userAction name=\"A\" bogus=\"1\" /></actionGroup></grid>"),
+                allowGridStructure: true);
+            var withDupAction = PatternXmlEditPlan.Create(beforeGrid,
+                beforeGrid.Replace("</grid>", "<actionGroup name=\"G\"><userAction name=\"A\" /><userAction name=\"A\" /></actionGroup></grid>"),
+                allowGridStructure: true);
+
+            Assert.Equal("PatternStructureChangeUnsupported", withTable.ErrorCode);
+            Assert.Equal("PatternStructureChangeUnsupported", withBadAttr.ErrorCode);
+            Assert.Contains("bogus", withBadAttr.Error, StringComparison.Ordinal);
+            Assert.Equal("PatternStructureChangeUnsupported", withDupAction.ErrorCode);
+        }
     }
 }

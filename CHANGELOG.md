@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- **WWP grid action groups:** `genexus_wwp` `add_action` creating a missing `actionGroup` now targets the grid (or `gridPath`/`containerName`) instead of a header action group or `standardAction` element, runs `PatternXmlEditPlan` in `dryRun` so preview matches the real write, and `PatternXmlEditPlan` / `StructuralLayoutRules` now permit inserting an `<actionGroup>` together with its initial `<userAction>` child(ren) in one atomic write. Verified with unit and regression tests; not validated on a live WorkWithPlus KB (no WorkWithPlus installation on this machine). https://github.com/lennix1337/Genexus18MCP/issues/1041
 - **WWP grid diff:** a grid with no explicit name now shows its projected name instead of an empty string. The reported empty `controlName` and `id` remain the actual XML attributes. Verified with an in-memory instance; not yet validated on a live WorkWithPlus KB. https://github.com/lennix1337/Genexus18MCP/issues/1036
 
 ### Internal
