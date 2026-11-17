@@ -159,6 +159,16 @@ namespace GxMcp.Worker.Models
         public string ToJson() => JsonConvert.SerializeObject(this, Formatting.Indented);
         public static SearchIndex FromJson(string json) => JsonConvert.DeserializeObject<SearchIndex>(json);
 
+        public static SearchIndex FromJsonStream(System.IO.Stream stream)
+        {
+            if (stream == null) return null;
+            using (var sr = new System.IO.StreamReader(stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 16384, leaveOpen: true))
+            using (var jr = new JsonTextReader(sr))
+            {
+                return JsonSerializer.CreateDefault().Deserialize<SearchIndex>(jr);
+            }
+        }
+
         // Pass-through for null/empty; otherwise the CLR interned instance. Used
         // for shared-vocabulary fields only (Type/Module/edge names) — never for
         // unique-per-object values (Name/Guid/Description/FullSource), which would
@@ -176,10 +186,15 @@ namespace GxMcp.Worker.Models
         public static void InternSharedStrings(SearchIndex index)
         {
             if (index?.Objects == null) return;
-            foreach (var entry in index.Objects.Values)
+            foreach (var kv in index.Objects)
             {
+                var entry = kv.Value;
                 if (entry == null) continue;
+                if (string.IsNullOrEmpty(entry.StorageKey) && !string.IsNullOrEmpty(kv.Key))
+                    entry.StorageKey = kv.Key;
                 entry.Type = InternShared(entry.Type);
+                entry.EntityTypeGuid = InternShared(entry.EntityTypeGuid);
+                entry.LastModifiedBy = InternShared(entry.LastModifiedBy);
                 entry.FullSourcePart = InternShared(entry.FullSourcePart);
                 entry.Module = InternShared(entry.Module);
                 entry.Parent = InternShared(entry.Parent);

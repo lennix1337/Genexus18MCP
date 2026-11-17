@@ -9,6 +9,8 @@
 
 ### Changed
 
+- **Lower SDK Worker memory during source search and indexing.** Replaced the string-keyed trigram index and per-record trigram string sets in `SourceStoreService` with numeric record IDs, packed 64-bit trigrams, and streaming index/catalog I/O, cutting duplicate key/trigram allocations on the managed heap. Verified via search bursts on `C:\KBs\KBTeste955` (860 objects: private bytes 140.54 -> 103.36 MiB, working set 197.22 -> 160.46 MiB) and `C:\KBs\KBTesteBench` (838 objects: private bytes 140.86 -> 110.78 MiB, working set 194.91 -> 166.52 MiB). https://github.com/lennix1337/Genexus18MCP/issues/1039 https://github.com/lennix1337/Genexus18MCP/issues/1038
+
 ### Fixed
 
 - **WWP grid action groups:** `genexus_wwp` `add_action` creating a missing `actionGroup` now targets the grid (or `gridPath`/`containerName`) instead of a header action group or `standardAction` element, runs `PatternXmlEditPlan` in `dryRun` so preview matches the real write, and `PatternXmlEditPlan` / `StructuralLayoutRules` now permit inserting an `<actionGroup>` together with its initial `<userAction>` child(ren) in one atomic write. Verified with unit and regression tests; not validated on a live WorkWithPlus KB (no WorkWithPlus installation on this machine). https://github.com/lennix1337/Genexus18MCP/issues/1041

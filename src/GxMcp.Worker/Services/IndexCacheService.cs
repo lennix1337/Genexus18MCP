@@ -834,6 +834,8 @@ namespace GxMcp.Worker.Services
                 // PERFORMANCE: Since we are iterating dictionary values, there are NO duplicates.
                 // Using .Add() directly changes this from an O(N^2) operation to O(N).
                 list.Add(entry);
+                if (string.IsNullOrEmpty(entry.StorageKey) && !string.IsNullOrEmpty(kv.Key))
+                    entry.StorageKey = kv.Key;
                 string storageKey = GetEntryStorageKey(entry);
                 keysByParent[parent].Add(storageKey);
 
@@ -874,9 +876,35 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private static readonly System.Text.RegularExpressions.Regex SourceTokenRegex =
-            new System.Text.RegularExpressions.Regex(@"[A-Za-z0-9_]{3,}",
-                System.Text.RegularExpressions.RegexOptions.Compiled);
+        private static IEnumerable<string> ExtractUniqueSourceTokens(string source)
+        {
+            if (string.IsNullOrEmpty(source) || source.Length < 3) return Array.Empty<string>();
+            var tokens = new HashSet<string>(StringComparer.Ordinal);
+            int i = 0;
+            int len = source.Length;
+            char[] buf = null;
+            while (i < len)
+            {
+                while (i < len && !IsSourceTokenChar(source[i])) i++;
+                int start = i;
+                while (i < len && IsSourceTokenChar(source[i])) i++;
+                int tokLen = i - start;
+                if (tokLen >= 3)
+                {
+                    if (buf == null || buf.Length < tokLen) buf = new char[Math.Max(64, tokLen)];
+                    for (int k = 0; k < tokLen; k++)
+                    {
+                        char c = source[start + k];
+                        buf[k] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+                    }
+                    tokens.Add(new string(buf, 0, tokLen));
+                }
+            }
+            return tokens;
+        }
+
+        private static bool IsSourceTokenChar(char c)
+            => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 
         private static void AddSourceTokens(
             System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.HashSet<string>> tokenIndex,
@@ -884,9 +912,8 @@ namespace GxMcp.Worker.Services
         {
             if (tokenIndex == null || entry == null || entry.FullSource == null) return;
             string storageKey = GetEntryStorageKeyStatic(entry);
-            foreach (System.Text.RegularExpressions.Match match in SourceTokenRegex.Matches(entry.FullSource))
+            foreach (string token in ExtractUniqueSourceTokens(entry.FullSource))
             {
-                string token = match.Value.ToLowerInvariant();
                 var set = tokenIndex.GetOrAdd(token, _ => new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 lock (set) { set.Add(storageKey); }
             }
@@ -898,9 +925,8 @@ namespace GxMcp.Worker.Services
         {
             if (tokenIndex == null || entry == null || entry.FullSource == null) return;
             string storageKey = GetEntryStorageKeyStatic(entry);
-            foreach (System.Text.RegularExpressions.Match match in SourceTokenRegex.Matches(entry.FullSource))
+            foreach (string token in ExtractUniqueSourceTokens(entry.FullSource))
             {
-                string token = match.Value.ToLowerInvariant();
                 if (!tokenIndex.TryGetValue(token, out var set)) continue;
                 lock (set)
                 {
@@ -992,8 +1018,11 @@ namespace GxMcp.Worker.Services
                 if (loaded.Payload == null || loaded.Payload.Length == 0)
                     return WarmRestoreFallback(response, "payload-empty");
 
-                string json = Encoding.UTF8.GetString(loaded.Payload);
-                SearchIndex restored = SearchIndex.FromJson(json);
+                SearchIndex restored;
+                using (var ms = new MemoryStream(loaded.Payload, writable: false))
+                {
+                    restored = SearchIndex.FromJsonStream(ms);
+                }
                 if (restored?.Objects == null)
                     return WarmRestoreFallback(response, "payload-invalid");
                 if (metadata.ObjectCount != restored.Objects.Count)
@@ -1747,7 +1776,16 @@ namespace GxMcp.Worker.Services
                         && !string.Equals(NormalizeCachePath(currentKbPath), NormalizeCachePath(metadata.KbPath), StringComparison.OrdinalIgnoreCase))
                         return null;
 
-                    var index = SearchIndex.FromJson(ReadGzippedText(Path.Combine(slot, "body.json.gz")));
+                    SearchIndex index = null;
+                    string bodyPath = Path.Combine(slot, "body.json.gz");
+                    if (File.Exists(bodyPath))
+                    {
+                        using (var fs = new FileStream(bodyPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        using (var gz = new GZipStream(fs, CompressionMode.Decompress))
+                        {
+                            index = SearchIndex.FromJsonStream(gz);
+                        }
+                    }
                     if (index == null || index.Objects == null || index.Objects.Count == 0) return null;
                     // Resumed lite entries are reused verbatim by the walk, so a checkpoint written
                     // before #650 must be repaired here or its doubled folder paths survive the resume.
@@ -1904,18 +1942,23 @@ namespace GxMcp.Worker.Services
             }
             else
             {
-                string json = null;
                 if (File.Exists(_indexPathGz))
                 {
                     Logger.Debug(string.Format("Loading gzipped index from disk: {0}", _indexPathGz));
-                    json = ReadGzippedText(_indexPathGz);
+                    using (var fs = new FileStream(_indexPathGz, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    using (var gz = new GZipStream(fs, CompressionMode.Decompress))
+                    {
+                        loaded = SearchIndex.FromJsonStream(gz);
+                    }
                 }
                 else if (File.Exists(_indexPath))
                 {
                     Logger.Debug(string.Format("Loading legacy plain index from disk: {0}", _indexPath));
-                    json = File.ReadAllText(_indexPath);
+                    using (var fs = new FileStream(_indexPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        loaded = SearchIndex.FromJsonStream(fs);
+                    }
                 }
-                if (!string.IsNullOrEmpty(json)) loaded = SearchIndex.FromJson(json);
             }
 
             if (loaded == null) loaded = new SearchIndex();

@@ -53,6 +53,7 @@ namespace GxMcp.Worker.Services
 
         public class RecordSummary
         {
+            internal int RecordId { get; set; } = -1;
             public string Guid { get; set; }
             public string PartName { get; set; }
             public DateTime? LastUpdate { get; set; }
@@ -61,6 +62,123 @@ namespace GxMcp.Worker.Services
             public string RelativeFilePath { get; set; }
             public long FileBytes { get; set; }
             public DateTime StoredAtUtc { get; set; }
+        }
+
+        internal sealed class PostingList
+        {
+            private int[] _ids;
+            private int _count;
+
+            public PostingList()
+            {
+                _ids = new int[4];
+                _count = 0;
+            }
+
+            public PostingList(int[] sortedIds)
+            {
+                _ids = sortedIds ?? Array.Empty<int>();
+                _count = _ids.Length;
+            }
+
+            public int Count
+            {
+                get { lock (this) return _count; }
+            }
+
+            public void Add(int id)
+            {
+                lock (this)
+                {
+                    int idx = Array.BinarySearch(_ids, 0, _count, id);
+                    if (idx >= 0) return;
+                    int insertPos = ~idx;
+                    if (_count == _ids.Length)
+                    {
+                        int newCap = _ids.Length == 0 ? 4 : (_ids.Length < 64 ? _ids.Length * 2 : _ids.Length + (_ids.Length >> 1));
+                        var next = new int[newCap];
+                        if (_count > 0) Array.Copy(_ids, 0, next, 0, _count);
+                        _ids = next;
+                    }
+                    if (insertPos < _count)
+                    {
+                        Array.Copy(_ids, insertPos, _ids, insertPos + 1, _count - insertPos);
+                    }
+                    _ids[insertPos] = id;
+                    _count++;
+                }
+            }
+
+            public bool Remove(int id)
+            {
+                lock (this)
+                {
+                    int idx = Array.BinarySearch(_ids, 0, _count, id);
+                    if (idx < 0) return _count == 0;
+                    _count--;
+                    if (idx < _count)
+                    {
+                        Array.Copy(_ids, idx + 1, _ids, idx, _count - idx);
+                    }
+                    if (_count > 0 && _ids.Length > 8 && _count <= _ids.Length / 4)
+                    {
+                        var shrunk = new int[Math.Max(4, _count * 2)];
+                        Array.Copy(_ids, 0, shrunk, 0, _count);
+                        _ids = shrunk;
+                    }
+                    return _count == 0;
+                }
+            }
+
+            public int[] SnapshotIds()
+            {
+                lock (this)
+                {
+                    if (_count == 0) return Array.Empty<int>();
+                    var copy = new int[_count];
+                    Array.Copy(_ids, 0, copy, 0, _count);
+                    return copy;
+                }
+            }
+
+            public void IntersectInto(List<int> candidates)
+            {
+                lock (this)
+                {
+                    if (_count == 0)
+                    {
+                        candidates.Clear();
+                        return;
+                    }
+                    int write = 0;
+                    int i = 0;
+                    int j = 0;
+                    int cCount = candidates.Count;
+                    while (i < cCount && j < _count)
+                    {
+                        int a = candidates[i];
+                        int b = _ids[j];
+                        if (a == b)
+                        {
+                            candidates[write++] = a;
+                            i++;
+                            j++;
+                        }
+                        else if (a < b)
+                        {
+                            i++;
+                        }
+                        else
+                        {
+                            j++;
+                        }
+                    }
+                    if (write < cCount)
+                    {
+                        candidates.RemoveRange(write, cCount - write);
+                    }
+                }
+            }
         }
 
         private enum RecordReadState
@@ -73,8 +191,14 @@ namespace GxMcp.Worker.Services
         private string _storeDirectory;
         private readonly ConcurrentDictionary<string, RecordSummary> _records =
             new ConcurrentDictionary<string, RecordSummary>(StringComparer.OrdinalIgnoreCase);
-        private readonly ConcurrentDictionary<string, HashSet<string>> _trigramIndex =
-            new ConcurrentDictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<ulong, PostingList> _trigramIndex =
+            new ConcurrentDictionary<ulong, PostingList>();
+
+        private readonly object _idGate = new object();
+        private RecordSummary[] _recordsById = Array.Empty<RecordSummary>();
+        private string[] _idToKey = Array.Empty<string>();
+        private int _nextRecordId;
+        private readonly Stack<int> _freeRecordIds = new Stack<int>();
 
         private readonly object _ioGate = new object();
         private readonly object _flushGate = new object();
@@ -120,14 +244,77 @@ namespace GxMcp.Worker.Services
         // empty posting set is dropped from the index rather than kept, since a set with
         // no members answers nothing and only retains the key strings.
         //
-        // Concurrency: a query that is mid-scan may still observe a key that is being
+        // Concurrency: a query that is mid-scan may still observe an id that is being
         // removed. That is the safe direction - a candidate whose record is gone is
         // re-checked against the record dictionary before it is used, so a stale
         // posting costs a miss, never a wrong result. The reverse (removing a posting
         // that a concurrent write just added) is prevented by removing under the same
         // per-set lock the writer uses.
-        private readonly ConcurrentDictionary<string, HashSet<string>> _trigramsByRecord =
-            new ConcurrentDictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<int, ulong[]> _trigramsByRecord =
+            new ConcurrentDictionary<int, ulong[]>();
+
+        private int AssignRecordId(string key, RecordSummary summary)
+        {
+            lock (_idGate)
+            {
+                if (_records.TryGetValue(key, out var existing) && existing != null && existing.RecordId >= 0)
+                {
+                    int existingId = existing.RecordId;
+                    summary.RecordId = existingId;
+                    _recordsById[existingId] = summary;
+                    _idToKey[existingId] = key;
+                    return existingId;
+                }
+
+                int id = _freeRecordIds.Count > 0 ? _freeRecordIds.Pop() : _nextRecordId++;
+                if (id >= _recordsById.Length)
+                {
+                    int newLen = Math.Max(64, _recordsById.Length * 2);
+                    while (newLen <= id) newLen *= 2;
+                    var nextRecs = new RecordSummary[newLen];
+                    var nextKeys = new string[newLen];
+                    Array.Copy(_recordsById, nextRecs, _recordsById.Length);
+                    Array.Copy(_idToKey, nextKeys, _idToKey.Length);
+                    Volatile.Write(ref _recordsById, nextRecs);
+                    Volatile.Write(ref _idToKey, nextKeys);
+                }
+                summary.RecordId = id;
+                _recordsById[id] = summary;
+                _idToKey[id] = key;
+                return id;
+            }
+        }
+
+        private void ReleaseRecordId(int id)
+        {
+            if (id < 0) return;
+            lock (_idGate)
+            {
+                if (id < _recordsById.Length)
+                {
+                    _recordsById[id] = null;
+                    _idToKey[id] = null;
+                    _freeRecordIds.Push(id);
+                }
+            }
+        }
+
+        private void ClearRecordIds()
+        {
+            lock (_idGate)
+            {
+                _recordsById = Array.Empty<RecordSummary>();
+                _idToKey = Array.Empty<string>();
+                _nextRecordId = 0;
+                _freeRecordIds.Clear();
+            }
+        }
+
+        private string GetKeyById(int id)
+        {
+            var arr = Volatile.Read(ref _idToKey);
+            return (uint)id < (uint)arr.Length ? arr[id] : null;
+        }
 
         /// <summary>Record keys currently reachable through at least one trigram posting.</summary>
         internal int TrigramIndexedRecordCount => _trigramsByRecord.Count;
@@ -139,9 +326,13 @@ namespace GxMcp.Worker.Services
         internal HashSet<string> TrigramsForRecordForTest(string guid, string partName)
         {
             string key = MakeKey(guid, partName);
-            return _trigramsByRecord.TryGetValue(key, out var set)
-                ? new HashSet<string>(set, StringComparer.OrdinalIgnoreCase)
-                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (_records.TryGetValue(key, out var rec) && rec != null && rec.RecordId >= 0
+                && _trigramsByRecord.TryGetValue(rec.RecordId, out var packed) && packed != null)
+            {
+                foreach (ulong t in packed) result.Add(TrigramExtractor.UnpackTrigram(t));
+            }
+            return result;
         }
 
         /// <summary>
@@ -156,9 +347,15 @@ namespace GxMcp.Worker.Services
             var snapshot = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var kvp in _trigramIndex)
             {
-                var set = kvp.Value;
-                lock (set)
-                    snapshot[kvp.Key] = new HashSet<string>(set, StringComparer.OrdinalIgnoreCase);
+                int[] ids = kvp.Value.SnapshotIds();
+                if (ids.Length == 0) continue;
+                var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (int id in ids)
+                {
+                    string k = GetKeyById(id);
+                    if (k != null) set.Add(k);
+                }
+                snapshot[TrigramExtractor.UnpackTrigram(kvp.Key)] = set;
             }
             return snapshot;
         }
@@ -198,6 +395,7 @@ namespace GxMcp.Worker.Services
                 // new content's trigrams were the previous content's, and subtract the
                 // wrong postings instead of removing the right ones.
                 _trigramsByRecord.Clear();
+                ClearRecordIds();
                 // Issue #339: same for the freshness certifications - they describe the
                 // store that was just reset.
                 _certifications.Clear();
@@ -231,7 +429,8 @@ namespace GxMcp.Worker.Services
             {
                 if (_records.TryRemove(key, out var rec))
                 {
-                    RemoveTrigramPostings(key);
+                    RemoveTrigramPostings(rec.RecordId);
+                    ReleaseRecordId(rec.RecordId);
                     _certifications.TryRemove(key, out _);
                     ApplyAccountingDelta(-rec.FileBytes);
                     try
@@ -330,14 +529,6 @@ namespace GxMcp.Worker.Services
             return $"{guid?.Trim().ToLowerInvariant()}:{partName?.Trim().ToLowerInvariant()}";
         }
 
-        private static DateTime? ParseDateToken(JToken token)
-        {
-            if (token == null || token.Type == JTokenType.Null) return null;
-            if (token.Type == JTokenType.Date) return token.Value<DateTime>();
-            DateTime parsed;
-            return DateTime.TryParse(token.ToString(), out parsed) ? parsed : (DateTime?)null;
-        }
-
         private bool TryReadStoredRecord(string guid, string partName,
             out string source, out RecordReadState state, out string detail)
         {
@@ -399,71 +590,115 @@ namespace GxMcp.Worker.Services
 
             try
             {
+                string payloadGuid = null;
+                string payloadPart = null;
+                string payloadHash = null;
+                bool hasSource = false;
+                bool hasLastUpdate = false;
+                DateTime? payloadLastUpdate = null;
+
                 using (var fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var gz = new GZipStream(fs, CompressionMode.Decompress))
                 using (var reader = new StreamReader(gz, Encoding.UTF8))
+                using (var jr = new JsonTextReader(reader) { DateParseHandling = DateParseHandling.DateTime })
                 {
-                    var payload = JObject.Parse(reader.ReadToEnd());
-                    var sourceToken = payload["source"];
-                    if (sourceToken == null || sourceToken.Type != JTokenType.String)
+                    if (!jr.Read() || jr.TokenType != JsonToken.StartObject)
                     {
-                        detail = "The source-store record has no string source payload.";
+                        detail = "The source-store record is not a JSON object.";
                         return false;
                     }
-                    source = sourceToken.Value<string>();
-                    if (source == null)
+                    while (jr.Read())
                     {
-                        detail = "The source-store record source is null.";
-                        return false;
-                    }
-
-                    string payloadGuid = payload["guid"]?.ToString();
-                    string payloadPart = payload["part"]?.ToString();
-                    if (string.IsNullOrWhiteSpace(payloadGuid) || string.IsNullOrWhiteSpace(payloadPart)
-                        || !string.Equals(payloadGuid.Trim(), normalizedGuid, StringComparison.OrdinalIgnoreCase)
-                        || !string.Equals(ObjectService.NormalizeRawSourcePart(payloadPart), normalizedPart,
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        detail = "The source-store payload identity does not match its catalog part.";
-                        source = null;
-                        return false;
-                    }
-
-                    string payloadHash = payload["hash"]?.ToString();
-                    if (!string.Equals(payloadHash, summary.ContentHash, StringComparison.OrdinalIgnoreCase)
-                        || !string.Equals(ComputeHash(source), summary.ContentHash,
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        detail = "The source-store payload hash does not match its catalog record.";
-                        source = null;
-                        return false;
-                    }
-
-                    if (summary.FileBytes > 0
-                        && new FileInfo(fullPath).Length != summary.FileBytes)
-                    {
-                        detail = "The source-store record file size does not match its catalog record.";
-                        source = null;
-                        return false;
-                    }
-
-                    var lastUpdateToken = payload["lastUpdate"];
-                    DateTime? payloadLastUpdate = null;
-                    if (lastUpdateToken != null && lastUpdateToken.Type != JTokenType.Null)
-                    {
-                        DateTime parsed;
-                        if (lastUpdateToken.Type == JTokenType.Date)
+                        if (jr.TokenType == JsonToken.EndObject) break;
+                        if (jr.TokenType != JsonToken.PropertyName) continue;
+                        string prop = jr.Value as string;
+                        if (!jr.Read()) break;
+                        switch (prop)
                         {
-                            parsed = lastUpdateToken.Value<DateTime>();
+                            case "source":
+                                if (jr.TokenType == JsonToken.String)
+                                {
+                                    source = jr.Value as string;
+                                    hasSource = source != null;
+                                }
+                                else if (jr.TokenType != JsonToken.Null)
+                                {
+                                    detail = "The source-store record has no string source payload.";
+                                    return false;
+                                }
+                                break;
+                            case "guid":
+                                payloadGuid = jr.Value?.ToString();
+                                break;
+                            case "part":
+                                payloadPart = jr.Value?.ToString();
+                                break;
+                            case "hash":
+                                payloadHash = jr.Value?.ToString();
+                                break;
+                            case "lastUpdate":
+                                hasLastUpdate = true;
+                                if (jr.TokenType == JsonToken.Null)
+                                {
+                                    payloadLastUpdate = null;
+                                }
+                                else if (jr.TokenType == JsonToken.Date && jr.Value is DateTime dt)
+                                {
+                                    payloadLastUpdate = dt;
+                                }
+                                else if (jr.Value != null)
+                                {
+                                    if (!DateTime.TryParse(jr.Value.ToString(), out var parsed))
+                                    {
+                                        detail = "The source-store payload has an invalid last-update value.";
+                                        source = null;
+                                        return false;
+                                    }
+                                    payloadLastUpdate = parsed;
+                                }
+                                break;
+                            default:
+                                jr.Skip();
+                                break;
                         }
-                        else if (!DateTime.TryParse(lastUpdateToken.ToString(), out parsed))
-                        {
-                            detail = "The source-store payload has an invalid last-update value.";
-                            source = null;
-                            return false;
-                        }
-                        payloadLastUpdate = parsed;
                     }
+                }
+
+                if (!hasSource || source == null)
+                {
+                    detail = "The source-store record has no string source payload.";
+                    source = null;
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(payloadGuid) || string.IsNullOrWhiteSpace(payloadPart)
+                    || !string.Equals(payloadGuid.Trim(), normalizedGuid, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(ObjectService.NormalizeRawSourcePart(payloadPart), normalizedPart,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    detail = "The source-store payload identity does not match its catalog part.";
+                    source = null;
+                    return false;
+                }
+
+                if (!string.Equals(payloadHash, summary.ContentHash, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(ComputeHash(source), summary.ContentHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    detail = "The source-store payload hash does not match its catalog record.";
+                    source = null;
+                    return false;
+                }
+
+                if (summary.FileBytes > 0
+                    && new FileInfo(fullPath).Length != summary.FileBytes)
+                {
+                    detail = "The source-store record file size does not match its catalog record.";
+                    source = null;
+                    return false;
+                }
+
+                if (hasLastUpdate)
+                {
                     if (summary.LastUpdate.HasValue != payloadLastUpdate.HasValue
                         || (summary.LastUpdate.HasValue && payloadLastUpdate.HasValue
                             && summary.LastUpdate.Value != payloadLastUpdate.Value))
@@ -472,6 +707,12 @@ namespace GxMcp.Worker.Services
                         source = null;
                         return false;
                     }
+                }
+                else if (summary.LastUpdate.HasValue)
+                {
+                    detail = "The source-store payload timestamp does not match its catalog record.";
+                    source = null;
+                    return false;
                 }
 
                 state = RecordReadState.Valid;
@@ -530,22 +771,24 @@ namespace GxMcp.Worker.Services
                 string fullPath = Path.Combine(subDir, fileName);
                 string relativePath = Path.Combine(prefix, fileName);
 
-                var payload = new JObject
-                {
-                    ["guid"] = guid,
-                    ["part"] = originalPartName,
-                    ["lastUpdate"] = lastUpdate?.ToString("o"),
-                    ["versionToken"] = versionToken,
-                    ["hash"] = hash,
-                    ["source"] = source
-                };
-
-                byte[] rawBytes = Encoding.UTF8.GetBytes(payload.ToString(Formatting.None));
                 string tmpPath = Path.Combine(subDir, $"{guid}_{partName}.tmp-{System.Guid.NewGuid():N}");
                 using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
                 using (var gz = new GZipStream(fs, CompressionMode.Compress))
+                using (var sw = new StreamWriter(gz, new UTF8Encoding(false), 16384))
+                using (var jw = new JsonTextWriter(sw) { Formatting = Formatting.None })
                 {
-                    gz.Write(rawBytes, 0, rawBytes.Length);
+                    jw.WriteStartObject();
+                    jw.WritePropertyName("guid"); jw.WriteValue(guid);
+                    jw.WritePropertyName("part"); jw.WriteValue(originalPartName);
+                    jw.WritePropertyName("lastUpdate");
+                    if (lastUpdate.HasValue) jw.WriteValue(lastUpdate.Value.ToString("o"));
+                    else jw.WriteNull();
+                    jw.WritePropertyName("versionToken");
+                    if (versionToken != null) jw.WriteValue(versionToken);
+                    else jw.WriteNull();
+                    jw.WritePropertyName("hash"); jw.WriteValue(hash);
+                    jw.WritePropertyName("source"); jw.WriteValue(source);
+                    jw.WriteEndObject();
                 }
 
                 lock (_ioGate)
@@ -572,22 +815,14 @@ namespace GxMcp.Worker.Services
                     StoredAtUtc = DateTime.UtcNow
                 };
 
+                int recordId = AssignRecordId(key, summary);
+
                 // Issue #344: update trigram postings, replacing rather than accumulating.
-                // The previous set for this key is removed first, so a source replaced by
+                // The previous set for this record id is removed first, so a source replaced by
                 // one with a disjoint trigram set does not leave the old trigrams still
                 // pointing at it.
-                var trigrams = TrigramExtractor.ExtractTrigrams(source);
-                var currentTrigrams = new HashSet<string>(trigrams, StringComparer.OrdinalIgnoreCase);
-                RemoveTrigramPostings(key);
-                foreach (var t in currentTrigrams)
-                {
-                    var set = _trigramIndex.GetOrAdd(t, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-                    lock (set)
-                    {
-                        set.Add(key);
-                    }
-                }
-                _trigramsByRecord[key] = currentTrigrams;
+                ulong[] packedTrigrams = TrigramExtractor.ExtractPackedTrigrams(source);
+                AddRecordTrigrams(recordId, packedTrigrams);
 
                 // Issue #338: apply the size delta for this record instead of making the
                 // next budget check rescan the catalog. A replacement must subtract the
@@ -942,22 +1177,23 @@ namespace GxMcp.Worker.Services
                 || string.IsNullOrWhiteSpace(part) || literal == null || literal.Length < 3)
                 return false;
 
-            var required = TrigramExtractor.ExtractTrigrams(literal);
-            if (required.Count == 0) return false;
+            ulong[] required = TrigramExtractor.ExtractPackedTrigrams(literal);
+            if (required.Length == 0) return false;
 
             Initialize();
             string normalizedPart = ObjectService.NormalizeRawSourcePart(
                 ObjectService.ResolveSearchPartName(entry.Type, part));
             string key = MakeKey(entry.Guid, normalizedPart);
 
-            if (!_records.TryGetValue(key, out var summaryBefore) || summaryBefore == null) return false;
-            if (!_trigramsByRecord.TryGetValue(key, out var indexed) || indexed == null || indexed.Count == 0)
+            if (!_records.TryGetValue(key, out var summaryBefore) || summaryBefore == null || summaryBefore.RecordId < 0)
+                return false;
+            if (!_trigramsByRecord.TryGetValue(summaryBefore.RecordId, out var indexed) || indexed == null || indexed.Length == 0)
                 return false;
 
             bool missing = false;
-            foreach (string trigram in required)
+            for (int i = 0; i < required.Length; i++)
             {
-                if (!indexed.Contains(trigram)) { missing = true; break; }
+                if (Array.BinarySearch(indexed, required[i]) < 0) { missing = true; break; }
             }
             if (!missing) return false;
 
@@ -965,7 +1201,8 @@ namespace GxMcp.Worker.Services
 
             return _records.TryGetValue(key, out var summaryAfter)
                 && ReferenceEquals(summaryBefore, summaryAfter)
-                && _trigramsByRecord.TryGetValue(key, out var indexedAfter)
+                && summaryAfter.RecordId >= 0
+                && _trigramsByRecord.TryGetValue(summaryAfter.RecordId, out var indexedAfter)
                 && ReferenceEquals(indexed, indexedAfter);
         }
 
@@ -1064,47 +1301,47 @@ namespace GxMcp.Worker.Services
             var hits = new List<JObject>();
             if (storedEntries == null || criteria == null) return hits;
 
-            var entriesByGuid = new Dictionary<string, SearchIndex.IndexEntry>(StringComparer.OrdinalIgnoreCase);
-            var allowedPartsByGuid = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var allowedById = new Dictionary<int, (SearchIndex.IndexEntry Entry, string Part, RecordSummary Summary)>();
             foreach (var e in storedEntries)
             {
                 if (string.IsNullOrWhiteSpace(e?.Guid)) continue;
                 var requestedParts = ResolveRequestedParts(e.Type, criteria.Scope);
                 if (requestedParts.Count == 0 || !IsStoredAndFresh(e, requestedParts)) continue;
                 string guid = e.Guid.Trim().ToLowerInvariant();
-                entriesByGuid[guid] = e;
-                allowedPartsByGuid[guid] = new HashSet<string>(requestedParts, StringComparer.OrdinalIgnoreCase);
-            }
-
-            if (entriesByGuid.Count == 0) return hits;
-
-            // Extract trigram candidate sets
-            var branches = TrigramExtractor.ExtractRequiredTrigramSets(criteria.Pattern, criteria.Callee);
-            var candidateKeys = TrigramExtractor.IntersectPostings(_trigramIndex, branches, _records.Keys);
-
-            // Filter candidates to those belonging to the given storedEntries
-            var matchedCandidateKeys = new List<string>();
-            foreach (var k in candidateKeys)
-            {
-                int colon = k.IndexOf(':');
-                if (colon > 0)
+                foreach (string part in requestedParts)
                 {
-                    string guid = k.Substring(0, colon);
-                    string part = k.Substring(colon + 1);
-                    if (entriesByGuid.ContainsKey(guid)
-                        && allowedPartsByGuid.TryGetValue(guid, out var allowedParts)
-                        && allowedParts.Contains(part))
+                    if (_records.TryGetValue(MakeKey(guid, part), out var rec) && rec != null && rec.RecordId >= 0)
                     {
-                        matchedCandidateKeys.Add(k);
+                        allowedById[rec.RecordId] = (e, part, rec);
                     }
                 }
             }
 
-            if (matchedCandidateKeys.Count == 0) return hits;
+            if (allowedById.Count == 0) return hits;
+
+            // Extract trigram candidate sets
+            var branches = TrigramExtractor.ExtractRequiredPackedTrigramSets(criteria.Pattern, criteria.Callee);
+            List<int> matchedIds;
+            if (branches == null || branches.Count == 0)
+            {
+                matchedIds = new List<int>(allowedById.Keys);
+            }
+            else
+            {
+                var candidateIds = IntersectPackedPostings(branches);
+                matchedIds = new List<int>();
+                for (int i = 0; i < candidateIds.Count; i++)
+                {
+                    int id = candidateIds[i];
+                    if (allowedById.ContainsKey(id)) matchedIds.Add(id);
+                }
+            }
+
+            if (matchedIds.Count == 0) return hits;
 
             // Parallel verification off-STA
             var bag = new ConcurrentBag<JObject>();
-            Parallel.ForEach(matchedCandidateKeys, new ParallelOptions { CancellationToken = ct }, (key, state) =>
+            Parallel.ForEach(matchedIds, new ParallelOptions { CancellationToken = ct }, (recordId, state) =>
             {
                 if (ct.IsCancellationRequested || bag.Count >= criteria.MaxResults)
                 {
@@ -1112,18 +1349,15 @@ namespace GxMcp.Worker.Services
                     return;
                 }
 
-                int colon = key.IndexOf(':');
-                string guid = key.Substring(0, colon);
-                string part = key.Substring(colon + 1);
+                if (!allowedById.TryGetValue(recordId, out var target)) return;
+                var entry = target.Entry;
+                string part = target.Part;
+                var rec = target.Summary;
+                if (!TryGet(entry.Guid, part, out string src) || string.IsNullOrEmpty(src)) return;
 
-                if (!entriesByGuid.TryGetValue(guid, out var entry)) return;
-                if (!TryGet(guid, part, out string src) || string.IsNullOrEmpty(src)) return;
-
-                string canonicalPart = null;
-                if (_records.TryGetValue(key, out var rec) && !string.IsNullOrEmpty(rec.PartName))
-                    canonicalPart = rec.PartName;
-                if (string.IsNullOrEmpty(canonicalPart))
-                    canonicalPart = ObjectService.ResolveSearchPartName(entry.Type, part);
+                string canonicalPart = !string.IsNullOrEmpty(rec?.PartName)
+                    ? rec.PartName
+                    : ObjectService.ResolveSearchPartName(entry.Type, part);
                 if (string.Equals(canonicalPart, "events", StringComparison.OrdinalIgnoreCase))
                 {
                     canonicalPart = "Events";
@@ -1275,38 +1509,51 @@ namespace GxMcp.Worker.Services
                 {
                     string catalogPath = Path.Combine(_storeDirectory, "catalog.json.gz");
                     string tmpPath = catalogPath + $".tmp-{Guid.NewGuid():N}";
+                    string catalogDigest;
 
-                    var recordsArray = new JArray();
-                    foreach (var kvp in _records)
+                    using (var sha = SHA256.Create())
                     {
-                        var rec = kvp.Value;
-                        recordsArray.Add(new JObject
+                        using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                        using (var gz = new GZipStream(fs, CompressionMode.Compress))
+                        using (var cs = new CryptoStream(gz, sha, CryptoStreamMode.Write))
+                        using (var sw = new StreamWriter(cs, new UTF8Encoding(false), 16384))
+                        using (var jw = new JsonTextWriter(sw) { Formatting = Formatting.None })
                         {
-                            ["k"] = kvp.Key,
-                            ["g"] = rec.Guid,
-                            ["p"] = rec.PartName,
-                            ["u"] = rec.LastUpdate?.ToString("o"),
-                            ["v"] = rec.VersionToken,
-                            ["h"] = rec.ContentHash,
-                            ["f"] = rec.RelativeFilePath,
-                            ["b"] = rec.FileBytes,
-                            ["s"] = rec.StoredAtUtc.ToString("o")
-                        });
-                    }
-
-                    var root = new JObject
-                    {
-                        ["version"] = 1,
-                        ["savedAt"] = DateTime.UtcNow.ToString("o"),
-                        ["records"] = recordsArray
-                    };
-
-                    string serialized = root.ToString(Formatting.None);
-                    byte[] bytes = Encoding.UTF8.GetBytes(serialized);
-                    using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
-                    using (var gz = new GZipStream(fs, CompressionMode.Compress))
-                    {
-                        gz.Write(bytes, 0, bytes.Length);
+                            jw.WriteStartObject();
+                            jw.WritePropertyName("version"); jw.WriteValue(1);
+                            jw.WritePropertyName("savedAt"); jw.WriteValue(DateTime.UtcNow.ToString("o"));
+                            jw.WritePropertyName("records");
+                            jw.WriteStartArray();
+                            foreach (var kvp in _records)
+                            {
+                                var rec = kvp.Value;
+                                jw.WriteStartObject();
+                                jw.WritePropertyName("k"); jw.WriteValue(kvp.Key);
+                                jw.WritePropertyName("g"); jw.WriteValue(rec.Guid);
+                                jw.WritePropertyName("p"); jw.WriteValue(rec.PartName);
+                                jw.WritePropertyName("u");
+                                if (rec.LastUpdate.HasValue) jw.WriteValue(rec.LastUpdate.Value.ToString("o"));
+                                else jw.WriteNull();
+                                jw.WritePropertyName("v");
+                                if (rec.VersionToken != null) jw.WriteValue(rec.VersionToken);
+                                else jw.WriteNull();
+                                jw.WritePropertyName("h");
+                                if (rec.ContentHash != null) jw.WriteValue(rec.ContentHash);
+                                else jw.WriteNull();
+                                jw.WritePropertyName("f");
+                                if (rec.RelativeFilePath != null) jw.WriteValue(rec.RelativeFilePath);
+                                else jw.WriteNull();
+                                jw.WritePropertyName("b"); jw.WriteValue(rec.FileBytes);
+                                jw.WritePropertyName("s"); jw.WriteValue(rec.StoredAtUtc.ToString("o"));
+                                jw.WriteEndObject();
+                            }
+                            jw.WriteEndArray();
+                            jw.WriteEndObject();
+                            jw.Flush();
+                            sw.Flush();
+                            cs.FlushFinalBlock();
+                        }
+                        catalogDigest = Convert.ToBase64String(sha.Hash);
                     }
 
                     lock (_ioGate)
@@ -1322,7 +1569,7 @@ namespace GxMcp.Worker.Services
                     // Written after the catalog is in place, and stamped with the digest
                     // of what was just written, so a crash between the two leaves postings
                     // that fail the digest check and trigger the normal rebuild.
-                    WriteTrigramPostingsFile(ComputeCatalogDigest(serialized));
+                    WriteTrigramPostingsFile(catalogDigest);
 
                     _isCatalogDirty = false;
                 }
@@ -1342,6 +1589,7 @@ namespace GxMcp.Worker.Services
             // survive into it. A leftover entry would make the first replacement of a
             // loaded record subtract the wrong postings.
             _trigramsByRecord.Clear();
+            ClearRecordIds();
             // Issue #339: same for the freshness certifications - they describe the
             // store that was just reset. A reopen therefore starts uncertified, and the
             // first coverage probe validates bodies lazily, which is what keeps a
@@ -1351,76 +1599,129 @@ namespace GxMcp.Worker.Services
 
             try
             {
-                string catalogText;
-                using (var fs = new FileStream(catalogPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var gz = new GZipStream(fs, CompressionMode.Decompress))
-                using (var reader = new StreamReader(gz, Encoding.UTF8))
+                string catalogDigest;
+                using (var sha = SHA256.Create())
                 {
-                    catalogText = reader.ReadToEnd();
-                    var root = JObject.Parse(catalogText);
-                    var array = root["records"] as JArray;
-                    if (array == null) return;
-
-                    foreach (var item in array)
+                    using (var fs = new FileStream(catalogPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    using (var gz = new GZipStream(fs, CompressionMode.Decompress))
+                    using (var cs = new CryptoStream(gz, sha, CryptoStreamMode.Read))
+                    using (var reader = new StreamReader(cs, Encoding.UTF8))
+                    using (var jr = new JsonTextReader(reader) { DateParseHandling = DateParseHandling.DateTime })
                     {
-                        string guid = item["g"]?.ToString();
-                        string part = item["p"]?.ToString();
-                        var updateToken = item["u"];
-                        DateTime? u = ParseDateToken(updateToken);
-                        string v = item["v"]?.ToString();
-                        string h = item["h"]?.ToString();
-                        string f = item["f"]?.ToString();
-                        long b = item["b"]?.Value<long>() ?? 0;
-                        var storedToken = item["s"];
-                        DateTime? storedAt = ParseDateToken(storedToken);
-                        DateTime s = storedAt ?? DateTime.UtcNow;
-
-                        if (!string.IsNullOrEmpty(guid) && !string.IsNullOrEmpty(part))
+                        if (!jr.Read() || jr.TokenType != JsonToken.StartObject) return;
+                        bool foundRecords = false;
+                        while (jr.Read())
                         {
-                            // Keep even an incomplete summary in memory so freshness
-                            // can report it as an invalid/stale part rather than
-                            // silently mistaking it for an unvisited object.  The
-                            // concrete record validator will reject missing paths,
-                            // hashes, or payloads.
-                            string canonicalPart = ObjectService.NormalizeRawSourcePart(part);
-                            string canonicalKey = MakeKey(guid, canonicalPart);
-                            if (string.IsNullOrWhiteSpace(h)
-                                || (updateToken != null && updateToken.Type != JTokenType.Null && !u.HasValue)
-                                || (storedToken != null && storedToken.Type != JTokenType.Null && !storedAt.HasValue)
-                                || b < 0)
-                                h = null;
-                            var summary = new RecordSummary
+                            if (jr.TokenType == JsonToken.EndObject) break;
+                            if (jr.TokenType != JsonToken.PropertyName) continue;
+                            string rootProp = jr.Value as string;
+                            if (!jr.Read()) break;
+                            if (string.Equals(rootProp, "records", StringComparison.Ordinal))
                             {
-                                Guid = guid.Trim(),
-                                PartName = part.Trim(),
-                                LastUpdate = u,
-                                VersionToken = v,
-                                ContentHash = h,
-                                RelativeFilePath = f,
-                                FileBytes = b,
-                                StoredAtUtc = s
-                            };
-                            _records[canonicalKey] = summary;
-                            // Issue #339: the catalog was rebuilt from disk, so every
-                            // certification refers to a previous process's validation.
-                            _certifications.TryRemove(canonicalKey, out _);
-                            // Issue #338: the catalog load rebuilt the record set, so
-                            // the incremental total describes the previous set. Force
-                            // one reconciliation pass rather than trying to patch a
-                            // counter across a bulk replace.
-                            MarkAccountingUntrusted();
-                        }
-                    }
+                                if (jr.TokenType != JsonToken.StartArray) return;
+                                foundRecords = true;
+                                while (jr.Read() && jr.TokenType != JsonToken.EndArray)
+                                {
+                                    if (jr.TokenType != JsonToken.StartObject) { jr.Skip(); continue; }
 
-                    // Issue #374: try the persisted postings first. A warm reopen of an unchanged store
-                    // then reads one derived file instead of every stored body, so startup
-                    // I/O no longer scales with the store size. A missing, partial, stale
-                    // or corrupt file falls through to the full rebuild below, so search
-                    // results are identical either way.
-                    if (!TryLoadTrigramPostingsFile(ComputeCatalogDigest(catalogText)))
-                    {
-                        RebuildTrigramPostingsFromBodies();
+                                    string guid = null, part = null, v = null, h = null, f = null;
+                                    DateTime? u = null, storedAt = null;
+                                    bool uInvalid = false, sInvalid = false;
+                                    long b = 0;
+
+                                    while (jr.Read() && jr.TokenType != JsonToken.EndObject)
+                                    {
+                                        if (jr.TokenType != JsonToken.PropertyName) continue;
+                                        string prop = jr.Value as string;
+                                        if (!jr.Read()) break;
+                                        switch (prop)
+                                        {
+                                            case "g": guid = jr.Value?.ToString(); break;
+                                            case "p": part = jr.Value?.ToString(); break;
+                                            case "v": v = jr.Value?.ToString(); break;
+                                            case "h": h = jr.Value?.ToString(); break;
+                                            case "f": f = jr.Value?.ToString(); break;
+                                            case "b":
+                                                if (jr.TokenType == JsonToken.Integer || jr.TokenType == JsonToken.Float)
+                                                    b = Convert.ToInt64(jr.Value);
+                                                break;
+                                            case "u":
+                                                if (jr.TokenType == JsonToken.Date && jr.Value is DateTime dtU) u = dtU;
+                                                else if (jr.TokenType != JsonToken.Null && jr.Value != null)
+                                                {
+                                                    if (DateTime.TryParse(jr.Value.ToString(), out var parsedU)) u = parsedU;
+                                                    else uInvalid = true;
+                                                }
+                                                break;
+                                            case "s":
+                                                if (jr.TokenType == JsonToken.Date && jr.Value is DateTime dtS) storedAt = dtS;
+                                                else if (jr.TokenType != JsonToken.Null && jr.Value != null)
+                                                {
+                                                    if (DateTime.TryParse(jr.Value.ToString(), out var parsedS)) storedAt = parsedS;
+                                                    else sInvalid = true;
+                                                }
+                                                break;
+                                            default:
+                                                jr.Skip();
+                                                break;
+                                        }
+                                    }
+
+                                    if (!string.IsNullOrEmpty(guid) && !string.IsNullOrEmpty(part))
+                                    {
+                                        // Keep even an incomplete summary in memory so freshness
+                                        // can report it as an invalid/stale part rather than
+                                        // silently mistaking it for an unvisited object.  The
+                                        // concrete record validator will reject missing paths,
+                                        // hashes, or payloads.
+                                        string canonicalPart = ObjectService.NormalizeRawSourcePart(part);
+                                        string canonicalKey = MakeKey(guid, canonicalPart);
+                                        if (string.IsNullOrWhiteSpace(h) || uInvalid || sInvalid || b < 0)
+                                            h = null;
+                                        var summary = new RecordSummary
+                                        {
+                                            Guid = guid.Trim(),
+                                            PartName = part.Trim(),
+                                            LastUpdate = u,
+                                            VersionToken = v,
+                                            ContentHash = h,
+                                            RelativeFilePath = f,
+                                            FileBytes = b,
+                                            StoredAtUtc = storedAt ?? DateTime.UtcNow
+                                        };
+                                        AssignRecordId(canonicalKey, summary);
+                                        _records[canonicalKey] = summary;
+                                        // Issue #339: the catalog was rebuilt from disk, so every
+                                        // certification refers to a previous process's validation.
+                                        _certifications.TryRemove(canonicalKey, out _);
+                                        // Issue #338: the catalog load rebuilt the record set, so
+                                        // the incremental total describes the previous set. Force
+                                        // one reconciliation pass rather than trying to patch a
+                                        // counter across a bulk replace.
+                                        MarkAccountingUntrusted();
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                jr.Skip();
+                            }
+                        }
+                        if (!foundRecords) return;
+                        // Drain any trailing bytes so CryptoStream hashes the complete stream.
+                        while (reader.Read() > 0) { }
                     }
+                    catalogDigest = Convert.ToBase64String(sha.Hash);
+                }
+
+                // Issue #374: try the persisted postings first. A warm reopen of an unchanged store
+                // then reads one derived file instead of every stored body, so startup
+                // I/O no longer scales with the store size. A missing, partial, stale
+                // or corrupt file falls through to the full rebuild below, so search
+                // results are identical either way.
+                if (!TryLoadTrigramPostingsFile(catalogDigest))
+                {
+                    RebuildTrigramPostingsFromBodies();
                 }
             }
             catch (Exception ex)
@@ -1434,20 +1735,6 @@ namespace GxMcp.Worker.Services
         private static string TrigramPostingsFileName => "trigram-postings.json.gz";
 
         /// <summary>
-        /// Identity of the catalog a postings file was derived from. Both the digest and
-        /// the record count have to match, so a file left over from a different catalog -
-        /// including one whose body changed without the catalog changing shape - is
-        /// rejected rather than trusted.
-        /// </summary>
-        private static string ComputeCatalogDigest(string catalogText)
-        {
-            using (var sha = SHA256.Create())
-            {
-                return Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(catalogText ?? string.Empty)));
-            }
-        }
-
-        /// <summary>
         /// Reconstructs the postings by reading and decompressing every stored body. The
         /// fallback for a store with no usable postings file.
         /// </summary>
@@ -1455,59 +1742,126 @@ namespace GxMcp.Worker.Services
         {
             Parallel.ForEach(_records, kvp =>
             {
+                if (kvp.Value == null || kvp.Value.RecordId < 0) return;
                 if (!TryGet(kvp.Value.Guid, kvp.Value.PartName, out string src) || string.IsNullOrEmpty(src)) return;
                 // Issue #344: a loaded record must record its own trigram set. Without
                 // this, the first replacement of a record that came from disk had nothing
-                // to subtract, so its original postings stayed live and the stale set was
+                // to subtract, so its original postings stayed live and the stale record id was
                 // never reclaimable - which is exactly the churn case this fixes.
-                AddRecordTrigrams(kvp.Key, TrigramExtractor.ExtractTrigrams(src));
+                AddRecordTrigrams(kvp.Value.RecordId, TrigramExtractor.ExtractPackedTrigrams(src));
             });
         }
 
         /// <summary>Publishes one record's trigram set into both directions of the index.</summary>
-        private void AddRecordTrigrams(string key, IEnumerable<string> trigrams)
+        private void AddRecordTrigrams(int recordId, ulong[] packedTrigrams)
         {
-            var indexed = new HashSet<string>(trigrams, StringComparer.OrdinalIgnoreCase);
-            foreach (var t in indexed)
+            RemoveTrigramPostings(recordId);
+            var trigrams = packedTrigrams ?? Array.Empty<ulong>();
+            for (int i = 0; i < trigrams.Length; i++)
             {
-                var set = _trigramIndex.GetOrAdd(t, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-                lock (set) { set.Add(key); }
+                var list = _trigramIndex.GetOrAdd(trigrams[i], _ => new PostingList());
+                list.Add(recordId);
             }
-            _trigramsByRecord[key] = indexed;
+            _trigramsByRecord[recordId] = trigrams;
+        }
+
+        private List<int> IntersectPackedPostings(List<ulong[]> branches)
+        {
+            var union = new HashSet<int>();
+            var candidates = new List<int>();
+
+            foreach (var branch in branches)
+            {
+                if (branch == null || branch.Length == 0) continue;
+
+                ulong rarest = 0;
+                PostingList rarestList = null;
+                int minPostings = int.MaxValue;
+                for (int i = 0; i < branch.Length; i++)
+                {
+                    if (!_trigramIndex.TryGetValue(branch[i], out var list) || list == null)
+                    {
+                        minPostings = 0;
+                        break;
+                    }
+                    int count = list.Count;
+                    if (count == 0)
+                    {
+                        minPostings = 0;
+                        break;
+                    }
+                    if (count < minPostings)
+                    {
+                        minPostings = count;
+                        rarest = branch[i];
+                        rarestList = list;
+                    }
+                }
+
+                if (minPostings == 0 || rarestList == null) continue;
+
+                candidates.Clear();
+                candidates.AddRange(rarestList.SnapshotIds());
+                for (int i = 0; i < branch.Length; i++)
+                {
+                    ulong t = branch[i];
+                    if (t == rarest) continue;
+                    if (!_trigramIndex.TryGetValue(t, out var list) || list == null)
+                    {
+                        candidates.Clear();
+                        break;
+                    }
+                    list.IntersectInto(candidates);
+                    if (candidates.Count == 0) break;
+                }
+
+                for (int i = 0; i < candidates.Count; i++) union.Add(candidates[i]);
+            }
+
+            return new List<int>(union);
         }
 
         /// <summary>
         /// Writes the derived postings, stamped with the catalog digest. Best-effort: a
         /// failure here costs the next start a full rebuild, which is the behaviour before
-        /// this file existed.
+        /// this file existed. Streams JSON directly to avoid allocating a large DOM in memory.
         /// </summary>
         private void WriteTrigramPostingsFile(string catalogDigest)
         {
             try
             {
-                var byRecord = new JArray();
-                foreach (var kvp in _trigramsByRecord)
-                {
-                    if (kvp.Value == null) continue;
-                    byRecord.Add(new JObject { ["k"] = kvp.Key, ["t"] = new JArray(kvp.Value) });
-                }
-
-                var root = new JObject
-                {
-                    ["version"] = TrigramPostingsSchemaVersion,
-                    ["catalogDigest"] = catalogDigest,
-                    ["records"] = _records.Count,
-                    ["savedAt"] = DateTime.UtcNow.ToString("o"),
-                    ["byRecord"] = byRecord
-                };
-
                 string path = Path.Combine(_storeDirectory, TrigramPostingsFileName);
                 string tmp = path + $".tmp-{Guid.NewGuid():N}";
-                byte[] bytes = Encoding.UTF8.GetBytes(root.ToString(Formatting.None));
                 using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
                 using (var gz = new GZipStream(fs, CompressionMode.Compress))
+                using (var sw = new StreamWriter(gz, new UTF8Encoding(false), 16384))
+                using (var jw = new JsonTextWriter(sw) { Formatting = Formatting.None })
                 {
-                    gz.Write(bytes, 0, bytes.Length);
+                    jw.WriteStartObject();
+                    jw.WritePropertyName("version"); jw.WriteValue(TrigramPostingsSchemaVersion);
+                    jw.WritePropertyName("catalogDigest"); jw.WriteValue(catalogDigest);
+                    jw.WritePropertyName("records"); jw.WriteValue(_records.Count);
+                    jw.WritePropertyName("savedAt"); jw.WriteValue(DateTime.UtcNow.ToString("o"));
+                    jw.WritePropertyName("byRecord");
+                    jw.WriteStartArray();
+                    foreach (var kvp in _trigramsByRecord)
+                    {
+                        string key = GetKeyById(kvp.Key);
+                        if (key == null || kvp.Value == null) continue;
+                        jw.WriteStartObject();
+                        jw.WritePropertyName("k"); jw.WriteValue(key);
+                        jw.WritePropertyName("t");
+                        jw.WriteStartArray();
+                        ulong[] trigrams = kvp.Value;
+                        for (int i = 0; i < trigrams.Length; i++)
+                        {
+                            jw.WriteValue(TrigramExtractor.UnpackTrigram(trigrams[i]));
+                        }
+                        jw.WriteEndArray();
+                        jw.WriteEndObject();
+                    }
+                    jw.WriteEndArray();
+                    jw.WriteEndObject();
                 }
                 lock (_ioGate)
                 {
@@ -1525,6 +1879,7 @@ namespace GxMcp.Worker.Services
         /// Loads persisted postings when they provably belong to the catalog just read.
         /// Returns false - leaving the index empty for
         /// <see cref="RebuildTrigramPostingsFromBodies"/> - for anything unproven.
+        /// Streams JSON and builds exact-sized sorted PostingLists without intermediate string sets.
         /// </summary>
         private bool TryLoadTrigramPostingsFile(string catalogDigest)
         {
@@ -1533,36 +1888,109 @@ namespace GxMcp.Worker.Services
 
             try
             {
-                string json;
+                int? version = null;
+                string fileDigest = null;
+                long? recordCount = null;
+                var staged = new List<(int RecordId, ulong[] Trigrams)>(_records.Count);
+                var postingCounts = new Dictionary<ulong, int>();
+                var localTrigrams = new HashSet<ulong>();
+
                 using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var gz = new GZipStream(fs, CompressionMode.Decompress))
                 using (var reader = new StreamReader(gz, Encoding.UTF8))
+                using (var jr = new JsonTextReader(reader))
                 {
-                    json = reader.ReadToEnd();
+                    if (!jr.Read() || jr.TokenType != JsonToken.StartObject) return false;
+                    while (jr.Read())
+                    {
+                        if (jr.TokenType == JsonToken.EndObject) break;
+                        if (jr.TokenType != JsonToken.PropertyName) continue;
+                        string prop = jr.Value as string;
+                        if (!jr.Read()) break;
+
+                        switch (prop)
+                        {
+                            case "version":
+                                version = jr.Value != null ? Convert.ToInt32(jr.Value) : (int?)null;
+                                break;
+                            case "catalogDigest":
+                                fileDigest = jr.Value?.ToString();
+                                break;
+                            case "records":
+                                recordCount = jr.Value != null ? Convert.ToInt64(jr.Value) : (long?)null;
+                                break;
+                            case "byRecord":
+                                if (version != TrigramPostingsSchemaVersion
+                                    || !string.Equals(fileDigest, catalogDigest, StringComparison.Ordinal)
+                                    || recordCount != _records.Count)
+                                    return false;
+                                if (jr.TokenType != JsonToken.StartArray) return false;
+
+                                // Rebuild from the persisted per-record sets. Only keys the catalog still
+                                // holds are accepted, so a postings file can never introduce a record that
+                                // the catalog does not describe.
+                                while (jr.Read() && jr.TokenType != JsonToken.EndArray)
+                                {
+                                    if (jr.TokenType != JsonToken.StartObject) { jr.Skip(); continue; }
+                                    string key = null;
+                                    bool hasTrigrams = false;
+                                    localTrigrams.Clear();
+
+                                    while (jr.Read() && jr.TokenType != JsonToken.EndObject)
+                                    {
+                                        if (jr.TokenType != JsonToken.PropertyName) continue;
+                                        string itemProp = jr.Value as string;
+                                        if (!jr.Read()) break;
+                                        if (itemProp == "k")
+                                        {
+                                            key = jr.Value?.ToString();
+                                        }
+                                        else if (itemProp == "t" && jr.TokenType == JsonToken.StartArray)
+                                        {
+                                            hasTrigrams = true;
+                                            while (jr.Read() && jr.TokenType != JsonToken.EndArray)
+                                            {
+                                                if (jr.TokenType == JsonToken.String && jr.Value is string ts
+                                                    && TrigramExtractor.TryPackTrigram(ts, out ulong packed))
+                                                {
+                                                    localTrigrams.Add(packed);
+                                                }
+                                            }
+                                        }
+                                        else
+                                        {
+                                            jr.Skip();
+                                        }
+                                    }
+
+                                    if (string.IsNullOrEmpty(key) || !hasTrigrams
+                                        || !_records.TryGetValue(key, out var rec) || rec == null || rec.RecordId < 0)
+                                        continue;
+
+                                    ulong[] arr = localTrigrams.Count == 0 ? Array.Empty<ulong>() : new ulong[localTrigrams.Count];
+                                    if (arr.Length > 0)
+                                    {
+                                        localTrigrams.CopyTo(arr);
+                                        Array.Sort(arr);
+                                        for (int i = 0; i < arr.Length; i++)
+                                        {
+                                            postingCounts[arr[i]] = postingCounts.TryGetValue(arr[i], out int c) ? c + 1 : 1;
+                                        }
+                                    }
+                                    staged.Add((rec.RecordId, arr));
+                                }
+                                break;
+                            default:
+                                jr.Skip();
+                                break;
+                        }
+                    }
                 }
 
-                var root = JObject.Parse(json);
-                if (root["version"]?.ToObject<int?>() != TrigramPostingsSchemaVersion) return false;
-                if (!string.Equals(root["catalogDigest"]?.ToString(), catalogDigest, StringComparison.Ordinal)) return false;
-                if (root["records"]?.ToObject<long?>() != _records.Count) return false;
-
-                var byRecord = root["byRecord"] as JArray;
-                if (byRecord == null) return false;
-
-                // Rebuild from the persisted per-record sets. Only keys the catalog still
-                // holds are accepted, so a postings file can never introduce a record that
-                // the catalog does not describe.
-                var staged = new List<KeyValuePair<string, HashSet<string>>>();
-                foreach (var item in byRecord)
-                {
-                    string key = item["k"]?.ToString();
-                    if (string.IsNullOrEmpty(key) || !_records.ContainsKey(key)) continue;
-                    var trigrams = item["t"] as JArray;
-                    if (trigrams == null) continue;
-                    staged.Add(new KeyValuePair<string, HashSet<string>>(key,
-                        new HashSet<string>(trigrams.Select(t => t?.ToString()).Where(t => !string.IsNullOrEmpty(t)),
-                            StringComparer.OrdinalIgnoreCase)));
-                }
+                if (version != TrigramPostingsSchemaVersion
+                    || !string.Equals(fileDigest, catalogDigest, StringComparison.Ordinal)
+                    || recordCount != _records.Count)
+                    return false;
 
                 if (staged.Count != _records.Count)
                 {
@@ -1573,7 +2001,32 @@ namespace GxMcp.Worker.Services
                     return false;
                 }
 
-                foreach (var pair in staged) AddRecordTrigrams(pair.Key, pair.Value);
+                // Build exact-sized sorted int[] posting arrays in one pass.
+                var builders = new Dictionary<ulong, (int[] Ids, int Cursor)>(postingCounts.Count);
+                foreach (var kvp in postingCounts)
+                {
+                    builders[kvp.Key] = (new int[kvp.Value], 0);
+                }
+
+                staged.Sort((a, b) => a.RecordId.CompareTo(b.RecordId));
+                for (int i = 0; i < staged.Count; i++)
+                {
+                    int recId = staged[i].RecordId;
+                    ulong[] trigrams = staged[i].Trigrams;
+                    _trigramsByRecord[recId] = trigrams;
+                    for (int j = 0; j < trigrams.Length; j++)
+                    {
+                        ulong t = trigrams[j];
+                        var slot = builders[t];
+                        slot.Ids[slot.Cursor] = recId;
+                        builders[t] = (slot.Ids, slot.Cursor + 1);
+                    }
+                }
+
+                foreach (var kvp in builders)
+                {
+                    _trigramIndex[kvp.Key] = new PostingList(kvp.Value.Ids);
+                }
                 return true;
             }
             catch (Exception ex)
@@ -1605,8 +2058,9 @@ namespace GxMcp.Worker.Services
                 {
                     // Issue #344: eviction dropped the catalog record and the file but
                     // left the trigram postings, so an evicted record stayed reachable
-                    // through the index and the stale keys accumulated across evictions.
-                    RemoveTrigramPostings(key);
+                    // through the index and the stale record ids accumulated across evictions.
+                    RemoveTrigramPostings(rec.RecordId);
+                    ReleaseRecordId(rec.RecordId);
                     // Issue #339: and its certification, which now describes a file that
                     // no longer exists. The FileInfo check would catch it, but leaving a
                     // dead entry behind makes the count meaningless as a diagnostic.
@@ -1675,20 +2129,23 @@ namespace GxMcp.Worker.Services
         /// <summary>
         /// Removes a record's trigram postings and forgets the record's trigram set.
         /// Issue #344. Each posting is removed under the same per-set lock the writer
-        /// uses, so a concurrent write that re-adds the key is not undone, and a set
-        /// left empty is dropped from the index - it answers nothing and only retains
-        /// the key strings.
+        /// uses, so a concurrent write that re-adds the id is not undone, and a list
+        /// left empty is dropped from the index.
         /// </summary>
-        private void RemoveTrigramPostings(string key)
+        private void RemoveTrigramPostings(int recordId)
         {
-            if (!_trigramsByRecord.TryRemove(key, out var previous)) return;
-            foreach (var t in previous)
+            if (recordId < 0) return;
+            if (!_trigramsByRecord.TryRemove(recordId, out var previous) || previous == null) return;
+            for (int i = 0; i < previous.Length; i++)
             {
-                if (!_trigramIndex.TryGetValue(t, out var set)) continue;
-                lock (set)
+                ulong t = previous[i];
+                if (!_trigramIndex.TryGetValue(t, out var list) || list == null) continue;
+                if (list.Remove(recordId))
                 {
-                    set.Remove(key);
-                    if (set.Count == 0) _trigramIndex.TryRemove(t, out _);
+                    lock (list)
+                    {
+                        if (list.Count == 0) _trigramIndex.TryRemove(t, out _);
+                    }
                 }
             }
         }
@@ -1798,15 +2255,54 @@ namespace GxMcp.Worker.Services
         internal bool TrackedBytesMatchCatalog()
             => !_accountingTrusted || CurrentStorageBytes() == SumRecordBytes();
 
+        [ThreadStatic]
+        private static byte[] t_hashBuffer;
+
         private static string ComputeHash(string text)
         {
+            string s = text ?? string.Empty;
             using (var sha = SHA256.Create())
             {
-                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(text ?? string.Empty));
-                var sb = new StringBuilder(hash.Length * 2);
-                foreach (byte b in hash) sb.Append(b.ToString("x2"));
-                return sb.ToString();
+                if (s.Length == 0)
+                {
+                    return FormatHexLower(sha.ComputeHash(Array.Empty<byte>()));
+                }
+
+                byte[] buf = t_hashBuffer ?? (t_hashBuffer = new byte[16384]);
+                var enc = Encoding.UTF8.GetEncoder();
+                int charIdx = 0;
+                int remaining = s.Length;
+                unsafe
+                {
+                    fixed (char* pChars = s)
+                    fixed (byte* pBuf = buf)
+                    {
+                        while (remaining > 0)
+                        {
+                            enc.Convert(pChars + charIdx, remaining, pBuf, buf.Length, flush: false, out int charsUsed, out int bytesUsed, out _);
+                            charIdx += charsUsed;
+                            remaining -= charsUsed;
+                            if (bytesUsed > 0) sha.TransformBlock(buf, 0, bytesUsed, null, 0);
+                        }
+                        enc.Convert(pChars + charIdx, 0, pBuf, buf.Length, flush: true, out _, out int finalBytes, out _);
+                        sha.TransformFinalBlock(buf, 0, finalBytes);
+                    }
+                }
+                return FormatHexLower(sha.Hash);
             }
+        }
+
+        private static string FormatHexLower(byte[] hash)
+        {
+            char[] c = new char[hash.Length * 2];
+            const string hex = "0123456789abcdef";
+            for (int i = 0; i < hash.Length; i++)
+            {
+                byte b = hash[i];
+                c[i * 2] = hex[b >> 4];
+                c[i * 2 + 1] = hex[b & 0xF];
+            }
+            return new string(c);
         }
     }
 }
