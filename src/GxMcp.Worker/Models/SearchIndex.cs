@@ -84,14 +84,38 @@ namespace GxMcp.Worker.Models
             public string ParentFolderPath { get; set; }
             public string Path { get; set; }
             public string Module { get; set; }
-            public List<string> Tags { get; set; } = new List<string>();
-            public List<string> Keywords { get; set; } = new List<string>();
-            
+            private List<string> _tags;
+            private List<string> _keywords;
+            private List<string> _calls;
+            private List<string> _calledBy;
+            private List<string> _tables;
+            private List<string> _rules;
+
+            public List<string> Tags { get => _tags ?? (_tags = new List<string>(0)); set => _tags = value; }
+            public List<string> Keywords { get => _keywords ?? (_keywords = new List<string>(0)); set => _keywords = value; }
+
             // Graph Relationships
-            public List<string> Calls { get; set; } = new List<string>();
-            public List<string> CalledBy { get; set; } = new List<string>();
-            public List<string> Tables { get; set; } = new List<string>();
-            public List<string> Rules { get; set; } = new List<string>();
+            public List<string> Calls { get => _calls ?? (_calls = new List<string>(0)); set => _calls = value; }
+            public List<string> CalledBy { get => _calledBy ?? (_calledBy = new List<string>(0)); set => _calledBy = value; }
+            public List<string> Tables { get => _tables ?? (_tables = new List<string>(0)); set => _tables = value; }
+            public List<string> Rules { get => _rules ?? (_rules = new List<string>(0)); set => _rules = value; }
+
+            public bool ShouldSerializeTags() => _tags != null && _tags.Count > 0;
+            public bool ShouldSerializeKeywords() => _keywords != null && _keywords.Count > 0;
+            public bool ShouldSerializeCalls() => _calls != null && _calls.Count > 0;
+            public bool ShouldSerializeCalledBy() => _calledBy != null && _calledBy.Count > 0;
+            public bool ShouldSerializeTables() => _tables != null && _tables.Count > 0;
+            public bool ShouldSerializeRules() => _rules != null && _rules.Count > 0;
+
+            internal void TrimEmptyLists()
+            {
+                if (_tags != null && _tags.Count == 0) _tags = null;
+                if (_keywords != null && _keywords.Count == 0) _keywords = null;
+                if (_calls != null && _calls.Count == 0) _calls = null;
+                if (_calledBy != null && _calledBy.Count == 0) _calledBy = null;
+                if (_tables != null && _tables.Count == 0) _tables = null;
+                if (_rules != null && _rules.Count == 0) _rules = null;
+            }
             
             // Business Intelligence fields
             public string BusinessDomain { get; set; }
@@ -217,12 +241,13 @@ namespace GxMcp.Worker.Models
                 entry.Path = InternShared(entry.Path);
                 entry.RootTable = InternShared(entry.RootTable);
                 entry.DataType = InternShared(entry.DataType);
-                entry.Calls = InternEdgeList(entry.Calls);
-                entry.CalledBy = InternEdgeList(entry.CalledBy);
-                entry.Tables = InternEdgeList(entry.Tables);
-                entry.Rules = InternEdgeList(entry.Rules);
-                entry.Keywords = InternEdgeList(entry.Keywords);
-                entry.Tags = InternEdgeList(entry.Tags);
+                entry.TrimEmptyLists();
+                if (entry.ShouldSerializeCalls()) entry.Calls = InternEdgeList(entry.Calls);
+                if (entry.ShouldSerializeCalledBy()) entry.CalledBy = InternEdgeList(entry.CalledBy);
+                if (entry.ShouldSerializeTables()) entry.Tables = InternEdgeList(entry.Tables);
+                if (entry.ShouldSerializeRules()) entry.Rules = InternEdgeList(entry.Rules);
+                if (entry.ShouldSerializeKeywords()) entry.Keywords = InternEdgeList(entry.Keywords);
+                if (entry.ShouldSerializeTags()) entry.Tags = InternEdgeList(entry.Tags);
             }
         }
 

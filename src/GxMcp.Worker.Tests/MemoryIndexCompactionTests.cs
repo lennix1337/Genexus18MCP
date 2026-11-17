@@ -148,6 +148,8 @@ namespace GxMcp.Worker.Tests
                 Assert.True(restored.Objects.ContainsKey(key));
                 Assert.Equal("ProcStreamTest", restored.Objects[key].Name);
                 Assert.Equal("For Each Customer\nEndFor", restored.Objects[key].FullSource);
+                Assert.False(restored.Objects[key].ShouldSerializeCalls());
+                Assert.False(restored.Objects[key].ShouldSerializeTags());
             }
         }
     }
