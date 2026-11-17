@@ -19,6 +19,8 @@
 
 ### Internal
 
+- **Worker checkpoint/index memory compaction and Rust feasibility ADR:** streamed `WriteLiteWalkCheckpoint` via `SearchIndex.WriteToStream`, lazy-allocated `SearchIndex.IndexEntry` collection lists with `ShouldSerialize*` omissions, added `scripts/bench/mem-baseline.ps1` and `MemoryAttributionTests`, resolved `rustup which cargo` in `build.ps1` when `cargo.exe` is a 0-byte NTFS symlink, and documented the measured process-tree baseline and Rust keep-.NET decision in `docs/adr/001-memory-rust-feasibility.md`. https://github.com/lennix1337/Genexus18MCP/issues/1038 https://github.com/lennix1337/Genexus18MCP/issues/1039 https://github.com/lennix1337/Genexus18MCP/issues/1040
+
 ## v4.6.1 - 2026-11-16
 
 

@@ -1825,8 +1825,7 @@ namespace GxMcp.Worker.Services
                     string bodyPath = Path.Combine(tempSlot, "body.json.gz");
                     using (var fs = File.Create(bodyPath))
                     using (var gz = new GZipStream(fs, CompressionLevel.Fastest))
-                    using (var writer = new StreamWriter(gz, new UTF8Encoding(false)))
-                        writer.Write(snapshot.ToJson());
+                        snapshot.WriteToStream(gz);
 
                     var metadata = new LiteWalkCheckpointMetadata
                     {

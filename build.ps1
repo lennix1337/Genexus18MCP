@@ -301,10 +301,33 @@ dotnet GxMcp.Gateway.dll
 Set-Content -Path "$publishDir\start_mcp.bat" -Value $batContent -Encoding Ascii
 
 # 6.05 Build and bundle GxWire (Rust engine)
+function Resolve-CargoExecutable {
+    $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
+    if (-not $cargoCmd) { return $null }
+    # A cargo that is not an executable file (a test double, an alias) is invoked by name.
+    if ($cargoCmd.CommandType -ne 'Application') { return $cargoCmd.Name }
+    $source = $cargoCmd.Source
+    try {
+        $item = Get-Item -LiteralPath $source -ErrorAction SilentlyContinue
+        # On Windows, rustup's ~/.cargo/bin/cargo.exe is a 0-byte NTFS symlink to rustup.exe,
+        # which can fail with "No application is associated" in some shells/sandboxes.
+        if ($item -and ($item.Length -eq 0 -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint))) {
+            $rustupCmd = Get-Command rustup -ErrorAction SilentlyContinue
+            if ($rustupCmd) {
+                $realCargo = (& $rustupCmd.Source which cargo 2>$null | Select-Object -First 1)
+                if ($realCargo -and (Test-Path -LiteralPath $realCargo.Trim() -PathType Leaf)) {
+                    return $realCargo.Trim()
+                }
+            }
+        }
+    } catch { }
+    return $source
+}
+
+$cargoExe = Resolve-CargoExecutable
 $gxwireDir = Join-Path $root "src\gxwire"
 if (Test-Path (Join-Path $gxwireDir "Cargo.toml")) {
-    $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
-    if ($cargoCmd) {
+    if ($cargoExe) {
         $gxwireCache = Get-RustArtifactCacheEntry -CacheRoot $RustArtifactCache -RepositoryRoot $root -CrateRelativePath "src/gxwire" -BinaryName "gxwire.exe"
         if ($gxwireCache.Reason) {
             Write-Host "   > Rust artifact cache not used for gxwire.exe: $($gxwireCache.Reason)." -ForegroundColor Yellow
@@ -315,7 +338,7 @@ if (Test-Path (Join-Path $gxwireDir "Cargo.toml")) {
             Write-Host "   > Building GxWire (Rust release)..."
             Push-Location $gxwireDir
             try {
-                & cargo build --release
+                & $cargoExe build --release
                 if ($LASTEXITCODE -eq 0 -and (Test-Path "target\release\gxwire.exe")) {
                     Copy-Item "target\release\gxwire.exe" -Destination "$publishDir\gxwire.exe" -Force
                     Write-Host "   > Deployed gxwire.exe to publish." -ForegroundColor Green
@@ -335,8 +358,7 @@ if (Test-Path (Join-Path $gxwireDir "Cargo.toml")) {
 # 6.06 Build and bundle gx-engine (Rust engine)
 $gxEngineDir = Join-Path $root "src\gx-engine"
 if (Test-Path (Join-Path $gxEngineDir "Cargo.toml")) {
-    $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
-    if ($cargoCmd) {
+    if ($cargoExe) {
         $gxEngineCache = Get-RustArtifactCacheEntry -CacheRoot $RustArtifactCache -RepositoryRoot $root -CrateRelativePath "src/gx-engine" -BinaryName "gx-engine.exe"
         if ($gxEngineCache.Reason) {
             Write-Host "   > Rust artifact cache not used for gx-engine.exe: $($gxEngineCache.Reason)." -ForegroundColor Yellow
@@ -347,7 +369,7 @@ if (Test-Path (Join-Path $gxEngineDir "Cargo.toml")) {
             Write-Host "   > Building gx-engine (Rust release)..."
             Push-Location $gxEngineDir
             try {
-                & cargo build --release
+                & $cargoExe build --release
                 if ($LASTEXITCODE -eq 0 -and (Test-Path "target\release\gx-engine.exe")) {
                     Copy-Item "target\release\gx-engine.exe" -Destination "$publishDir\gx-engine.exe" -Force
                     Write-Host "   > Deployed gx-engine.exe to publish." -ForegroundColor Green
