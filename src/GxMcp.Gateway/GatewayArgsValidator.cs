@@ -568,15 +568,7 @@ namespace GxMcp.Gateway
                 if (_toolDefs != null) return;
                 string? path = ToolDefinitionsLocator.Locate();
                 if (path == null) return;
-                try
-                {
-                    _toolDefs = JArray.Parse(File.ReadAllText(path));
-                    ToolSchemaCompatibility.Apply(_toolDefs);
-                }
-                catch
-                {
-                    // Silently fail — validation becomes a no-op if the file can't be read
-                }
+                _toolDefs = ToolDefinitionsLocator.GetOrLoadDefinitions(path);
             }
         }
 
@@ -597,6 +589,7 @@ namespace GxMcp.Gateway
             _schemaCache.Clear();
             _vocabularyCache.Clear();
             lock (_loadLock) { _toolDefs = null; }
+            ToolDefinitionsLocator.ClearCache();
         }
     }
 }

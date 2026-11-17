@@ -26,6 +26,7 @@ namespace GxMcp.Gateway
         // Crystallized user macros: discovered from <configRoot>/recipes/user-macros/*.json.
         // Built-in recipes win on name collision. Set via ConfigureUserMacroDirectory + Refresh*.
         private static string? _userMacroDirectory;
+        private static bool _userMacrosDirty;
         private static readonly Dictionary<string, RecipeMeta> _userMacros
             = new Dictionary<string, RecipeMeta>(StringComparer.OrdinalIgnoreCase);
         private static readonly object _userMacroLock = new object();
@@ -35,8 +36,15 @@ namespace GxMcp.Gateway
             lock (_userMacroLock)
             {
                 _userMacroDirectory = directory;
+                _userMacrosDirty = true;
             }
-            RefreshUserMacros();
+        }
+
+        private static void EnsureUserMacrosLoaded()
+        {
+            bool needsLoad;
+            lock (_userMacroLock) { needsLoad = _userMacrosDirty; }
+            if (needsLoad) RefreshUserMacros();
         }
 
         // Reload all user-macro JSON files from the configured directory.
@@ -85,11 +93,13 @@ namespace GxMcp.Gateway
             {
                 _userMacros.Clear();
                 foreach (var kvp in fresh) _userMacros[kvp.Key] = kvp.Value;
+                _userMacrosDirty = false;
             }
         }
 
         private static IEnumerable<KeyValuePair<string, RecipeMeta>> AllRecipes()
         {
+            EnsureUserMacrosLoaded();
             foreach (var kvp in RecipeRegistry) yield return kvp;
             lock (_userMacroLock)
             {
