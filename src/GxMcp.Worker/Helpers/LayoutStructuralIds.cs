@@ -75,7 +75,7 @@ namespace GxMcp.Worker.Helpers
             var text = preserveReferencedIds ? document.DescendantNodes().OfType<XText>().Select(t => t.Value).ToArray() : null;
             foreach (var element in elements.Where(e =>
                 (Is(e, "layout") || Is(e, "table") || Is(e, "row") || Is(e, "cell")
-                    || (includeNamedControls && (IsTabContainer(e) || IsGridControl(e))))
+                    || (includeNamedControls && (IsTabContainer(e) || IsGridControl(e) || IsUserControlGroup(e))))
                 && e.AncestorsAndSelf().Any(a => Is(a, "layout"))))
             {
                 var id = element.Attribute("id");
@@ -109,6 +109,12 @@ namespace GxMcp.Worker.Helpers
                 && !string.IsNullOrWhiteSpace((string)element.Parent.Attribute("controlName"))
                 && !string.IsNullOrWhiteSpace((string)element.Attribute("attribute"));
         }
+
+        // Issue #1053: WorkWithPlus emits a new id for the <group> of a group table (isGroup) on every
+        // projection. Only a group rendered by a user control (<ucw>) is covered, and a referenced id
+        // is still protected by the caller, so the group content stays compared.
+        private static bool IsUserControlGroup(XElement element)
+            => Is(element, "group") && element.Ancestors().Any(a => Is(a, "ucw"));
 
         private static bool Is(XElement element, string name)
             => element != null && element.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase);
