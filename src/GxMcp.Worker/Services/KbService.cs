@@ -128,6 +128,19 @@ namespace GxMcp.Worker.Services
                 .Any(thread => thread != null && thread.IsAlive);
         }
 
+        // Index walks run on their own STA threads, but the SDK object cache is shared with
+        // the dispatcher thread that serves tool calls (Plan 037, issue #594): the reset is
+        // queued onto that thread so it never clears the cache under an in-flight command.
+        private void ScheduleSdkCacheReset(string reason)
+        {
+            bool queued = Program.EnqueueSdkAction(() =>
+            {
+                WorkerMemoryMaintenance.ResetSdkObjectCaches(GetKB()?.DesignModel?.Objects);
+                WorkerMemoryMaintenance.CompactLohOnce(reason);
+            }, "sdk-cache-reset");
+            if (!queued) WorkerMemoryMaintenance.CompactLohOnce(reason);
+        }
+
         private bool FinishIndexOperation(int generation)
         {
             bool completed = _indexOperations.Complete(generation);
@@ -1130,8 +1143,7 @@ namespace GxMcp.Worker.Services
                         bulkSw.Stop();
                         _currentStatus = "Complete";
                         FinishIndexOperation(operationGeneration);
-                        WorkerMemoryMaintenance.ResetSdkObjectCaches(kb?.DesignModel?.Objects);
-                        WorkerMemoryMaintenance.CompactLohOnce("bulk-index-lite");
+                        ScheduleSdkCacheReset("bulk-index-lite");
                         Logger.Info($"[ENRICH-LAZY] eager drain skipped — {_totalCount} objects catalogued, enrichment on-demand. litePassMs={liteSw.ElapsedMilliseconds}");
                         return;
                     }
@@ -1669,8 +1681,7 @@ namespace GxMcp.Worker.Services
                     // v2.3.8 (Task 1.1): publish completion to IndexState.
                     try { _indexCacheService?.MarkIndexComplete(_processedCount); } catch { }
                     FinishIndexOperation(operationGeneration);
-                    WorkerMemoryMaintenance.ResetSdkObjectCaches(kb?.DesignModel?.Objects);
-                    WorkerMemoryMaintenance.CompactLohOnce("bulk-index");
+                    ScheduleSdkCacheReset("bulk-index");
                     Logger.Info($"[BULK-INDEX] elapsedMs={bulkSw.ElapsedMilliseconds} processed={_processedCount} total={_totalCount}");
                 } catch (Exception ex) {
                     bulkSw.Stop();
