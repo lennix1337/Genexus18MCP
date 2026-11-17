@@ -1215,7 +1215,7 @@ namespace GxMcp.Gateway
         // true only when a worker process exists and HasExited is false; any error
         // looking at the pool is treated as "not healthy" so we err on the side of
         // skipping the round-trip.
-        private static bool IsActiveWorkerHealthy()
+        internal static bool IsActiveWorkerHealthy()
         {
             try
             {
@@ -1229,14 +1229,14 @@ namespace GxMcp.Gateway
                 if (kb != null)
                 {
                     var worker = _workerPool.TryGet(kb.NormalizedAlias);
-                    return worker != null && worker.Pid.HasValue;
+                    return worker != null && worker.Pid.HasValue && worker.IsSdkReady;
                 }
                 var open = _workerPool.ListOpen();
                 if (open == null || open.Count == 0) return false;
                 foreach (var handle in open)
                 {
                     var w = _workerPool.TryGet(handle.NormalizedAlias);
-                    if (w != null && w.Pid.HasValue) return true;
+                    if (w != null && w.Pid.HasValue && w.IsSdkReady) return true;
                 }
                 return false;
             }
