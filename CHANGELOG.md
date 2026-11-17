@@ -11,6 +11,20 @@
 
 ### Fixed
 
+### Internal
+
+## v4.7.1 - 2026-11-17
+
+
+<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+     subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
+
+### Added
+
+### Changed
+
+### Fixed
+
 - Gateway: a KB-level `PostTimeoutReadRequired` fence left by a timed-out `import_text_to_kb` is now cleared once the manifest import finishes with a closed, persisted count, instead of requiring an MCP reconnect ([#1056](https://github.com/lennix1337/Genexus18MCP/issues/1056), #1057).
 
 ### Internal

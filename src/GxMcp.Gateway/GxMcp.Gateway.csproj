@@ -5,10 +5,10 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>4.7.0</Version>
-    <AssemblyVersion>4.7.0.0</AssemblyVersion>
-    <FileVersion>4.7.0.0</FileVersion>
-    <InformationalVersion>4.7.0</InformationalVersion>
+    <Version>4.7.1</Version>
+    <AssemblyVersion>4.7.1.0</AssemblyVersion>
+    <FileVersion>4.7.1.0</FileVersion>
+    <InformationalVersion>4.7.1</InformationalVersion>
     <!-- Workstation GC + ConserveMemory=9 + RetainVM=false keeps per-client Gateway
          footprint low (~1 heap/1 GC thread instead of per-core Server GC heaps/threads)
          without imposing a hard heap cap that could OOM on 16 MB frames or 64 MB caches. -->
