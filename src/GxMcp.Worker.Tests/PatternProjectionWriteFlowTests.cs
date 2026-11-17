@@ -403,6 +403,48 @@ namespace GxMcp.Worker.Tests
                 projectedWebForm: true)["equal"].Value<bool>());
         }
 
+        // Issue #1053: the group of a WorkWithPlus group table gets a new id on every projection.
+        private const string NativeGroupMarkup =
+            "<ucw gxControlType='42'><table><row><cell><group id='1a1a1a1a-1a1a-1a1a-1a1a-1a1a1a1a1a1a' caption='Objeto'>"
+            + "<table><row><cell><action controlName='BtnGroup' onClickEvent='DoGroup'/></cell></row></table></group></cell></row></table></ucw>";
+
+        private static string NativeGroupForm() => NativeProjectionForm.Replace(
+            "<action controlName='BtnSave' onClickEvent='DoSave'/>", NativeGroupMarkup);
+
+        private static string RecreatedGroupId(string xml) => xml
+            .Replace("1a1a1a1a-1a1a-1a1a-1a1a-1a1a1a1a1a1a", "2b2b2b2b-2b2b-2b2b-2b2b-2b2b2b2b2b2b");
+
+        [Fact]
+        public void ProjectedWebFormAcceptsRecreatedUserControlGroupId()
+        {
+            string before = NativeGroupForm();
+            string after = RecreatedLayoutIds(RecreatedGroupId(before));
+            var comparison = WriteService.CompareProjectionXml(before, after, projectedWebForm: true);
+            Assert.True(comparison["equal"].Value<bool>(), comparison["difference"]?.ToString());
+            Assert.False(WriteService.CompareProjectionXml(before, after)["equal"].Value<bool>());
+        }
+
+        [Fact]
+        public void UserControlGroupContentAndReferencesRemainSignificant()
+        {
+            string before = NativeGroupForm();
+            Assert.False(WriteService.CompareProjectionXml(before,
+                RecreatedGroupId(before).Replace("caption='Objeto'", "caption='Other'"),
+                projectedWebForm: true)["equal"].Value<bool>());
+
+            string referenced = before.Replace("<ucw ", "<ucw target='1a1a1a1a-1a1a-1a1a-1a1a-1a1a1a1a1a1a' ");
+            Assert.False(WriteService.CompareProjectionXml(referenced, RecreatedGroupId(referenced),
+                projectedWebForm: true)["equal"].Value<bool>());
+        }
+
+        [Fact]
+        public void GroupIdsOutsideUserControlsRemainStrict()
+        {
+            string before = NativeGroupForm().Replace("<ucw gxControlType='42'>", "<div>").Replace("</ucw>", "</div>");
+            Assert.False(WriteService.CompareProjectionXml(before, RecreatedGroupId(before),
+                projectedWebForm: true)["equal"].Value<bool>());
+        }
+
         [Fact]
         public void ProjectedWebFormAcceptsRecreatedTabAndDirectPageIdsInsideNestedUserControl()
         {
