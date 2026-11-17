@@ -476,8 +476,10 @@ namespace GxMcp.Gateway.Tests
             lock (observed)
             {
                 Assert.NotEmpty(observed);
-                Assert.DoesNotContain(RecordReadStatus.Unparseable, observed);
-                Assert.DoesNotContain(RecordReadStatus.Absent, observed);
+                // Name the status counts and the first offending index so a rare failure under load says what the reader saw (#1051).
+                var summary = string.Join(", ", observed.GroupBy(x => x).Select(g => g.Key + "=" + g.Count()));
+                int firstBad = observed.FindIndex(x => x == RecordReadStatus.Unparseable || x == RecordReadStatus.Absent);
+                Assert.True(firstBad < 0, "reader saw a partial or missing record at read #" + firstBad + " of " + observed.Count + " (" + summary + ")");
             }
             Assert.Equal(100, SharedWorkerRegistry.ReadRecordV2(identity.KbKey, _root).Record!.Generation);
         }
