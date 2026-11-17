@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Gateway
 {
@@ -59,6 +61,47 @@ namespace GxMcp.Gateway
                 dir = parent.FullName;
             }
             return null;
+        }
+
+        private static readonly object _defsLock = new object();
+        private static string? _cachedDefsPath;
+        private static JArray? _cachedDefs;
+
+        /// <summary>
+        /// Loads and caches the parsed <c>tool_definitions.json</c> array with
+        /// <see cref="ToolSchemaCompatibility.Apply"/> applied once, so
+        /// <c>GatewayArgsValidator</c> and <c>ToolIdentity</c> share one in-memory copy.
+        /// </summary>
+        internal static JArray? GetOrLoadDefinitions(string? path = null)
+        {
+            path ??= Locate();
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            lock (_defsLock)
+            {
+                if (_cachedDefs != null && string.Equals(_cachedDefsPath, path, StringComparison.OrdinalIgnoreCase))
+                    return _cachedDefs;
+                try
+                {
+                    var parsed = JArray.Parse(File.ReadAllText(path));
+                    ToolSchemaCompatibility.Apply(parsed);
+                    _cachedDefs = parsed;
+                    _cachedDefsPath = path;
+                    return _cachedDefs;
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+        }
+
+        internal static void ClearCache()
+        {
+            lock (_defsLock)
+            {
+                _cachedDefs = null;
+                _cachedDefsPath = null;
+            }
         }
     }
 }

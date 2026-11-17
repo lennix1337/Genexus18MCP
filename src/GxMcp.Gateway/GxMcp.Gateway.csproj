@@ -9,9 +9,17 @@
     <AssemblyVersion>4.6.1.0</AssemblyVersion>
     <FileVersion>4.6.1.0</FileVersion>
     <InformationalVersion>4.6.1</InformationalVersion>
-    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <!-- Workstation GC + ConserveMemory=9 + RetainVM=false keeps per-client Gateway
+         footprint low (~1 heap/1 GC thread instead of per-core Server GC heaps/threads)
+         without imposing a hard heap cap that could OOM on 16 MB frames or 64 MB caches. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
   </PropertyGroup>
+
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
+  </ItemGroup>
 
   <!-- PERFORMANCE (build flags): enable ReadyToRun for Release publish. This pre-compiles
        hot methods to native code at publish time, eliminating most JIT cost on cold start.

@@ -10,6 +10,7 @@
 ### Changed
 
 - **Lower SDK Worker memory during source search and indexing.** Replaced the string-keyed trigram index and per-record trigram string sets in `SourceStoreService` with numeric record IDs, packed 64-bit trigrams, and streaming index/catalog I/O, cutting duplicate key/trigram allocations on the managed heap. Verified via search bursts on `C:\KBs\KBTeste955` (860 objects: private bytes 140.54 -> 103.36 MiB, working set 197.22 -> 160.46 MiB) and `C:\KBs\KBTesteBench` (838 objects: private bytes 140.86 -> 110.78 MiB, working set 194.91 -> 166.52 MiB). https://github.com/lennix1337/Genexus18MCP/issues/1039 https://github.com/lennix1337/Genexus18MCP/issues/1038
+- **Gateway memory footprint:** switched `GxMcp.Gateway` to Workstation GC with `ConserveMemory=9` and `RetainVM=false`, shared parsed `tool_definitions.json` across validator and tool-identity lookups, and deferred `RecipeCatalog` user-macro loading until first recipe query. https://github.com/lennix1337/Genexus18MCP/issues/1040
 
 ### Fixed
 

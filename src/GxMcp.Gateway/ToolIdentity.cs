@@ -101,19 +101,14 @@ namespace GxMcp.Gateway
                 if (_toolDefs != null) return;
                 string? path = ToolDefinitionsLocator.Locate();
                 if (path == null) return;
-                try
-                {
-                    _toolDefs = JArray.Parse(File.ReadAllText(path));
-                    _canonicalToolNames = _toolDefs.OfType<JObject>()
-                        .Select(t => t["name"]?.ToString())
-                        .Where(n => !string.IsNullOrEmpty(n))
-                        .Select(n => n!)
-                        .ToList();
-                }
-                catch
-                {
-                    // Silently fail — same degrade-to-no-op behavior as GatewayArgsValidator.
-                }
+                var defs = ToolDefinitionsLocator.GetOrLoadDefinitions(path);
+                if (defs == null) return;
+                _toolDefs = defs;
+                _canonicalToolNames = _toolDefs.OfType<JObject>()
+                    .Select(t => t["name"]?.ToString())
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .Select(n => n!)
+                    .ToList();
             }
         }
 
