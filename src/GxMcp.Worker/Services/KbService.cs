@@ -1130,6 +1130,8 @@ namespace GxMcp.Worker.Services
                         bulkSw.Stop();
                         _currentStatus = "Complete";
                         FinishIndexOperation(operationGeneration);
+                        WorkerMemoryMaintenance.ResetSdkObjectCaches(kb?.DesignModel?.Objects);
+                        WorkerMemoryMaintenance.CompactLohOnce("bulk-index-lite");
                         Logger.Info($"[ENRICH-LAZY] eager drain skipped — {_totalCount} objects catalogued, enrichment on-demand. litePassMs={liteSw.ElapsedMilliseconds}");
                         return;
                     }
@@ -1180,7 +1182,11 @@ namespace GxMcp.Worker.Services
                             Logger.Error("[BULK-INDEX-ENRICH-FAIL] error=" + ex.Message);
                             MarkIndexOperationFailed(operationGeneration, ex.Message);
                         }
-                        finally { FinishIndexOperation(operationGeneration); }
+                        finally
+                        {
+                            FinishIndexOperation(operationGeneration);
+                            WorkerMemoryMaintenance.CompactLohOnce("bulk-index-enrich");
+                        }
                     }) {
                         IsBackground = true,
                         Priority = ThreadPriority.BelowNormal,
@@ -1663,6 +1669,8 @@ namespace GxMcp.Worker.Services
                     // v2.3.8 (Task 1.1): publish completion to IndexState.
                     try { _indexCacheService?.MarkIndexComplete(_processedCount); } catch { }
                     FinishIndexOperation(operationGeneration);
+                    WorkerMemoryMaintenance.ResetSdkObjectCaches(kb?.DesignModel?.Objects);
+                    WorkerMemoryMaintenance.CompactLohOnce("bulk-index");
                     Logger.Info($"[BULK-INDEX] elapsedMs={bulkSw.ElapsedMilliseconds} processed={_processedCount} total={_totalCount}");
                 } catch (Exception ex) {
                     bulkSw.Stop();

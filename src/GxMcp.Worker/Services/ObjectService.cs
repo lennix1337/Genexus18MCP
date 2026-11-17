@@ -414,7 +414,9 @@ namespace GxMcp.Worker.Services
                     return null;
                 }
 
-                var actualParts = GetSourceStoreRequiredParts(entry);
+                var actualParts = GetSourceStoreRequiredParts(
+                    entry.Type,
+                    GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj));
                 var staleParts = actualParts
                     .Where(p => !store.IsStoredAndFresh(entry, new List<string> { p }))
                     .ToList();
@@ -459,7 +461,8 @@ namespace GxMcp.Worker.Services
             bool started = backfill.Start(
                 entryProvider,
                 partReader,
-                requiredPartProvider: requiredPartProvider);
+                requiredPartProvider: requiredPartProvider,
+                onMaintenance: _ => WorkerMemoryMaintenance.ResetSdkObjectCaches(_kbService?.GetKB()?.DesignModel?.Objects));
             if (!started) ReleaseSourceStoreBackfillStartGate();
         }
 

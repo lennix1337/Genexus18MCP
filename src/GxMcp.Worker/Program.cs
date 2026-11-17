@@ -1171,12 +1171,7 @@ namespace GxMcp.Worker
                         continue;
                     }
                     if (compactedThisIdle) continue;
-                    long beforeMb = currentMb;
-                    System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-                    GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-                    GC.WaitForPendingFinalizers();
-                    long afterMb = GC.GetTotalMemory(true) / (1024 * 1024);
-                    Logger.Info($"[IDLE-GC] LOH compaction gcMemMB {beforeMb}->{afterMb} (idleMs={(int)idleMs})");
+                    WorkerMemoryMaintenance.CompactLohOnce($"idle(idleMs={(int)idleMs})");
                     compactedThisIdle = true;
                 }
                 catch (Exception ex) { Logger.Warn("[IDLE-GC] " + ex.Message); }

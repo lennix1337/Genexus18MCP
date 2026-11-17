@@ -58,6 +58,10 @@
       <HintPath>$(GX_PATH)\Packages\Artech.Packages.Patterns.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="Artech.Udm.Framework">
+      <HintPath>$(GX_PATH)\Artech.Udm.Framework.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="Microsoft.Build.Framework" />
