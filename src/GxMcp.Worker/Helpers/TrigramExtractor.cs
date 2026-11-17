@@ -13,6 +13,110 @@ namespace GxMcp.Worker.Helpers
     /// </summary>
     public static class TrigramExtractor
     {
+        internal static ulong PackTrigram(char c0, char c1, char c2)
+            => ((ulong)c0 << 32) | ((ulong)c1 << 16) | c2;
+
+        internal static bool TryPackTrigram(string trigram, out ulong packed)
+        {
+            if (trigram == null || trigram.Length != 3)
+            {
+                packed = 0;
+                return false;
+            }
+            packed = PackTrigram(
+                ToLowerInvariantFast(trigram[0]),
+                ToLowerInvariantFast(trigram[1]),
+                ToLowerInvariantFast(trigram[2]));
+            return true;
+        }
+
+        internal static string UnpackTrigram(ulong packed)
+            => new string(new[]
+            {
+                (char)((packed >> 32) & 0xFFFF),
+                (char)((packed >> 16) & 0xFFFF),
+                (char)(packed & 0xFFFF)
+            });
+
+        private static char ToLowerInvariantFast(char c)
+            => (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (c < 128 ? c : char.ToLowerInvariant(c));
+
+        /// <summary>
+        /// Extracts sorted unique packed trigrams without allocating a lowercased copy
+        /// of <paramref name="text"/> or per-trigram substring objects.
+        /// </summary>
+        internal static ulong[] ExtractPackedTrigrams(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length < 3) return Array.Empty<ulong>();
+
+            var set = new HashSet<ulong>();
+            char c0 = ToLowerInvariantFast(text[0]);
+            char c1 = ToLowerInvariantFast(text[1]);
+            for (int i = 2; i < text.Length; i++)
+            {
+                char c2 = ToLowerInvariantFast(text[i]);
+                set.Add(PackTrigram(c0, c1, c2));
+                c0 = c1;
+                c1 = c2;
+            }
+            if (set.Count == 0) return Array.Empty<ulong>();
+            var arr = new ulong[set.Count];
+            set.CopyTo(arr);
+            Array.Sort(arr);
+            return arr;
+        }
+
+        internal static List<ulong[]> ExtractRequiredPackedTrigramSets(string pattern, string callee)
+        {
+            ulong[] calleeTrigrams = null;
+            if (!string.IsNullOrWhiteSpace(callee))
+            {
+                calleeTrigrams = ExtractPackedTrigrams(callee.Trim());
+            }
+
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                if (calleeTrigrams != null && calleeTrigrams.Length > 0)
+                {
+                    return new List<ulong[]> { calleeTrigrams };
+                }
+                return null;
+            }
+
+            List<string> branches = SplitTopLevelAlternations(pattern.Trim());
+            var branchTrigramSets = new List<ulong[]>(branches.Count);
+
+            foreach (var branch in branches)
+            {
+                var branchSet = new HashSet<ulong>();
+                var literalRuns = ExtractLiteralRuns(branch);
+                foreach (var run in literalRuns)
+                {
+                    if (run.Length >= 3)
+                    {
+                        foreach (var t in ExtractPackedTrigrams(run)) branchSet.Add(t);
+                    }
+                }
+
+                if (calleeTrigrams != null && calleeTrigrams.Length > 0)
+                {
+                    foreach (var t in calleeTrigrams) branchSet.Add(t);
+                }
+
+                if (branchSet.Count == 0)
+                {
+                    return null;
+                }
+
+                var arr = new ulong[branchSet.Count];
+                branchSet.CopyTo(arr);
+                Array.Sort(arr);
+                branchTrigramSets.Add(arr);
+            }
+
+            return branchTrigramSets.Count > 0 ? branchTrigramSets : null;
+        }
+
         public static HashSet<string> ExtractTrigrams(string text)
         {
             var set = new HashSet<string>(StringComparer.Ordinal);
