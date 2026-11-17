@@ -153,8 +153,8 @@ namespace GxMcp.Gateway
                 PipeDirection.InOut,
                 PipeOptions.Asynchronous);
             _pipe.Connect(timeoutMs);
-            _reader = new StreamReader(_pipe, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, bufferSize: 16 * 1024, leaveOpen: true);
-            _writer = new StreamWriter(_pipe, new UTF8Encoding(false), bufferSize: 16 * 1024, leaveOpen: true)
+            _reader = new StreamReader(_pipe, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, bufferSize: 64 * 1024, leaveOpen: true);
+            _writer = new StreamWriter(_pipe, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: true)
             {
                 AutoFlush = true,
                 NewLine = "\n"

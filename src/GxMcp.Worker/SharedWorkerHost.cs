@@ -26,7 +26,7 @@ namespace GxMcp.Worker
         internal static StreamWriter CreateChildStdinWriter(Stream stream)
         {
             if (stream == null) throw new ArgumentNullException(nameof(stream));
-            return new StreamWriter(stream, new UTF8Encoding(false), 16 * 1024)
+            return new StreamWriter(stream, new UTF8Encoding(false), 64 * 1024)
             {
                 AutoFlush = false,
                 NewLine = "\n"
@@ -2812,8 +2812,8 @@ namespace GxMcp.Worker
             _host = host;
             _pipe = pipe;
             _attachTimeoutMs = attachTimeoutMs;
-            _reader = new StreamReader(pipe, new UTF8Encoding(false), false, 16 * 1024, true);
-            _writer = new StreamWriter(pipe, new UTF8Encoding(false), 16 * 1024, true) { AutoFlush = true, NewLine = "\n" };
+            _reader = new StreamReader(pipe, new UTF8Encoding(false), false, 64 * 1024, true);
+            _writer = new StreamWriter(pipe, new UTF8Encoding(false), 64 * 1024, true) { AutoFlush = true, NewLine = "\n" };
             ConnectionId = Guid.NewGuid().ToString("N");
         }
 

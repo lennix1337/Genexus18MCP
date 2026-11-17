@@ -10,9 +10,8 @@
     <FileVersion>4.6.1.0</FileVersion>
     <InformationalVersion>4.6.1</InformationalVersion>
     <!-- Workstation GC + ConserveMemory=9 + RetainVM=false keeps per-client Gateway
-         footprint low (~1 heap/1 GC thread instead of per-core Server GC heaps/threads).
-         HeapHardLimit (128 MB) bounds runaway retention while leaving headroom above
-         SemanticCacheStore.DefaultMaxBytes (64 MB) and HardFrameCeilingBytes (16 MB). -->
+         footprint low (~1 heap/1 GC thread instead of per-core Server GC heaps/threads)
+         without imposing a hard heap cap that could OOM on 16 MB frames or 64 MB caches. -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
     <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
@@ -20,7 +19,6 @@
 
   <ItemGroup>
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
-    <RuntimeHostConfigurationOption Include="System.GC.HeapHardLimit" Value="134217728" />
   </ItemGroup>
 
   <!-- PERFORMANCE (build flags): enable ReadyToRun for Release publish. This pre-compiles

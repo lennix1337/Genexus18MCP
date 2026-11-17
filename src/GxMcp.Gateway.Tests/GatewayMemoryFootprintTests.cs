@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Xml.Linq;
 using GxMcp.TestSupport;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GxMcp.Gateway.Tests
@@ -31,10 +33,26 @@ namespace GxMcp.Gateway.Tests
             }
 
             Assert.Equal("9", conserveMemory);
-            Assert.True(long.TryParse(heapHardLimitRaw, out long heapHardLimit), "System.GC.HeapHardLimit must be a numeric byte limit.");
-            Assert.True(
-                heapHardLimit >= SemanticCacheStore.DefaultMaxBytes + SharedWorkerConnection.HardFrameCeilingBytes,
-                $"HeapHardLimit ({heapHardLimit}) must stay above SemanticCacheStore ({SemanticCacheStore.DefaultMaxBytes}) + HardFrameCeiling ({SharedWorkerConnection.HardFrameCeilingBytes}).");
+            Assert.Null(heapHardLimitRaw);
+        }
+
+        [Fact]
+        public void ToolIdentity_CanonicalNames_MatchRawToolDefinitionsAfterCompatibilityApply()
+        {
+            string? path = ToolDefinitionsLocator.Locate();
+            Assert.NotNull(path);
+
+            var rawNames = JArray.Parse(File.ReadAllText(path!))
+                .OfType<JObject>()
+                .Select(t => t["name"]?.ToString())
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Select(n => n!)
+                .ToList();
+
+            ToolDefinitionsLocator.ClearCache();
+            var sharedNames = ToolIdentity.CanonicalToolNames.ToList();
+
+            Assert.Equal(rawNames, sharedNames);
         }
 
         [Fact]
