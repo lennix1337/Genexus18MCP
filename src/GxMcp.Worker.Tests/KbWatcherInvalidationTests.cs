@@ -59,5 +59,15 @@ namespace GxMcp.Worker.Tests
 
             Assert.Equal(0, fires);
         }
+
+        [Fact]
+        public void ComputeNextPollIntervalMs_BacksOffWhenIdleAndResetsOnActivity()
+        {
+            Assert.Equal(10000, KbWatcherService.ComputeNextPollIntervalMs(5000, hadActivity: false));
+            Assert.Equal(20000, KbWatcherService.ComputeNextPollIntervalMs(10000, hadActivity: false));
+            Assert.Equal(30000, KbWatcherService.ComputeNextPollIntervalMs(20000, hadActivity: false));
+            Assert.Equal(30000, KbWatcherService.ComputeNextPollIntervalMs(30000, hadActivity: false));
+            Assert.Equal(5000, KbWatcherService.ComputeNextPollIntervalMs(30000, hadActivity: true));
+        }
     }
 }
