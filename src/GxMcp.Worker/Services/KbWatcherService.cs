@@ -45,7 +45,7 @@ namespace GxMcp.Worker.Services
         private readonly HashSet<Guid> _notifiedInLastTick = new HashSet<Guid>();
 
         internal const int BasePollIntervalMs = 5000;
-        internal const int MaxIdlePollIntervalMs = 30000;
+        internal const int MaxIdlePollIntervalMs = 15000;
 
         internal static int ComputeNextPollIntervalMs(int currentIntervalMs, bool hadActivity)
         {
