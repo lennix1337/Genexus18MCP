@@ -1,0 +1,45 @@
+# When a PR that only references an issue ("refs #N") is merged, GitHub does not
+# close or comment on that issue, so the issue gives no sign that work landed.
+# This posts one comment on each open referenced issue with the PR and commit.
+# Issues closed by the PR ("fixes/closes #N") are left to GitHub, and an issue
+# that already mentions the PR is skipped, so a hand-written update is not repeated.
+#
+# pull_request_target so merged PRs from forks can also comment. No code from
+# the PR is checked out or run; title and body only reach the script through env.
+name: PR merged -> issue comment
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  comment:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on referenced issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          issues=$(printf '%s\n%s\n' "$TITLE" "$BODY" \
+            | grep -oiE '\b(refs?|part of|related to|relates to)[: ]+#[0-9]+([ ,]+#[0-9]+)*' \
+            | grep -oE '#[0-9]+' | tr -d '#' | sort -un || true)
+          for n in $issues; do
+            [ "$n" = "$PR" ] && continue
+            state=$(gh issue view "$n" --repo "$REPO" --json state -q .state 2>/dev/null || echo MISSING)
+            [ "$state" = "OPEN" ] || { echo "#$n: $state, skipped"; continue; }
+            if gh issue view "$n" --repo "$REPO" --json comments -q '.comments[].body' | grep -qE "#$PR\b|/pull/$PR\b"; then
+              echo "#$n: already mentions #$PR, skipped"; continue
+            fi
+            gh issue comment "$n" --repo "$REPO" --body "O #$PR ($TITLE) foi mergeado em \`${SHA:0:8}\`. Ele referencia esta issue sem fechá-la: a issue segue aberta até a verificação do que ainda falta."
+            echo "#$n: commented"
+          done
