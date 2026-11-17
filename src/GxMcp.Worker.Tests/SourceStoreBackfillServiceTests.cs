@@ -1378,6 +1378,39 @@ namespace GxMcp.Worker.Tests
             }
         }
 
+        [Fact]
+        public void MaintenanceHookInvokedAtBatchBoundaryAndCompletion()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "gxmcp-backfill-maint-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var store = new SourceStoreService();
+                store.SetStoreDirectoryForTest(root);
+                int total = SourceStoreBackfillService.MaintenanceBatchObjects + 5;
+                var entries = Enumerable.Range(1, total)
+                    .Select(i => Entry(i.ToString("D32"), i))
+                    .ToArray();
+                var events = new List<bool>();
+                var service = new SourceStoreBackfillService(store);
+                Assert.True(service.Start(
+                    () => entries,
+                    e => new[] { new SourceStoreBackfillPart { PartName = "Source", Source = "x", ReadSucceeded = true } },
+                    maxObjectsPerSlice: SourceStoreBackfillService.MaintenanceBatchObjects,
+                    sliceBudgetMs: 10000,
+                    schedule: false,
+                    onMaintenance: isComplete => events.Add(isComplete)));
+
+                Assert.True(service.RunOneSliceForTest(SourceStoreBackfillService.MaintenanceBatchObjects, 10000));
+                Assert.Equal(new[] { false }, events);
+
+                Assert.True(service.RunOneSliceForTest(SourceStoreBackfillService.MaintenanceBatchObjects, 10000));
+                Assert.Equal(new[] { false, true }, events);
+                Assert.Equal("complete", service.GetState().State);
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        }
+
         [Theory]
         [InlineData("complete", true)]
         [InlineData("completeWithFailures", true)]

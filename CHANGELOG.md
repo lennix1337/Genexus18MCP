@@ -11,6 +11,7 @@
 
 - **Lower SDK Worker memory during source search and indexing.** Replaced the string-keyed trigram index and per-record trigram string sets in `SourceStoreService` with numeric record IDs, packed 64-bit trigrams, and streaming index/catalog I/O, cutting duplicate key/trigram allocations on the managed heap. Verified via search bursts on `C:\KBs\KBTeste955` (860 objects: private bytes 140.54 -> 103.36 MiB, working set 197.22 -> 160.46 MiB) and `C:\KBs\KBTesteBench` (838 objects: private bytes 140.86 -> 110.78 MiB, working set 194.91 -> 166.52 MiB). https://github.com/lennix1337/Genexus18MCP/issues/1039 https://github.com/lennix1337/Genexus18MCP/issues/1038
 - **Gateway memory footprint:** switched `GxMcp.Gateway` to Workstation GC with `ConserveMemory=9` and `RetainVM=false`, shared parsed `tool_definitions.json` across validator and tool-identity lookups, and deferred `RecipeCatalog` user-macro loading until first recipe query. https://github.com/lennix1337/Genexus18MCP/issues/1040
+- **Worker SDK cache reset and LOH compaction after index/backfill:** cleared `IKBModelObjectsCacheConfiguration` and ran `CompactOnce` gen-2 GC after bulk indexing and every 100-object batch / completion of `SourceStoreBackfillService`, and removed a redundant `FindObject` call in `StartSourceStoreBackfillIfReady`, cutting steady Worker Private Bytes on `KBTeste955` + `KBTeste` from 349.60 MB to 207.61 MB (`isolated`) and from 235.19 MB to 180.44 MB (`shared-host`, vs 560.38 MB in ADR-001). https://github.com/lennix1337/Genexus18MCP/issues/1039
 
 ### Fixed
 

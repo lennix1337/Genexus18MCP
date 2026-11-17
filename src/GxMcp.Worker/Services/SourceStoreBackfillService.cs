@@ -207,6 +207,9 @@ namespace GxMcp.Worker.Services
         // already fresh" (an empty result is valid) from "a stale required part
         // was dropped after a failed SDK read".
         private Func<SearchIndex.IndexEntry, IReadOnlyList<string>> _requiredPartProvider;
+        private Action<bool> _onMaintenance;
+        private int _objectsSinceMaintenance;
+        internal const int MaintenanceBatchObjects = 100;
         private IReadOnlyList<SearchIndex.IndexEntry> _entries = Array.Empty<SearchIndex.IndexEntry>();
         private SourceStoreBackfillState _state = new SourceStoreBackfillState();
         private readonly Dictionary<string, int> _objectRetries = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -268,7 +271,8 @@ namespace GxMcp.Worker.Services
             int maxObjectsPerSlice = 50,
             int sliceBudgetMs = 250,
             bool schedule = true,
-            Func<SearchIndex.IndexEntry, IReadOnlyList<string>> requiredPartProvider = null)
+            Func<SearchIndex.IndexEntry, IReadOnlyList<string>> requiredPartProvider = null,
+            Action<bool> onMaintenance = null)
         {
             if (!Configuration.SourceStoreBackfillEnabled) return false;
             if (entryProvider == null || partReader == null) return false;
@@ -278,6 +282,8 @@ namespace GxMcp.Worker.Services
                 _entryProvider = entryProvider;
                 _partReader = partReader;
                 _requiredPartProvider = requiredPartProvider;
+                _onMaintenance = onMaintenance;
+                _objectsSinceMaintenance = 0;
                 _entries = (entryProvider() ?? Array.Empty<SearchIndex.IndexEntry>())
                     .Where(e => e != null && !string.IsNullOrWhiteSpace(e.Guid))
                     .OrderByDescending(e => e.LastUpdate)
@@ -433,6 +439,7 @@ namespace GxMcp.Worker.Services
             IReadOnlyList<SearchIndex.IndexEntry> entries;
             Func<SearchIndex.IndexEntry, IReadOnlyList<SourceStoreBackfillPart>> reader;
             Func<SearchIndex.IndexEntry, IReadOnlyList<string>> requiredPartProvider;
+            Action<bool> onMaintenance;
             int start;
             int generation;
             lock (_gate)
@@ -441,6 +448,7 @@ namespace GxMcp.Worker.Services
                 entries = _entries;
                 reader = _partReader;
                 requiredPartProvider = _requiredPartProvider;
+                onMaintenance = _onMaintenance;
                 generation = _walkGeneration;
                 start = Math.Max(0, Math.Min(_state.CursorIndex, entries.Count));
                 _state.State = "running";
@@ -710,12 +718,19 @@ namespace GxMcp.Worker.Services
                 // per-part read-back above).  Do not perform an unbounded second
                 // catalogue walk here: this method is one bounded slice.
                 bool complete;
+                bool runMaintenance = false;
                 lock (_gate)
                 {
                     if (IsStaleSliceLocked(generation)) return false;
                     _state.RetryCount = 0;
                     _state.LastError = null;
                     complete = _state.CursorIndex >= entries.Count;
+                    _objectsSinceMaintenance += processed;
+                    if (processed > 0 && (complete || _objectsSinceMaintenance >= MaintenanceBatchObjects))
+                    {
+                        _objectsSinceMaintenance = 0;
+                        runMaintenance = true;
+                    }
                     _state.State = complete
                         ? (_state.ReadFailedObjects.Count > 0 ? "completeWithFailures" : "complete")
                         : "running";
@@ -732,6 +747,16 @@ namespace GxMcp.Worker.Services
                         _state.EtaMs = (int)Math.Max(0, Math.Min(int.MaxValue, perObject * remaining));
                     }
                     PersistStateLocked();
+                }
+                if (runMaintenance)
+                {
+                    if (onMaintenance != null)
+                    {
+                        try { runOnSdk(() => onMaintenance(complete)); }
+                        catch (Exception mex) { Logger.Debug("[SOURCE-STORE] maintenance hook failed: " + mex.Message); }
+                    }
+                    try { WorkerMemoryMaintenance.CompactLohOnce(complete ? "backfill-complete" : "backfill-batch"); }
+                    catch (Exception gex) { Logger.Debug("[SOURCE-STORE] LOH compaction failed: " + gex.Message); }
                 }
                 if (!complete && scheduleContinuation) QueueNextSlice(maxObjectsPerSlice, sliceBudgetMs);
                 return true;
