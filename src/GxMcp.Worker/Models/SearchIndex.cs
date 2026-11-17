@@ -159,6 +159,20 @@ namespace GxMcp.Worker.Models
         public string ToJson() => JsonConvert.SerializeObject(this, Formatting.Indented);
         public static SearchIndex FromJson(string json) => JsonConvert.DeserializeObject<SearchIndex>(json);
 
+        // Stream directly to the target stream without materializing a full-index JSON string
+        // on the Large Object Heap (which peaks at ~3x the in-memory index size).
+        public void WriteToStream(System.IO.Stream stream, Formatting formatting = Formatting.None)
+        {
+            if (stream == null) throw new ArgumentNullException(nameof(stream));
+            using (var sw = new System.IO.StreamWriter(stream, new System.Text.UTF8Encoding(false), bufferSize: 16384, leaveOpen: true))
+            using (var jw = new JsonTextWriter(sw) { Formatting = formatting, CloseOutput = false })
+            {
+                JsonSerializer.CreateDefault().Serialize(jw, this);
+                jw.Flush();
+                sw.Flush();
+            }
+        }
+
         public static SearchIndex FromJsonStream(System.IO.Stream stream)
         {
             if (stream == null) return null;

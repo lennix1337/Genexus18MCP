@@ -125,5 +125,30 @@ namespace GxMcp.Worker.Tests
                 Assert.Contains(TrigramExtractor.UnpackTrigram(p), strSet);
             }
         }
+
+        [Fact]
+        public void SearchIndex_WriteToStream_RoundTrips_Without_String_Materialization()
+        {
+            var index = new SearchIndex();
+            var key = "Procedure:ProcStreamTest";
+            index.Objects[key] = new SearchIndex.IndexEntry
+            {
+                Guid = Guid.NewGuid().ToString("D"),
+                Name = "ProcStreamTest",
+                Type = "Procedure",
+                FullSource = "For Each Customer\nEndFor"
+            };
+
+            using (var ms = new MemoryStream())
+            {
+                index.WriteToStream(ms);
+                ms.Position = 0;
+                var restored = SearchIndex.FromJsonStream(ms);
+                Assert.NotNull(restored);
+                Assert.True(restored.Objects.ContainsKey(key));
+                Assert.Equal("ProcStreamTest", restored.Objects[key].Name);
+                Assert.Equal("For Each Customer\nEndFor", restored.Objects[key].FullSource);
+            }
+        }
     }
 }
