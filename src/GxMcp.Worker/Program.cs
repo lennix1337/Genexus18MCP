@@ -579,6 +579,7 @@ namespace GxMcp.Worker
                         }
                     }
                     CommandQueue.CompleteAdding();
+                    BackgroundSignal.Set();
                 }) { IsBackground = true, Name = "HeartbeatReader" };
                 readerThread.Start();
 
@@ -592,13 +593,15 @@ namespace GxMcp.Worker
                         Visible = false 
                     };
                     
-                    // The 'Quiet Mode' loop: process commands on the UI thread
-                    var pollTimer = new System.Windows.Forms.Timer { Interval = 15 };
+                    // Safety fallback at 1Hz: EnqueueSdkCommand and SdkExecutor already
+                    // wake the UI thread immediately via _bridgeForm.BeginInvoke(DrainSdkCommands).
+                    var pollTimer = new System.Windows.Forms.Timer { Interval = 1000 };
                     pollTimer.Tick += (s, e) => DrainSdkCommands();
                     
                     _bridgeForm.Load += (s, e) => {
                         pollTimer.Start();
                         _uiReady.Set();
+                        DrainSdkCommands();
                         Logger.Debug("WinForms Bridge Ready.");
                     };
                     
@@ -623,9 +626,9 @@ namespace GxMcp.Worker
                             try { action(); }
                             catch (Exception ex) { Logger.Error("Background Task Error: " + ex.Message); }
                         } else {
-                            // PERFORMANCE (W-B3): wait for signal from EnqueueBackground; 100ms
+                            // PERFORMANCE (W-B3): wait for signal from EnqueueBackground; 1000ms
                             // fallback re-checks CommandQueue.IsCompleted on shutdown.
-                            BackgroundSignal.WaitOne(100);
+                            BackgroundSignal.WaitOne(1000);
                         }
                     }
                 }) { IsBackground = true, Name = "BackgroundWorker" };
@@ -651,7 +654,7 @@ namespace GxMcp.Worker
                         foreach (var expired in scheduler.ExpireTimedOut(DateTime.UtcNow))
                             SendWorkerBusy(null, expired.RawLine,
                                 (DateTime.UtcNow - expired.EnqueuedAtUtc).TotalMilliseconds);
-                    if (CommandQueue.TryTake(out string line, 100))
+                    if (CommandQueue.TryTake(out string line, scheduler.QueuedCount > 0 ? 100 : 1000))
                     {
                         // P3 perf: parseia o comando UMA vez aqui e propaga o JObject pelo
                         // caminho MTA (Task.Run) — elimina os 3 re-parses em IsThreadSafe/

@@ -1244,40 +1244,42 @@ namespace GxMcp.Worker.Services
         internal void AccumulateCoverage(SourceStoreCoverage coverage, IEnumerable<SearchIndex.IndexEntry> entries, List<string> scope)
         {
             foreach (var e in entries)
+                AccumulateCoverage(coverage, e, scope);
+        }
+
+        internal void AccumulateCoverage(SourceStoreCoverage coverage, SearchIndex.IndexEntry e, List<string> scope)
+        {
+            if (string.IsNullOrWhiteSpace(e?.Guid)) return;
+            var requestedParts = ResolveRequestedParts(e.Type, scope);
+            bool allStored = requestedParts.Count > 0;
+            bool anyStale = false;
+            foreach (string part in requestedParts)
             {
-                if (string.IsNullOrWhiteSpace(e?.Guid)) continue;
-                var requestedParts = ResolveRequestedParts(e.Type, scope);
-                bool allStored = requestedParts.Count > 0;
-                bool anyStale = false;
-                foreach (string part in requestedParts)
+                if (!coverage.PartsByPart.TryGetValue(part, out var partCoverage))
                 {
-                    if (!coverage.PartsByPart.TryGetValue(part, out var partCoverage))
-                    {
-                        partCoverage = new SourceStoreCoverage();
-                        coverage.PartsByPart[part] = partCoverage;
-                    }
-                    partCoverage.TotalObjects++;
-
-                    if (IsPartStoredAndFresh(e, part))
-                    {
-                        partCoverage.StoredObjects++;
-                    }
-                    else
-                    {
-                        // Missing, corrupt, and timestamp-stale records are all
-                        // ineligible for coverage.  Keep them in the stale/error
-                        // bucket instead of silently treating an absent file as
-                        // a healthy catalog entry.
-                        partCoverage.StaleObjects++;
-                        allStored = false;
-                        anyStale = true;
-                    }
+                    partCoverage = new SourceStoreCoverage();
+                    coverage.PartsByPart[part] = partCoverage;
                 }
+                partCoverage.TotalObjects++;
 
-                if (allStored && !anyStale) coverage.StoredObjects++;
-                else if (anyStale) coverage.StaleObjects++;
+                if (IsPartStoredAndFresh(e, part))
+                {
+                    partCoverage.StoredObjects++;
+                }
+                else
+                {
+                    // Missing, corrupt, and timestamp-stale records are all
+                    // ineligible for coverage.  Keep them in the stale/error
+                    // bucket instead of silently treating an absent file as
+                    // a healthy catalog entry.
+                    partCoverage.StaleObjects++;
+                    allStored = false;
+                    anyStale = true;
+                }
             }
 
+            if (allStored && !anyStale) coverage.StoredObjects++;
+            else if (anyStale) coverage.StaleObjects++;
         }
 
         public bool IsStoredAndFresh(SearchIndex.IndexEntry entry, List<string> scope)

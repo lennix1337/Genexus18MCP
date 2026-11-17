@@ -243,9 +243,16 @@ namespace GxMcp.Gateway
                 string defPath = Path.Combine(exeDir, "tool_definitions.json");
                 if (File.Exists(defPath))
                 {
-                    string json = File.ReadAllText(defPath);
-                    var parsed = JArray.Parse(json);
-                    ToolSchemaCompatibility.Apply(parsed);
+                    // Share the parsed + compatibility-patched JArray with GatewayArgsValidator
+                    // and ToolIdentity via ToolDefinitionsLocator so startup only parses
+                    // tool_definitions.json once while preserving McpRouter's beside-assembly lookup.
+                    var parsed = ToolDefinitionsLocator.GetOrLoadDefinitions(defPath);
+                    if (parsed == null)
+                    {
+                        string json = File.ReadAllText(defPath);
+                        parsed = JArray.Parse(json);
+                        ToolSchemaCompatibility.Apply(parsed);
+                    }
                     // MCP clients cache tools/list aggressively; deterministic ordering
                     // keeps discovery diffs stable and avoids model-visible churn when
                     // the source JSON is edited in a different order.
@@ -316,6 +323,7 @@ namespace GxMcp.Gateway
                         {
                             try
                             {
+                                ToolDefinitionsLocator.ClearCache();
                                 LoadToolDefinitions();
                             }
                             catch (Exception ex)

@@ -1047,11 +1047,10 @@ namespace GxMcp.Worker.Services
                             ["requestedTimeoutMs"] = requestedTimeoutMs
                         });
                     }
-                    var one = new[] { entries[coveragePosition] };
                     if (CoverageForTest != null)
-                        MergeCoverage(coverage, CoverageForTest(one, scanScope));
+                        MergeCoverage(coverage, CoverageForTest(new[] { entries[coveragePosition] }, scanScope));
                     else
-                        SourceStoreService.Instance.AccumulateCoverage(coverage, one, scanScope);
+                        SourceStoreService.Instance.AccumulateCoverage(coverage, entries[coveragePosition], scanScope);
                     coveragePosition++;
                 }
                 if (resumeCoverage)

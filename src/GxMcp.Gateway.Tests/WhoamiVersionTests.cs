@@ -281,5 +281,25 @@ namespace GxMcp.Gateway.Tests
             // Reset so we don't pollute other tests that rely on default Cold/0.
             Program.UpdateLastKnownIndexState("Cold", 0, null, null, null);
         }
+
+        [Fact]
+        public async System.Threading.Tasks.Task Whoami_DoesNotBlock_WhenWorkerPoolIsUnready()
+        {
+            Program.ResetWorkerLifecycleForTest();
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var payload = await Program.BuildWhoamiPayloadAsync();
+                sw.Stop();
+
+                Assert.False(Program.IsActiveWorkerHealthy());
+                Assert.True(sw.ElapsedMilliseconds < 1000, $"Expected fast degraded whoami, took {sw.ElapsedMilliseconds}ms");
+                Assert.NotNull(payload["workerHealth"]);
+            }
+            finally
+            {
+                Program.ResetWorkerLifecycleForTest();
+            }
+        }
     }
 }
