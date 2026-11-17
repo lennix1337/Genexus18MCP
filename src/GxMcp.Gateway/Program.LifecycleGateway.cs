@@ -120,7 +120,10 @@ namespace GxMcp.Gateway
 
         private static int TryReconcileMutationRecoveryFromOperation(string operationId, JToken? payload)
         {
-            if (_mutationRecovery == null || string.IsNullOrWhiteSpace(operationId) || !IsTerminalPersistedReread(payload)) return 0;
+            if (_mutationRecovery == null || string.IsNullOrWhiteSpace(operationId)) return 0;
+            bool persistedReread = IsTerminalPersistedReread(payload);
+            bool closedKbImport = IsCompletedKbImportAccounting(payload);
+            if (!persistedReread && !closedKbImport) return 0;
             string? trackedStatus =_operationTracker.BuildOperationStatus(operationId)["status"]?.ToString();
             if (string.Equals(trackedStatus, "Cancelled", StringComparison.OrdinalIgnoreCase))
                 return 0;
@@ -136,7 +139,9 @@ namespace GxMcp.Gateway
             {
                 if (!LateResultMatchesRecovery(requirement, evidence, operationArgs))
                     continue;
-                bool cleared = MutationRecoveryRegistry.IsKbLevelRecovery(requirement)
+                bool kbLevel = MutationRecoveryRegistry.IsKbLevelRecovery(requirement);
+                if (!kbLevel && !persistedReread) continue;
+                bool cleared = kbLevel
                     ? _mutationRecovery.ConfirmVerifiedOperationRead(requirement)
                     : _mutationRecovery.ConfirmRead(
                         requirement.KbAlias,
