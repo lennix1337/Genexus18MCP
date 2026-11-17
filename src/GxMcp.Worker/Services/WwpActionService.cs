@@ -367,6 +367,24 @@ namespace GxMcp.Worker.Services
                 var diff = new JObject { ["before"] = before, ["after"] = after };
                 bool dryRun = args?["dryRun"]?.ToObject<bool?>() == true;
                 bool rollbackOnFailure = args?["rollbackOnFailure"]?.ToObject<bool?>() ?? true;
+
+                var preflightPlan = PatternXmlEditPlan.Create(
+                    xml,
+                    WriteService.ToSdkPatternLineEndings(afterDocument.ToString(SaveOptions.DisableFormatting)),
+                    allowGridStructure: true,
+                    _patterns.TryGetSpecView(instance, "PatternInstance"));
+                if (preflightPlan.ErrorCode != null)
+                    return McpResponse.Err(
+                        code: preflightPlan.ErrorCode,
+                        message: preflightPlan.Error,
+                        hint: PatternXmlEditPlan.RawXmlEditScopeHint,
+                        target: target,
+                        extra: new JObject
+                        {
+                            ["operation"] = operation,
+                            ["saved"] = false
+                        });
+
                 if (dryRun)
                     return McpResponse.Ok(target: target, code: "DryRun", result: new JObject
                     {
@@ -661,14 +679,12 @@ namespace GxMcp.Worker.Services
             if (operation == "add_grid_action" && group == null)
             {
                 if (string.IsNullOrWhiteSpace(groupName)) return Error("MissingActionGroup", "group is required.");
-                XElement parent = document.Descendants().FirstOrDefault(e =>
-                    e.Elements().Any(c => Is(c, "actionGroup")))
-                    ?? document.Descendants().FirstOrDefault(e =>
-                        e.Name.LocalName.IndexOf("action", StringComparison.OrdinalIgnoreCase) >= 0
-                        || e.Name.LocalName.IndexOf("grid", StringComparison.OrdinalIgnoreCase) >= 0);
-                if (parent == null) return Error("ActionGroupContainerNotFound", "The WorkWithPlus instance has no action-group/grid container where a group can be created safely.");
+                if (string.IsNullOrWhiteSpace(actionName)) return Error("MissingActionName", "actionName is required.");
+                JObject parentError = ResolveMissingActionGroupParent(document, args, out XElement parent);
+                if (parentError != null) return parentError;
+                string groupCaption = FirstNonBlank(args?["groupCaption"]?.ToString()) ?? groupName;
                 group = new XElement(parent.GetDefaultNamespace() + "actionGroup",
-                    new XAttribute("name", groupName), new XAttribute("caption", groupName));
+                    new XAttribute("name", groupName), new XAttribute("caption", groupCaption));
                 parent.Add(group);
             }
 
@@ -997,6 +1013,54 @@ namespace GxMcp.Worker.Services
 
         private static string FirstNonBlank(params string[] values) =>
             values.Select(v => v?.Trim()).FirstOrDefault(v => !string.IsNullOrEmpty(v));
+
+        private static JObject ResolveMissingActionGroupParent(XDocument document, JObject args, out XElement parent)
+        {
+            parent = null;
+            string gridPath = FirstNonBlank(args?["gridPath"]?.ToString());
+            if (gridPath != null)
+                return FindRequestedGrid(document, gridPath, out parent);
+
+            string containerSpec = FirstNonBlank(args?["containerName"]?.ToString(), args?["container"]?.ToString());
+            if (containerSpec != null)
+            {
+                JObject gridErr = FindRequestedGrid(document, containerSpec, out XElement gridMatch);
+                if (gridErr == null && gridMatch != null)
+                {
+                    parent = gridMatch;
+                    return null;
+                }
+                List<XElement> containers = FindFormContainers(document, containerSpec).ToList();
+                if (containers.Count > 1)
+                    return new JObject
+                    {
+                        ["code"] = "FormActionContainerAmbiguous",
+                        ["error"] = "Form action container '" + containerSpec + "' matched more than one table.",
+                        ["matchingContainers"] = new JArray(containers.Select(DescribeFormContainer))
+                    };
+                if (containers.Count == 1)
+                {
+                    parent = containers[0];
+                    return null;
+                }
+                return Error("ActionGroupContainerNotFound", "Container '" + containerSpec + "' was not found.");
+            }
+
+            List<XElement> grids = document.Descendants().Where(e => Is(e, "grid") || Is(e, "simplegrid")).ToList();
+            if (grids.Count == 1)
+            {
+                parent = grids[0];
+                return null;
+            }
+            if (grids.Count > 1)
+                return Error("AmbiguousGrid", "The PatternInstance has more than one grid; provide gridPath.");
+
+            parent = document.Descendants().FirstOrDefault(e => e.Elements().Any(c => Is(c, "actionGroup")))
+                ?? document.Descendants().FirstOrDefault(e => Is(e, "actions"));
+            if (parent == null)
+                return Error("ActionGroupContainerNotFound", "The WorkWithPlus instance has no action-group/grid container where a group can be created safely.");
+            return null;
+        }
 
         private static XElement FindGroup(XDocument doc, string name) => string.IsNullOrWhiteSpace(name) ? null
             : doc.Descendants().FirstOrDefault(e => Is(e, "actionGroup") && Attr(e, "name").Equals(name, StringComparison.OrdinalIgnoreCase));

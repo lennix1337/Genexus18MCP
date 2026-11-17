@@ -1078,5 +1078,55 @@ namespace GxMcp.Worker.Tests
             Assert.Contains("return BuildWwpInstanceNotFound(target, existing);", source);
             Assert.DoesNotContain("requestedObject = _objects.FindObject(\n                        target,\n                        guid:", source.Replace("\r\n", "\n"));
         }
+
+        [Fact]
+        public void AddGridAction_CreatesMissingActionGroupInsideGrid_AndPassesPatternXmlEditPlan()
+        {
+            const string beforeXml = "<instance><table name='TableActions'><actionGroup name='HeaderActions'><userAction name='Export'/></actionGroup><standardAction name='Insert'/></table><grid name='Grid1'><gridVariable name='&amp;Item'/></grid></instance>";
+            var doc = XDocument.Parse(beforeXml, LoadOptions.PreserveWhitespace);
+            JObject result = WwpActionService.Apply(doc, "add_grid_action", new JObject
+            {
+                ["group"] = "GridActionGroup1",
+                ["actionName"] = "Approve",
+                ["caption"] = "Approve",
+                ["enabledWhen"] = "Status = 1"
+            }, null);
+
+            Assert.Null(result["error"]);
+            XElement grid = doc.Descendants("grid").Single();
+            XElement createdGroup = grid.Element("actionGroup");
+            Assert.NotNull(createdGroup);
+            Assert.Equal("GridActionGroup1", (string)createdGroup.Attribute("name"));
+            XElement action = createdGroup.Element("userAction");
+            Assert.NotNull(action);
+            Assert.Equal("Approve", (string)action.Attribute("name"));
+            Assert.Equal("Status = 1", (string)action.Attribute("condition"));
+
+            var plan = Helpers.PatternXmlEditPlan.Create(beforeXml, doc.ToString(SaveOptions.DisableFormatting), allowGridStructure: true);
+            Assert.Null(plan.ErrorCode);
+        }
+
+        [Fact]
+        public void AddGridAction_MultipleGrids_RequiresGridPathWhenCreatingMissingGroup()
+        {
+            const string xml = "<instance><grid name='Grid1'/><grid name='Grid2'/></instance>";
+            var ambiguousDoc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+            JObject ambiguous = WwpActionService.Apply(ambiguousDoc, "add_grid_action", new JObject
+            {
+                ["group"] = "GridActionGroup1",
+                ["actionName"] = "Approve"
+            }, null);
+            Assert.Equal("AmbiguousGrid", ambiguous["code"]?.ToString());
+
+            var targetedDoc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+            JObject targeted = WwpActionService.Apply(targetedDoc, "add_grid_action", new JObject
+            {
+                ["gridPath"] = "Grid2",
+                ["group"] = "GridActionGroup1",
+                ["actionName"] = "Approve"
+            }, null);
+            Assert.Null(targeted["error"]);
+            Assert.NotNull(targetedDoc.Descendants("grid").Last().Element("actionGroup")?.Element("userAction"));
+        }
     }
 }
