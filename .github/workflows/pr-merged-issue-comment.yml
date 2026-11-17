@@ -4,12 +4,14 @@
 # Issues closed by the PR ("fixes/closes #N") are left to GitHub, and an issue
 # that already mentions the PR is skipped, so a hand-written update is not repeated.
 #
-# pull_request_target so merged PRs from forks can also comment. No code from
-# the PR is checked out or run; title and body only reach the script through env.
+# Plain pull_request (repo policy forbids pull_request_target): only PRs from
+# branches of this repository get a write token, so fork PRs are skipped.
+# No code from the PR is checked out or run; title and body only reach the
+# script through env.
 name: PR merged -> issue comment
 
 on:
-  pull_request_target:
+  pull_request:
     types: [closed]
 
 permissions:
@@ -17,7 +19,7 @@ permissions:
 
 jobs:
   comment:
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Comment on referenced issues
