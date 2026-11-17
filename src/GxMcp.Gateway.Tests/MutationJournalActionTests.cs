@@ -303,6 +303,40 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
+        public void ACompletedManifestImportWithClosedAccountingClearsTheKbFenceButNeverAnObjectFence()
+        {
+            // #1056: the legacy import result carries attempted/succeeded/failed and no persisted/rereadConfirmed,
+            // so the object-level test can never match it and the KB-level fence stayed forever.
+            var finished = new JObject
+            {
+                ["status"] = "Completed",
+                ["workerPayload"] = new JObject
+                {
+                    ["attempted"] = 39,
+                    ["succeeded"] = 36,
+                    ["failed"] = 3
+                }
+            };
+            Assert.True(Program.IsCompletedKbImportAccounting(finished));
+            Assert.False(Program.IsTerminalPersistedReread(finished));
+        }
+
+        [Theory]
+        [InlineData("Running", 39, 36, 3, false)]
+        [InlineData("Completed", 39, 30, 3, false)]
+        [InlineData("Completed", 0, 0, 0, false)]
+        [InlineData("Completed", 39, 36, 3, true)]
+        public void AnOpenOrCancelledManifestImportDoesNotClearTheKbFence(
+            string status, int attempted, int succeeded, int failed, bool cancelled)
+        {
+            var worker = new JObject { ["attempted"] = attempted, ["succeeded"] = succeeded, ["failed"] = failed };
+            if (cancelled) worker["cancelled"] = true;
+            var result = new JObject { ["status"] = status, ["workerPayload"] = worker };
+
+            Assert.False(Program.IsCompletedKbImportAccounting(result));
+        }
+
+        [Fact]
         public void AnUnknownPersistedIsNotAConfirmationAndDoesNotThrow()
         {
             var unknown = new JObject

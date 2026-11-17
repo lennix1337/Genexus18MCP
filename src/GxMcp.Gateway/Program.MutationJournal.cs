@@ -160,6 +160,42 @@ namespace GxMcp.Gateway
                 string.Equals(value.Name, name, StringComparison.OrdinalIgnoreCase)));
         }
 
+        /// <summary>
+        /// A finished manifest import whose own accounting is closed: every planned file
+        /// was attempted and ended as succeeded or failed, nothing is left, and the run
+        /// was neither cancelled nor a dry run. For the KB-level fence this is the
+        /// authoritative outcome - the Worker finished the work itself, so only the
+        /// gateway's answer was lost to the timeout. A manifest result has no
+        /// persisted/rereadConfirmed fields, which is why the object-level test never
+        /// matched it and left the fence uncleared (#1056).
+        /// </summary>
+        internal static bool IsCompletedKbImportAccounting(JToken? result)
+        {
+            if (result is not JObject payload || payload["error"] != null)
+                return false;
+
+            JObject evidence = payload["workerPayload"] as JObject
+                ?? payload["result"] as JObject
+                ?? payload;
+            string status = (payload["status"]?.ToString() ?? evidence["status"]?.ToString() ?? string.Empty).Trim();
+            if (!(status.Equals("Completed", StringComparison.OrdinalIgnoreCase)
+                || status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase)
+                || status.Equals("Success", StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            JObject counts = evidence["attempted"] != null ? evidence : evidence["result"] as JObject ?? evidence;
+            if (counts["attempted"]?.Type != JTokenType.Integer
+                || counts["succeeded"]?.Type != JTokenType.Integer
+                || counts["failed"]?.Type != JTokenType.Integer)
+                return false;
+            if (IsJsonTrue(counts["cancelled"]) || IsJsonTrue(counts["dryRun"]) || IsJsonTrue(counts["stoppedOnError"]))
+                return false;
+            if (counts["remaining"] != null && counts["remaining"]!.Value<int>() != 0)
+                return false;
+            int attempted = counts["attempted"]!.Value<int>();
+            return attempted > 0 && counts["succeeded"]!.Value<int>() + counts["failed"]!.Value<int>() == attempted;
+        }
+
         internal static bool IsTerminalPersistedReread(JToken? result)
         {
             if (result is not JObject payload || payload["error"] != null)
