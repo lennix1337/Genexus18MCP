@@ -2204,7 +2204,8 @@ namespace GxMcp.Worker.Services
             }
             var raw = ModifyVariableInternal(target, varName, newTypeName, basedOn, length, decimals, collection, basedOnAttribute, dimensions, dimensionSizes, description);
             MarkDirtyIfSuccess(raw, target);
-            return WrapWithPersistedState(raw, target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
+            string wrapped = WrapWithPersistedState(raw, target, "Variables", GxMcp.Worker.Helpers.WriteResultMeta.TypedWriter);
+            return GxMcp.Worker.Helpers.RetypeReadBack.EnforceJson(wrapped, varName);
         }
 
         protected internal virtual string ModifyVariableInternal(string target, string varName, string newTypeName, string basedOn,
