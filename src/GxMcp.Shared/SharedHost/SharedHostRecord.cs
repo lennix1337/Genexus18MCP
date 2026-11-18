@@ -308,6 +308,12 @@ namespace GxMcp.Common.SharedHost
                     }
                     break;
                 }
+                catch (FileNotFoundException) when (retrying.Elapsed < ReadRetryWindow
+                    && (attempts == 0 || IsWriteInFlight(path)))
+                {
+                    if (++attempts <= 4) Thread.Yield();
+                    else Thread.Sleep(1);
+                }
                 catch (FileNotFoundException)
                 {
                     return Absent;
@@ -335,6 +341,25 @@ namespace GxMcp.Common.SharedHost
             }
 
             return FromJson(text);
+        }
+
+        private static bool IsWriteInFlight(string path)
+        {
+            try
+            {
+                if (File.Exists(path)) return true;
+                string? dir = Path.GetDirectoryName(path);
+                string name = Path.GetFileName(path);
+                if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(name) || !Directory.Exists(dir))
+                    return false;
+                foreach (string _ in Directory.EnumerateFiles(dir, name + ".tmp-*"))
+                    return true;
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool ReadSignificant(JsonTextReader reader)

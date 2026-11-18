@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- Shared-host registry: `RecordReadResult.ReadFile` now retries transient sharing-violation and delete-pending (`IOException` / `UnauthorizedAccessException`) errors for up to 500 ms when opening a registry v2 record concurrently with `File.Move(overwrite: true)` / `MoveFileEx` ([#1051](https://github.com/lennix1337/Genexus18MCP/issues/1051)).
+- Shared-host registry: `SharedWorkerRegistry.WriteRecordV2` now uses Windows POSIX-semantics rename (`FileRenameInfoEx` with `FILE_RENAME_FLAG_POSIX_SEMANTICS | FILE_RENAME_FLAG_REPLACE_IF_EXISTS`, falling back to `File.Move(overwrite: true)`), and `RecordReadResult.ReadFile` retries transient `IOException`/`UnauthorizedAccessException` and in-flight rename `FileNotFoundException` errors for up to 500 ms ([#1051](https://github.com/lennix1337/Genexus18MCP/issues/1051)).
 
 ### Internal
 

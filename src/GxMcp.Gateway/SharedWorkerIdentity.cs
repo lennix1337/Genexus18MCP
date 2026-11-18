@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using GxMcp.Common.SharedHost;
@@ -444,17 +445,20 @@ namespace GxMcp.Gateway
                 // The rename fails with a sharing or access error while a reader has the record open (readers
                 // share delete, but a rename over an open file is still refused); retry for a bounded time.
                 var retrying = Stopwatch.StartNew();
+                int attempts = 0;
                 while (true)
                 {
                     try
                     {
-                        File.Move(temp, path, overwrite: true);
+                        if (!TryPosixRename(temp, path))
+                            File.Move(temp, path, overwrite: true);
                         break;
                     }
                     catch (Exception ex) when ((ex is IOException || ex is UnauthorizedAccessException)
                         && retrying.Elapsed < ReplaceRetryWindow)
                     {
-                        Thread.Sleep(1);
+                        if ((++attempts & 63) != 0) Thread.Yield();
+                        else Thread.Sleep(1);
                     }
                 }
             }
@@ -465,6 +469,86 @@ namespace GxMcp.Gateway
 
             return path;
         }
+
+        private static bool TryPosixRename(string sourcePath, string destinationPath)
+        {
+            if (!OperatingSystem.IsWindows()) return false;
+
+            const uint DeleteAccess = 0x00010000;
+            const uint SynchronizeAccess = 0x00100000;
+            const uint ShareAll = 0x00000001 | 0x00000002 | 0x00000004;
+            const uint OpenExisting = 3;
+            const int FileRenameInfoExClass = 22;
+            const uint FileRenameFlagReplaceIfExists = 0x00000001;
+            const uint FileRenameFlagPosixSemantics = 0x00000002;
+            const int ErrorInvalidParameter = 87;
+            const int ErrorNotSupported = 50;
+            const int ErrorInvalidFunction = 1;
+
+            string fullDest = Path.GetFullPath(destinationPath);
+            using var handle = CreateFileW(
+                sourcePath,
+                DeleteAccess | SynchronizeAccess,
+                ShareAll,
+                IntPtr.Zero,
+                OpenExisting,
+                0,
+                IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                int openErr = Marshal.GetLastWin32Error();
+                if (openErr == ErrorInvalidParameter || openErr == ErrorNotSupported || openErr == ErrorInvalidFunction)
+                    return false;
+                throw new IOException("Could not open staged record for rename: " + new Win32Exception(openErr).Message,
+                    unchecked((int)(0x80070000 | (uint)openErr)));
+            }
+
+            byte[] nameBytes = Encoding.Unicode.GetBytes(fullDest);
+            int nameOffset = IntPtr.Size == 8 ? 20 : 12;
+            int totalSize = nameOffset + nameBytes.Length + 2;
+            IntPtr buffer = Marshal.AllocHGlobal(totalSize);
+            try
+            {
+                Marshal.WriteInt32(buffer, 0, unchecked((int)(FileRenameFlagReplaceIfExists | FileRenameFlagPosixSemantics)));
+                Marshal.WriteIntPtr(buffer, IntPtr.Size == 8 ? 8 : 4, IntPtr.Zero);
+                Marshal.WriteInt32(buffer, IntPtr.Size == 8 ? 16 : 8, nameBytes.Length);
+                Marshal.Copy(nameBytes, 0, IntPtr.Add(buffer, nameOffset), nameBytes.Length);
+                Marshal.WriteInt16(buffer, nameOffset + nameBytes.Length, 0);
+
+                if (SetFileInformationByHandle(handle, FileRenameInfoExClass, buffer, (uint)totalSize))
+                    return true;
+
+                int err = Marshal.GetLastWin32Error();
+                if (err == ErrorInvalidParameter || err == ErrorNotSupported || err == ErrorInvalidFunction)
+                    return false;
+                if (err == 5) // ERROR_ACCESS_DENIED
+                    throw new UnauthorizedAccessException("Access to the path '" + fullDest + "' is denied.");
+                throw new IOException("Could not replace registry record '" + fullDest + "': " + new Win32Exception(err).Message,
+                    unchecked((int)(0x80070000 | (uint)err)));
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetFileInformationByHandle(
+            Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
+            int fileInformationClass,
+            IntPtr lpFileInformation,
+            uint dwBufferSize);
 
         // Removes one stale registry v2 record (Requirement 7 criteria 2, 7 and 9). The caller holds the election
         // mutex of kbKey, so no other Gateway rewrites the record between the re-read and the delete.
