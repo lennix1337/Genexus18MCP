@@ -294,6 +294,7 @@ namespace GxMcp.Common.SharedHost
 
             var retrying = Stopwatch.StartNew();
             int attempts = 0;
+            int quietChecks = 0;
             string text;
             while (true)
             {
@@ -308,9 +309,15 @@ namespace GxMcp.Common.SharedHost
                     }
                     break;
                 }
-                catch (FileNotFoundException) when (retrying.Elapsed < ReadRetryWindow
-                    && (attempts < 8 || IsWriteInFlight(path)))
+                catch (FileNotFoundException) when (retrying.Elapsed < ReadRetryWindow)
                 {
+                    if (attempts >= 8)
+                    {
+                        // A replace can leave an instant where neither the target nor its temp file is visible,
+                        // so only several consecutive quiet checks a millisecond apart mean the record is absent.
+                        quietChecks = IsWriteInFlight(path) ? 0 : quietChecks + 1;
+                        if (quietChecks >= 3) return Absent;
+                    }
                     if (++attempts <= 8) Thread.Yield();
                     else Thread.Sleep(1);
                 }
