@@ -309,9 +309,9 @@ namespace GxMcp.Common.SharedHost
                     break;
                 }
                 catch (FileNotFoundException) when (retrying.Elapsed < ReadRetryWindow
-                    && (attempts == 0 || IsWriteInFlight(path)))
+                    && (attempts < 8 || IsWriteInFlight(path)))
                 {
-                    if (++attempts <= 4) Thread.Yield();
+                    if (++attempts <= 8) Thread.Yield();
                     else Thread.Sleep(1);
                 }
                 catch (FileNotFoundException)
@@ -347,7 +347,7 @@ namespace GxMcp.Common.SharedHost
         {
             try
             {
-                if (File.Exists(path)) return true;
+                if (PathExistsOrLocked(path)) return true;
                 string? dir = Path.GetDirectoryName(path);
                 string name = Path.GetFileName(path);
                 if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(name) || !Directory.Exists(dir))
@@ -359,6 +359,31 @@ namespace GxMcp.Common.SharedHost
             catch
             {
                 return false;
+            }
+        }
+
+        private static bool PathExistsOrLocked(string path)
+        {
+            try
+            {
+                File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
             }
         }
 
