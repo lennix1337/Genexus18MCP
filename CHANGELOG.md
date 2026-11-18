@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Shared-host registry: `RecordReadResult.ReadFile` now retries transient sharing-violation and delete-pending (`IOException` / `UnauthorizedAccessException`) errors for up to 500 ms when opening a registry v2 record concurrently with `File.Move(overwrite: true)` / `MoveFileEx` ([#1051](https://github.com/lennix1337/Genexus18MCP/issues/1051)).
+
 ### Internal
 
 ## v4.7.1 - 2026-11-17

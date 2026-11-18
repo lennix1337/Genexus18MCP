@@ -5,6 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using GxMcp.Common.SharedHost;
 using Newtonsoft.Json;
 using Xunit;
@@ -482,6 +483,47 @@ namespace GxMcp.Gateway.Tests
                 Assert.True(firstBad < 0, "reader saw a partial or missing record at read #" + firstBad + " of " + observed.Count + " (" + summary + ")");
             }
             Assert.Equal(100, SharedWorkerRegistry.ReadRecordV2(identity.KbKey, _root).Record!.Generation);
+        }
+
+        [Fact]
+        public async Task WriteRecordV2_IsAtomic_ConcurrentReadersNeverSeeUnreadablePartialOrMissingRecord()
+        {
+            const int writerWorkers = 8;
+            const int readersPerWorker = 4;
+            const int writesPerWorker = 500;
+            var failures = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+            var tasks = Enumerable.Range(0, writerWorkers).Select(workerId => Task.Run(async () =>
+            {
+                var identity = Identity(kbPath: @"C:\KBs\DemoKb-" + workerId);
+                SharedWorkerRegistry.WriteRecordV2(Record(identity, hostPid: 4120 + workerId, generation: 1), _root);
+                using var stop = new ManualResetEventSlim(false);
+                var readers = Enumerable.Range(0, readersPerWorker).Select(_ => Task.Run(() =>
+                {
+                    int reads = 0;
+                    while (!stop.IsSet)
+                    {
+                        var result = SharedWorkerRegistry.ReadRecordV2(identity.KbKey, _root);
+                        reads++;
+                        if (result.Status != RecordReadStatus.Parsed && failures.Count < 10)
+                            failures.Enqueue($"worker={workerId} read={reads} status={result.Status} error={result.Error}");
+                    }
+                })).ToArray();
+
+                try
+                {
+                    for (int generation = 2; generation <= writesPerWorker; generation++)
+                        SharedWorkerRegistry.WriteRecordV2(Record(identity, hostPid: 4120 + workerId, generation: generation), _root);
+                }
+                finally
+                {
+                    stop.Set();
+                    await Task.WhenAll(readers);
+                }
+            })).ToArray();
+
+            await Task.WhenAll(tasks);
+            Assert.True(failures.IsEmpty, "concurrent readers saw non-Parsed record(s): " + string.Join(" | ", failures));
         }
 
         // ---------------------------------------------------------------
