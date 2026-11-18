@@ -2,9 +2,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Threading;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -281,6 +283,8 @@ namespace GxMcp.Common.SharedHost
             }
         }
 
+        private static readonly TimeSpan ReadRetryWindow = TimeSpan.FromMilliseconds(500);
+
         internal static RecordReadResult ReadFile(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
@@ -288,35 +292,106 @@ namespace GxMcp.Common.SharedHost
                 throw new ArgumentException("A record path is required.", nameof(path));
             }
 
+            var retrying = Stopwatch.StartNew();
+            int attempts = 0;
+            int quietChecks = 0;
             string text;
-            try
+            while (true)
             {
-                // Share read, write and delete so a reader never blocks the owner's temp-file-plus-replace write.
-                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete))
-                using (var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+                try
                 {
-                    text = reader.ReadToEnd();
+                    // Share read, write and delete so a reader never blocks the owner's temp-file-plus-replace write.
+                    using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete))
+                    using (var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+                    {
+                        text = reader.ReadToEnd();
+                    }
+                    break;
                 }
-            }
-            catch (FileNotFoundException)
-            {
-                return Absent;
-            }
-            catch (DirectoryNotFoundException)
-            {
-                return Absent;
-            }
-            catch (IOException ex)
-            {
-                return Unreadable(ex.GetType().Name + ": " + ex.Message);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return Unreadable(ex.GetType().Name + ": " + ex.Message);
+                catch (FileNotFoundException) when (retrying.Elapsed < ReadRetryWindow)
+                {
+                    if (attempts >= 8)
+                    {
+                        // A replace can leave an instant where neither the target nor its temp file is visible,
+                        // so only several consecutive quiet checks a millisecond apart mean the record is absent.
+                        quietChecks = IsWriteInFlight(path) ? 0 : quietChecks + 1;
+                        if (quietChecks >= 3) return Absent;
+                    }
+                    if (++attempts <= 8) Thread.Yield();
+                    else Thread.Sleep(1);
+                }
+                catch (FileNotFoundException)
+                {
+                    return Absent;
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    return Absent;
+                }
+                catch (Exception ex) when ((ex is IOException || ex is UnauthorizedAccessException)
+                    && retrying.Elapsed < ReadRetryWindow)
+                {
+                    // A concurrent MoveFileEx/File.Move(overwrite: true) can briefly leave the previous target
+                    // in a delete-pending or sharing-violation state while another reader closes its handle.
+                    if (++attempts <= 4) Thread.Yield();
+                    else Thread.Sleep(1);
+                }
+                catch (IOException ex)
+                {
+                    return Unreadable(ex.GetType().Name + ": " + ex.Message);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    return Unreadable(ex.GetType().Name + ": " + ex.Message);
+                }
             }
 
             return FromJson(text);
+        }
+
+        private static bool IsWriteInFlight(string path)
+        {
+            try
+            {
+                if (PathExistsOrLocked(path)) return true;
+                string? dir = Path.GetDirectoryName(path);
+                string name = Path.GetFileName(path);
+                if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(name) || !Directory.Exists(dir))
+                    return false;
+                foreach (string _ in Directory.EnumerateFiles(dir, name + ".tmp-*"))
+                    return true;
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool PathExistsOrLocked(string path)
+        {
+            try
+            {
+                File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
+            }
         }
 
         private static bool ReadSignificant(JsonTextReader reader)
