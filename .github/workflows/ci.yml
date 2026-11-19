@@ -200,6 +200,12 @@ jobs:
         working-directory: src/nexus-ide
         run: npm ci
 
+      # Runtime dependencies only: dev-toolchain advisories without a published
+      # fix (issue #1061) must not block PRs, but a runtime advisory must.
+      - name: Nexus IDE npm audit (production)
+        working-directory: src/nexus-ide
+        run: npm audit --omit=dev
+
       - name: Nexus IDE compile
         working-directory: src/nexus-ide
         run: npm run compile
