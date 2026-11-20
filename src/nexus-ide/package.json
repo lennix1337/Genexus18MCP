@@ -479,13 +479,14 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
+    "prelint": "node --test ./test/eslint-dependencies.test.cjs",
     "lint": "eslint src",
     "test": "node ./out/test/runTest.js",
     "check": "npm run compile && npm run lint && npm test",
     "package": "npm run compile && vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.5",
+    "@eslint/js": "^10.0.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "^26.6.6",
     "@types/vscode": "~1.93.0",
