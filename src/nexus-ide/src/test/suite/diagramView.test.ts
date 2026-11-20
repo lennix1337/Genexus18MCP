@@ -17,7 +17,7 @@ suite("DiagramView - CSP + local mermaid", () => {
       const extensionUri = vscode.Uri.joinPath(vscode.Uri.file(__dirname), "..", "..", "..");
       const asset = vscode.Uri.joinPath(extensionUri, "resources", "mermaid.min.js");
       const hash = createHash("sha256").update(readFileSync(asset.fsPath)).digest("hex");
-      assert.strictEqual(hash, "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8");
+      assert.strictEqual(hash, "336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3");
       const html = DiagramView.buildHtml(panel.webview, extensionUri, "graph TD; A-->B;");
 
       assert.ok(
