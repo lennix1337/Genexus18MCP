@@ -15,6 +15,8 @@
 
 ### Internal
 
+- Nexus IDE: align `@eslint/js` with ESLint 10 and check local dependency resolution before linting ([#1064](https://github.com/lennix1337/Genexus18MCP/issues/1064); follow-up to #1061 and #1063).
+
 ## v4.7.1 - 2026-11-17
 
 
