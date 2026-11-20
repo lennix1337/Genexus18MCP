@@ -1,5 +1,7 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
+import { createHash } from "crypto";
+import { readFileSync } from "fs";
 import { DiagramView } from "../../webviews/DiagramView";
 
 suite("DiagramView - CSP + local mermaid", () => {
@@ -12,7 +14,10 @@ suite("DiagramView - CSP + local mermaid", () => {
     );
 
     try {
-      const extensionUri = vscode.Uri.file(__dirname);
+      const extensionUri = vscode.Uri.joinPath(vscode.Uri.file(__dirname), "..", "..", "..");
+      const asset = vscode.Uri.joinPath(extensionUri, "resources", "mermaid.min.js");
+      const hash = createHash("sha256").update(readFileSync(asset.fsPath)).digest("hex");
+      assert.strictEqual(hash, "18327bef70d96fb505fe7287d9f6a7362ebf07ff6576ddfaffb1a06f3e1a2954");
       const html = DiagramView.buildHtml(panel.webview, extensionUri, "graph TD; A-->B;");
 
       assert.ok(

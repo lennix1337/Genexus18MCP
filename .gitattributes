@@ -11,6 +11,7 @@
 *.dll -text !eol
 *.exe -text !eol
 *.pdb -text !eol
+src/nexus-ide/resources/mermaid.min.js -text !eol -diff
 
 # Release merge tooling and the existing changelog history intentionally preserve CRLF.
 # Marking it non-text prevents Git's renormalization from creating a noisy full-file diff.
