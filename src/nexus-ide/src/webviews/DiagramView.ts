@@ -5,7 +5,7 @@ import { GxUriParser } from "../utils/GxUriParser";
 import { escapeHtml } from "../utils/htmlEscape";
 import { createNonce, messagePage } from "../utils/webviewHtml";
 
-// Vendored from npm `mermaid@11.16.1` into resources/mermaid.min.js; the
+// Vendored from npm `mermaid@11.17.2` into resources/mermaid.min.js; the
 // webview never fetches a script from a CDN. The devDependency pin supports
 // re-vendoring only; runtime uses the vendored file. To update, npm pack the
 // pinned version, verify the tarball SRI and dist/mermaid.min.js SHA-256 against

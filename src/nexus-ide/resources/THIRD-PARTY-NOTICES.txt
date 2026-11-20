@@ -1,8 +1,8 @@
-THIRD-PARTY NOTICES: mermaid.min.js 11.16.1
+THIRD-PARTY NOTICES: mermaid.min.js 11.17.2
 
 The following components and versions are identified by the official npm tarball's dist/mermaid.min.js.map sources. License texts are from the corresponding exact-version npm tarballs. Bundle license comments are reproduced at the end.
 
-=== mermaid@11.16.1 ===
+=== mermaid@11.17.2 ===
 The MIT License (MIT)
 
 Copyright (c) 2014 - 2022 Knut Sveidqvist
@@ -94,7 +94,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-=== cytoscape@3.33.3 ===
+=== cytoscape@3.34.0 ===
 Copyright (c) 2016-2026, The Cytoscape Consortium.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -815,7 +815,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-=== dayjs@1.11.20 ===
+=== dayjs@1.11.21 ===
 MIT License
 
 Copyright (c) 2018-present, iamkun
@@ -838,7 +838,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-=== dompurify@3.4.0 ===
+=== dompurify@3.4.12 ===
+The 3.4.12 tarball contains the Apache License 2.0 text reproduced below.
+The additional historical DOMPurify notice and MPL text are retained for reference.
 DOMPurify
 Copyright 2025 Dr.-Ing. Mario Heiderich, Cure53
 
@@ -1407,6 +1409,17 @@ Exhibit B - “Incompatible With Secondary Licenses” Notice
       With Secondary Licenses”, as defined by
       the Mozilla Public License, v. 2.0.
 
+=== fastdom@1.0.12 ===
+(The MIT License)
+
+Copyright (c) 2016 Wilson Page <wilsonpage@me.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the 'Software'), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 === es-toolkit@1.45.1 ===
 MIT License
 
@@ -1472,7 +1485,7 @@ OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
 TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
-=== js-yaml@4.1.1 ===
+=== js-yaml@4.3.0 ===
 (The MIT License)
 
 Copyright (C) 2011-2015 by Vitaly Puzrin
@@ -1495,7 +1508,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-=== katex@0.16.45 ===
+=== katex@0.16.47 ===
 The MIT License (MIT)
 
 Copyright (c) 2013-2020 Khan Academy and other contributors
@@ -1804,10 +1817,7 @@ lodash-es/lodash.js:
 /*! Bundled license information:
 
 dompurify/dist/purify.es.mjs:
-  (*! @license DOMPurify 3.4.0 | (c) Cure53 and other contributors | Released under the Apache license 2.0 and Mozilla Public License 2.0 | github.com/cure53/DOMPurify/blob/3.4.0/LICENSE *)
-
-js-yaml/dist/js-yaml.mjs:
-  (*! js-yaml 4.1.1 https://github.com/nodeca/js-yaml @license MIT *)
+  (*! @license DOMPurify 3.4.12 | (c) Cure53 and other contributors | Released under the Apache license 2.0 and Mozilla Public License 2.0 | github.com/cure53/DOMPurify/blob/3.4.12/LICENSE *)
 
 lodash-es/lodash.js:
   (**
