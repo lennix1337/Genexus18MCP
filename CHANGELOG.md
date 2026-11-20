@@ -9,6 +9,8 @@
 
 ### Changed
 
+- Nexus IDE: update the embedded Mermaid renderer to 12.3.0, preserve the previous diagram appearance, and refresh bundled licenses and advisory inventory ([#1065](https://github.com/lennix1337/Genexus18MCP/issues/1065)).
+
 - Nexus IDE: update the embedded Mermaid renderer to 11.17.2 and refresh its dependency notices and advisory inventory ([#1065](https://github.com/lennix1337/Genexus18MCP/issues/1065)).
 
 ### Fixed

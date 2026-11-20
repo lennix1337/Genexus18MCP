@@ -1,39 +1,19 @@
 {
-  "version": "11.17.2",
+  "version": "12.3.0",
   "source": {
-    "tarball": "https://registry.npmjs.org/mermaid/-/mermaid-11.17.2.tgz",
+    "tarball": "https://registry.npmjs.org/mermaid/-/mermaid-12.3.0.tgz",
     "path": "package/dist/mermaid.min.js"
   },
-  "sha256": "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8",
-  "integrity": "sha512-V6K3C8EBdEsPFZXSKMJe6ppQOENxuHARr9GvHX4hh47lAbhMRD9qf4oEK7LoaRQxULMa80/qt5gHO73aCleBBg==",
+  "sha256": "336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3",
+  "integrity": "sha512-4113TdXeLAsMruJ79OpFL5O8+LTFXhQqZ260rF3tgUmiNAtRm4Uume04I+65PRN6yZ69J4f8rVYWW8zRk65UYw==",
   "license": "MIT and bundled third-party licenses",
   "licenseFile": "resources/THIRD-PARTY-NOTICES.txt",
   "checkedAt": "2026-11-20",
   "advisories": {
     "source": "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
-    "scope": "npm bulk advisories API, exact Mermaid 11.17.2 and all 60 dependency versions identified by the npm tarball sourcemap, checked 2026-11-20",
-    "highCritical": [
-      {
-        "dependency": "js-yaml@4.3.0",
-        "severity": "high",
-        "advisories": ["GHSA-5p4m-2wfm-xmqj", "GHSA-2883-xcg3-v3hh"],
-        "rationale": "Present in the upstream browser bundle; the registry identifies fixes in 4.3.1 and 4.3.2 respectively."
-      }
-    ],
-    "moderateLow": [
-      {
-        "dependency": "dompurify@3.4.12",
-        "severity": "moderate and low",
-        "advisories": ["GHSA-cg2g-xh64-v4q7", "GHSA-55q2-fjhq-7xh7", "GHSA-6688-9rhm-gjv2", "GHSA-c6gr-qvv4-5v3f", "GHSA-mrv2-3pqr-j5jr"],
-        "rationale": "Present in the upstream browser bundle."
-      },
-      {
-        "dependency": "katex@0.16.47",
-        "severity": "low",
-        "advisories": ["GHSA-238p-pmpm-9mq7"],
-        "rationale": "Present in the upstream browser bundle; exploitation requires existing prototype pollution."
-      }
-    ],
-    "rationale": "The upstream bundle still contains dependencies affected by the advisories above."
+    "scope": "npm bulk advisories API, Mermaid 12.3.0 and all 60 dependency package names (65 versions) identified by the npm tarball sourcemap, checked 2026-11-20",
+    "highCritical": [],
+    "moderateLow": [],
+    "rationale": "The registry returned no advisories for the submitted bundled versions."
   }
 }
