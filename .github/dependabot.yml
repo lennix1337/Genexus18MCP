@@ -34,8 +34,10 @@ updates:
     ignore:
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # mermaid is vendored (src/nexus-ide/vendor) with a pinned SHA-256 and THIRD-PARTY-NOTICES;
+      # a version bump needs a re-vendor, which Dependabot cannot do (test-mermaid-vendor.js fails).
       - dependency-name: "mermaid"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       # @types/vscode must not be newer than engines.vscode (vsce refuses to package otherwise);
       # raise both together when the minimum supported VS Code version moves.
       - dependency-name: "@types/vscode"
