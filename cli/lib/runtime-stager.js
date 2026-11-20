@@ -71,7 +71,7 @@ function verifyManifest(stagedDir, manifestPath) {
     try {
         manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     } catch (err) {
-        throw new Error(`Failed to parse manifest at ${manifestPath}: ${err.message}`);
+        throw new Error(`Failed to parse manifest at ${manifestPath}: ${err.message}`, { cause: err });
     }
 
     const artifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : [];

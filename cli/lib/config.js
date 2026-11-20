@@ -2146,8 +2146,8 @@ function readGeneXusKbIdentity(kbPath) {
     if (!kbPath) return { version: null, major: null, source: 'unavailable', reason: 'missing-kb-path' };
 
     let gxwFiles;
-    let gxiFiles = [];
-    let classicMarkerCount = 0;
+    let gxiFiles;
+    let classicMarkerCount;
     try {
         const allFiles = fs.readdirSync(kbPath);
         gxwFiles = allFiles
