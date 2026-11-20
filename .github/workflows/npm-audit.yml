@@ -1,0 +1,83 @@
+name: npm dependency audit
+
+on:
+  schedule:
+    - cron: '17 8 * * 1'
+  workflow_dispatch:
+    inputs:
+      enforce:
+        description: 'Run the phase 2 audit gate (phase 1 is report-only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: '24'
+      - name: Audit root (report-only)
+        id: root
+        run: |
+          mkdir -p audit-reports
+          set +e
+          npm audit --audit-level=high --json > audit-reports/root.json
+          code=$?
+          echo "$code" > audit-reports/root.exit
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          npm audit --omit=dev --audit-level=high --json > audit-reports/root-runtime.json
+          echo "$?" > audit-reports/root-runtime.exit
+          exit 0
+      - name: Audit Nexus (report-only)
+        id: nexus
+        run: |
+          set +e
+          npm audit --prefix src/nexus-ide --audit-level=high --json > audit-reports/nexus.json
+          code=$?
+          echo "$code" > audit-reports/nexus.exit
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          npm audit --prefix src/nexus-ide --omit=dev --audit-level=high --json > audit-reports/nexus-runtime.json
+          echo "$?" > audit-reports/nexus-runtime.exit
+          exit 0
+      - name: Summarize reports
+        if: always()
+        run: |
+          echo '## npm audit (phase 1: report-only)' >> "$GITHUB_STEP_SUMMARY"
+          for tree in root nexus root-runtime nexus-runtime; do
+            echo "### $tree (exit $(cat audit-reports/$tree.exit 2>/dev/null || echo unavailable))" >> "$GITHUB_STEP_SUMMARY"
+            node -e 'try { const a=require(process.argv[1]); console.log("```json\n"+JSON.stringify(a.metadata?.vulnerabilities || a.error || {}, null, 2)+"\n```"); } catch(e) { console.log("Report unavailable: "+e.message); }' "$(pwd)/audit-reports/$tree.json" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-audit-reports
+          path: audit-reports/
+          if-no-files-found: warn
+      - name: Phase 2 gate (root)
+        if: ${{ inputs.enforce }}
+        run: node scripts/npm-audit-gate.js root audit-reports/root.json package-lock.json scripts/npm-audit-allowlist.json '${{ steps.root.outputs.code }}'
+      - name: Phase 2 gate (Nexus)
+        if: ${{ inputs.enforce && always() }}
+        run: node scripts/npm-audit-gate.js nexus audit-reports/nexus.json src/nexus-ide/package-lock.json scripts/npm-audit-allowlist.json '${{ steps.nexus.outputs.code }}'
+      - name: Test audit gate and packaging guard
+        run: node --test scripts/npm-audit-gate.test.js scripts/nexus-package.test.js
+      - name: Package and inspect VSIX
+        run: |
+          npm ci --prefix src/nexus-ide
+          npm run package --prefix src/nexus-ide
+          vsix=(src/nexus-ide/*.vsix)
+          test "${#vsix[@]}" -eq 1 && test -f "${vsix[0]}"
+          NEXUS_VSIX="${vsix[0]}" node --test scripts/nexus-package.test.js

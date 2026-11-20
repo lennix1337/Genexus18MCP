@@ -73,6 +73,8 @@ also read [`AGENTS.md`](../AGENTS.md).
 
 ## Architecture and debugging
 
+- [npm dependency audit](dependency-audit.md) — weekly reports, accepted advisories and the optional enforcement gate.
+
 - [Technical architecture](technical_architecture.md) — the Gateway/Worker runtime.
 - [MCP debugging guide](mcp_debugging_guide.md).
 - [GeneXus 18 SDK discovery](sdk_gx18_discovery.md) — SDK bootstrapping and performance findings.

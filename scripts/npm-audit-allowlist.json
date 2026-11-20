@@ -1,0 +1,20 @@
+[
+  {
+    "ghsa": "GHSA-3g3m-2fjr-6pw4",
+    "package": "glob",
+    "tree": "nexus",
+    "version": "13.0.7",
+    "reason": "Development-only Mocha dependency; npm suggests a major downgrade.",
+    "owner": "maintainers",
+    "expiresOn": "2027-02-20"
+  },
+  {
+    "ghsa": "GHSA-g3hv-75wg-m249",
+    "package": "minimatch",
+    "tree": "nexus",
+    "version": "10.2.6",
+    "reason": "Development-only dependency; npm suggests a major downgrade.",
+    "owner": "maintainers",
+    "expiresOn": "2027-02-20"
+  }
+]
