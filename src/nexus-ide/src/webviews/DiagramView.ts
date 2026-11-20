@@ -5,11 +5,11 @@ import { GxUriParser } from "../utils/GxUriParser";
 import { escapeHtml } from "../utils/htmlEscape";
 import { createNonce, messagePage } from "../utils/webviewHtml";
 
-// Vendored from npm `mermaid@11.16.0` (node_modules/mermaid/dist/mermaid.min.js,
-// https://www.npmjs.com/package/mermaid) into resources/mermaid.min.js so the
-// diagram webview never fetches a script from a CDN. package.json pins the
-// devDependency to that exact version. To re-vendor, bump the pin, run npm
-// install, copy dist/mermaid.min.js here and update the version above.
+// Vendored from npm `mermaid@11.16.1` into resources/mermaid.min.js; the
+// webview never fetches a script from a CDN. The devDependency pin supports
+// re-vendoring only; runtime uses the vendored file. To update, npm pack the
+// pinned version, verify the tarball SRI and dist/mermaid.min.js SHA-256 against
+// vendor/mermaid.vendor.json, then copy the bundle and update the manifest.
 const MERMAID_ASSET = "mermaid.min.js";
 
 export class DiagramView {

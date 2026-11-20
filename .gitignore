@@ -10,6 +10,7 @@
 *.txt
 *.bak
 !LICENSE.txt
+!src/nexus-ide/resources/THIRD-PARTY-NOTICES.txt
 # Engine test fixtures are text files that the tests read: keep them visible to git.
 !src/gx-engine/tests/fixtures/**/*.txt
 # gx-engine web templates embedded with include_str!: the build fails without them.
