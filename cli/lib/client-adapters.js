@@ -123,7 +123,7 @@ class CodexTomlAdapter extends BaseClientAdapter {
     }
     read(client, serverName) {
         if (!fs.existsSync(client.path)) return null;
-        let content = '';
+        let content;
         try {
             content = fs.readFileSync(client.path, 'utf8');
         } catch {

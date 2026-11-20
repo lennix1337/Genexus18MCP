@@ -59,7 +59,7 @@ function isCi() {
 function confirmInstall() {
   process.stderr.write(`${setupMessage(dependencyStatus(packageRoot()))}\nDeseja executar "npm ci" para instalar as dependências do projeto? [s/N] `);
   const buffer = Buffer.alloc(64);
-  let bytes = 0;
+  let bytes;
   try {
     bytes = fs.readSync(0, buffer, 0, buffer.length, null);
   } catch {

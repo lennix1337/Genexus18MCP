@@ -699,7 +699,7 @@ function buildWorkerSingleInstanceLockCheck() {
             continue;
         }
 
-        let alive = false;
+        let alive;
         try {
             process.kill(pid, 0);
             alive = true;

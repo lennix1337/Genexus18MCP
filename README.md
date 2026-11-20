@@ -937,6 +937,10 @@ See [docs/engine_backend.md](docs/engine_backend.md), the [engine guide](src/gx-
 
 Want to run a local dev build?
 
+For the root JavaScript development tools, including `npm run lint`, use Node.js
+22.13 or newer in the 22.x line, or Node.js 24 or newer. The published package
+still supports Node.js 22.0 and newer.
+
 1. Clone this repo on Windows.
 2. Run `.\build.ps1` to restore and build the C# components and package the local artifacts. The script checks for the required .NET SDK and GeneXus 18 installation.
 3. If GeneXus is installed outside the default path, set `$env:GX_PATH` to its installation folder before running the build. A Knowledge Base is only needed for runtime testing.
