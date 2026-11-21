@@ -763,12 +763,34 @@ namespace GxMcp.Gateway
         {
             // An exit nobody asked for has stopReason None: "(None)" alone tells the caller nothing,
             // so the process exit code (when the gateway saw it) goes in the message and in data.
+            string? statusName = exitCode.HasValue ? NtStatusName(exitCode.Value) : null;
             string reasonText = stopReason == WorkerStopReason.None && exitCode.HasValue
-                ? $"None; exit code {exitCode.Value}"
+                ? $"None; exit code {exitCode.Value}" + (statusName == null ? "" : $", 0x{exitCode.Value:X8} {statusName}")
                 : stopReason.ToString();
             JObject exitError = BuildWorkerExitErrorCore(kbAlias, reasonText, stopReason, delivered);
-            if (exitCode.HasValue) ((JObject)exitError["data"]!)["exitCode"] = exitCode.Value;
+            if (exitCode.HasValue)
+            {
+                var data = (JObject)exitError["data"]!;
+                data["exitCode"] = exitCode.Value;
+                if (statusName != null)
+                {
+                    data["exitCodeHex"] = $"0x{exitCode.Value:X8}";
+                    data["exitCodeName"] = statusName;
+                }
+            }
             return exitError;
+        }
+
+        private static string? NtStatusName(int exitCode)
+        {
+            switch ((uint)exitCode)
+            {
+                case 0xC0000005: return "ACCESS_VIOLATION";
+                case 0xC00000FD: return "STACK_OVERFLOW";
+                case 0xC0000374: return "HEAP_CORRUPTION";
+                case 0xC0000409: return "STACK_BUFFER_OVERRUN";
+                default: return null;
+            }
         }
 
         private static JObject BuildWorkerExitErrorCore(string kbAlias, string stopReasonText, WorkerStopReason stopReason, bool delivered)

@@ -70,10 +70,21 @@ namespace GxMcp.Gateway.Tests
         {
             JObject error = Program.BuildWorkerExitError(Alias, WorkerStopReason.None, delivered, exitCode: -1073741819);
 
-            Assert.Contains("(None; exit code -1073741819)", (string?)error["message"]);
+            Assert.Contains("(None; exit code -1073741819, 0xC0000005 ACCESS_VIOLATION)", (string?)error["message"]);
+            Assert.Equal("0xC0000005", (string?)error["data"]!["exitCodeHex"]);
+            Assert.Equal("ACCESS_VIOLATION", (string?)error["data"]!["exitCodeName"]);
             Assert.Contains("crashed/exited", (string?)error["message"]);
             Assert.Equal(-1073741819, (int?)error["data"]!["exitCode"]);
             Assert.Equal("None", (string?)error["data"]!["stopReason"]);
+        }
+
+        [Fact]
+        public void AnOrdinaryExitCodeHasNoStatusName()
+        {
+            JObject error = Program.BuildWorkerExitError(Alias, WorkerStopReason.None, delivered: true, exitCode: 3);
+
+            Assert.Contains("(None; exit code 3)", (string?)error["message"]);
+            Assert.Null(error["data"]!["exitCodeName"]);
         }
 
         [Fact]
