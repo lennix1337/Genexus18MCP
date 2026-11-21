@@ -943,7 +943,7 @@ namespace GxMcp.Worker.Services
                 }
                 else if (family == "db2")
                 {
-                    bool ibmI = IsIbmIFactory(ResolveFactory(provider, family));
+                    bool ibmI = IsIbmIFactory(ResolveFactory(provider, family, profileAlias));
                     connectionString = BuildDb2ConnectionString(ibmI, server, database, schema, user, password, port, timeoutSeconds);
                 }
                 else
@@ -951,7 +951,7 @@ namespace GxMcp.Worker.Services
                     throw new RecordOperationException("DataStoreProviderUnsupported", "The active datastore provider is not supported by the native Transaction records adapter.", "Use a datastore with a supported ADO.NET provider registered in the worker.");
                 }
             }
-            var factory = ResolveFactory(provider, family);
+            var factory = ResolveFactory(provider, family, profileAlias);
             if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(database))
             {
                 if (string.IsNullOrWhiteSpace(server)) server = ReadConnectionStringValue(connectionString, "Data Source", "DataSource", "Server", "Host");
@@ -965,6 +965,8 @@ namespace GxMcp.Worker.Services
                 Name = FirstDynamicString(selected, "Name", "Category.Name", "Type") ?? "default",
                 Family = family,
                 Provider = provider,
+                ProviderAssemblyPath = profileAlias?.ProviderAssemblyPath,
+                ProviderInvariantName = profileAlias?.ProviderInvariantName,
                 Factory = factory,
                 ConnectionString = connectionString,
                 Schema = schema,
@@ -1199,10 +1201,15 @@ namespace GxMcp.Worker.Services
             return value;
         }
 
-        internal static DbProviderFactory ResolveFactory(string provider, string family)
+        internal static DbProviderFactory ResolveFactory(string provider, string family, ProfileDataStoreAlias alias = null)
         {
             if (family == "sqlserver") return System.Data.SqlClient.SqlClientFactory.Instance;
-            if (family == "db2") return ResolveDb2Factory(LookupRegisteredDb2Factory);
+            if (family == "db2")
+            {
+                if (!string.IsNullOrWhiteSpace(alias?.ProviderAssemblyPath) || !string.IsNullOrWhiteSpace(alias?.ProviderInvariantName))
+                    return ResolveConfiguredDb2Factory(alias?.ProviderAssemblyPath, alias?.ProviderInvariantName);
+                return ResolveDb2Factory(LookupRegisteredDb2Factory);
+            }
             if (family == "oracle")
             {
                 var oracle = Type.GetType("Oracle.ManagedDataAccess.Client.OracleClientFactory, Oracle.ManagedDataAccess", false);
@@ -1269,7 +1276,31 @@ namespace GxMcp.Worker.Services
             }
             throw new RecordOperationException("DataStoreProviderUnavailable",
                 "No IBM DB2 ADO.NET provider is registered in the worker process, so the DB2 datastore cannot be queried.",
-                "Install the IBM i Access Client Solutions .NET provider, register the IBM.Data.DB2.iSeries NuGet package in DbProviderFactories (App.config), or install the IBM Data Server provider (IBM.Data.DB2) on the Worker host. The JT400 JDBC driver used by the GeneXus datastore cannot be loaded by the .NET Worker; no connection was attempted.");
+                "Install an IBM ADO.NET provider on the Worker host, or configure ProviderAssemblyPath and ProviderInvariantName on the DB2 alias (for IBM i use IBM.Data.DB2.iSeries). The JT400 JDBC driver cannot be loaded by the .NET Worker; no connection was attempted.");
+        }
+
+        internal static DbProviderFactory ResolveConfiguredDb2Factory(string assemblyPath, string invariantName)
+        {
+            const string hint = "Set ProviderAssemblyPath to the absolute path of the installed provider DLL and ProviderInvariantName to IBM.Data.DB2.iSeries, IBM.Data.DB2, or IBM.Data.Db2; ensure its dependencies and x86 architecture are compatible with the Worker. No connection was attempted.";
+            string typeName = null;
+            if (string.Equals(invariantName, "IBM.Data.DB2.iSeries", StringComparison.OrdinalIgnoreCase)) typeName = "IBM.Data.DB2.iSeries.iDB2Factory";
+            else if (string.Equals(invariantName, "IBM.Data.Db2", StringComparison.Ordinal)) typeName = "IBM.Data.Db2.DB2Factory";
+            else if (string.Equals(invariantName, "IBM.Data.DB2", StringComparison.OrdinalIgnoreCase)) typeName = "IBM.Data.DB2.DB2Factory";
+            if (typeName != null && !string.IsNullOrWhiteSpace(assemblyPath) && Path.IsPathRooted(assemblyPath))
+            {
+                try
+                {
+                    var type = Assembly.LoadFrom(assemblyPath).GetType(typeName, false);
+                    var instance = type?.GetField("Instance", BindingFlags.Public | BindingFlags.Static)?.GetValue(null) as DbProviderFactory
+                        ?? type?.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static)?.GetValue(null, null) as DbProviderFactory;
+                    if (instance != null) return instance;
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is BadImageFormatException || ex is TypeLoadException || ex is ReflectionTypeLoadException || ex is System.Security.SecurityException || ex is TargetInvocationException || ex is TypeInitializationException || ex is ArgumentException || ex is NotSupportedException)
+                {
+                    // Return the same sanitized setup error for invalid assemblies and dependencies.
+                }
+            }
+            throw new RecordOperationException("DataStoreProviderUnavailable", "The configured DB2 provider could not be loaded.", hint);
         }
 
         internal static bool IsIbmIFactory(DbProviderFactory factory)
@@ -1625,6 +1656,8 @@ namespace GxMcp.Worker.Services
             public string Name;
             public string Family;
             public string Provider;
+            public string ProviderAssemblyPath;
+            public string ProviderInvariantName;
             public string Schema;
             public string Server;
             public string Database;
@@ -1649,7 +1682,7 @@ namespace GxMcp.Worker.Services
 
             public string ConfigurationFingerprint()
             {
-                return string.Join("|", Alias, Name, Family, Provider, Schema, Server, Database, KbIdentity, EnvironmentIdentity, Hash(ConnectionString));
+                return string.Join("|", Alias, Name, Family, Provider, ProviderAssemblyPath, ProviderInvariantName, Schema, Server, Database, KbIdentity, EnvironmentIdentity, Hash(ConnectionString));
             }
         }
 
@@ -1659,6 +1692,8 @@ namespace GxMcp.Worker.Services
             public string DataStore;
             public string Family;
             public string Provider;
+            public string ProviderAssemblyPath;
+            public string ProviderInvariantName;
             public string Server;
             public string Database;
             public string Schema;
@@ -1679,6 +1714,8 @@ namespace GxMcp.Worker.Services
                     DataStore = ReadJsonText(value, "DataStore", "dataStore"),
                     Family = ReadJsonText(value, "Family", "family"),
                     Provider = ReadJsonText(value, "Provider", "provider"),
+                    ProviderAssemblyPath = ReadJsonText(value, "ProviderAssemblyPath", "providerAssemblyPath"),
+                    ProviderInvariantName = ReadJsonText(value, "ProviderInvariantName", "providerInvariantName"),
                     Server = ReadJsonText(value, "Server", "server"),
                     Database = ReadJsonText(value, "Database", "database"),
                     Schema = ReadJsonText(value, "Schema", "schema"),

@@ -146,6 +146,8 @@ namespace GxMcp.Gateway.Tests
         ""server"": ""SERVER\\\\INSTANCE"",
         ""database"": ""APP_PROD"",
         ""schema"": ""dbo"",
+        ""providerAssemblyPath"": ""C:\\IBM\\provider.dll"",
+        ""providerInvariantName"": ""IBM.Data.DB2.iSeries"",
         ""integratedSecurity"": true
       }
     }
@@ -156,6 +158,8 @@ namespace GxMcp.Gateway.Tests
                 var alias = Assert.Single(cfg.Environment!.DataStoreAliases!);
                 Assert.Equal("Default", alias.Value.DataStore);
                 Assert.Equal("SERVER\\\\INSTANCE", alias.Value.Server);
+                Assert.Equal(@"C:\IBM\provider.dll", alias.Value.ProviderAssemblyPath);
+                Assert.Equal("IBM.Data.DB2.iSeries", alias.Value.ProviderInvariantName);
                 Assert.True(alias.Value.IntegratedSecurity == true);
             }
             finally

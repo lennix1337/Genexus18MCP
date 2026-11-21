@@ -15,6 +15,8 @@
 
 ### Fixed
 
+- Allow DB2 aliases to load an IBM ADO.NET provider from a configured assembly without changing the Worker exe.config ([#959](https://github.com/lennix1337/Genexus18MCP/issues/959)).
+
 - Nexus IDE: update the vendored Mermaid diagram renderer to 11.16.1, record its integrity and bundled licenses, and prevent asset/version drift ([#1061](https://github.com/lennix1337/Genexus18MCP/issues/1061), [#1065](https://github.com/lennix1337/Genexus18MCP/issues/1065)).
 
 - Shared-host registry: `SharedWorkerRegistry.WriteRecordV2` now uses Windows POSIX-semantics rename (`FileRenameInfoEx` with `FILE_RENAME_FLAG_POSIX_SEMANTICS | FILE_RENAME_FLAG_REPLACE_IF_EXISTS`, falling back to `File.Move(overwrite: true)`), and `RecordReadResult.ReadFile` retries transient `IOException`/`UnauthorizedAccessException` and in-flight rename `FileNotFoundException` errors for up to 500 ms ([#1051](https://github.com/lennix1337/Genexus18MCP/issues/1051)).

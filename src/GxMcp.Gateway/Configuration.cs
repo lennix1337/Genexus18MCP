@@ -540,7 +540,7 @@ namespace GxMcp.Gateway
                 throw new InvalidDataException($"Strict config {label} must be an object in '{path}'.");
             var allowed = new HashSet<string>(new[]
             {
-                "DataStore", "Family", "Provider", "Server", "Database", "Schema", "Port",
+                "DataStore", "Family", "Provider", "ProviderAssemblyPath", "ProviderInvariantName", "Server", "Database", "Schema", "Port",
                 "IntegratedSecurity", "UserIdEnvironmentVariable", "PasswordEnvironmentVariable",
                 "ConnectionStringEnvironmentVariable"
             }, StringComparer.OrdinalIgnoreCase);
@@ -893,6 +893,8 @@ namespace GxMcp.Gateway
         public string? DataStore { get; set; }
         public string? Family { get; set; }
         public string? Provider { get; set; }
+        public string? ProviderAssemblyPath { get; set; }
+        public string? ProviderInvariantName { get; set; }
         public string? Server { get; set; }
         public string? Database { get; set; }
         public string? Schema { get; set; }
