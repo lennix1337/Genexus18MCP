@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- `records_query` (#959): when the DB2 provider cannot load its native client (`DllNotFoundException`, `BadImageFormatException` or a `cwbdc.dll` mention anywhere in the exception chain), the failure reports `messageCategory: native_client_missing` with a hint to install IBM i Access Client Solutions, instead of the misleading `provider_rejected`. Verified by regression tests and the Worker suite (net48); not against a real DB2 for i host.
+
 ### Internal
 
 ## v4.7.2 - 2026-11-21
