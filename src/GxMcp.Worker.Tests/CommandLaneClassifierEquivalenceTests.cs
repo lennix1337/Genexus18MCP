@@ -201,11 +201,54 @@ namespace GxMcp.Worker.Tests
             Assert.InRange(pinnedSafe, 1, unpinnedSafe - 1);
         }
 
+        [Theory]
+        [InlineData("com-gxpublic", @"{""method"":""list"",""action"":""Objects""}", false)]
+        [InlineData("COM-GXPUBLIC", @"{""method"":""LIST"",""action"":""Objects""}", false)]
+        [InlineData("com-gxpublic", @"{""method"":""list""}", false)]
+        [InlineData("com-gxpublic", @"{""method"":""search"",""action"":""Query""}", false)]
+        [InlineData("com-gxpublic", @"{""method"":""Search"",""action"":""Query""}", false)]
+        [InlineData("com-gxpublic", @"{""method"":""search""}", false)]
+        [InlineData("com-gxpublic", @"{""method"":""ping""}", true)]
+        [InlineData("com-gxpublic", @"{""method"":""control"",""action"":""Cancel""}", true)]
+        [InlineData("com-gxpublic", @"{""method"":""object"",""action"":""ReadLogs""}", true)]
+        [InlineData("native-sdk", @"{""method"":""list"",""action"":""Objects""}", true)]
+        [InlineData("native-sdk", @"{""method"":""search"",""action"":""Query""}", true)]
+        [InlineData("dotnet-reflection", @"{""method"":""list"",""action"":""Objects""}", true)]
+        [InlineData("dotnet-reflection", @"{""method"":""search"",""action"":""Query""}", true)]
+        [InlineData(null, @"{""method"":""list"",""action"":""Objects""}", true)]
+        [InlineData(null, @"{""method"":""search"",""action"":""Query""}", true)]
+        public void Com_gxpublic_driver_routes_list_and_search_to_sta_while_modern_sdk_keeps_parallel(
+            string driver, string request, bool expected)
+        {
+            using (new PinScope(PinState.None))
+            using (new DriverScope(driver))
+            {
+                JObject parsed = Parse(request);
+                Assert.Equal(expected, ClassifierEntryPoint(parsed));
+                Assert.Equal(expected, DispatcherEntryPoint(parsed));
+            }
+        }
+
         private static JObject Parse(string request)
             => request == NullRequest ? null : JObject.Parse(request);
 
         private static bool IsConfigured(PinState pins)
             => pins == PinState.PathOnly || pins == PinState.VersionOnly || pins == PinState.Both;
+
+        private sealed class DriverScope : IDisposable
+        {
+            private readonly string _previous = Environment.GetEnvironmentVariable("GXMCP_DRIVER");
+
+            internal DriverScope(string driver)
+            {
+                Environment.SetEnvironmentVariable("GXMCP_DRIVER", driver);
+            }
+
+            public void Dispose()
+            {
+                Environment.SetEnvironmentVariable("GXMCP_DRIVER", _previous);
+            }
+        }
 
         private sealed class PinScope : IDisposable
         {

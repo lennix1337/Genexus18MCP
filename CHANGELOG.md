@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- `genexus_list_objects` / `genexus_query` (GXPublic/GX9, [#965](https://github.com/lennix1337/Genexus18MCP/issues/965)): route `list` and `search` (`Query`) to the STA lane when `GXMCP_DRIVER=com-gxpublic` instead of the MTA thread pool, open the OLE DB connection with `Mode=Read` (falling back when rejected) via a single connection-string builder, and log open-vs-query apartment state, thread IDs, provider ProgId and `InprocServer32` path category on `ComListError`/`AccessViolationException`. Verified by classifier and driver contract tests; not run against a real GX9/GXPublic installation.
+
 ### Internal
 
 ## v4.7.3 - 2026-11-21

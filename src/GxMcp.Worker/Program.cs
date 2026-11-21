@@ -313,6 +313,7 @@ namespace GxMcp.Worker
                     if (args[i] == "--driver" && i + 1 < args.Length) { driver = args[i + 1]; }
                     if (args[i] == "--major" && i + 1 < args.Length) { targetMajor = args[i + 1]; }
                 }
+                Environment.SetEnvironmentVariable("GXMCP_DRIVER", driver);
                 GxMcp.Worker.Compatibility.DynamicSdkBridge.Initialize(driver, targetMajor);
 
                 if (string.IsNullOrEmpty(gxPath) || string.IsNullOrEmpty(kbPath))

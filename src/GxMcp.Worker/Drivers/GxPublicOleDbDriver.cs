@@ -4,7 +4,11 @@ using System.Data;
 using System.Data.OleDb;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.ExceptionServices;
+using System.Threading;
+using GxMcp.Worker.Helpers;
 using GxMcp.Worker.Models;
+using Microsoft.Win32;
 
 namespace GxMcp.Worker.Drivers
 {
@@ -74,6 +78,8 @@ namespace GxMcp.Worker.Drivers
         private IGxPublicConnection _connection;
         private string _activeKbPath;
         private bool _isConnected;
+        private int? _openThreadId;
+        private ApartmentState? _openApartmentState;
 
         public GxPublicOleDbDriver(
             Func<string, Type> progIdResolver = null,
@@ -150,6 +156,8 @@ namespace GxMcp.Worker.Drivers
                     _connection = candidate;
                     _activeKbPath = kbPath;
                     _isConnected = true;
+                    _openThreadId = Thread.CurrentThread.ManagedThreadId;
+                    _openApartmentState = Thread.CurrentThread.GetApartmentState();
                     ResolvedProgId = provider;
                     return true;
                 }
@@ -179,6 +187,8 @@ namespace GxMcp.Worker.Drivers
 
             _isConnected = false;
             _activeKbPath = null;
+            _openThreadId = null;
+            _openApartmentState = null;
         }
 
         public List<string> QueryObjects(string typeFilter, string nameFilter, out string error, bool exactMatch = false)
@@ -190,6 +200,7 @@ namespace GxMcp.Worker.Drivers
                 .ToList();
         }
 
+        [HandleProcessCorruptedStateExceptions]
         public List<GxPublicObjectMetadata> QueryObjectMetadata(string typeFilter, string nameFilter, out string error, bool exactMatch = false)
         {
             error = null;
@@ -249,8 +260,27 @@ namespace GxMcp.Worker.Drivers
             }
             catch (Exception ex)
             {
-                error = UnwrapMessage(ex) + " [GXPublic list failed at stage '" + stage + "', provider "
-                    + (_connection?.ProviderName ?? "unknown") + ", rows read " + list.Count + "]";
+                string provider = _connection?.ProviderName ?? ResolvedProgId ?? "unknown";
+                int queryThreadId = Thread.CurrentThread.ManagedThreadId;
+                ApartmentState queryApartment = Thread.CurrentThread.GetApartmentState();
+                string openThread = _openThreadId.HasValue
+                    ? _openThreadId.Value.ToString(CultureInfo.InvariantCulture)
+                    : "unknown";
+                string openApartment = _openApartmentState.HasValue
+                    ? _openApartmentState.Value.ToString()
+                    : "unknown";
+                string inprocCategory = GetInprocServer32Category(provider);
+                string message = UnwrapMessage(ex);
+
+                Logger.Error(
+                    $"[GXPublic] {ex.GetType().Name} at stage '{stage}': provider={provider} inprocServer32={inprocCategory} " +
+                    $"openThread={openThread}({openApartment}) queryThread={queryThreadId}({queryApartment}) rowsRead={list.Count} message={message}");
+
+                error = message + " [GXPublic list failed at stage '" + stage + "', provider "
+                    + provider + ", inprocServer32 " + inprocCategory
+                    + ", openThread " + openThread + " (" + openApartment + ")"
+                    + ", queryThread " + queryThreadId + " (" + queryApartment + ")"
+                    + ", rows read " + list.Count + "]";
             }
 
             return list;
@@ -352,6 +382,74 @@ namespace GxMcp.Worker.Drivers
             return ex.Message;
         }
 
+        internal static string GetInprocServer32Category(string progId)
+        {
+            if (string.IsNullOrWhiteSpace(progId) || string.Equals(progId, "unknown", StringComparison.OrdinalIgnoreCase))
+                return "not-found";
+
+            try
+            {
+                using (RegistryKey classesRoot = RegistryKey.OpenBaseKey(RegistryHive.ClassesRoot, RegistryView.Registry32))
+                using (RegistryKey clsidKey = classesRoot.OpenSubKey(progId + "\\CLSID"))
+                {
+                    string clsid = clsidKey?.GetValue(null)?.ToString();
+                    if (string.IsNullOrWhiteSpace(clsid)) return "not-found";
+
+                    using (RegistryKey inprocKey = classesRoot.OpenSubKey("CLSID\\" + clsid + "\\InprocServer32"))
+                    {
+                        string serverPath = inprocKey?.GetValue(null)?.ToString();
+                        return CategorizeInprocServer32Path(serverPath);
+                    }
+                }
+            }
+            catch
+            {
+                return "unavailable";
+            }
+        }
+
+        internal static string CategorizeInprocServer32Path(string serverPath)
+        {
+            if (string.IsNullOrWhiteSpace(serverPath)) return "not-found";
+            string normalized = serverPath.Trim().Trim('"');
+            if (string.IsNullOrWhiteSpace(normalized)) return "not-found";
+
+            if (IsUnderSpecialFolder(normalized, Environment.SpecialFolder.ProgramFilesX86)
+                || normalized.IndexOf(@"\Program Files (x86)\", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "program-files-x86";
+            if (IsUnderSpecialFolder(normalized, Environment.SpecialFolder.CommonProgramFilesX86)
+                || IsUnderSpecialFolder(normalized, Environment.SpecialFolder.CommonProgramFiles)
+                || normalized.IndexOf(@"\Common Files\", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "common-files";
+            if (IsUnderSpecialFolder(normalized, Environment.SpecialFolder.ProgramFiles)
+                || normalized.IndexOf(@"\Program Files\", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "program-files";
+            if (IsUnderSpecialFolder(normalized, Environment.SpecialFolder.SystemX86)
+                || normalized.IndexOf(@"\SysWOW64\", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "system-wow64";
+            if (IsUnderSpecialFolder(normalized, Environment.SpecialFolder.System)
+                || normalized.IndexOf(@"\System32\", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "system32";
+            if (IsUnderSpecialFolder(normalized, Environment.SpecialFolder.UserProfile)
+                || normalized.IndexOf(@"\Users\", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "user-profile";
+            return "other";
+        }
+
+        private static bool IsUnderSpecialFolder(string path, Environment.SpecialFolder folder)
+        {
+            try
+            {
+                string root = Environment.GetFolderPath(folder);
+                return !string.IsNullOrWhiteSpace(root)
+                    && path.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public void Dispose()
         {
             CloseKB();
@@ -361,25 +459,52 @@ namespace GxMcp.Worker.Drivers
     internal sealed class OleDbGxPublicConnection : IGxPublicConnection
     {
         private readonly string _providerName;
+        private readonly Action<string> _openConnection;
         private OleDbConnection _connection;
         private readonly List<OleDbCommand> _commands = new List<OleDbCommand>();
 
         public OleDbGxPublicConnection(string providerName)
+            : this(providerName, null)
+        {
+        }
+
+        internal OleDbGxPublicConnection(string providerName, Action<string> openConnection)
         {
             _providerName = providerName;
+            _openConnection = openConnection ?? (connectionString =>
+            {
+                _connection = new OleDbConnection(connectionString);
+                _connection.Open();
+            });
         }
 
         public string ProviderName => _providerName;
         public bool IsOpen => _connection != null && _connection.State == ConnectionState.Open;
 
+        internal static string BuildConnectionString(string providerName, string kbPath, bool includeReadMode = true)
+        {
+            var builder = new OleDbConnectionStringBuilder();
+            builder["Provider"] = providerName;
+            builder["Data Source"] = kbPath;
+            if (includeReadMode)
+                builder["Mode"] = "Read";
+            return builder.ConnectionString;
+        }
+
         public void Open(string kbPath)
         {
             Close();
-            var builder = new OleDbConnectionStringBuilder();
-            builder["Provider"] = _providerName;
-            builder["Data Source"] = kbPath;
-            _connection = new OleDbConnection(builder.ConnectionString);
-            _connection.Open();
+            try
+            {
+                _openConnection(BuildConnectionString(_providerName, kbPath, includeReadMode: true));
+            }
+            catch (Exception)
+            {
+                // Some GXPublic OLE DB providers reject Mode=Read; retry without it
+                // while keeping connection-string construction in BuildConnectionString.
+                Close();
+                _openConnection(BuildConnectionString(_providerName, kbPath, includeReadMode: false));
+            }
         }
 
         public IDataReader ExecuteReader(string sql)
