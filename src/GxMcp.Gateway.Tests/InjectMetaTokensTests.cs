@@ -1,11 +1,21 @@
+using System;
+using System.Diagnostics;
 using GxMcp.Gateway;
 using Newtonsoft.Json.Linq;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace GxMcp.Gateway.Tests
 {
     public class InjectMetaTokensTests
     {
+        private readonly ITestOutputHelper _output;
+
+        public InjectMetaTokensTests(ITestOutputHelper output)
+        {
+            _output = output;
+        }
+
         private static JObject MakeToolResult(string innerJson)
         {
             return new JObject
@@ -67,6 +77,64 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(42, (int)inner["_meta"]!["tokens"]!["used"]!);
             Assert.Equal(99, (int)inner["_meta"]!["tokens"]!["limit"]!);
             Assert.Equal("sticky", (string)inner["_meta"]!["tokens"]!["hint"]!);
+        }
+
+        [Fact]
+        public void BuildToolResultContent_Injects_MetaTokens_And_Keeps_StructuredContent_In_Sync()
+        {
+            var payload = new JObject
+            {
+                ["status"] = "Success",
+                ["source"] = new string('a', 1024)
+            };
+
+            // genexus_lifecycle declares outputSchema, so structuredContent is emitted.
+            var tr = Program.BuildToolResultContent(payload, isError: false, toolName: "genexus_lifecycle", toolArgs: new JObject(), payloadOwned: true);
+
+            var inner = JObject.Parse((string)tr["content"]![0]!["text"]!);
+            Assert.NotNull(inner["_meta"]?["tokens"]);
+            Assert.Equal(McpRouter.MetaTokenLimit, (int)inner["_meta"]!["tokens"]!["limit"]!);
+            Assert.True((int)inner["_meta"]!["tokens"]!["used"]! > 0);
+
+            // structuredContent must match content[0].text and also carry _meta.tokens.
+            Assert.NotNull(tr["structuredContent"]?["_meta"]?["tokens"]);
+            Assert.Equal((int)inner["_meta"]!["tokens"]!["used"]!, (int)tr["structuredContent"]!["_meta"]!["tokens"]!["used"]!);
+
+            // Calling InjectMetaTokens afterwards must be a no-op (must not re-parse content[0].text).
+            tr["content"]![0]!["text"] = "{\"sentinel\":true}";
+            McpRouter.InjectMetaTokens(tr);
+            Assert.Equal("{\"sentinel\":true}", (string)tr["content"]![0]!["text"]!);
+        }
+
+        [Fact]
+        public void Benchmark_BuildToolResultContent_Plus_InjectMetaTokens()
+        {
+            var payloadTemplate = new JObject
+            {
+                ["status"] = "Success",
+                ["source"] = new string('x', 48_000)
+            };
+
+            // Warmup
+            for (int i = 0; i < 5; i++)
+            {
+                var w = Program.BuildToolResultContent((JObject)payloadTemplate.DeepClone(), false, "genexus_read", new JObject(), payloadOwned: true);
+                McpRouter.InjectMetaTokens(w);
+            }
+
+            const int iterations = 100;
+            long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+            var sw = Stopwatch.StartNew();
+            for (int i = 0; i < iterations; i++)
+            {
+                var clone = (JObject)payloadTemplate.DeepClone();
+                var tr = Program.BuildToolResultContent(clone, false, "genexus_read", new JObject(), payloadOwned: true);
+                McpRouter.InjectMetaTokens(tr);
+            }
+            sw.Stop();
+            long allocAfter = GC.GetAllocatedBytesForCurrentThread();
+
+            _output.WriteLine($"PERF_BENCH iterations={iterations} elapsedMs={sw.ElapsedMilliseconds} allocatedBytes={allocAfter - allocBefore}");
         }
     }
 }

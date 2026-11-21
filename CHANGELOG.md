@@ -9,6 +9,8 @@
 
 ### Changed
 
+- Gateway (`BuildToolResultContent` / `InjectMetaTokens`): inject `_meta.tokens` directly in memory before serializing `content[0].text` once and mark the envelope as handled, eliminating the redundant `JObject.Parse` + re-serialize per tool call (100x ~48 KB payload benchmark: 77 ms / 78.1 MB allocated -> 17 ms / 21.5 MB allocated) and keeping `structuredContent` in sync.
+
 ### Fixed
 
 - `genexus_doctor`: `DoctorService.BuildKbBlock` and `DoctorService.BuildCacheBlock` now probe `IndexCacheService.TryGetLoadedIndex()` instead of calling `GetIndex()`, avoiding a blocking 30–60s cold index load (and potential Gateway timeout) when diagnosing a cold Worker. `objectCount` and `indexEntries` report `0` until the index is loaded in memory.

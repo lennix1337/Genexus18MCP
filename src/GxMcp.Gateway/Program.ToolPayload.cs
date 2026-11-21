@@ -1277,6 +1277,19 @@ namespace GxMcp.Gateway
                 CompactSuccessfulEditPatchResponse(axiPayload, lateOmittedMutationFields);
             }
 
+            if (!TerseResponsesEnabledCached()
+                && axiPayload is JObject axiObj
+                && axiObj["_meta"]?["tokens"] == null)
+            {
+                if (!payloadOwned && ReferenceEquals(axiPayload, payload))
+                {
+                    axiObj = (JObject)axiObj.DeepClone();
+                    axiPayload = axiObj;
+                }
+                int preCharCount = McpRouter.MeasureSerializedCharCount(axiObj);
+                McpRouter.TryAttachMetaTokensInPlace(axiObj, preCharCount);
+            }
+
             var result = new JObject
             {
                 ["resultType"] = "complete",
@@ -1287,6 +1300,7 @@ namespace GxMcp.Gateway
                     ["text"] = axiPayload.ToString(Formatting.None)
                 } }
             };
+            McpRouter.MarkMetaTokensHandled(result);
             // Legacy stdio clients (including OpenCode's text-oriented MCP path)
             // need the resolved KB in-band to correlate a response. Modern clients
             // can use the protocol metadata without reparsing the text.

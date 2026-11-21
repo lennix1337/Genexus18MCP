@@ -542,6 +542,10 @@ namespace GxMcp.Gateway
                 if (cached != null)
                 {
                     var hit = (JObject)cached.DeepClone();
+                    if (McpRouter.IsMetaTokensHandled(cached))
+                    {
+                        McpRouter.MarkMetaTokensHandled(hit);
+                    }
                     var hitMeta = hit["_meta"] as JObject ?? new JObject();
                     hit["_meta"] = hitMeta;
                     hitMeta["cacheOutcome"] = "hit";
