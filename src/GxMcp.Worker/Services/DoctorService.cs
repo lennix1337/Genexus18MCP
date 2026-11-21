@@ -224,7 +224,8 @@ namespace GxMcp.Worker.Services
             {
                 try
                 {
-                    var idx = _indexCacheService.GetIndex();
+                    // Non-blocking probe: avoid triggering a 30-60s cold index load on doctor.
+                    var idx = _indexCacheService.TryGetLoadedIndex();
                     if (idx != null && idx.Objects != null)
                         objectCount = idx.Objects.Count;
                 }
@@ -275,7 +276,8 @@ namespace GxMcp.Worker.Services
             {
                 try
                 {
-                    var idx = _indexCacheService.GetIndex();
+                    // Non-blocking probe: report 0 while the index is not yet loaded in memory.
+                    var idx = _indexCacheService.TryGetLoadedIndex();
                     if (idx != null && idx.Objects != null)
                         entries = idx.Objects.Count;
                 }
