@@ -30,11 +30,18 @@ are always `planUnavailable` (syntax-only `EXPLAIN`), as on every other DBMS.
 `DataStoreWritesUnsupported` before any connection is opened.
 
 The Worker is .NET and cannot load the JDBC driver the GeneXus datastore names.
-Executing a query needs an IBM ADO.NET provider registered by invariant name
-(`IBM.Data.DB2.iSeries`, `IBM.Data.DB2` or `IBM.Data.Db2`), either via IBM i
-Access Client Solutions or by registering the `IBM.Data.DB2.iSeries` NuGet
-package in `DbProviderFactories` (`App.config`); without one the request fails
-with `DataStoreProviderUnavailable` naming what to install.
+Executing a query needs an IBM ADO.NET provider. For IBM i, obtain the .NET
+provider from IBM i Access Client Solutions or the `IBM.Data.DB2.iSeries` NuGet
+package and make its DLL and dependencies available to the x86 Worker. Configure
+both `ProviderAssemblyPath` (an absolute DLL path on the Worker host) and
+`ProviderInvariantName` (`IBM.Data.DB2.iSeries`) in the DB2 alias. This loads the
+factory for this operation without editing the bundled Worker exe.config. Only
+load provider DLLs from a trusted administrator-controlled location: assemblies
+execute code in the Worker. If the DLL, dependencies, or factory cannot be loaded,
+the request fails closed with `DataStoreProviderUnavailable`. A provider already
+registered with .NET remains supported when neither field is configured. The
+reporter resolved the NuGet factory in a custom Worker, but a real DB2 query
+through this loading path has not been verified.
 
 When the GeneXus SDK does not expose connection metadata (for example when the
 connection is configured in the runtime environment or JNDI datasource rather
@@ -68,7 +75,10 @@ host environment. The value of a secret is never returned or logged by the MCP.
 Read-only profile aliases support SQL Server and DB2 only (for DB2 on IBM i,
 `database` is optional and `integratedSecurity` defaults to `false`, so host
 `userIdEnvironmentVariable`/`passwordEnvironmentVariable` or
-`connectionStringEnvironmentVariable` must be provided). When the active datastore
+`connectionStringEnvironmentVariable` must be provided). Example provider fields
+for that DB2 alias: `"ProviderAssemblyPath": "C:\\IBM\\IBM.Data.DB2.iSeries.dll"`,
+`"ProviderInvariantName": "IBM.Data.DB2.iSeries"` (JSON paths require escaped
+backslashes). When the active datastore
 is PostgreSQL, Oracle, or MySQL and the SDK does not expose connection
 metadata, `records_query` fails closed with `DataStoreConnectionUnavailable`
 whose hint states the SQL Server and DB2-only alias limitation instead of

@@ -371,9 +371,10 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void Db2ConfiguredFactory_LoadsFromAssemblyWithoutGlobalRegistration()
         {
-            var alias = ProfileDataStoreAlias.From("db2", JObject.Parse("{'ProviderInvariantName':'IBM.Data.DB2.iSeries'}"));
             string assemblyPath = typeof(IBM.Data.DB2.iSeries.iDB2Factory).Assembly.Location;
-            var factory = ResolveConfiguredDb2Factory(assemblyPath, alias.ProviderInvariantName);
+            var alias = ProfileDataStoreAlias.From("db2", new JObject {
+                ["ProviderAssemblyPath"] = assemblyPath, ["ProviderInvariantName"] = "IBM.Data.DB2.iSeries" });
+            var factory = ResolveFactory("JT400", "db2", alias);
             Assert.Same(IBM.Data.DB2.iSeries.iDB2Factory.Instance, factory);
         }
 
@@ -385,6 +386,15 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("DataStoreProviderUnavailable", ex.Code);
             Assert.Contains("ProviderAssemblyPath", ex.Hint);
             Assert.DoesNotContain("App.config", ex.Hint);
+        }
+
+        [Fact]
+        public void Db2ConfiguredFactory_IncompleteAlias_DoesNotFallBackToRegisteredProvider()
+        {
+            var alias = new ProfileDataStoreAlias { ProviderInvariantName = "IBM.Data.DB2.iSeries" };
+            var ex = Assert.Throws<RecordOperationException>(() => ResolveFactory("JT400", "db2", alias));
+            Assert.Equal("DataStoreProviderUnavailable", ex.Code);
+            Assert.Contains("ProviderAssemblyPath", ex.Hint);
         }
 
         [Fact]
