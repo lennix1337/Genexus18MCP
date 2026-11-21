@@ -1272,6 +1272,11 @@ namespace GxMcp.Worker.Services
                 "Install the IBM i Access Client Solutions .NET provider, register the IBM.Data.DB2.iSeries NuGet package in DbProviderFactories (App.config), or install the IBM Data Server provider (IBM.Data.DB2) on the Worker host. The JT400 JDBC driver used by the GeneXus datastore cannot be loaded by the .NET Worker; no connection was attempted.");
         }
 
+        internal static DbProviderFactory ResolveConfiguredDb2Factory(string assemblyPath, string invariantName)
+        {
+            throw new RecordOperationException("DataStoreProviderUnavailable", "The configured DB2 provider could not be loaded.", "Check ProviderAssemblyPath and ProviderInvariantName.");
+        }
+
         internal static bool IsIbmIFactory(DbProviderFactory factory)
             => factory != null && factory.GetType().FullName.IndexOf("iSeries", StringComparison.OrdinalIgnoreCase) >= 0;
 
@@ -1659,6 +1664,7 @@ namespace GxMcp.Worker.Services
             public string DataStore;
             public string Family;
             public string Provider;
+            public string ProviderInvariantName;
             public string Server;
             public string Database;
             public string Schema;
@@ -1679,6 +1685,7 @@ namespace GxMcp.Worker.Services
                     DataStore = ReadJsonText(value, "DataStore", "dataStore"),
                     Family = ReadJsonText(value, "Family", "family"),
                     Provider = ReadJsonText(value, "Provider", "provider"),
+                    ProviderInvariantName = ReadJsonText(value, "ProviderInvariantName", "providerInvariantName"),
                     Server = ReadJsonText(value, "Server", "server"),
                     Database = ReadJsonText(value, "Database", "database"),
                     Schema = ReadJsonText(value, "Schema", "schema"),

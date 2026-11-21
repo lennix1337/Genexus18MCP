@@ -369,6 +369,25 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void Db2ConfiguredFactory_LoadsFromAssemblyWithoutGlobalRegistration()
+        {
+            var alias = ProfileDataStoreAlias.From("db2", JObject.Parse("{'ProviderInvariantName':'IBM.Data.DB2.iSeries'}"));
+            string assemblyPath = typeof(IBM.Data.DB2.iSeries.iDB2Factory).Assembly.Location;
+            var factory = ResolveConfiguredDb2Factory(assemblyPath, alias.ProviderInvariantName);
+            Assert.Same(IBM.Data.DB2.iSeries.iDB2Factory.Instance, factory);
+        }
+
+        [Fact]
+        public void Db2ConfiguredFactory_MissingAssembly_FailsClosedWithSetupHint()
+        {
+            var ex = Assert.Throws<RecordOperationException>(() => ResolveConfiguredDb2Factory(
+                System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString(), "missing.dll"), "IBM.Data.DB2.iSeries"));
+            Assert.Equal("DataStoreProviderUnavailable", ex.Code);
+            Assert.Contains("ProviderAssemblyPath", ex.Hint);
+            Assert.DoesNotContain("App.config", ex.Hint);
+        }
+
+        [Fact]
         public void Db2Factory_UsesFirstInstalledCandidateInPreferenceOrder()
         {
             var seen = new List<string>();
