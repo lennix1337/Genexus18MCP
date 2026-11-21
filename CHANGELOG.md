@@ -11,6 +11,25 @@
 
 ### Fixed
 
+### Internal
+
+## v4.7.3 - 2026-11-21
+
+
+### Tracked issues
+
+- [#959](https://github.com/lennix1337/Genexus18MCP/issues/959) — genexus_db: support DB2 (IBM i / AS400) datastores for records_query and the read-only database actions
+
+
+<!-- Next release: put new entries under a `### Added` / `### Changed` / `### Fixed` / `### Internal`
+     subsection of THIS `## Unreleased` section, not under a published `## v...` heading. -->
+
+### Added
+
+### Changed
+
+### Fixed
+
 - `records_query` ([#959](https://github.com/lennix1337/Genexus18MCP/issues/959)): when the DB2 provider cannot load its native client (`DllNotFoundException`, `BadImageFormatException` or a `cwbdc.dll` mention anywhere in the exception chain), the failure reports `messageCategory: native_client_missing` with a hint to install IBM i Access Client Solutions, instead of the misleading `provider_rejected`. Verified by regression tests and the Worker suite (net48); not against a real DB2 for i host.
 
 - `genexus_list_objects` (GXPublic/GX9, [#965](https://github.com/lennix1337/Genexus18MCP/issues/965)): a failure while listing now names the stage (`ExecuteReader`, `FindOrdinal`, row read), the provider and the rows already read, so the reporter's log shows where the legacy provider fails. Diagnostic only; the worker crash (0xC0000005) is not fixed.
