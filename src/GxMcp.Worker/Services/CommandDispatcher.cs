@@ -1606,7 +1606,11 @@ namespace GxMcp.Worker.Services
                         nameFilter,
                         out string qErr,
                         args?["exactMatch"]?.ToObject<bool?>() ?? false);
-                    if (qErr != null) return Models.McpResponse.Err(code: "ComQueryError", message: qErr, target: target);
+                    if (qErr != null)
+                    {
+                        Logger.Error($"[ComQueryError] {qErr}");
+                        return Models.McpResponse.Err(code: "ComQueryError", message: qErr, target: target);
+                    }
                     int limit = args?["limit"]?.ToObject<int?>() ?? 50;
                     return Models.McpResponse.Ok(
                         code: "QueryResults",
@@ -1703,7 +1707,11 @@ namespace GxMcp.Worker.Services
                     string nameFilter = args?["nameFilter"]?.ToString() ?? target;
                     nameFilter = ParseLegacyMetadataQuery(nameFilter, ref typeFilter) ?? nameFilter;
                     var objects = GxMcp.Worker.Drivers.ComGxPublicDriver.Instance.QueryObjectMetadata(typeFilter, nameFilter, out string listErr);
-                    if (listErr != null) return Models.McpResponse.Err(code: "ComListError", message: listErr, target: target);
+                    if (listErr != null)
+                    {
+                        Logger.Error($"[ComListError] {listErr}");
+                        return Models.McpResponse.Err(code: "ComListError", message: listErr, target: target);
+                    }
                     string descriptionFilter = args?["descriptionFilter"]?.ToString();
                     if (!string.IsNullOrWhiteSpace(descriptionFilter))
                     {

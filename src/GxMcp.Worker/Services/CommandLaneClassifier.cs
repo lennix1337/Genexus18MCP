@@ -43,11 +43,13 @@ namespace GxMcp.Worker.Services
                 // which reads object Source/WebForm XML via the GeneXus SDK and MUST run
                 // on the STA thread. Routing SearchSource to the MTA thread-pool path
                 // caused a native COM access-violation that crashed the worker 100% of the time.
+                // issue #965: under com-gxpublic, GXPublic OLE DB (apartment-threaded) is
+                // opened on the STA thread, so list and search/Query must also stay on STA.
                 if (method == "search" && !string.Equals(action, "SearchSource", StringComparison.OrdinalIgnoreCase))
-                    return true;
+                    return !IsComGxPublicDriverActive();
 
                 if (method == "list")
-                    return true;
+                    return !IsComGxPublicDriverActive();
 
                 // v2.3.8 (post-Task 7.2 fix): Control:Cancel must run on the parallel
                 // dispatch path so it can interleave with an in-flight SDK call and
@@ -110,5 +112,8 @@ namespace GxMcp.Worker.Services
             }
             catch { return false; }
         }
+
+        private static bool IsComGxPublicDriverActive()
+            => string.Equals(Environment.GetEnvironmentVariable("GXMCP_DRIVER"), "com-gxpublic", StringComparison.OrdinalIgnoreCase);
     }
 }

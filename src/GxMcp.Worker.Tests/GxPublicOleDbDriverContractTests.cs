@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.OleDb;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Threading;
 using GxMcp.Worker.Drivers;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -91,6 +95,88 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("error", response["status"]?.ToString());
             Assert.Equal("GXMCP_GXPUBLIC_PROVIDER_NOT_REGISTERED", response["error"]?["code"]?.ToString());
             Assert.Contains("matching the KB generation", response["error"]?["hint"]?.ToString());
+        }
+
+        [Fact]
+        public void QueryFailure_LogsOpenVsQueryApartmentAndThreadIdsAndInprocCategory()
+        {
+            var connection = new FailingReaderConnection("GXPublic.GXPublic.5");
+            var driver = new GxPublicOleDbDriver(
+                progIdResolver: provider => provider == "GXPublic.GXPublic.5" ? typeof(object) : null,
+                connectionFactory: provider => provider == "GXPublic.GXPublic.5" ? connection : null);
+
+            int openThreadId = -1;
+            var staThread = new Thread(() =>
+            {
+                openThreadId = Thread.CurrentThread.ManagedThreadId;
+                Assert.True(driver.OpenKB(@"C:\KBs\GX9", out string openError), openError);
+            });
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.Start();
+            staThread.Join();
+
+            int queryThreadId = -1;
+            string error = null;
+            var mtaThread = new Thread(() =>
+            {
+                queryThreadId = Thread.CurrentThread.ManagedThreadId;
+                driver.QueryObjects(null, null, out error);
+            });
+            mtaThread.SetApartmentState(ApartmentState.MTA);
+            mtaThread.Start();
+            mtaThread.Join();
+
+            Assert.NotNull(error);
+            Assert.Contains("provider GXPublic.GXPublic.5", error);
+            Assert.Contains($"openThread {openThreadId} (STA)", error);
+            Assert.Contains($"queryThread {queryThreadId} (MTA)", error);
+            Assert.Contains("inprocServer32 ", error);
+        }
+
+        [Theory]
+        [InlineData(@"C:\Program Files (x86)\GeneXus\GX9\GxPublic.dll", "program-files-x86")]
+        [InlineData(@"C:\Program Files\Common Files\GeneXus\GxPublic.dll", "common-files")]
+        [InlineData(@"C:\Windows\SysWOW64\GxPublic.dll", "system-wow64")]
+        [InlineData(@"C:\Users\sensitive-user\Downloads\GxPublic.dll", "user-profile")]
+        [InlineData(null, "not-found")]
+        public void CategorizeInprocServer32Path_OmitsUserPaths(string rawPath, string expectedCategory)
+        {
+            string category = GxPublicOleDbDriver.CategorizeInprocServer32Path(rawPath);
+            Assert.Equal(expectedCategory, category);
+            Assert.DoesNotContain("sensitive-user", category, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("\\", category);
+        }
+
+        [Fact]
+        public void OleDbConnection_BuildsConnectionStringInOnePlace_AndFallsBackWhenModeReadIsRejected()
+        {
+            string driverSourcePath = Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory, "..", "..", "..", "..", "GxMcp.Worker", "Drivers", "GxPublicOleDbDriver.cs"));
+            string driverSource = File.ReadAllText(driverSourcePath);
+            Assert.Single(Regex.Matches(driverSource, @"new\s+OleDbConnectionStringBuilder\b"));
+
+            var attempted = new List<string>();
+            using (var conn = new OleDbGxPublicConnection("GXPublic.GXPublic.5", cs =>
+            {
+                attempted.Add(cs);
+                var parsed = new OleDbConnectionStringBuilder(cs);
+                if (parsed.ContainsKey("Mode"))
+                    throw new InvalidOperationException("Provider does not support Mode=Read");
+            }))
+            {
+                conn.Open(@"C:\KBs\GX9");
+            }
+
+            Assert.Equal(2, attempted.Count);
+            var first = new OleDbConnectionStringBuilder(attempted[0]);
+            Assert.Equal("GXPublic.GXPublic.5", first["Provider"]?.ToString());
+            Assert.Equal(@"C:\KBs\GX9", first["Data Source"]?.ToString());
+            Assert.Equal("Read", first["Mode"]?.ToString());
+
+            var second = new OleDbConnectionStringBuilder(attempted[1]);
+            Assert.Equal("GXPublic.GXPublic.5", second["Provider"]?.ToString());
+            Assert.Equal(@"C:\KBs\GX9", second["Data Source"]?.ToString());
+            Assert.False(second.ContainsKey("Mode"));
         }
 
         private sealed class FakeGxPublicConnection : IGxPublicConnection
