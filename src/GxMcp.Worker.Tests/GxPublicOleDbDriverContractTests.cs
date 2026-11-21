@@ -43,6 +43,24 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void QueryFailure_NamesTheStageProviderAndRowsRead()
+        {
+            var connection = new FailingReaderConnection("GXPublic.GXPublic.5");
+            var driver = new GxPublicOleDbDriver(
+                progIdResolver: provider => provider == "GXPublic.GXPublic.5" ? typeof(object) : null,
+                connectionFactory: provider => provider == "GXPublic.GXPublic.5" ? connection : null);
+            Assert.True(driver.OpenKB(@"C:\KBs\GX9", out string openError), openError);
+
+            var objects = driver.QueryObjects(null, null, out string error);
+
+            Assert.Empty(objects);
+            Assert.Contains("protected memory", error);
+            Assert.Contains("stage 'ExecuteReader'", error);
+            Assert.Contains("provider GXPublic.GXPublic.5", error);
+            Assert.Contains("rows read 0", error);
+        }
+
+        [Fact]
         public void Open_FallsBackWhenTheFirstRegisteredProviderCannotOpenTheKb()
         {
             var fallback = new FakeGxPublicConnection("GXPublic.GXPublic.5");
@@ -114,6 +132,30 @@ namespace GxMcp.Worker.Tests
             {
                 Close();
             }
+        }
+
+        private sealed class FailingReaderConnection : IGxPublicConnection
+        {
+            public FailingReaderConnection(string providerName)
+            {
+                ProviderName = providerName;
+            }
+
+            public string ProviderName { get; }
+            public bool IsOpen { get; private set; }
+
+            public void Open(string kbPath)
+            {
+                IsOpen = true;
+            }
+
+            public void Close()
+            {
+                IsOpen = false;
+            }
+
+            public IDataReader ExecuteReader(string sql) => throw new AccessViolationException("Attempted to read or write protected memory.");
+            public void Dispose() { }
         }
 
         private sealed class ThrowingGxPublicConnection : IGxPublicConnection
