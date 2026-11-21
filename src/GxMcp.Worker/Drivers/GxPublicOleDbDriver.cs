@@ -196,10 +196,12 @@ namespace GxMcp.Worker.Drivers
             var list = new List<GxPublicObjectMetadata>();
             if (!EnsureConnected(out error)) return list;
 
+            string stage = "ExecuteReader";
             try
             {
                 using (IDataReader reader = _connection.ExecuteReader("SELECT * FROM Object"))
                 {
+                    stage = "FindOrdinal";
                     int nameOrdinal = FindOrdinal(reader, "ObjNam", "ObjName", "Name");
                     int classOrdinal = FindOrdinal(reader, "ObjClsName", "ObjCls", "ObjectClass");
                     if (nameOrdinal < 0)
@@ -215,9 +217,14 @@ namespace GxMcp.Worker.Drivers
                     int classGuidOrdinal = FindOrdinal(reader, "ObjClsGUID", "ObjClsGuid", "ClassGuid");
                     int lastUpdateOrdinal = FindOrdinal(reader, "ObjUpdTS", "ObjUpdateTS", "LastUpdate");
                     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    int rowNumber = 0;
 
-                    while (reader.Read())
+                    while (true)
                     {
+                        stage = "Read row " + (rowNumber + 1);
+                        if (!reader.Read()) break;
+                        rowNumber++;
+                        stage = "GetValue row " + rowNumber;
                         string name = ReadValue(reader, nameOrdinal);
                         if (string.IsNullOrWhiteSpace(name)) continue;
 
@@ -242,7 +249,8 @@ namespace GxMcp.Worker.Drivers
             }
             catch (Exception ex)
             {
-                error = UnwrapMessage(ex);
+                error = UnwrapMessage(ex) + " [GXPublic list failed at stage '" + stage + "', provider "
+                    + (_connection?.ProviderName ?? "unknown") + ", rows read " + list.Count + "]";
             }
 
             return list;
