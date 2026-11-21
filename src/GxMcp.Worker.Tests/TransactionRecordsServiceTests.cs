@@ -544,6 +544,26 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void DatabaseFailure_MissingNativeClientInInnerExceptionIsClassified()
+        {
+            var f = new Fixture();
+            var exception = new InvalidOperationException("Connection string is invalid", new DllNotFoundException("Unable to load DLL 'cwbdc.dll'"));
+            var details = BuildDatabaseFailureDetails("open", exception, f.Database);
+
+            Assert.Equal("native_client_missing", details["messageCategory"]?.Value<string>());
+            Assert.DoesNotContain("cwbdc", details.ToString());
+        }
+
+        [Fact]
+        public void DatabaseFailure_PlainProviderRejectionStaysProviderRejected()
+        {
+            var f = new Fixture();
+            var details = BuildDatabaseFailureDetails("open", new InvalidOperationException("bad things"), f.Database);
+
+            Assert.Equal("provider_rejected", details["messageCategory"]?.Value<string>());
+        }
+
+        [Fact]
         public void NonDbConnectionSetupFailure_UsesSanitizedDatabaseEnvelope()
         {
             var f = new Fixture();

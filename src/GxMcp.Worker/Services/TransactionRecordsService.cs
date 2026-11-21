@@ -771,7 +771,10 @@ namespace GxMcp.Worker.Services
             {
                 ["persisted"] = false,
                 ["rereadConfirmed"] = false,
-                ["diagnostic"] = "The " + family + " database provider failed during " + safePhase + "; connection details and record values were omitted.",
+                ["diagnostic"] = "The " + family + " database provider failed during " + safePhase + "; connection details and record values were omitted."
+                    + (details["messageCategory"]?.ToString() == "native_client_missing"
+                        ? " A native client library the provider depends on was not found on the worker host (for DB2 for i, install IBM i Access Client Solutions)."
+                        : string.Empty),
                 ["details"] = details
             };
             return new RecordOperationException(
@@ -795,13 +798,26 @@ namespace GxMcp.Worker.Services
                 ["providerCode"] = ReadExceptionValue(ex, "Number", "Code", "ErrorCode"),
                 ["providerState"] = ReadExceptionValue(ex, "SqlState", "State", "Class"),
                 ["message"] = SanitizeProviderMessage(ex?.Message),
-                ["messageCategory"] = ClassifyProviderMessage(ex?.Message)
+                ["messageCategory"] = ClassifyProviderFailure(ex)
             };
         }
 
         internal static string SanitizeProviderMessage(string message)
         {
             return "The database provider returned a sanitized diagnostic; sensitive provider text was omitted.";
+        }
+
+        private static string ClassifyProviderFailure(Exception ex)
+        {
+            for (Exception current = ex; current != null; current = current.InnerException)
+            {
+                if (current is DllNotFoundException || current is BadImageFormatException
+                    || Regex.IsMatch(current.Message ?? string.Empty, @"(?i)unable to load dll|dllnotfound|cwbdc\.dll"))
+                {
+                    return "native_client_missing";
+                }
+            }
+            return ClassifyProviderMessage(ex?.Message);
         }
 
         private static string ClassifyProviderMessage(string message)
