@@ -1,6 +1,8 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using GxMcp.Worker.Models;
 using GxMcp.Worker.Services;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -167,6 +169,82 @@ namespace GxMcp.Worker.Tests
                 Environment.SetEnvironmentVariable("GX_PATH", prevPath);
                 Environment.SetEnvironmentVariable("GX_PROGRAM_DIR", prevProg);
                 try { Directory.Delete(tmp, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void Diagnose_ColdIndexCache_DoesNotTriggerLoadAndCompletesImmediately()
+        {
+            string kbPath = Path.Combine(Path.GetTempPath(), "gxdoctor-cold-" + Guid.NewGuid().ToString("N"));
+            var writer = new IndexCacheService();
+            writer.Initialize(kbPath, proactiveLoad: false);
+            try
+            {
+                var entries = Enumerable.Range(1, 500)
+                    .Select(i => new SearchIndex.IndexEntry
+                    {
+                        Name = "ColdProc" + i,
+                        Type = "Procedure",
+                        Guid = Guid.NewGuid().ToString(),
+                        Description = "Sample description for cold index load benchmark " + i
+                    })
+                    .ToArray();
+                writer.ReplaceAll(entries);
+                Assert.True(writer.FlushNow());
+
+                var coldCache = new IndexCacheService();
+                coldCache.Initialize(kbPath, proactiveLoad: false);
+                var kb = new KbService(coldCache);
+                Assert.Null(coldCache.TryGetLoadedIndex());
+                Assert.Equal(0, coldCache.LoadInvocationCountForTest);
+
+                // Warm JIT for DoctorService/JObject/Process probes so the timing measures the call itself.
+                _ = new DoctorService(null, null, null).Diagnose();
+
+                var sw = Stopwatch.StartNew();
+                var json = JObject.Parse(new DoctorService(kb, coldCache, null).Diagnose());
+                sw.Stop();
+
+                Assert.Equal("ok", (string)json["status"]);
+                Assert.Equal(0, coldCache.LoadInvocationCountForTest);
+                Assert.Null(coldCache.TryGetLoadedIndex());
+                Assert.Equal(0, (int)json["result"]!["kb"]!["objectCount"]!);
+                Assert.Equal(0, (int)json["result"]!["cache"]!["indexEntries"]!);
+                Assert.True(sw.ElapsedMilliseconds < 1000, $"Expected non-blocking Diagnose (<1000ms), took {sw.ElapsedMilliseconds}ms");
+            }
+            finally
+            {
+                writer.DeleteOnDiskSnapshot();
+                try { if (Directory.Exists(kbPath)) Directory.Delete(kbPath, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void Diagnose_WarmIndexCache_ReportsLoadedCounts()
+        {
+            string kbPath = Path.Combine(Path.GetTempPath(), "gxdoctor-warm-" + Guid.NewGuid().ToString("N"));
+            var cache = new IndexCacheService();
+            cache.Initialize(kbPath, proactiveLoad: false);
+            var kb = new KbService(cache);
+            try
+            {
+                cache.ReplaceAll(new[]
+                {
+                    new SearchIndex.IndexEntry { Name = "WarmProc1", Type = "Procedure", Guid = Guid.NewGuid().ToString() },
+                    new SearchIndex.IndexEntry { Name = "WarmProc2", Type = "Procedure", Guid = Guid.NewGuid().ToString() }
+                });
+                Assert.NotNull(cache.TryGetLoadedIndex());
+
+                var json = JObject.Parse(new DoctorService(kb, cache, null).Diagnose());
+
+                Assert.Equal("ok", (string)json["status"]);
+                Assert.Equal(2, (int)json["result"]!["kb"]!["objectCount"]!);
+                Assert.Equal(2, (int)json["result"]!["cache"]!["indexEntries"]!);
+            }
+            finally
+            {
+                cache.DeleteOnDiskSnapshot();
+                try { if (Directory.Exists(kbPath)) Directory.Delete(kbPath, true); } catch { }
             }
         }
 
