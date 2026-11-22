@@ -41,6 +41,8 @@ namespace GxMcp.Worker.Services
         // queries paid them).
         private static readonly char[] DirectLookupStopChars = { ' ', ':', '*', '@', '"', '?', '/' };
         private static readonly char[] SpaceSeparator = { ' ' };
+        private static readonly IComparer<RankedResult> RelevanceComparer = Comparer<RankedResult>.Create(CompareRankedResults);
+        private static readonly IComparer<RankedResult> LastUpdateComparer = Comparer<RankedResult>.Create(CompareRankedResultsByLastUpdate);
 
         public SearchService(IndexCacheService indexCacheService, ObjectService objectService = null)
         {
@@ -399,7 +401,7 @@ namespace GxMcp.Worker.Services
                     queryEmbedding = _vectorService.ComputeEmbedding(query);
                 }
 
-                var rankedAll = queryResults
+                var rankedStream = queryResults
                     .Select(entry =>
                     {
                         int score = 0;
@@ -436,47 +438,53 @@ namespace GxMcp.Worker.Services
                         int finalScore = score + (int)(vectorScore * 1000);
                         return new RankedResult(entry, finalScore, vectorScore);
                     })
-                    .Where(r => r.Score > 0)
-                    .ToList();
+                    .Where(r => r.Score > 0);
 
                 // v2.6.8: sort selector. "lastUpdate" bypasses relevance ranking and
                 // returns newest-first — the agent explicitly opted out of score
                 // ordering in favor of recency.
                 bool sortByLastUpdate = !string.IsNullOrEmpty(sort) &&
                     string.Equals(sort, "lastUpdate", StringComparison.OrdinalIgnoreCase);
-                if (sortByLastUpdate)
+                var comparer = sortByLastUpdate ? LastUpdateComparer : RelevanceComparer;
+
+                int total;
+                int startIndex = 0;
+                List<RankedResult> rankedAll;
+                // PERFORMANCE: For bounded pages without a cursor (default limit=50),
+                // select Top-K in O(N log K) via bounded heap instead of materializing
+                // and sorting all N RankedResult entries in O(N log N).
+                if (string.IsNullOrEmpty(cursor) && limit > 0 && limit <= 200)
                 {
-                    rankedAll.Sort(CompareRankedResultsByLastUpdate);
+                    rankedAll = TopKHelper.SelectTopK(rankedStream, limit, comparer, out total);
                 }
                 else
                 {
-                    rankedAll.Sort(CompareRankedResults);
-                }
+                    rankedAll = rankedStream.ToList();
+                    rankedAll.Sort(comparer);
+                    total = rankedAll.Count;
 
-                int total = rankedAll.Count;
-
-                // v2.6.8: stable cursor (only honored with sort=lastUpdate, same as list_objects).
-                int startIndex = 0;
-                if (sortByLastUpdate && !string.IsNullOrEmpty(cursor))
-                {
-                    var decoded = ListService.DecodeCursor(cursor);
-                    if (decoded.HasValue)
+                    // v2.6.8: stable cursor (only honored with sort=lastUpdate, same as list_objects).
+                    if (sortByLastUpdate && !string.IsNullOrEmpty(cursor))
                     {
-                        var (cursorTs, cursorName, cursorGuid) = decoded.Value;
-                        // v2.6.8 (review C1): predicate mirrors the sort tuple
-                        // (LastUpdate desc, Name asc, Guid asc) — see ListService
-                        // for the rationale.
-                        int resumeAt = rankedAll.FindIndex(r =>
+                        var decoded = ListService.DecodeCursor(cursor);
+                        if (decoded.HasValue)
                         {
-                            if (r.Entry.LastUpdate < cursorTs) return true;
-                            if (r.Entry.LastUpdate != cursorTs) return false;
-                            int byName = string.Compare(r.Entry.Name ?? string.Empty, cursorName ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-                            if (byName > 0) return true;
-                            if (byName < 0) return false;
-                            return string.Compare(r.Entry.Guid ?? string.Empty, cursorGuid ?? string.Empty, StringComparison.OrdinalIgnoreCase) > 0;
-                        });
-                        if (resumeAt >= 0) startIndex = resumeAt;
-                        else startIndex = total;
+                            var (cursorTs, cursorName, cursorGuid) = decoded.Value;
+                            // v2.6.8 (review C1): predicate mirrors the sort tuple
+                            // (LastUpdate desc, Name asc, Guid asc) — see ListService
+                            // for the rationale.
+                            int resumeAt = rankedAll.FindIndex(r =>
+                            {
+                                if (r.Entry.LastUpdate < cursorTs) return true;
+                                if (r.Entry.LastUpdate != cursorTs) return false;
+                                int byName = string.Compare(r.Entry.Name ?? string.Empty, cursorName ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+                                if (byName > 0) return true;
+                                if (byName < 0) return false;
+                                return string.Compare(r.Entry.Guid ?? string.Empty, cursorGuid ?? string.Empty, StringComparison.OrdinalIgnoreCase) > 0;
+                            });
+                            if (resumeAt >= 0) startIndex = resumeAt;
+                            else startIndex = total;
+                        }
                     }
                 }
 
