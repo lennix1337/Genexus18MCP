@@ -9,6 +9,8 @@
 
 ### Changed
 
+- `genexus_query`: use bounded `O(N log K)` Top-K selection (`TopKHelper.SelectTopK`) in `SearchService.Search` for uncursored pages with `limit <= 200` instead of materializing and sorting the full candidate list in `O(N log N)`.
+
 ### Fixed
 
 - `genexus_doctor`: `DoctorService.BuildKbBlock` and `DoctorService.BuildCacheBlock` now probe `IndexCacheService.TryGetLoadedIndex()` instead of calling `GetIndex()`, avoiding a blocking 30–60s cold index load (and potential Gateway timeout) when diagnosing a cold Worker. `objectCount` and `indexEntries` report `0` until the index is loaded in memory.
