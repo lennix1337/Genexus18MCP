@@ -664,9 +664,12 @@ namespace GxMcp.Gateway
                 JObject toolInnerResult;
                 try
                 {
-                    toolInnerResult = await idempotencyMiddleware.Invoke(
-                        toolCallParams,
-                        tcParams => DispatchToolCallCoreAsync(tcParams, request, sessionId, sessionContextEnabled, idToken, transportCancellation));
+                    using (BeginInMemoryMetaTokensScope())
+                    {
+                        toolInnerResult = await idempotencyMiddleware.Invoke(
+                            toolCallParams,
+                            tcParams => DispatchToolCallCoreAsync(tcParams, request, sessionId, sessionContextEnabled, idToken, transportCancellation));
+                    }
                 }
                 catch (UsageException ux)
                 {

@@ -80,7 +80,7 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
-        public void BuildToolResultContent_Injects_MetaTokens_And_Keeps_StructuredContent_In_Sync()
+        public void BuildToolResultContent_Default_Leaves_Text_Unmodified_And_Scope_Injects_In_Memory()
         {
             var payload = new JObject
             {
@@ -88,7 +88,13 @@ namespace GxMcp.Gateway.Tests
                 ["source"] = new string('a', 1024)
             };
 
-            // genexus_lifecycle declares outputSchema, so structuredContent is emitted.
+            // Without the request-loop scope, BuildToolResultContent must leave content[0].text identical to payload.
+            var unscoped = Program.BuildToolResultContent((JObject)payload.DeepClone(), isError: false, toolName: "genexus_read", toolArgs: new JObject(), payloadOwned: true);
+            var unscopedInner = JObject.Parse((string)unscoped["content"]![0]!["text"]!);
+            Assert.Null(unscopedInner["_meta"]?["tokens"]);
+
+            // Inside the request-loop scope, genexus_lifecycle (which declares outputSchema) gets _meta.tokens in both text and structuredContent.
+            using var _ = Program.BeginInMemoryMetaTokensScope();
             var tr = Program.BuildToolResultContent(payload, isError: false, toolName: "genexus_lifecycle", toolArgs: new JObject(), payloadOwned: true);
 
             var inner = JObject.Parse((string)tr["content"]![0]!["text"]!);
@@ -114,6 +120,8 @@ namespace GxMcp.Gateway.Tests
                 ["status"] = "Success",
                 ["source"] = new string('x', 48_000)
             };
+
+            using var _ = Program.BeginInMemoryMetaTokensScope();
 
             // Warmup
             for (int i = 0; i < 5; i++)
