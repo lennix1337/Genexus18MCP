@@ -217,6 +217,55 @@ namespace GxMcp.Gateway
             }
         }
 
+        internal static string? ReadArtechArchitectureVersion(string? installationPath)
+        {
+            if (string.IsNullOrWhiteSpace(installationPath)) return null;
+            try
+            {
+                string[] assemblies =
+                {
+                    "Artech.Architecture.Common.dll",
+                    "Artech.Architecture.BL.Framework.dll",
+                    "Artech.Architecture.UI.Framework.dll"
+                };
+                foreach (string assembly in assemblies)
+                {
+                    string fullPath = Path.Combine(installationPath, assembly);
+                    if (File.Exists(fullPath))
+                    {
+                        string? version = GetFileVersion(fullPath);
+                        if (!string.IsNullOrWhiteSpace(version)) return version;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return null;
+        }
+
+        internal static string? FindRegisteredLegacyProviders(string? major)
+        {
+            if (!OperatingSystem.IsWindows()) return null;
+            string[] candidates = string.Equals(major, "8", StringComparison.Ordinal)
+                ? new[] { "GXPublic.GXPublic.4", "GXPubGXX.GXPublic.5", "GXPubGXX.GXPublic" }
+                : new[] { "GXPublic.GXPublic.5", "GXPubGXX.GXPublic.5", "GXPubGXX.GXPublic", "GXPublic.GXPublic.4" };
+            var found = new System.Collections.Generic.List<string>();
+            try
+            {
+                using RegistryKey classesRoot = RegistryKey.OpenBaseKey(RegistryHive.ClassesRoot, RegistryView.Registry32);
+                foreach (string candidate in candidates)
+                {
+                    using RegistryKey? registration = classesRoot.OpenSubKey(candidate);
+                    if (registration != null) found.Add(candidate);
+                }
+            }
+            catch
+            {
+            }
+            return found.Count > 0 ? string.Join(", ", found) : null;
+        }
+
         private static string? GetFileVersion(string filePath)
         {
             if (FileVersionReader != null)
