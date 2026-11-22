@@ -7,6 +7,8 @@
 
 ### Added
 
+- `genexus_doctor` / `gx doctor` ([#965](https://github.com/lennix1337/Genexus18MCP/issues/965)): `issueReportBlock` with the data a GX9/GXPublic crash report needs (PE bitness of the gateway, worker and GeneXus install, IDE running or closed, worker exit code named as NTSTATUS), ready to paste into the issue.
+
 ### Changed
 
 - Gateway (`BuildToolResultContent` / `InjectMetaTokens`): inject `_meta.tokens` directly in memory before serializing `content[0].text` once and mark the envelope as handled, eliminating the redundant `JObject.Parse` + re-serialize per tool call (100x ~48 KB payload benchmark: 77 ms / 78.1 MB allocated -> 17 ms / 21.5 MB allocated) and keeping `structuredContent` in sync.
