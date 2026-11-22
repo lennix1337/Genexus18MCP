@@ -1525,6 +1525,116 @@ namespace GxMcp.Gateway
             };
         }
 
+        internal static string DetectPeBitness(string? exePath)
+        {
+            if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) return "unknown";
+            try
+            {
+                using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var br = new BinaryReader(fs);
+                if (fs.Length < 0x40 || br.ReadUInt16() != 0x5A4D) return "unknown";
+                fs.Seek(0x3C, SeekOrigin.Begin);
+                uint peOffset = br.ReadUInt32();
+                if (peOffset + 6 > fs.Length) return "unknown";
+                fs.Seek(peOffset, SeekOrigin.Begin);
+                if (br.ReadUInt32() != 0x00004550) return "unknown";
+                ushort machine = br.ReadUInt16();
+                return machine switch
+                {
+                    0x014C => "32-bit",
+                    0x8664 => "64-bit",
+                    0xAA64 => "64-bit",
+                    _ => "unknown"
+                };
+            }
+            catch
+            {
+                return "unknown";
+            }
+        }
+
+        internal static string DetectIdeStatus(Func<string, bool>? isProcessRunning = null)
+        {
+            Func<string, bool> probe = isProcessRunning ?? (name =>
+            {
+                try
+                {
+                    return System.Diagnostics.Process.GetProcessesByName(name).Length > 0;
+                }
+                catch
+                {
+                    return false;
+                }
+            });
+            string[] candidates = { "gx", "gxw32", "genexus" };
+            var open = new List<string>();
+            foreach (string name in candidates)
+            {
+                if (probe(name)) open.Add(name + ".exe");
+            }
+            return open.Count > 0 ? "open (" + string.Join(", ", open) + ")" : "closed";
+        }
+
+        internal static int? ResolveLastWorkerExitCode(JObject doctorResult)
+        {
+            JToken? token = doctorResult["workerHealth"]?["exitCode"]
+                ?? doctorResult["worker"]?["diagnostics"]?["lastExitCode"]
+                ?? doctorResult["worker"]?["deaths"]?["recent"]?.FirstOrDefault()?["exitCode"];
+            if (token != null && token.Type == JTokenType.Integer) return token.Value<int>();
+            try
+            {
+                var summary = CrashLedger.Summarize(recentN: 1);
+                JToken? recentExit = summary["recent"]?.FirstOrDefault()?["exitCode"];
+                if (recentExit != null && recentExit.Type == JTokenType.Integer) return recentExit.Value<int>();
+            }
+            catch
+            {
+            }
+            return null;
+        }
+
+        internal static string BuildDoctorCopyPasteBlock(
+            JObject doctorResult,
+            KbHandle? target,
+            string? workerExePath = null,
+            Func<string, bool>? isProcessRunning = null,
+            Func<string?, string?>? legacyProviderProbe = null,
+            Func<string?, string?>? artechVersionProbe = null)
+        {
+            var geneXus = doctorResult["geneXus"] as JObject ?? new JObject();
+            string? alias = target?.Alias ?? doctorResult["target"]?["alias"]?.ToString();
+            string? installDir = target?.InstallationPath ?? geneXus["installationPath"]?.ToString();
+            string? major = target?.Major ?? geneXus["major"]?.ToString() ?? geneXus["matchedMajor"]?.ToString();
+            string? exe = workerExePath
+                ?? doctorResult["worker"]?["exePath"]?.ToString()
+                ?? doctorResult["worker"]?["diagnostics"]?["configured"]?["workerExecutable"]?.ToString();
+            if (string.IsNullOrWhiteSpace(exe))
+            {
+                string candidate = Path.Combine(AppContext.BaseDirectory, "GxMcp.Worker.exe");
+                if (File.Exists(candidate)) exe = candidate;
+            }
+            string bitness = DetectPeBitness(exe);
+            string? com = (legacyProviderProbe ?? WorkerSdkCompatibilityProbe.FindRegisteredLegacyProviders)(major);
+            string? artech = (artechVersionProbe ?? WorkerSdkCompatibilityProbe.ReadArtechArchitectureVersion)(installDir);
+            int? lastExit = ResolveLastWorkerExitCode(doctorResult);
+            string? exitHex = GxMcp.Worker.Helpers.WorkerCrashGuard.FormatExitCodeHex(lastExit);
+            string? exitName = lastExit.HasValue ? GxMcp.Worker.Helpers.WorkerCrashGuard.ExitCodeStatusName(lastExit.Value) : null;
+            string exitText = exitHex == null ? "none" : (exitName == null ? exitHex : $"{exitHex} ({exitName})");
+            string ide = DetectIdeStatus(isProcessRunning);
+
+            return string.Join("\n", new[]
+            {
+                "--- genexus_doctor issue report ---",
+                $"GX alias: {(string.IsNullOrWhiteSpace(alias) ? "none" : alias)}",
+                $"Install dir: {(string.IsNullOrWhiteSpace(installDir) ? "none" : installDir)}",
+                $"Worker bitness: {bitness}",
+                $"gxpublic COM: {(string.IsNullOrWhiteSpace(com) ? "none" : com)}",
+                $"Artech.Architecture version: {(string.IsNullOrWhiteSpace(artech) ? "not found" : artech)}",
+                $"Last worker exit code: {exitText}",
+                $"IDE: {ide}"
+            });
+        }
+
         private static JObject BuildStartupFailureHealth(string alias, WorkerStartupFailure failure)
         {
             bool sdkFailure = SdkDiagnosticClassifier.IsFatalCode(failure.Code);
@@ -1655,6 +1765,7 @@ namespace GxMcp.Gateway
                     tool => !string.Equals(tool, "genexus_doctor", StringComparison.OrdinalIgnoreCase)),
                 GatewayArgsValidator.SchemaVocabulary);
             result["issueReport"] = issueReport;
+            result["issueReportBlock"] = BuildDoctorCopyPasteBlock(result, target);
 
             return new JObject
             {

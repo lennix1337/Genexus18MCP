@@ -1860,6 +1860,66 @@ test('doctor evaluates gxpublic_com_registration and legacy_ide_lock checks for 
     }
 });
 
+test('doctor prints issueReportBlock with worker bitness, COM, Artech.Architecture, exit code hex, IDE, alias and install dir', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genexus-mcp-doctor-block-'));
+    const kbDir = path.join(tempRoot, 'kb9');
+    const gxDir = path.join(tempRoot, 'GeneXus9');
+    const binDir = path.join(tempRoot, 'bin');
+    const ledgerDir = path.join(tempRoot, 'GenexusMCP');
+    fs.mkdirSync(kbDir, { recursive: true });
+    fs.mkdirSync(gxDir, { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(ledgerDir, { recursive: true });
+    fs.writeFileSync(path.join(kbDir, 'test.gxi'), 'legacy classic kb index');
+    fs.writeFileSync(path.join(gxDir, 'gx.exe'), 'classic-genexus-exe');
+    const gatewayStub = path.join(binDir, 'GxMcp.Gateway.exe');
+    fs.copyFileSync(process.execPath, gatewayStub);
+    const workerPe = Buffer.alloc(128);
+    workerPe[0] = 0x4d;
+    workerPe[1] = 0x5a;
+    workerPe[0x3c] = 0x40;
+    workerPe[0x40] = 0x50;
+    workerPe[0x41] = 0x45;
+    workerPe[0x44] = 0x4c;
+    workerPe[0x45] = 0x01;
+    fs.writeFileSync(path.join(binDir, 'GxMcp.Worker.exe'), workerPe);
+    fs.writeFileSync(
+        path.join(ledgerDir, 'worker-crashes.jsonl'),
+        JSON.stringify({ atUtc: '2026-11-21T00:00:00Z', kb: 'kb-gx9', reason: 'None', exitCode: -1073741819 }) + '\n'
+    );
+    const configPath = path.join(tempRoot, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+        GeneXus: { InstallationPath: gxDir },
+        Environment: {
+            DefaultKb: 'kb-gx9',
+            KBs: [{ Alias: 'kb-gx9', Path: kbDir, InstallationPath: gxDir, Driver: 'com-gxpublic', Major: '9' }]
+        }
+    }));
+
+    try {
+        const result = runCli(['doctor', '--format', 'json', '--limit', '50'], {
+            env: {
+                GX_CONFIG_PATH: configPath,
+                GENEXUS_MCP_GATEWAY_EXE: gatewayStub,
+                LOCALAPPDATA: tempRoot
+            }
+        });
+        assert.equal(result.status, 0);
+        const parsed = JSON.parse(result.stdout);
+        const block = parsed.ok.issueReportBlock;
+        assert.equal(typeof block, 'string');
+        assert.match(block, /GX alias: kb-gx9/);
+        assert.ok(block.includes(`Install dir: ${gxDir}`));
+        assert.match(block, /Worker bitness: 32-bit/);
+        assert.match(block, /gxpublic COM:/);
+        assert.match(block, /Artech\.Architecture version:/);
+        assert.match(block, /Last worker exit code: 0xC0000005/);
+        assert.match(block, /IDE: (open|closed)/);
+    } finally {
+        removeTempPath(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('invalid format returns usage exit code 2', () => {
     const result = runCli(['status', '--format', 'yaml']);
     assert.equal(result.status, 2);

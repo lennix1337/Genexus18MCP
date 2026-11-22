@@ -2481,6 +2481,7 @@ module.exports = {
     getGeneXusMajor,
     readGeneXusInstallationIdentity,
     readGeneXusVersionFromInstall,
+    readExecutableProductVersion,
     readGeneXusKbIdentity,
     compareGeneXusKbAndInstallation,
     readKbCatalog,

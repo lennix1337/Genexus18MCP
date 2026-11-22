@@ -20,6 +20,7 @@ const {
     listSupportedClientIds,
     getLocalAppDataCacheDir,
     readGeneXusInstallationIdentity,
+    readExecutableProductVersion,
     readGeneXusKbIdentity,
     compareGeneXusKbAndInstallation,
     getGeneXusVersionCatalog,
@@ -786,6 +787,7 @@ function buildGxPublicComCheck(gxMajor) {
         return {
             id: 'gxpublic_com_registration',
             status: hasMatchingProvider ? 'pass' : 'warn',
+            registered,
             detail: hasMatchingProvider
                 ? `GXPublic OLE DB provider(s) registered for the 32-bit Worker: ${registered.join(', ')}.`
                 : `GXPublic provider(s) registered for the 32-bit Worker: ${registered.join(', ')}, but none is the documented GeneXus ${gxMajor}.0 provider (${matching.join(', ')}). Install the matching version before opening this KB.`
@@ -794,8 +796,123 @@ function buildGxPublicComCheck(gxMajor) {
     return {
         id: 'gxpublic_com_registration',
         status: 'warn',
+        registered,
         detail: `No supported GXPublic OLE DB provider is registered for GeneXus ${gxMajor}.0. Install the versioned GXPublic provider matching the KB generation (GXPublic 8.0 for GX8 or GXPublic Yi for GX9).`
     };
+}
+
+function detectPeBitness(exePath) {
+    if (!exePath || !fs.existsSync(exePath)) return 'unknown';
+    try {
+        const fd = fs.openSync(exePath, 'r');
+        try {
+            const header = Buffer.alloc(64);
+            if (fs.readSync(fd, header, 0, 64, 0) < 64 || header.readUInt16LE(0) !== 0x5a4d) return 'unknown';
+            const peOffset = header.readUInt32LE(0x3c);
+            const pe = Buffer.alloc(6);
+            if (fs.readSync(fd, pe, 0, 6, peOffset) < 6 || pe.readUInt32LE(0) !== 0x00004550) return 'unknown';
+            const machine = pe.readUInt16LE(4);
+            if (machine === 0x014c) return '32-bit';
+            if (machine === 0x8664 || machine === 0xaa64) return '64-bit';
+            return 'unknown';
+        } finally {
+            fs.closeSync(fd);
+        }
+    } catch {
+        return 'unknown';
+    }
+}
+
+function readArtechArchitectureVersion(gxPath) {
+    if (!gxPath || !fs.existsSync(gxPath)) return null;
+    const candidates = [
+        'Artech.Architecture.Common.dll',
+        'Artech.Architecture.BL.Framework.dll',
+        'Artech.Architecture.UI.Framework.dll'
+    ];
+    for (const file of candidates) {
+        const fullPath = path.join(gxPath, file);
+        if (fs.existsSync(fullPath)) {
+            const version = readExecutableProductVersion(fullPath);
+            if (version) return version;
+        }
+    }
+    return null;
+}
+
+function readLastWorkerExitCodeHex() {
+    const ledgerPath = process.env.GXMCP_CRASH_LEDGER_PATH
+        || path.join(process.env.LOCALAPPDATA || '', 'GenexusMCP', 'worker-crashes.jsonl');
+    if (!ledgerPath || !fs.existsSync(ledgerPath)) return 'none';
+    try {
+        const lines = fs.readFileSync(ledgerPath, 'utf8').split(/\r?\n/).filter(Boolean);
+        for (let i = lines.length - 1; i >= 0; i--) {
+            try {
+                const rec = JSON.parse(lines[i]);
+                if (typeof rec.exitCode === 'number') {
+                    const hex = '0x' + (rec.exitCode >>> 0).toString(16).toUpperCase().padStart(8, '0');
+                    const names = {
+                        0xC0000005: 'ACCESS_VIOLATION',
+                        0xC00000FD: 'STACK_OVERFLOW',
+                        0xC0000374: 'HEAP_CORRUPTION',
+                        0xC0000409: 'STACK_BUFFER_OVERRUN'
+                    };
+                    const name = names[rec.exitCode >>> 0];
+                    return name ? `${hex} (${name})` : hex;
+                }
+            } catch {
+            }
+        }
+    } catch {
+    }
+    return 'none';
+}
+
+function detectIdeStatus(ideLockCheck) {
+    const child_process = require('child_process');
+    const open = [];
+    if (ideLockCheck && ideLockCheck.status === 'warn') {
+        open.push('gx.exe');
+    }
+    const extra = ideLockCheck && ideLockCheck.status === 'not_applicable'
+        ? ['gx.exe', 'gxw32.exe', 'genexus.exe']
+        : ['gxw32.exe', 'genexus.exe'];
+    for (const image of extra) {
+        try {
+            const res = child_process.spawnSync('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/NH'], { encoding: 'utf8', timeout: 2000 });
+            if (res.stdout && res.stdout.toLowerCase().includes(image)) {
+                open.push(image);
+            }
+        } catch {
+        }
+    }
+    return open.length > 0 ? `open (${open.join(', ')})` : 'closed';
+}
+
+function buildDoctorCopyPasteBlock({
+    gxAlias,
+    installDir,
+    workerExePath,
+    comCheck,
+    ideLockCheck
+}) {
+    const bitness = detectPeBitness(workerExePath);
+    const comText = Array.isArray(comCheck && comCheck.registered) && comCheck.registered.length > 0
+        ? comCheck.registered.join(', ')
+        : (comCheck && comCheck.status === 'not_applicable' ? 'not_applicable' : 'none');
+    const artechVersion = readArtechArchitectureVersion(installDir);
+    const exitCodeText = readLastWorkerExitCodeHex();
+    const ideText = detectIdeStatus(ideLockCheck);
+    return [
+        '--- genexus_doctor issue report ---',
+        `GX alias: ${gxAlias || 'none'}`,
+        `Install dir: ${installDir || 'none'}`,
+        `Worker bitness: ${bitness}`,
+        `gxpublic COM: ${comText}`,
+        `Artech.Architecture version: ${artechVersion || 'not found'}`,
+        `Last worker exit code: ${exitCodeText}`,
+        `IDE: ${ideText}`
+    ].join('\n');
 }
 
 function buildLegacyIdeLockCheck(gxMajor) {
@@ -1284,6 +1401,15 @@ async function handleDoctor(options, ctx) {
         help.push('Run `genexus-mcp doctor --mcp-smoke` to execute MCP protocol smoke checks.');
     }
 
+    const workerExePath = gatewayExePath ? path.join(path.dirname(gatewayExePath), 'GxMcp.Worker.exe') : null;
+    const issueReportBlock = buildDoctorCopyPasteBlock({
+        gxAlias: selectedCatalogAlias || data.kbCatalog?.activeKb || null,
+        installDir: gxPath || null,
+        workerExePath,
+        comCheck,
+        ideLockCheck
+    });
+
     return {
         exitCode: ctx.EXIT_CODES.OK,
         envelope: {
@@ -1291,7 +1417,8 @@ async function handleDoctor(options, ctx) {
                 summary,
                 checks: limited,
                 returned: limited.length,
-                total: checks.length
+                total: checks.length,
+                issueReportBlock
             },
             help,
             meta: { fields: selectedFields }

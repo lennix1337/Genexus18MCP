@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using GxMcp.Gateway;
+using GxMcp.Worker.Helpers;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -92,6 +94,80 @@ namespace GxMcp.Gateway.Tests
             Assert.DoesNotContain("acme-client-kb", text);
             Assert.DoesNotContain("hunter2", text);
             Assert.DoesNotContain(@"C:\", text);
+        }
+
+        [Fact]
+        public void CopyPasteBlock_IncludesBitnessComArtechExitHexIdeAliasAndInstallDir()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "gxmcp-doctor-965-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string workerExe = Path.Combine(tempDir, "GxMcp.Worker.exe");
+                byte[] pe32 = new byte[128];
+                pe32[0] = (byte)'M';
+                pe32[1] = (byte)'Z';
+                pe32[0x3C] = 0x40;
+                pe32[0x40] = (byte)'P';
+                pe32[0x41] = (byte)'E';
+                pe32[0x44] = 0x4C;
+                pe32[0x45] = 0x01;
+                File.WriteAllBytes(workerExe, pe32);
+
+                var gx9 = new KbHandle("kb-gx9", @"C:\KBs\Legacy", @"C:\GeneXus9", "com-gxpublic", "9");
+                var doctorResult = new JObject
+                {
+                    ["target"] = new JObject { ["alias"] = "kb-gx9" },
+                    ["geneXus"] = new JObject { ["installationPath"] = @"C:\GeneXus9", ["major"] = "9" },
+                    ["worker"] = new JObject
+                    {
+                        ["exePath"] = workerExe,
+                        ["diagnostics"] = new JObject
+                        {
+                            ["lastExitCode"] = unchecked((int)0xC0000005)
+                        }
+                    },
+                    ["workerHealth"] = new JObject { ["status"] = "startup_failed" }
+                };
+
+                string block = Program.BuildDoctorCopyPasteBlock(
+                    doctorResult,
+                    gx9,
+                    workerExe,
+                    name => string.Equals(name, "gx", StringComparison.OrdinalIgnoreCase),
+                    _ => "GXPublic.GXPublic.5",
+                    _ => "11.0.0.0");
+
+                Assert.Equal("0xC0000005", WorkerCrashGuard.FormatExitCodeHex(unchecked((int)0xC0000005)));
+                Assert.Contains("GX alias: kb-gx9", block);
+                Assert.Contains(@"Install dir: C:\GeneXus9", block);
+                Assert.Contains("Worker bitness: 32-bit", block);
+                Assert.Contains("gxpublic COM: GXPublic.GXPublic.5", block);
+                Assert.Contains("Artech.Architecture version: 11.0.0.0", block);
+                Assert.Contains("Last worker exit code: 0xC0000005 (ACCESS_VIOLATION)", block);
+                Assert.Contains("IDE: open (gx.exe)", block);
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void GatewayDoctorEnvelope_IncludesCopyPasteIssueReportBlock()
+        {
+            JObject envelope = Program.BuildGatewayDoctorEnvelope(null);
+            JToken? block = envelope["result"]?["issueReportBlock"];
+
+            Assert.NotNull(block);
+            string text = block!.ToString();
+            Assert.Contains("Worker bitness:", text);
+            Assert.Contains("gxpublic COM:", text);
+            Assert.Contains("Artech.Architecture version:", text);
+            Assert.Contains("Last worker exit code:", text);
+            Assert.Contains("IDE:", text);
+            Assert.Contains("GX alias:", text);
+            Assert.Contains("Install dir:", text);
         }
     }
 }
