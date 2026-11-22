@@ -1863,6 +1863,102 @@ namespace GxMcp.Gateway
         internal const int MetaTokenLimit = 25000;
 
         /// <summary>
+        /// Tracks tool-result envelopes whose <c>_meta.tokens</c> handling was already
+        /// completed in-memory (e.g. inside <see cref="Program.BuildToolResultContent"/>),
+        /// so <see cref="InjectMetaTokens"/> can skip re-parsing <c>content[0].text</c>.
+        /// </summary>
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<JObject, object?> _metaTokensHandled =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<JObject, object?>();
+
+        private static readonly object _metaTokensHandledSentinel = new object();
+
+        [ThreadStatic]
+        private static CountingCharWriter? t_countingCharWriter;
+
+        private sealed class CountingCharWriter : System.IO.TextWriter
+        {
+            public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+            public int Count;
+
+            public void Reset() => Count = 0;
+
+            public override void Write(char value) => Count++;
+
+            public override void Write(string? value)
+            {
+                if (!string.IsNullOrEmpty(value)) Count += value.Length;
+            }
+
+            public override void Write(char[] buffer, int index, int count)
+            {
+                if (buffer != null && count > 0) Count += count;
+            }
+
+            public override void Write(ReadOnlySpan<char> buffer)
+            {
+                Count += buffer.Length;
+            }
+        }
+
+        internal static void MarkMetaTokensHandled(JObject toolResult)
+        {
+            if (toolResult != null)
+            {
+                _metaTokensHandled.AddOrUpdate(toolResult, _metaTokensHandledSentinel);
+            }
+        }
+
+        internal static bool IsMetaTokensHandled(JObject toolResult)
+            => toolResult != null && _metaTokensHandled.TryGetValue(toolResult, out _);
+
+        internal static int MeasureSerializedCharCount(JToken token)
+        {
+            if (token == null) return 0;
+            var writer = t_countingCharWriter ??= new CountingCharWriter();
+            writer.Reset();
+            using (var jw = new Newtonsoft.Json.JsonTextWriter(writer)
+            {
+                Formatting = Newtonsoft.Json.Formatting.None,
+                CloseOutput = false
+            })
+            {
+                token.WriteTo(jw);
+                jw.Flush();
+            }
+            return writer.Count;
+        }
+
+        internal static bool TryAttachMetaTokensInPlace(JObject inner, int preInjectedCharLength)
+        {
+            if (inner == null) return false;
+            var meta = (JObject?)inner["_meta"] ?? new JObject();
+            if (meta["tokens"] != null) return false;
+
+            // Estimate the emitted size from the pre-injection length plus a constant
+            // for the injected block, instead of a throwaway full serialize.
+            bool hadMeta = inner["_meta"] != null;
+            int blockOverhead = (hadMeta ? 0 : "\"_meta\":{}".Length + 1)
+                                + ",\"tokens\":{\"used\":1234567,\"limit\":".Length
+                                + MetaTokenLimit.ToString().Length
+                                + "}".Length;
+            int used = Math.Max(1, (int)Math.Round((preInjectedCharLength + blockOverhead) / 4.0));
+            var tokenBlock = new JObject
+            {
+                ["used"] = used,
+                ["limit"] = MetaTokenLimit
+            };
+            if (used > MetaTokenLimit / 2)
+            {
+                tokenBlock["hint"] = used > MetaTokenLimit
+                    ? "Response exceeds token limit. Use fields/axiCompact=true, narrower filters, or pagination to reduce size."
+                    : "Response is over 50% of the token limit. Consider fields/axiCompact=true or pagination for follow-up calls.";
+            }
+            meta["tokens"] = tokenBlock;
+            inner["_meta"] = meta;
+            return true;
+        }
+
+        /// <summary>
         /// Injects <c>_meta.tokens</c> into the inner JSON payload carried by
         /// <c>toolResult.content[0].text</c>.  Tokens are estimated as
         /// <c>Math.Round(charCount / 4)</c>.  When <c>_meta.tokens</c> already exists it is
@@ -1874,7 +1970,7 @@ namespace GxMcp.Gateway
             // Terse mode: the _meta.tokens used/limit block is UX sugar for LLM
             // self-pagination; terse deployments opt out of paying ~60-90 bytes
             // per response for it.
-            if (Program.TerseResponsesEnabled()) return;
+            if (toolResult == null || Program.TerseResponsesEnabled() || IsMetaTokensHandled(toolResult)) return;
 
             try
             {
@@ -1889,38 +1985,11 @@ namespace GxMcp.Gateway
                 try { inner = JObject.Parse(textStr); }
                 catch { return; /* non-JSON text payload — leave alone */ }
 
-                // Merge: don't overwrite an existing _meta.tokens block if already set.
-                var meta = (JObject?)inner["_meta"] ?? new JObject();
-                if (meta["tokens"] == null)
+                if (TryAttachMetaTokensInPlace(inner, textStr.Length))
                 {
-                    // PERF: estimate the emitted size from the PRE-injection text (already in hand)
-                    // plus a constant for the injected block, instead of a throwaway full serialize.
-                    // The few-byte estimation error is immaterial against the 50% threshold
-                    // (~12500 tokens). Single serialize on the common path carries the REAL `used`.
-                    bool hadMeta = inner["_meta"] != null;
-                    int blockOverhead = (hadMeta ? 0 : "\"_meta\":{}".Length + 1)
-                                        + ",\"tokens\":{\"used\":1234567,\"limit\":".Length + MetaTokenLimit.ToString().Length + "}".Length;
-                    int used = Math.Max(1, (int)Math.Round((textStr.Length + blockOverhead) / 4.0));
-                    var tokenBlock = new JObject
-                    {
-                        ["used"] = used,
-                        ["limit"] = MetaTokenLimit
-                    };
-                    meta["tokens"] = tokenBlock;
-                    inner["_meta"] = meta;
-
-                    string emitted = inner.ToString(Newtonsoft.Json.Formatting.None);
-                    if (used > MetaTokenLimit / 2)
-                    {
-                        tokenBlock["hint"] = used > MetaTokenLimit
-                            ? "Response exceeds token limit. Use fields/axiCompact=true, narrower filters, or pagination to reduce size."
-                            : "Response is over 50% of the token limit. Consider fields/axiCompact=true or pagination for follow-up calls.";
-                        // Block changed after measurement — one re-serialize on this rare path only,
-                        // so the emitted text carries the hint; still a single assignment to first["text"].
-                        emitted = inner.ToString(Newtonsoft.Json.Formatting.None);
-                    }
-                    first["text"] = emitted;
+                    first["text"] = inner.ToString(Newtonsoft.Json.Formatting.None);
                 }
+                MarkMetaTokensHandled(toolResult);
             }
             catch { /* token injection must never break the response */ }
         }

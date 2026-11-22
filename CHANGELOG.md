@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Gateway (`BuildToolResultContent` / `InjectMetaTokens`): inject `_meta.tokens` directly in memory before serializing `content[0].text` once and mark the envelope as handled, eliminating the redundant `JObject.Parse` + re-serialize per tool call (100x ~48 KB payload benchmark: 77 ms / 78.1 MB allocated -> 17 ms / 21.5 MB allocated) and keeping `structuredContent` in sync.
 - `genexus_query`: use bounded `O(N log K)` Top-K selection (`TopKHelper.SelectTopK`) in `SearchService.Search` for uncursored pages with `limit <= 200` instead of materializing and sorting the full candidate list in `O(N log N)`.
 
 ### Fixed

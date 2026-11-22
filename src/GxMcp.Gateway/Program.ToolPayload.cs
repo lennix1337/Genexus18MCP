@@ -1234,6 +1234,22 @@ namespace GxMcp.Gateway
         private static readonly HashSet<string> MinimalProjectionFields =
             new HashSet<string>(new[] { "name", "type", "lastUpdate" }, StringComparer.OrdinalIgnoreCase);
 
+        private static readonly System.Threading.AsyncLocal<bool> _injectMetaTokensInBuildToolResult = new System.Threading.AsyncLocal<bool>();
+
+        internal static IDisposable BeginInMemoryMetaTokensScope()
+        {
+            bool previous = _injectMetaTokensInBuildToolResult.Value;
+            _injectMetaTokensInBuildToolResult.Value = true;
+            return new MetaTokensScope(previous);
+        }
+
+        private sealed class MetaTokensScope : IDisposable
+        {
+            private readonly bool _previous;
+            public MetaTokensScope(bool previous) => _previous = previous;
+            public void Dispose() => _injectMetaTokensInBuildToolResult.Value = _previous;
+        }
+
         internal static JObject BuildToolTextResponse(JToken? idToken, JToken payload, bool isError, string? toolName = null, JObject? toolArgs = null, bool payloadOwned = false)
         {
             return new JObject
@@ -1277,6 +1293,21 @@ namespace GxMcp.Gateway
                 CompactSuccessfulEditPatchResponse(axiPayload, lateOmittedMutationFields);
             }
 
+            bool injectMetaTokensInMemory = _injectMetaTokensInBuildToolResult.Value;
+            if (injectMetaTokensInMemory
+                && !TerseResponsesEnabledCached()
+                && axiPayload is JObject axiObj
+                && axiObj["_meta"]?["tokens"] == null)
+            {
+                if (!payloadOwned && ReferenceEquals(axiPayload, payload))
+                {
+                    axiObj = (JObject)axiObj.DeepClone();
+                    axiPayload = axiObj;
+                }
+                int preCharCount = McpRouter.MeasureSerializedCharCount(axiObj);
+                McpRouter.TryAttachMetaTokensInPlace(axiObj, preCharCount);
+            }
+
             var result = new JObject
             {
                 ["resultType"] = "complete",
@@ -1287,6 +1318,10 @@ namespace GxMcp.Gateway
                     ["text"] = axiPayload.ToString(Formatting.None)
                 } }
             };
+            if (injectMetaTokensInMemory)
+            {
+                McpRouter.MarkMetaTokensHandled(result);
+            }
             // Legacy stdio clients (including OpenCode's text-oriented MCP path)
             // need the resolved KB in-band to correlate a response. Modern clients
             // can use the protocol metadata without reparsing the text.
