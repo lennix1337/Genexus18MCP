@@ -276,13 +276,7 @@ namespace GxMcp.Gateway
                     _declaredToolNames = declaredToolNames;
                     _toolDefinitionsByName = toolDefsByName;
                     _toolsWithOutputSchema = toolsWithOutputSchema;
-                    _cachedToolsListResponse = new JObject
-                    {
-                        ["resultType"] = "complete",
-                        ["tools"] = ToolProfileFilter.GetOrCreateFiltered(_toolDefinitions, "all"),
-                        ["ttlMs"] = PublicResourceTtlMs,
-                        ["cacheScope"] = "public"
-                    };
+                    _cachedToolsListResponse = null;
                     _cachedProfileResponses.Clear();
                     _adaptiveListResponses.Clear();
                     ToolProfileFilter.InvalidateCache();
@@ -524,7 +518,7 @@ namespace GxMcp.Gateway
                         string activeProfile = ToolProfileFilter.ResolveActiveProfile(Program.ActiveConfig?.Server?.ToolProfile);
                         if (string.IsNullOrEmpty(activeProfile) || activeProfile == "all")
                         {
-                            return _cachedToolsListResponse ?? new JObject
+                            return _cachedToolsListResponse ??= new JObject
                             {
                                 ["resultType"] = "complete",
                                 ["tools"] = ToolProfileFilter.GetOrCreateFiltered(_toolDefinitions, "all"),
