@@ -1363,8 +1363,7 @@ namespace GxMcp.Gateway
         }
 
         internal static bool ToolDeclaresOutputSchema(string? toolName)
-            => !string.IsNullOrWhiteSpace(toolName)
-               && McpRouter.FindToolDefinitionForHelp(toolName!)?["outputSchema"] != null;
+            => McpRouter.ToolDeclaresOutputSchema(toolName);
 
         // Resolved per call (cheap: one env lookup + one static field read) so a config
         // reload or env change takes effect without restart. Env wins over config file.

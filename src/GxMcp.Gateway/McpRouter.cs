@@ -85,6 +85,8 @@ namespace GxMcp.Gateway
         private static readonly List<IMcpModuleRouter> _routers;
         private static Dictionary<string, IMcpModuleRouter> _routerByTool = new Dictionary<string, IMcpModuleRouter>(StringComparer.OrdinalIgnoreCase);
         private static HashSet<string> _declaredToolNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static Dictionary<string, JObject> _toolDefinitionsByName = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+        private static HashSet<string> _toolsWithOutputSchema = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static JArray _toolDefinitions = new JArray();
         private static JObject? _cachedToolsListResponse;
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, JObject> _cachedProfileResponses =
@@ -258,11 +260,22 @@ namespace GxMcp.Gateway
                     // the source JSON is edited in a different order.
                     _toolDefinitions = new JArray(parsed.OfType<JObject>()
                         .OrderBy(definition => definition["name"]?.ToString() ?? string.Empty, StringComparer.Ordinal));
-                    _declaredToolNames = new HashSet<string>(
-                        _toolDefinitions.OfType<JObject>()
-                            .Select(d => d["name"]?.ToString() ?? string.Empty)
-                            .Where(n => !string.IsNullOrEmpty(n)),
-                        StringComparer.OrdinalIgnoreCase);
+                    var declaredToolNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var toolDefsByName = new Dictionary<string, JObject>(_toolDefinitions.Count, StringComparer.OrdinalIgnoreCase);
+                    var toolsWithOutputSchema = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var definition in _toolDefinitions.OfType<JObject>())
+                    {
+                        string? defName = definition["name"]?.ToString();
+                        if (string.IsNullOrEmpty(defName)) continue;
+                        declaredToolNames.Add(defName);
+                        if (!toolDefsByName.ContainsKey(defName))
+                            toolDefsByName[defName] = definition;
+                        if (definition["outputSchema"] != null)
+                            toolsWithOutputSchema.Add(defName);
+                    }
+                    _declaredToolNames = declaredToolNames;
+                    _toolDefinitionsByName = toolDefsByName;
+                    _toolsWithOutputSchema = toolsWithOutputSchema;
                     _cachedToolsListResponse = new JObject
                     {
                         ["resultType"] = "complete",
@@ -297,8 +310,21 @@ namespace GxMcp.Gateway
                 lookupName = canonicalName;
             }
 
-            return _toolDefinitions.OfType<JObject>().FirstOrDefault(definition =>
-                string.Equals(definition["name"]?.ToString(), lookupName, StringComparison.OrdinalIgnoreCase));
+            return _toolDefinitionsByName.TryGetValue(lookupName, out var definition) ? definition : null;
+        }
+
+        internal static bool ToolDeclaresOutputSchema(string? toolName)
+        {
+            if (string.IsNullOrWhiteSpace(toolName)) return false;
+
+            string lookupName = toolName!;
+            if (!_declaredToolNames.Contains(lookupName)
+                && TryRewriteLegacyTool(toolName!, null, out string canonicalName, out _))
+            {
+                lookupName = canonicalName;
+            }
+
+            return _toolsWithOutputSchema.Contains(lookupName);
         }
 
         private static void SetupToolDefinitionsWatcher()
