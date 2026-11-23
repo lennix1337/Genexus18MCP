@@ -1792,17 +1792,31 @@ namespace GxMcp.Gateway
 
         internal static void StripNulls(JObject obj)
         {
-            var toRemove = new List<string>();
-            foreach (var prop in obj.Properties())
+            JToken? current = obj.First;
+            while (current != null)
             {
-                if (prop.Value is null || prop.Value.Type == JTokenType.Null)
-                    toRemove.Add(prop.Name);
-                else if (prop.Value is JObject child)
-                    StripNulls(child);
-                else if (prop.Value is JArray arr)
-                    foreach (var item in arr) if (item is JObject o) StripNulls(o);
+                JToken? next = current.Next;
+                if (current is JProperty prop)
+                {
+                    var value = prop.Value;
+                    if (value is null || value.Type == JTokenType.Null)
+                    {
+                        prop.Remove();
+                    }
+                    else if (value is JObject child)
+                    {
+                        StripNulls(child);
+                    }
+                    else if (value is JArray arr)
+                    {
+                        for (int i = 0; i < arr.Count; i++)
+                        {
+                            if (arr[i] is JObject o) StripNulls(o);
+                        }
+                    }
+                }
+                current = next;
             }
-            foreach (var name in toRemove) obj.Remove(name);
         }
 
         /// <summary>

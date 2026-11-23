@@ -12,6 +12,7 @@
 ### Changed
 
 - Gateway (`BuildToolResultContent` / `InjectMetaTokens`): inject `_meta.tokens` directly in memory before serializing `content[0].text` once and mark the envelope as handled, eliminating the redundant `JObject.Parse` + re-serialize per tool call (100x ~48 KB payload benchmark: 77 ms / 78.1 MB allocated -> 17 ms / 21.5 MB allocated) and keeping `structuredContent` in sync.
+- Gateway (`TruncateResponseIfNeeded` / `SemanticCacheStore` / `McpRouter.StripNulls`): measure serialized sizes in-place with `MeasureSerializedCharCount`/`ResponseSizeGuard.ByteSize` instead of allocating full JSON strings, strip nulls in-place without per-object `List<string>` allocations, and replace `SemanticCacheStore`'s O(N log N) eviction sort and unconditional `Keys.ToArray()` expiry sweep with an O(N) min-scan and earliest-expiry gate (`Truncate_UnderBudget_100Rows`: 30.17 -> 21.70 us, 148.3 KB -> 536 B; `Truncate_OverBudget_400Rows`: 1254.38 -> 491.33 us; `SemanticCache_Set_AtCap_40KB`: 101.18 -> 61.18 us, 171.34 KB -> 1.23 KB).
 - `genexus_query`: use bounded `O(N log K)` Top-K selection (`TopKHelper.SelectTopK`) in `SearchService.Search` for uncursored pages with `limit <= 200` instead of materializing and sorting the full candidate list in `O(N log N)`.
 
 ### Fixed
