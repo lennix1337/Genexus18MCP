@@ -22,6 +22,8 @@
 
 ### Internal
 
+- `GxPublicOleDbDriverContractTests.OleDbConnection_BuildsConnectionStringInOnePlace_AndFallsBackWhenModeReadIsRejected` now locates `GxPublicOleDbDriver.cs` through `TestFixtures.FindRepoRoot()` like the other source-reading Worker tests, instead of climbing four directories from the test output folder. With `-p:Platform=x86` the test assembly is built into `bin\x86\<configuration>\net48`, one level deeper, so the old path pointed at a folder that does not exist and the test failed with `DirectoryNotFoundException` while passing in the default layout. Verified in both layouts (11 of 11 in the class); the old path fails in the x86 layout.
+
 ## v4.7.3 - 2026-11-21
 
 

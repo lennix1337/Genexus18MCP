@@ -150,8 +150,8 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void OleDbConnection_BuildsConnectionStringInOnePlace_AndFallsBackWhenModeReadIsRejected()
         {
-            string driverSourcePath = Path.GetFullPath(Path.Combine(
-                AppContext.BaseDirectory, "..", "..", "..", "..", "GxMcp.Worker", "Drivers", "GxPublicOleDbDriver.cs"));
+            string driverSourcePath = Path.Combine(
+                TestFixtures.FindRepoRoot(), "src", "GxMcp.Worker", "Drivers", "GxPublicOleDbDriver.cs");
             string driverSource = File.ReadAllText(driverSourcePath);
             Assert.Single(Regex.Matches(driverSource, @"new\s+OleDbConnectionStringBuilder\b"));
 
