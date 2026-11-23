@@ -207,7 +207,7 @@ namespace GxMcp.Worker.Services
                 ? string.Empty : objectName.ToString();
         }
 
-        private static bool AddSourceHit(JArray hits, JObject hit, ref int produced,
+        private static bool AddSourceHit(JArray hits, HashSet<string> seenHitKeys, JObject hit, ref int produced,
             ref int skipped, ref int consumed, int maxResults)
         {
             consumed++;
@@ -218,13 +218,61 @@ namespace GxMcp.Worker.Services
             }
 
             string hitKey = HitDedupKey(hit);
-            if (hits.OfType<JObject>().Any(existing => HitDedupKey(existing).Equals(hitKey, StringComparison.Ordinal)))
+            if (!seenHitKeys.Add(hitKey))
                 return false;
 
             hits.Add(hit);
             produced++;
             return produced >= maxResults;
         }
+
+        private sealed class PartExecutionState
+        {
+            public string RequestedPart;
+            public readonly List<string> ResolvedParts = new List<string>(2);
+            public readonly HashSet<string> ResolvedPartsSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public int ScannedObjects;
+            public int IndexReads;
+            public int StoreReads;
+            public int CacheReads;
+            public int SdkReads;
+            public bool Executed;
+            public string Status = "pending";
+
+            public PartExecutionState(string requestedPart)
+            {
+                RequestedPart = requestedPart;
+            }
+
+            public void RecordResolvedPart(string resolvedPart)
+            {
+                if (ResolvedPartsSet.Add(resolvedPart))
+                    ResolvedParts.Add(resolvedPart);
+            }
+
+            public JObject ToJson()
+            {
+                return new JObject
+                {
+                    ["requestedPart"] = RequestedPart,
+                    ["resolvedParts"] = new JArray(ResolvedParts),
+                    ["scannedObjects"] = ScannedObjects,
+                    ["indexReads"] = IndexReads,
+                    ["storeReads"] = StoreReads,
+                    ["cacheReads"] = CacheReads,
+                    ["sdkReads"] = SdkReads,
+                    ["executed"] = Executed,
+                    ["status"] = Status
+                };
+            }
+        }
+
+        private static readonly Comparison<SearchIndex.IndexEntry> EntryIdentityComparison = (a, b) =>
+        {
+            int cmp = StringComparer.OrdinalIgnoreCase.Compare(GetEntryStorageKey(a), GetEntryStorageKey(b));
+            if (cmp != 0) return cmp;
+            return StringComparer.OrdinalIgnoreCase.Compare(a?.Guid ?? string.Empty, b?.Guid ?? string.Empty);
+        };
 
         private const int LegacyResumeCursorVersion = 1;
         private const int ResumeCursorVersion = 2;
@@ -720,8 +768,11 @@ namespace GxMcp.Worker.Services
                     if (!c.CaseSensitive) opts |= RegexOptions.IgnoreCase;
                     rx = GetCachedRegex(c.Pattern, opts);
                 }
+                bool usePerLineRegex = rx != null
+                    && (HasLineAnchors(c.Pattern) || MayMatchAcrossLines(c.Pattern));
 
                 var hits = new JArray();
+                var seenHitKeys = new HashSet<string>(StringComparer.Ordinal);
                 var unresolvedObjects = new JArray();
                 var index = _index.GetIndex();
                 bool hasMetadataFields = c.Fields != null && c.Fields.Any(field =>
@@ -739,10 +790,20 @@ namespace GxMcp.Worker.Services
                 // immutable search context that produced the token. A token is
                 // valid only for this query, effective scope, index generation and
                 // physical KB; changing any of those starts a new search.
-                string indexGeneration = GetIndexGeneration(index);
-                string kbIdentity = GetKbIdentity();
-                string queryFingerprint = BuildQueryFingerprint(c);
-                string scopeFingerprint = BuildScopeFingerprint(c);
+                // Computed lazily so single-page complete searches without a cursor
+                // avoid SHA-256 hashing and path normalization.
+                string indexGeneration = null;
+                string kbIdentity = null;
+                string queryFingerprint = null;
+                string scopeFingerprint = null;
+                void EnsureCursorFingerprints()
+                {
+                    if (queryFingerprint != null) return;
+                    indexGeneration = GetIndexGeneration(index);
+                    kbIdentity = GetKbIdentity();
+                    queryFingerprint = BuildQueryFingerprint(c);
+                    scopeFingerprint = BuildScopeFingerprint(c);
+                }
                 JObject cursorState = null;
                 bool resumeCoverage = false;
                 int coveragePosition = 0;
@@ -750,6 +811,7 @@ namespace GxMcp.Worker.Services
                 var coverage = new SourceStoreCoverage();
                 string BuildBoundCursor(int entryIndex, int skippedHits, bool metadata, bool census = false)
                 {
+                    EnsureCursorFingerprints();
                     string token = BuildResumeCursor(entryIndex, skippedHits, metadata,
                         queryFingerprint, scopeFingerprint, indexGeneration, kbIdentity);
                     TryDecodeResumeCursor(token, out var state);
@@ -769,13 +831,16 @@ namespace GxMcp.Worker.Services
                 int resumeEntry = -1;
                 int resumeSkipped = 0;
                 bool resumeMetadata = false;
-                if (!string.IsNullOrWhiteSpace(c.Cursor)
-                    && !TryParseResumeCursor(c.Cursor,
+                if (!string.IsNullOrWhiteSpace(c.Cursor))
+                {
+                    EnsureCursorFingerprints();
+                    if (!TryParseResumeCursor(c.Cursor,
                         queryFingerprint, scopeFingerprint, indexGeneration, kbIdentity,
                         out resumeEntry, out resumeSkipped, out resumeMetadata))
-                {
-                    return Models.McpResponse.Err(code: "InvalidCursor",
-                        message: "cursor is not a valid continuation token for this search, scope, index generation and KB.");
+                    {
+                        return Models.McpResponse.Err(code: "InvalidCursor",
+                            message: "cursor is not a valid continuation token for this search, scope, index generation and KB.");
+                    }
                 }
                 if (cursorState != null)
                 {
@@ -797,44 +862,19 @@ namespace GxMcp.Worker.Services
                         message: "cursor phase does not match the fields and scope of this search.");
                 }
 
-                var partExecutions = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+                var partExecutions = new Dictionary<string, PartExecutionState>(StringComparer.OrdinalIgnoreCase);
                 foreach (string requestedPart in scanScope)
                 {
-                    partExecutions[requestedPart] = new JObject
-                    {
-                        ["requestedPart"] = requestedPart,
-                        ["resolvedParts"] = new JArray(),
-                        ["scannedObjects"] = 0,
-                        ["indexReads"] = 0,
-                        ["storeReads"] = 0,
-                        ["cacheReads"] = 0,
-                        ["sdkReads"] = 0,
-                        ["executed"] = false,
-                        ["status"] = "pending"
-                    };
+                    partExecutions[requestedPart] = new PartExecutionState(requestedPart);
                 }
-                JObject PartExecution(string requestedPart, string resolvedPart)
+                PartExecutionState PartExecution(string requestedPart, string resolvedPart)
                 {
                     if (!partExecutions.TryGetValue(requestedPart, out var execution))
                     {
-                        execution = new JObject
-                        {
-                            ["requestedPart"] = requestedPart,
-                            ["resolvedParts"] = new JArray(),
-                            ["scannedObjects"] = 0,
-                            ["indexReads"] = 0,
-                            ["storeReads"] = 0,
-                            ["cacheReads"] = 0,
-                            ["sdkReads"] = 0,
-                            ["executed"] = false,
-                            ["status"] = "pending"
-                        };
+                        execution = new PartExecutionState(requestedPart);
                         partExecutions[requestedPart] = execution;
                     }
-                    var resolved = execution["resolvedParts"] as JArray ?? new JArray();
-                    if (!resolved.Any(item => string.Equals(item.ToString(), resolvedPart, StringComparison.OrdinalIgnoreCase)))
-                        resolved.Add(resolvedPart);
-                    execution["resolvedParts"] = resolved;
+                    execution.RecordResolvedPart(resolvedPart);
                     return execution;
                 }
 
@@ -938,11 +978,21 @@ namespace GxMcp.Worker.Services
 
                     query = index.FindByTypes(targetTypes);
                 }
-                var entries = query
-                    .Where(e => string.IsNullOrEmpty(c.TypeFilter) || string.Equals(e.Type, c.TypeFilter, StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(e => GetEntryStorageKey(e), StringComparer.OrdinalIgnoreCase)
-                    .ThenBy(e => e.Guid ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
+                List<Models.SearchIndex.IndexEntry> entries;
+                if (string.IsNullOrEmpty(c.TypeFilter) && query is List<Models.SearchIndex.IndexEntry> queryList)
+                {
+                    entries = queryList;
+                }
+                else
+                {
+                    entries = new List<Models.SearchIndex.IndexEntry>();
+                    foreach (var entry in query)
+                    {
+                        if (string.IsNullOrEmpty(c.TypeFilter) || string.Equals(entry.Type, c.TypeFilter, StringComparison.OrdinalIgnoreCase))
+                            entries.Add(entry);
+                    }
+                }
+                entries.Sort(EntryIdentityComparison);
                 Logger.Info($"[SEARCH-SOURCE-PHASE] candidateFilterMs={searchSw.ElapsedMilliseconds} candidates={entries.Count} literals={literals.Count} partial={partialIndex}");
 
                 // issue #36.7 — an objectName scope that resolved to zero entries must say so
@@ -1067,10 +1117,10 @@ namespace GxMcp.Worker.Services
                     var uncoveredParts = new JArray();
                     foreach (var execution in partExecutions.Values)
                     {
-                        string requestedPart = execution["requestedPart"]?.ToString() ?? string.Empty;
-                        executionByPart[requestedPart] = execution.DeepClone();
-                        if (string.Equals(execution["status"]?.ToString(), "searched", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(execution["status"]?.ToString(), "unavailable", StringComparison.OrdinalIgnoreCase))
+                        string requestedPart = execution.RequestedPart ?? string.Empty;
+                        executionByPart[requestedPart] = execution.ToJson();
+                        if (string.Equals(execution.Status, "searched", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(execution.Status, "unavailable", StringComparison.OrdinalIgnoreCase))
                             coveredParts.Add(requestedPart);
                         else uncoveredParts.Add(requestedPart);
                     }
@@ -1191,9 +1241,9 @@ namespace GxMcp.Worker.Services
                     {
                         if (produced >= c.MaxResults || resolutionFailed) break;
                         string resolvedPart = ObjectService.ResolveSearchPartName(e.Type, part);
-                        JObject execution = PartExecution(part, resolvedPart);
-                        execution["executed"] = true;
-                        execution["status"] = "searching";
+                        PartExecutionState execution = PartExecution(part, resolvedPart);
+                        execution.Executed = true;
+                        execution.Status = "searching";
                         string src = null;
                         bool haveSrc = false;
                         // Only text read from the SDK in this iteration is persisted. The
@@ -1218,8 +1268,8 @@ namespace GxMcp.Worker.Services
                             if (SourceStoreService.Instance.ProvesLiteralAbsent(e, resolvedPart, pruneLiteral))
                             {
                                 storeProbeHits++;
-                                execution["status"] = "searched";
-                                execution["scannedObjects"] = execution["scannedObjects"]!.ToObject<int>() + 1;
+                                execution.Status = "searched";
+                                execution.ScannedObjects++;
                                 continue;
                             }
                         }
@@ -1227,7 +1277,7 @@ namespace GxMcp.Worker.Services
                         {
                             src = e.FullSource;
                             haveSrc = true;
-                            execution["indexReads"] = execution["indexReads"]!.ToObject<int>() + 1;
+                            execution.IndexReads++;
                         }
                         else if (!string.IsNullOrEmpty(e.Guid)
                             && SourceStoreService.Instance.TryGetStoredAndFresh(
@@ -1239,14 +1289,14 @@ namespace GxMcp.Worker.Services
                             // unbounded pass.
                             haveSrc = true;
                             sourceCacheHits++;
-                            execution["storeReads"] = execution["storeReads"]!.ToObject<int>() + 1;
+                            execution.StoreReads++;
                         }
                         else if (_objectService != null && !string.IsNullOrEmpty(e.Guid)
                             && _objectService.TryGetPartSourceRaw(e.Guid, resolvedPart, out src))
                         {
                             haveSrc = true;
                             sourceCacheHits++;
-                            execution["cacheReads"] = execution["cacheReads"]!.ToObject<int>() + 1;
+                            execution.CacheReads++;
                         }
                         if (!haveSrc)
                         {
@@ -1275,7 +1325,7 @@ namespace GxMcp.Worker.Services
                                 : TryGetPartSource(obj, resolvedPart);
                             haveSrc = src != null;
                             readFromSdk = haveSrc;
-                            if (haveSrc) execution["sdkReads"] = execution["sdkReads"]!.ToObject<int>() + 1;
+                            if (haveSrc) execution.SdkReads++;
                             sourceReadTicks += System.Diagnostics.Stopwatch.GetTimestamp() - sourceReadStart;
                         }
                         if (haveSrc && indexedSourceScope && IsSourceAlias(part) && e.FullSource == null)
@@ -1293,12 +1343,12 @@ namespace GxMcp.Worker.Services
                         }
                         if (string.IsNullOrEmpty(src))
                         {
-                            execution["status"] = "unavailable";
-                            execution["scannedObjects"] = execution["scannedObjects"]!.ToObject<int>() + 1;
+                            execution.Status = "unavailable";
+                            execution.ScannedObjects++;
                             continue;
                         }
-                        execution["status"] = "searched";
-                        execution["scannedObjects"] = execution["scannedObjects"]!.ToObject<int>() + 1;
+                        execution.Status = "searched";
+                        execution.ScannedObjects++;
 
                         if (!string.IsNullOrEmpty(c.Callee))
                         {
@@ -1312,7 +1362,7 @@ namespace GxMcp.Worker.Services
                                     string ln = call.LineNumber - 1 < lines.Length ? lines[call.LineNumber - 1] : "";
                                     if (!rx.IsMatch(ln)) continue;
                                 }
-                                if (AddSourceHit(hits, BuildHit(e, resolvedPart, lines, call.LineNumber, call),
+                                if (AddSourceHit(hits, seenHitKeys, BuildHit(e, resolvedPart, lines, call.LineNumber, call),
                                     ref produced, ref skippedHits, ref consumedHits, c.MaxResults))
                                 {
                                     entryReachedLimit = true;
@@ -1322,28 +1372,14 @@ namespace GxMcp.Worker.Services
                         }
                         else if (rx != null)
                         {
-                            // PERFORMANCE (perf round 3): single-pass regex over the whole source
-                            // when the pattern has no line anchors AND no newline-capable atoms —
-                            // semantics identical to per-line IsMatch, but avoids the full
-                            // line-array allocation + N regex calls for every scanned object
-                            // (the common non-match case). Line numbers come from counting
-                            // newlines up to each match index; the lines array is built lazily
-                            // only on the first match (BuildHit needs it for context).
-                            // Guarded fast path: HasLineAnchors keeps ^ $ \A \Z \z patterns on
-                            // the legacy per-line loop (they anchor per line, not per file), and
-                            // MayMatchAcrossLines keeps patterns whose atoms can match a newline
-                            // (\s \S \n \r \v \f \D \W \p.., negated classes, (?s), literal
-                            // newlines) on it too — those COULD match across lines, and the
-                            // per-line loop is the only exact semantic for them. Both guards are
-                            // conservative (a false positive only costs speed, never correctness).
-                            if (HasLineAnchors(c.Pattern) || MayMatchAcrossLines(c.Pattern))
+                            if (usePerLineRegex)
                             {
                                 var lines = src.Split('\n');
                                 for (int li = 0; li < lines.Length && produced < c.MaxResults; li++)
                                 {
                                     if (rx.IsMatch(lines[li]))
                                     {
-                                        if (AddSourceHit(hits, BuildHit(e, resolvedPart, lines, li + 1, null),
+                                        if (AddSourceHit(hits, seenHitKeys, BuildHit(e, resolvedPart, lines, li + 1, null),
                                             ref produced, ref skippedHits, ref consumedHits, c.MaxResults))
                                         {
                                             entryReachedLimit = true;
@@ -1354,28 +1390,28 @@ namespace GxMcp.Worker.Services
                             }
                             else
                             {
-                                // Lazy single-pass: iterate the MatchCollection (net48 computes it
-                                // lazily on enumeration), stop at MaxResults, and split the line
-                                // array only when the first match actually exists.
-                                var matches = rx.Matches(src);
-                                string[] hitLines = null;
-                                int pos = 0, lineNo = 1, lastHitLine = -1;
-                                foreach (Match m in matches)
+                                // Single-pass Match/NextMatch avoids MatchCollection/enumerator
+                                // allocations on non-matching files (returns Match.Empty) while
+                                // preserving net48's compiled Boyer-Moore scan speed.
+                                Match m = rx.Match(src);
+                                if (m.Success)
                                 {
-                                    if (produced >= c.MaxResults) break;
-                                    if (hitLines == null) hitLines = src.Split('\n');
-                                    int idx = m.Index;
-                                    while (pos < idx)
+                                    int pos = 0, lineNo = 1, lastHitLine = -1;
+                                    for (; m.Success && produced < c.MaxResults; m = m.NextMatch())
                                     {
-                                        if (src[pos] == '\n') lineNo++;
-                                        pos++;
-                                    }
-                                    if (!ShouldEmitRegexHitLine(lineNo, ref lastHitLine)) continue;
-                                    if (AddSourceHit(hits, BuildHit(e, resolvedPart, hitLines, lineNo, null),
-                                        ref produced, ref skippedHits, ref consumedHits, c.MaxResults))
-                                    {
-                                        entryReachedLimit = true;
-                                        break;
+                                        int idx = m.Index;
+                                        while (pos < idx)
+                                        {
+                                            if (src[pos] == '\n') lineNo++;
+                                            pos++;
+                                        }
+                                        if (!ShouldEmitRegexHitLine(lineNo, ref lastHitLine)) continue;
+                                        if (AddSourceHit(hits, seenHitKeys, BuildHitFromSource(e, resolvedPart, src, idx, lineNo),
+                                            ref produced, ref skippedHits, ref consumedHits, c.MaxResults))
+                                        {
+                                            entryReachedLimit = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -1535,7 +1571,7 @@ namespace GxMcp.Worker.Services
                                     ["field"] = field,
                                     ["matchedValue"] = fieldValue
                                 };
-                                if (AddSourceHit(hits, metadataHit, ref produced, ref metadataSkipped,
+                                if (AddSourceHit(hits, seenHitKeys, metadataHit, ref produced, ref metadataSkipped,
                                     ref metadataConsumed, c.MaxResults))
                                 {
                                     entryReachedLimit = true;
@@ -2019,6 +2055,64 @@ namespace GxMcp.Worker.Services
             if (s.Length >= 2 && (s[0] == '"' || s[0] == '\'') && s[s.Length - 1] == s[0])
                 s = s.Substring(1, s.Length - 2);
             return s;
+        }
+
+        private static JObject BuildHitFromSource(SearchIndex.IndexEntry e, string part, string src, int matchIndex, int line)
+        {
+            const int ctx = 3;
+            int srcLen = src.Length;
+            int lineStart = matchIndex > 0 ? src.LastIndexOf('\n', matchIndex - 1) + 1 : 0;
+            int nl = lineStart < srcLen ? src.IndexOf('\n', lineStart) : -1;
+            int lineEnd = nl >= 0 ? nl : srcLen;
+            string lineText = src.Substring(lineStart, lineEnd - lineStart);
+
+            // Collect up to 3 preceding lines without splitting the entire source file.
+            var beforeBuf = new string[ctx];
+            int beforeCount = 0;
+            int curLineStart = lineStart;
+            while (beforeCount < ctx && curLineStart > 0)
+            {
+                int prevLineEnd = curLineStart - 1; // index of the '\n' terminating previous line
+                int prevLineStart = prevLineEnd > 0 ? src.LastIndexOf('\n', prevLineEnd - 1) + 1 : 0;
+                beforeBuf[beforeCount++] = src.Substring(prevLineStart, prevLineEnd - prevLineStart);
+                curLineStart = prevLineStart;
+            }
+            var before = new JArray();
+            for (int i = beforeCount - 1; i >= 0; i--) before.Add(beforeBuf[i]);
+
+            var after = new JArray();
+            if (nl >= 0)
+            {
+                int posAfter = nl + 1;
+                for (int i = 0; i < ctx; i++)
+                {
+                    int nextNl = posAfter < srcLen ? src.IndexOf('\n', posAfter) : -1;
+                    if (nextNl >= 0)
+                    {
+                        after.Add(src.Substring(posAfter, nextNl - posAfter));
+                        posAfter = nextNl + 1;
+                    }
+                    else
+                    {
+                        after.Add(src.Substring(posAfter));
+                        break;
+                    }
+                }
+            }
+
+            return new JObject
+            {
+                ["objectName"] = e.Name,
+                ["type"] = e.Type,
+                ["guid"] = e.Guid,
+                ["entityKey"] = e.EntityKey,
+                ["path"] = e.Path,
+                ["part"] = part,
+                ["lineNumber"] = line,
+                ["lineText"] = lineText,
+                ["contextBefore"] = before,
+                ["contextAfter"] = after
+            };
         }
 
         private static JObject BuildHit(SearchIndex.IndexEntry e, string part, string[] lines, int line, ParsedCall call)
