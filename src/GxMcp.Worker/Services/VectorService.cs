@@ -22,37 +22,49 @@ namespace GxMcp.Worker.Services
             // We use a fixed-size hashing vector for local comparison (SimHash-like)
             float[] vector = new float[128];
 
-            // PERFORMANCE (W-A2): avoid the extra string allocation from text.ToLower() by
-            // splitting first and lowercasing each word via String.GetHashCode after a cheap
-            // per-word ToLowerInvariant. For long inputs this saves a full string copy on
-            // every embedding (~30k calls per bulk index).
+            // PERFORMANCE: all 4 quadrants of the 128-dim vector receive the exact same
+            // 32-bit SimHash accumulation, so compute and normalize only the first 32 floats
+            // and replicate the normalized slice 3 times via Buffer.BlockCopy (4x fewer ops).
+            // Skip rawWord.ToLowerInvariant() allocation when rawWord is already lowercase ASCII.
             var words = text.Split(WordSeparators, StringSplitOptions.RemoveEmptyEntries);
-            foreach (var rawWord in words)
+            for (int w = 0; w < words.Length; w++)
             {
-                int hash = rawWord.ToLowerInvariant().GetHashCode();
+                string rawWord = words[w];
+                bool needsLower = false;
+                for (int c = 0; c < rawWord.Length; c++)
+                {
+                    char ch = rawWord[c];
+                    if (ch >= 128 || (ch >= 'A' && ch <= 'Z'))
+                    {
+                        needsLower = true;
+                        break;
+                    }
+                }
+                int hash = (needsLower ? rawWord.ToLowerInvariant() : rawWord).GetHashCode();
                 for (int bit = 0; bit < 32; bit++)
                 {
-                    float delta = ((hash >> bit) & 1) == 1 ? 1.0f : -1.0f;
-                    vector[bit] += delta;
-                    vector[bit + 32] += delta;
-                    vector[bit + 64] += delta;
-                    vector[bit + 96] += delta;
+                    vector[bit] += ((hash >> bit) & 1) == 1 ? 1.0f : -1.0f;
                 }
             }
 
-            // Normalize
-            float magnitude = 0;
-            for (int i = 0; i < 128; i++)
+            // Normalize across all 4 identical 32-float quadrants: sum128 == 4 * sum32.
+            float sum32 = 0;
+            for (int i = 0; i < 32; i++)
             {
-                magnitude += vector[i] * vector[i];
+                float v = vector[i];
+                sum32 += v * v;
             }
-            magnitude = (float)Math.Sqrt(magnitude);
+            float magnitude = (float)Math.Sqrt(sum32 * 4.0f);
 
             if (magnitude > 0)
             {
                 float invMag = 1.0f / magnitude;
-                for (int i = 0; i < 128; i++) vector[i] *= invMag;
+                for (int i = 0; i < 32; i++) vector[i] *= invMag;
             }
+
+            const int QuadrantBytes = 32 * sizeof(float);
+            Buffer.BlockCopy(vector, 0, vector, QuadrantBytes, QuadrantBytes);
+            Buffer.BlockCopy(vector, 0, vector, QuadrantBytes * 2, QuadrantBytes * 2);
 
             return vector;
         }

@@ -895,13 +895,13 @@ namespace GxMcp.Worker.Services
                 var objectNameSet = ParseObjectNames(c.ObjectName);
                 bool hasIdentityScope = HasIdentityScope(c);
 
-                IEnumerable<Models.SearchIndex.IndexEntry> query = index.Objects.Values;
+                IEnumerable<Models.SearchIndex.IndexEntry> query = index.EnumerateObjects();
                 if (hasIdentityScope && objectNameSet != null)
                 {
                     // Selectors are conjunctive.  An identity filter must not
                     // silently replace a homonym name selector; if the two
                     // identify different objects, fail closed before any SDK read.
-                    var identityMatches = index.Objects.Values
+                    var identityMatches = index.EnumerateObjects()
                         .Where(e => MatchesIdentityScope(e, c))
                         .ToList();
                     var intersection = identityMatches
@@ -1439,7 +1439,7 @@ namespace GxMcp.Worker.Services
                 // can consume the remaining budget or replace that cursor.
                 if (extraFields.Count > 0 && rx != null && !sourcePageStoppedInsideEntry && cursor >= entries.Count)
                 {
-                    metadataEntries = index.Objects.Values
+                    metadataEntries = index.EnumerateObjects()
                         .Where(e => MatchesSearchObjectScope(e, c, objectNameSet))
                         .Where(e => string.IsNullOrEmpty(c.TypeFilter) || string.Equals(e.Type, c.TypeFilter, StringComparison.OrdinalIgnoreCase))
                         .OrderBy(e => GetEntryStorageKey(e), StringComparer.OrdinalIgnoreCase)
