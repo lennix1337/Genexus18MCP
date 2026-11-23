@@ -367,5 +367,18 @@ namespace GxMcp.Gateway.Tests
         {
             Assert.Equal(expected, DidYouMean.Suggest(input, candidates));
         }
+
+        [Fact]
+        public void Validate_GenexusWireTargesTypo_SuggestsTargets()
+        {
+            GatewayArgsValidator.ClearCache();
+            var result = GatewayArgsValidator.Validate("genexus_wire", new JObject
+            {
+                ["targes"] = new JArray("MyProc")
+            });
+
+            Assert.False(result.Ok);
+            Assert.Contains(result.Violations, v => v.Path == "targes" && v.Suggestion == "targets");
+        }
     }
 }

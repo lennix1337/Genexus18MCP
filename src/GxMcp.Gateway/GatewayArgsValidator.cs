@@ -622,7 +622,6 @@ namespace GxMcp.Gateway
                         Description = description
                     };
                 }
-                names.Sort(StringComparer.Ordinal);
                 declaredNames = names.ToArray();
             }
 

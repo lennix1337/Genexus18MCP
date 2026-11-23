@@ -275,20 +275,15 @@ namespace GxMcp.Worker.Models
         }
 
         /// <summary>
-        /// Lock-free, zero-snapshot enumeration of all non-null entries in <see cref="Objects"/>.
-        /// On .NET Framework 4.8, <c>ConcurrentDictionary.Values</c> acquires all internal bucket
-        /// locks and copies every value into a fresh <see cref="List{T}"/> on every access;
-        /// enumerating key-value pairs directly avoids both locking and the O(N) snapshot copy.
+        /// Point-in-time snapshot enumeration of all entries in <see cref="Objects"/>.
+        /// Uses <c>ConcurrentDictionary.Values</c> so concurrent <c>AddOrUpdateBatch</c>
+        /// mutations do not mix pre- and post-mutation states during Search/List/SourceSearch.
         /// </summary>
         public IEnumerable<IndexEntry> EnumerateObjects()
         {
             var objects = Objects;
-            if (objects == null) yield break;
-            foreach (var kv in objects)
-            {
-                var entry = kv.Value;
-                if (entry != null) yield return entry;
-            }
+            if (objects == null) return Array.Empty<IndexEntry>();
+            return objects.Values;
         }
 
         private List<IndexEntry> ResolveKeys(HashSet<string> keys)

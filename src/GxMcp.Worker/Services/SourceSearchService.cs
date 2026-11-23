@@ -792,14 +792,15 @@ namespace GxMcp.Worker.Services
                 // physical KB; changing any of those starts a new search.
                 // Computed lazily so single-page complete searches without a cursor
                 // avoid SHA-256 hashing and path normalization.
-                string indexGeneration = null;
+                // indexGeneration is captured before selection/scan so a concurrent
+                // index mutation cannot silently stamp a cursor with the post-mutation generation.
+                string indexGeneration = GetIndexGeneration(index);
                 string kbIdentity = null;
                 string queryFingerprint = null;
                 string scopeFingerprint = null;
                 void EnsureCursorFingerprints()
                 {
                     if (queryFingerprint != null) return;
-                    indexGeneration = GetIndexGeneration(index);
                     kbIdentity = GetKbIdentity();
                     queryFingerprint = BuildQueryFingerprint(c);
                     scopeFingerprint = BuildScopeFingerprint(c);

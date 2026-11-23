@@ -52,6 +52,7 @@ namespace GxMcp.Gateway
         // Earliest tick at which any entry currently in the cache may expire.
         // Lets Set() skip scanning all entries when no entry can be expired yet.
         private long _nextExpiryCheckAt = long.MaxValue;
+        internal Action<string>? OnSweepCandidateForTest { get; set; }
         // Logical clock: TickCount64 alone has 1ms resolution, so several accesses
         // can land on the same tick and leave LRU order ambiguous. Stamps only
         // move forward — a bumped stamp is still fresh enough for TTL checks.
@@ -361,12 +362,22 @@ namespace GxMcp.Gateway
                 return;
             }
 
+            // Reset before scanning so any concurrent Set() after this point lowers
+            // _nextExpiryCheckAt via RecordExpiryCheckAt without being clobbered.
+            Interlocked.Exchange(ref _nextExpiryCheckAt, long.MaxValue);
+
             long earliestRemaining = long.MaxValue;
             foreach (var pair in _createdAt)
             {
+                OnSweepCandidateForTest?.Invoke(pair.Key);
                 if (TimeSpan.FromMilliseconds(now - pair.Value) >= _ttl)
                 {
-                    RemoveEntry(pair.Key);
+                    if (!RemoveExpiredEntry(pair.Key, pair.Value)
+                        && _createdAt.TryGetValue(pair.Key, out long currentCreatedAt)
+                        && currentCreatedAt < earliestRemaining)
+                    {
+                        earliestRemaining = currentCreatedAt;
+                    }
                 }
                 else if (pair.Value < earliestRemaining)
                 {
@@ -377,7 +388,7 @@ namespace GxMcp.Gateway
             long nextCheck = earliestRemaining == long.MaxValue
                 ? long.MaxValue
                 : AddSaturated(earliestRemaining, _ttlFloorMs);
-            Interlocked.Exchange(ref _nextExpiryCheckAt, nextCheck);
+            RecordExpiryCheckAt(nextCheck);
         }
 
         private void EvictBeyondCap()
@@ -423,6 +434,18 @@ namespace GxMcp.Gateway
             if (_entryBytes.TryGetValue(key, out var old)) prev = old;
             _entryBytes[key] = next;
             Interlocked.Add(ref _totalBytes, next - prev);
+        }
+
+        private bool RemoveExpiredEntry(string key, long expectedCreatedAt)
+        {
+            if (!_createdAt.TryRemove(new KeyValuePair<string, long>(key, expectedCreatedAt)))
+                return false;
+
+            _lastAccess.TryRemove(key, out _);
+            if (_entryBytes.TryRemove(key, out var bytes))
+                Interlocked.Add(ref _totalBytes, -bytes);
+            _entries.TryRemove(key, out _);
+            return true;
         }
 
         private bool RemoveEntry(string key)

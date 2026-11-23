@@ -230,5 +230,48 @@ namespace GxMcp.Worker.Tests
                 Assert.Equal(expectedStarts, actualStarts);
             }
         }
+
+        [Fact]
+        public void EnumerateObjects_UsesSnapshot_DoesNotMixConcurrentAddOrUpdateBatch()
+        {
+            var entries = new List<SearchIndex.IndexEntry>(100);
+            for (int i = 0; i < 100; i++)
+            {
+                entries.Add(new SearchIndex.IndexEntry
+                {
+                    Guid = new Guid(i + 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5).ToString(),
+                    Name = $"InitialObj{i:D3}",
+                    Type = "Procedure"
+                });
+            }
+
+            var cache = new IndexCacheService();
+            cache.ReplaceAll(entries);
+            cache.MarkIndexComplete(entries.Count);
+
+            using var enumerator = cache.GetIndex().EnumerateObjects().GetEnumerator();
+            Assert.True(enumerator.MoveNext());
+            var observed = new List<string> { enumerator.Current.Name };
+
+            var added = new List<SearchIndex.IndexEntry>(50);
+            for (int i = 0; i < 50; i++)
+            {
+                added.Add(new SearchIndex.IndexEntry
+                {
+                    Guid = new Guid(1000 + i, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5).ToString(),
+                    Name = $"AddedDuringEnum{i:D3}",
+                    Type = "Procedure"
+                });
+            }
+            cache.AddOrUpdateBatch(added);
+
+            while (enumerator.MoveNext())
+            {
+                observed.Add(enumerator.Current.Name);
+            }
+
+            Assert.Equal(100, observed.Count);
+            Assert.DoesNotContain(observed, name => name.StartsWith("AddedDuringEnum", StringComparison.Ordinal));
+        }
     }
 }
