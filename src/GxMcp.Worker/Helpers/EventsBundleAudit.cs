@@ -69,7 +69,8 @@ namespace GxMcp.Worker.Helpers
         internal string TriggerHash => _criticalHashes[Trigger];
 
         // The exact bytes of the SDK core name one build of the SDK. A WorkWithPlus release is installed on more than one
-        // build of it, so the WorkWithPlus alone cannot tell two bundles apart; the core can, and no two bundles share it.
+        // build of it, so the WorkWithPlus alone cannot tell two bundles apart; the core can, and no two bundles that carry
+        // the same WorkWithPlus share it (one build of the SDK may be audited with more than one WorkWithPlus release).
         internal string CoreHash => _criticalHashes[CoreAssembly];
 
         internal static bool MaySaveTarget(JObject verification, string name)
@@ -196,18 +197,22 @@ namespace GxMcp.Worker.Helpers
     {
         // GeneXus 18 U16 builds with WorkWithPlus 16.2.0.8386. One WorkWithPlus release is installed on every build of the SDK, byte for
         // byte, so each build is a bundle of its own, audited as a whole: one manifest per build, and a build with no manifest is refused.
+        // A later WorkWithPlus release on an audited build is a bundle of its own as well (the build with that release): it has a manifest and
+        // a native proof of its own, and the registry tells it from the earlier release by the exact bytes of the WorkWithPlus.
         internal static readonly EventsBundleAudit U16Build189158 = EventsBundleAudit.FromEmbedded("events-u16-wwp16.2-189158-audit.json");
         internal static readonly EventsBundleAudit U16Build189513 = EventsBundleAudit.FromEmbedded("events-u16-wwp16.2-189513-audit.json");
         internal static readonly EventsBundleAudit U16Build189552 = EventsBundleAudit.FromEmbedded("events-u16-wwp16.2-189552-audit.json");
         // GeneXus 18 U16 build 189595: the first audited one; its manifest keeps the name it was created with.
         internal static readonly EventsBundleAudit U16 = EventsBundleAudit.FromEmbedded("events-u16-wwp16.2-audit.json");
         internal static readonly EventsBundleAudit U16Build189647 = EventsBundleAudit.FromEmbedded("events-u16-wwp16.2-189647-audit.json");
+        // GeneXus 18 U16 build 189647 with WorkWithPlus 16.2.1.8463, the release that replaced 16.2.0.8386 on that build.
+        internal static readonly EventsBundleAudit U16Build189647Wwp1621 = EventsBundleAudit.FromEmbedded("events-u16-wwp16.2.1-189647-audit.json");
         internal static readonly EventsBundleAudit U11 = EventsBundleAudit.FromEmbedded("events-u11-wwp16.1-audit.json");
         internal static readonly EventsBundleAudit U10 = EventsBundleAudit.FromEmbedded("events-u10-audit.json");
 
         internal static IReadOnlyList<EventsBundleAudit> All { get; } = new[]
         {
-            U16Build189158, U16Build189513, U16Build189552, U16, U16Build189647, U11, U10
+            U16Build189158, U16Build189513, U16Build189552, U16, U16Build189647, U16Build189647Wwp1621, U11, U10
         };
 
         // The hashes that make the complete-bundle audit mandatory: the WorkWithPlus of a bundle that includes it, the SDK

@@ -149,6 +149,7 @@ namespace GxMcp.Worker.Tests
             Assert.Contains(EventsBundleAudits.U16Build189513.BundleId, audited);
             Assert.Contains(EventsBundleAudits.U16Build189552.BundleId, audited);
             Assert.Contains(EventsBundleAudits.U16Build189647.BundleId, audited);
+            Assert.Contains(EventsBundleAudits.U16Build189647Wwp1621.BundleId, audited);
             Assert.Contains(EventsBundleAudits.U11.BundleId, audited);
             Assert.Contains("do not make an SDK/WorkWithPlus bundle safe", finding.Remediation);
             Assert.Contains("no allowlist by version number", finding.Remediation);

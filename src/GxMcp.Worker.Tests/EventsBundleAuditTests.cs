@@ -243,7 +243,13 @@ namespace GxMcp.Worker.Tests
                 return;
             }
             string coreHash = FileSha(Path.Combine(installedRoot, "Artech.Architecture.Common.dll"));
-            var audit = EventsBundleAudits.All.FirstOrDefault(a => a.CriticalHashes["Artech.Architecture.Common"] == coreHash);
+            var candidates = EventsBundleAudits.All.Where(a => a.CriticalHashes["Artech.Architecture.Common"] == coreHash).ToArray();
+            // One SDK build can be audited with more than one WorkWithPlus release, so the core alone may name two bundles: the manifest of
+            // this installation is then the one whose every critical assembly is the installed file. When none is, the latest one is compared
+            // so that a WorkWithPlus release nobody audited fails here, loudly, instead of passing as "not applicable".
+            var audit = candidates.Length > 1
+                ? candidates.FirstOrDefault(a => CriticalAssembliesAreInstalled(a, installedRoot)) ?? candidates.Last()
+                : candidates.SingleOrDefault();
             if (audit == null)
             {
                 _output.WriteLine("NOT APPLICABLE: the SDK of this run is not an audited bundle, so no manifest was compared.");
@@ -441,8 +447,9 @@ namespace GxMcp.Worker.Tests
         [Fact]
         public void TheEmbeddedManifests_AreWellFormedAndDoNotOverlap()
         {
-            // Five GeneXus 18 U16 builds (one manifest each), U11 and U10.
-            Assert.Equal(7, EventsBundleAudits.All.Count);
+            // Five GeneXus 18 U16 builds with WorkWithPlus 16.2.0.8386 (one manifest each), build 189647 with WorkWithPlus 16.2.1.8463,
+            // U11 and U10.
+            Assert.Equal(8, EventsBundleAudits.All.Count);
             Assert.Equal(5, U16Builds.Length);
             Assert.Equal(EventsBundleAudits.All.Count, EventsBundleAudits.All.Select(a => a.BundleId).Distinct().Count());
             Assert.Equal(EventsBundleAudits.All.Count, EventsBundleAudits.All.Select(a => a.ManifestName).Distinct().Count());
@@ -452,19 +459,26 @@ namespace GxMcp.Worker.Tests
                 Assert.Equal(ExpectedCriticalOf(audit).OrderBy(n => n, StringComparer.Ordinal), audit.CriticalHashes.Keys.OrderBy(n => n, StringComparer.Ordinal));
                 Assert.All(audit.CriticalHashes.Values, hash => Assert.Matches(Sha256Hex, hash));
             }
-            // The SDK core names one build of the SDK: no two audited bundles share it, which is what lets it tell apart two
-            // bundles that carry the same WorkWithPlus.
-            var cores = EventsBundleAudits.All.Select(a => a.CoreHash).ToArray();
-            Assert.Equal(cores.Length, cores.Distinct().Count());
-            // The Artech assemblies of a bundle are those of its SDK build: none belongs to two bundles. Only a WorkWithPlus
-            // assembly may be shared (one release installed on two SDK builds), and then only between bundles that carry it.
+            // The SDK core names one build of the SDK: no two audited bundles that carry the same WorkWithPlus share it, which is what
+            // lets it tell apart two bundles that carry the same WorkWithPlus. A build audited with a second WorkWithPlus release shares
+            // its core with the bundle of the first release, and the exact WorkWithPlus bytes tell those two apart: the pair is unique.
+            var pairs = EventsBundleAudits.All.Select(a => a.TriggerHash + "|" + a.CoreHash).ToArray();
+            Assert.Equal(pairs.Length, pairs.Distinct().Count());
+            // The Artech assemblies of a bundle are those of its SDK build: none belongs to a bundle of another build, and the only
+            // ones shared are those of the bundles of one build audited with two WorkWithPlus releases. A WorkWithPlus assembly may be
+            // shared (one release installed on two SDK builds), and then only between bundles that carry it.
             var shared = EventsBundleAudits.All
                 .SelectMany(a => a.CriticalHashes.Select(entry => new { Bundle = a, entry.Key, entry.Value }))
                 .GroupBy(item => item.Value).Where(group => group.Count() > 1).ToArray();
             Assert.All(shared, group =>
             {
-                Assert.All(group, item => Assert.StartsWith("DVelop.", item.Key, StringComparison.Ordinal));
-                Assert.All(group, item => Assert.True(item.Bundle.IncludesWorkWithPlus, item.Bundle.BundleId));
+                if (group.All(item => item.Key.StartsWith("DVelop.", StringComparison.Ordinal)))
+                {
+                    Assert.All(group, item => Assert.True(item.Bundle.IncludesWorkWithPlus, item.Bundle.BundleId));
+                    return;
+                }
+                Assert.All(group, item => Assert.False(item.Key.StartsWith("DVelop.", StringComparison.Ordinal), item.Key));
+                Assert.Single(group.Select(item => item.Bundle.CoreHash).Distinct());
             });
             var trigger = EventsBundleAudits.All.Select(a => a.CriticalHashes[a.Trigger]).Distinct().ToArray();
             Assert.Equal(trigger.OrderBy(h => h), EventsBundleAudits.TriggerHashes.OrderBy(h => h));
@@ -566,6 +580,127 @@ namespace GxMcp.Worker.Tests
             var otherWwp = new Dictionary<string, string>(newer.CriticalHashes) { [EventsBundleAudit.TriggerAssembly] = new string('e', 64) };
             ex = Assert.Throws<InvalidOperationException>(() => EventsBundleAudits.Select(otherWwp));
             Assert.Contains("covers the loaded WorkWithPlus", ex.Message);
+        }
+
+        // The assemblies of the WorkWithPlus package among the critical ones: what a later release of it replaces on the same SDK build.
+        private static readonly string[] WorkWithPlusCritical =
+        {
+            "DVelop.Patterns.WorkWithPlus", "DVelop.Extensions.WWPPackagesCommon", "DVelop.Extensions.UserControls", "DVelop.Extensions.WWPPackages"
+        };
+
+        [Fact]
+        public void TheLaterWorkWithPlusReleaseOnBuild189647_IsABundleOfItsOwn_ToldApartFromTheEarlierOneByTheExactWorkWithPlusBytes()
+        {
+            var earlier = EventsBundleAudits.U16Build189647;
+            var later = EventsBundleAudits.U16Build189647Wwp1621;
+            Assert.Equal("18.0.16.189647+wwp16.2.0.8386", earlier.BundleId);
+            Assert.Equal("18.0.16.189647+wwp16.2.1.8463", later.BundleId);
+
+            // One SDK build: the same Artech assemblies. Another WorkWithPlus release: every one of its assemblies is other bytes.
+            Assert.Equal(earlier.CoreHash, later.CoreHash);
+            foreach (string name in ExpectedCritical)
+            {
+                if (WorkWithPlusCritical.Contains(name)) Assert.NotEqual(earlier.CriticalHashes[name], later.CriticalHashes[name]);
+                else Assert.Equal(earlier.CriticalHashes[name], later.CriticalHashes[name]);
+            }
+            Assert.NotEqual(earlier.TriggerHash, later.TriggerHash);
+
+            // Each one selects its own manifest, whatever the order of the registry.
+            Assert.Same(earlier, EventsBundleAudits.Select(new Dictionary<string, string>(earlier.CriticalHashes)));
+            Assert.Same(later, EventsBundleAudits.Select(new Dictionary<string, string>(later.CriticalHashes)));
+            Assert.Equal(later.BundleId, EventsSaveIsolation.MatchAuditedBuild(new Dictionary<string, string>(later.CriticalHashes)));
+            Assert.Contains(later.BundleId, EventsSaveIsolation.AuditedBundleIds);
+
+            // A mixture of the two releases is never matched as an audited build: one WorkWithPlus assembly of the other release is enough.
+            foreach (string name in WorkWithPlusCritical)
+            {
+                var mixed = new Dictionary<string, string>(later.CriticalHashes) { [name] = earlier.CriticalHashes[name] };
+                Assert.Null(EventsSaveIsolation.MatchAuditedBuild(mixed));
+                var other = new Dictionary<string, string>(earlier.CriticalHashes) { [name] = later.CriticalHashes[name] };
+                Assert.Null(EventsSaveIsolation.MatchAuditedBuild(other));
+            }
+
+            // The WorkWithPlus of this release on a core that was not audited with it selects nothing, and the refusal names the bundle of
+            // this release only; the earlier release on an unknown core names its own bundles, never the later one.
+            var unknownCore = new Dictionary<string, string>(later.CriticalHashes) { [EventsBundleAudit.CoreAssembly] = new string('0', 64) };
+            var ex = Assert.Throws<InvalidOperationException>(() => EventsBundleAudits.Select(unknownCore));
+            Assert.Contains(later.BundleId, ex.Message);
+            Assert.DoesNotContain(earlier.BundleId, ex.Message);
+            var earlierOnUnknownCore = new Dictionary<string, string>(earlier.CriticalHashes) { [EventsBundleAudit.CoreAssembly] = new string('0', 64) };
+            ex = Assert.Throws<InvalidOperationException>(() => EventsBundleAudits.Select(earlierOnUnknownCore));
+            Assert.DoesNotContain(later.BundleId, ex.Message);
+        }
+
+        [Fact]
+        public void TheWorkWithPlusOfTheLaterRelease_IsTheOneInstalledOnBuild189647_PinnedIndependentlyOfItsManifest()
+        {
+            // The SHA-256 of each critical WorkWithPlus assembly of release 16.2.1.8463 as installed on build 189647, pinned here independently
+            // of the manifest so that editing it cannot move the bundle onto another release.
+            var later = EventsBundleAudits.U16Build189647Wwp1621;
+            var pinned = new Dictionary<string, string>
+            {
+                ["DVelop.Patterns.WorkWithPlus"] = "275e9398c0e5d41786664ee8eb876c7630499538ba676ba57ae9d378dd5f152b",
+                ["DVelop.Extensions.WWPPackagesCommon"] = "b1845109a9a1aa82dfdae56b8eb76bfbbca8058e5cb820763a54fb06a384cd4d",
+                ["DVelop.Extensions.UserControls"] = "23e2c577b162776926d1c32bfa9e10b1ff77d78ec4e849f45526ffebb3ce7df5",
+                ["DVelop.Extensions.WWPPackages"] = "a76e6293c834bed7de72dcf38346e8d2eae8d0c365b0c5e96973d607631e18bc"
+            };
+            Assert.Equal(WorkWithPlusCritical.OrderBy(n => n, StringComparer.Ordinal), pinned.Keys.OrderBy(n => n, StringComparer.Ordinal));
+            foreach (var entry in pinned) Assert.Equal(entry.Value, later.CriticalHashes[entry.Key]);
+            Assert.Equal("160b59afdab14c160711de46f60e6644a2ec88f420a1cf2b86d97219fa3464c6", later.CoreHash);
+        }
+
+        [Fact]
+        public void TheLaterWorkWithPlusBundleManifest_IsVerifiedWithTheDigestOfItsOwnProof_AndSaysWhatItDoesNotCover()
+        {
+            var later = EventsBundleAudits.U16Build189647Wwp1621;
+            var proof = later.NativeVerification;
+
+            Assert.Equal("verified", (string)proof["status"]);
+            Assert.Null(proof["scope"]);
+            Assert.Equal("synthetic-webpanel-in-kb-with-pattern-instances-and-loaded-workwithplus", (string)proof["scenario"]);
+            Assert.Matches(Sha256Hex, (string)proof["proofEvidenceSha256"]);
+            Assert.True(EventsBundleAudit.MaySaveTarget(proof, "AnyBusinessObject"));
+            string notCovered = string.Join(" ", ((JArray)proof["notCovered"]).Values<string>());
+            Assert.Contains("persisted WorkWithPlus host", notCovered);
+            // The release changed WorkWithPlus code that acts on WorkWithPlus templates and pattern instances: the proof saves a WebPanel only.
+            Assert.Contains("WorkWithPlus template", notCovered);
+            // The bundle was proven on its own: no other manifest cites the digest of its proof.
+            Assert.All(EventsBundleAudits.All.Where(a => !ReferenceEquals(a, later)),
+                other => Assert.NotEqual((string)proof["proofEvidenceSha256"], (string)other.NativeVerification["proofEvidenceSha256"]));
+        }
+
+        [Fact]
+        public void TheLaterWorkWithPlusBundleRuntimeInspection_ListsEverySaveHookThatDiffersFromTheEarlierRelease()
+        {
+            var later = EventsBundleAudits.U16Build189647Wwp1621;
+            var inspection = (JObject)ManifestOf(later)["runtimeInspection"];
+
+            // The nine critical assemblies at least, read again from this bundle; the 23 more that hold Save-topic subscribers are
+            // byte for byte those of the earlier bundle, which read them.
+            Assert.True(inspection.Value<int>("assemblies") >= 9);
+            Assert.Equal(0, inspection.Value<int>("bodyErrors"));
+            Assert.Equal(0, inspection.Value<int>("decodeErrors"));
+            Assert.True(inspection.Value<bool>("coreProtectedBodiesRequireNativeProof"));
+            var whole = (JObject)inspection["wholeBundle"];
+            int codeAssemblies = ((JArray)ManifestOf(later)["assemblies"])
+                .Count(entry => !((string)entry["relativePath"]).EndsWith(".resources.dll", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(codeAssemblies, whole.Value<int>("codeAssemblies"));
+            Assert.Equal(0, whole.Value<int>("assembliesWhoseSubscriptionsDiffer"));
+            Assert.True(whole.Value<int>("assembliesSubscribingToSaveTopics") > 0);
+            // Unlike a build that carries the WorkWithPlus bytes of its control, this bundle carries another release: the save hooks found
+            // in both bundles are either identical or counted as different, the ones found in only one are counted too, and the
+            // differences say which (a difference that is not listed would be a hole in the audit).
+            int compared = inspection.Value<int>("saveHooksCompared");
+            Assert.True(compared > 0);
+            Assert.Equal(compared, inspection.Value<int>("identicalIl") + inspection.Value<int>("saveHooksDifferent"));
+            Assert.True(inspection.Value<int>("identicalReferenceSequences") <= inspection.Value<int>("identicalIl"));
+            Assert.True(inspection.Value<int>("saveHooksDifferent") > 0);
+            Assert.True(inspection.Value<int>("saveHooksNotPaired") >= 0);
+            Assert.True(inspection.Value<int>("methodsWithIdenticalIl") <= inspection.Value<int>("methodsCompared"));
+            string differences = string.Join(" ", ((JArray)inspection["differences"]).Values<string>());
+            Assert.Contains("BeforeSaveKBObject", differences);
+            Assert.Contains("BeforeSaveObjects", differences);
+            Assert.Contains("native proof", differences);
         }
 
         [Fact]
@@ -846,6 +981,18 @@ namespace GxMcp.Worker.Tests
             Assert.Single(inspections.Select(i => i.Value<int>("saveHooksCompared")).Distinct());
             Assert.Single(inspections.Select(i => i.Value<int>("assemblies")).Distinct());
             Assert.Single(inspections.Select(i => i["wholeBundle"].Value<int>("eventSubscriptions")).Distinct());
+        }
+
+        private static bool CriticalAssembliesAreInstalled(EventsBundleAudit audit, string installedRoot)
+        {
+            // The culture satellites share a name, so the entries are searched, not keyed; each critical assembly is listed exactly once.
+            var entries = ((JArray)ManifestOf(audit)["assemblies"]).Cast<JObject>().ToArray();
+            return audit.CriticalHashes.All(critical =>
+            {
+                var entry = entries.Single(candidate => (string)candidate["name"] == critical.Key);
+                string path = Path.Combine(installedRoot, ((string)entry["relativePath"]).Replace('/', Path.DirectorySeparatorChar));
+                return File.Exists(path) && FileSha(path) == critical.Value;
+            });
         }
 
         private static JObject ManifestOf(EventsBundleAudit audit)

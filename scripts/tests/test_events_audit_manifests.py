@@ -16,6 +16,8 @@ U16_189158_MANIFEST = CONFIG / "events-u16-wwp16.2-189158-audit.json"
 U16_189513_MANIFEST = CONFIG / "events-u16-wwp16.2-189513-audit.json"
 U16_189552_MANIFEST = CONFIG / "events-u16-wwp16.2-189552-audit.json"
 U16_189647_MANIFEST = CONFIG / "events-u16-wwp16.2-189647-audit.json"
+# The same SDK build 189647 with the later WorkWithPlus release 16.2.1.8463: a bundle (and a manifest) of its own.
+U16_189647_WWP1621_MANIFEST = CONFIG / "events-u16-wwp16.2.1-189647-audit.json"
 # Every audited U16 build, oldest first, with the manifest that audits it.
 U16_BUILD_MANIFESTS = {
     "189158": U16_189158_MANIFEST,
@@ -24,7 +26,7 @@ U16_BUILD_MANIFESTS = {
     "189595": U16_MANIFEST,
     "189647": U16_189647_MANIFEST,
 }
-U16_PROVEN_MANIFESTS = [U16_189158_MANIFEST, U16_189513_MANIFEST, U16_189552_MANIFEST, U16_189647_MANIFEST]
+U16_PROVEN_MANIFESTS = [U16_189158_MANIFEST, U16_189513_MANIFEST, U16_189552_MANIFEST, U16_189647_MANIFEST, U16_189647_WWP1621_MANIFEST]
 SDK_CORE = "Artech.Architecture.Common"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 CRITICAL = (
@@ -73,7 +75,7 @@ class EventsAuditManifestTests(unittest.TestCase):
     lane that always runs keeps the manifests and the native proof they cite well formed.
     """
 
-    def test_the_repository_ships_the_seven_audited_bundles(self):
+    def test_the_repository_ships_the_eight_audited_bundles(self):
         self.assertEqual(
             [
                 "events-u10-audit.json",
@@ -83,27 +85,33 @@ class EventsAuditManifestTests(unittest.TestCase):
                 "events-u16-wwp16.2-189552-audit.json",
                 "events-u16-wwp16.2-189647-audit.json",
                 "events-u16-wwp16.2-audit.json",
+                "events-u16-wwp16.2.1-189647-audit.json",
             ],
             [manifest.name for manifest in MANIFESTS],
         )
 
-    def test_the_sdk_core_names_one_bundle_and_only_a_workwithplus_assembly_may_be_shared(self):
+    def test_the_sdk_core_names_one_bundle_among_those_that_carry_the_same_workwithplus(self):
         # One WorkWithPlus release is installed on every SDK build (the five U16 builds carry the same bytes), so the
-        # Worker tells such bundles apart by the exact bytes of the SDK core: no two manifests may share it, and the Artech
-        # critical assemblies of one bundle belong to that bundle alone.
-        cores = {}
+        # Worker tells such bundles apart by the exact bytes of the SDK core: no two manifests that carry the same
+        # WorkWithPlus may share it. One SDK build may be audited with more than one WorkWithPlus release; the Artech
+        # critical assemblies of a bundle then belong to the bundles of that SDK build alone, never to another build.
+        pairs = {}
         owners = {}
         for manifest in MANIFESTS:
             data = _load(manifest)
             hashes = {entry["name"]: entry["sha256"] for entry in data["assemblies"] if entry["name"] in data["criticalAssemblies"]}
-            self.assertNotIn(hashes[SDK_CORE], cores, f"{manifest.name} shares its SDK core with {cores.get(hashes[SDK_CORE])}")
-            cores[hashes[SDK_CORE]] = manifest.name
+            key = (hashes.get("DVelop.Patterns.WorkWithPlus"), hashes[SDK_CORE])
+            self.assertNotIn(key, pairs, f"{manifest.name} shares its WorkWithPlus and SDK core with {pairs.get(key)}")
+            pairs[key] = manifest.name
             for name, sha in hashes.items():
-                owners.setdefault(sha, []).append((manifest.name, name))
+                owners.setdefault(sha, []).append((manifest.name, name, hashes[SDK_CORE]))
         for sha, users in owners.items():
             if len(users) > 1:
                 with self.subTest(sha256=sha[:12]):
-                    self.assertTrue(all(name.startswith("DVelop.") for _, name in users), users)
+                    if all(name.startswith("DVelop.") for _, name, _ in users):
+                        continue
+                    self.assertTrue(all(not name.startswith("DVelop.") for _, name, _ in users), users)
+                    self.assertEqual(1, len({core for _, _, core in users}), users)
 
     def test_the_u16_manifests_name_their_build_and_share_the_workwithplus_release_they_audited(self):
         manifests = {build: _load(path) for build, path in U16_BUILD_MANIFESTS.items()}
@@ -127,6 +135,34 @@ class EventsAuditManifestTests(unittest.TestCase):
                         shared,
                     )
                     self.assertEqual(manifests[first]["criticalAssemblies"], manifests[second]["criticalAssemblies"])
+
+    def test_the_later_workwithplus_release_on_build_189647_replaces_exactly_the_files_of_that_package(self):
+        earlier = _load(U16_189647_MANIFEST)
+        later = _load(U16_189647_WWP1621_MANIFEST)
+        self.assertEqual("18.0.16.189647+wwp16.2.0.8386", earlier["bundleId"])
+        self.assertEqual("18.0.16.189647+wwp16.2.1.8463", later["bundleId"])
+        self.assertEqual(earlier["criticalAssemblies"], later["criticalAssemblies"])
+        first = {entry["relativePath"].lower(): entry for entry in earlier["assemblies"]}
+        second = {entry["relativePath"].lower(): entry for entry in later["assemblies"]}
+        self.assertEqual(set(first), set(second))
+        changed = sorted(path for path in first if first[path]["sha256"] != second[path]["sha256"])
+        # Only the files of the WorkWithPlus package change (its four assemblies and their culture satellites): the SDK is the same build.
+        self.assertEqual(8, len(changed), changed)
+        for path in changed:
+            with self.subTest(path=path):
+                self.assertTrue(second[path]["name"].startswith("DVelop."))
+                self.assertEqual("16.2.0.8386", first[path]["productVersion"])
+                self.assertEqual("16.2.1.8463", second[path]["productVersion"])
+        by_name = {entry["name"]: entry for entry in later["assemblies"]}
+        entries = {entry["name"]: entry for entry in earlier["assemblies"]}
+        for name in later["criticalAssemblies"]:
+            with self.subTest(critical=name):
+                same = by_name[name]["sha256"] == entries[name]["sha256"]
+                self.assertEqual(not name.startswith("DVelop."), same)
+        self.assertEqual(
+            {key: value for key, value in earlier.items() if key not in ("bundleId", "assemblies", "nativeVerification", "runtimeInspection")},
+            {key: value for key, value in later.items() if key not in ("bundleId", "assemblies", "nativeVerification", "runtimeInspection")},
+        )
 
     def test_bundle_ids_are_distinct_and_name_the_workwithplus_release_when_the_bundle_has_it(self):
         ids = [_load(manifest)["bundleId"] for manifest in MANIFESTS]
@@ -159,8 +195,8 @@ class EventsAuditManifestTests(unittest.TestCase):
                 for critical in expected:
                     self.assertEqual(1, names.count(critical), critical)
 
-    def test_the_u10_u11_and_four_u16_build_manifests_are_verified_by_a_sanitized_result(self):
-        # Build 189595 predates the sanitized results kept in the repository; every later U16 build ships a proof of its own.
+    def test_the_u10_u11_and_five_u16_bundle_manifests_are_verified_by_a_sanitized_result(self):
+        # Build 189595 predates the sanitized results kept in the repository; every later U16 bundle ships a proof of its own.
         self.assertEqual([CONFIG / "events-u10-audit.json", U11_MANIFEST] + U16_PROVEN_MANIFESTS, _verified_manifests())
 
     def test_each_verified_proof_digest_is_the_sha256_of_the_sanitized_result_kept_in_the_repository(self):
