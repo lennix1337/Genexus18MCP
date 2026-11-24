@@ -51,7 +51,7 @@ Response bytes measure the UTF-8 bytes returned to the agent context (`content[*
 
 ## What this does not measure
 
-- Fixed session `tools/list` schema overhead (measured separately in `docs/benchmarks/2026-11-23-tools-list-size.md`).
+- Fixed session `tools/list` schema overhead (measured separately in the 2026-11-23 tools-list-size benchmark).
 - End-to-end LLM reasoning turns, tool-selection accuracy, or provider tokenizers (tokens here are estimated as `bytes / 4`).
 - Write/edit, build, navigation, or pattern-instance workflows; every operation in this benchmark is strictly read-only.
 - Large production KBs (40,000+ objects); `C:\KBs\KBTeste` is a small disposable GeneXus 18 KB, so full-table blob scans in `plain-sql` scale much worse on real production KBs.
