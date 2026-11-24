@@ -17,9 +17,28 @@ namespace GxMcp.Gateway
     {
         // Cache: toolName → inputSchema JObject (null = tool has no inputSchema or no constraints)
         private static readonly ConcurrentDictionary<string, JObject?> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, CompiledSchema?> _compiledSchemaCache = new(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, ISet<string>> _vocabularyCache = new(StringComparer.OrdinalIgnoreCase);
         private static readonly object _loadLock = new();
         private static JArray? _toolDefs;
+        private static readonly ValidationResult OkResult = new() { Ok = true };
+
+        private sealed class CompiledProperty
+        {
+            public string? DeclaredType { get; init; }
+            public HashSet<string>? EnumSet { get; init; }
+            public string[]? EnumValues { get; init; }
+            public string? EnumExpectedText { get; init; }
+            public string? Description { get; init; }
+        }
+
+        private sealed class CompiledSchema
+        {
+            public required (string Name, string ExpectedType)[] Required { get; init; }
+            public required bool AdditionalPropertiesFalse { get; init; }
+            public required Dictionary<string, CompiledProperty>? Properties { get; init; }
+            public required string[] DeclaredNames { get; init; }
+        }
 
         public sealed class Violation
         {
@@ -74,23 +93,21 @@ namespace GxMcp.Gateway
         /// </summary>
         public static ValidationResult Validate(string toolName, JObject? args)
         {
-            var schema = GetSchema(toolName);
-            if (schema == null)
-                return new ValidationResult { Ok = true };
+            var compiled = GetCompiledSchema(toolName);
+            if (compiled == null)
+                return OkResult;
 
-            var violations = new List<Violation>();
-            var properties = schema["properties"] as JObject;
-            var required = (schema["required"] as JArray)?.Select(t => t.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase)
-                           ?? new HashSet<string>();
-            bool additionalPropertiesFalse = schema["additionalProperties"]?.ToObject<bool?>() == false;
+            List<Violation>? violations = null;
+            List<Violation> EnsureViolations() => violations ??= new List<Violation>();
 
             // 1. Required fields must be present
-            foreach (string req in required)
+            var required = compiled.Required;
+            for (int i = 0; i < required.Length; i++)
             {
+                var (req, expectedType) = required[i];
                 if (args == null || args[req] == null)
                 {
-                    string expectedType = (properties?[req] as JObject)?["type"]?.ToString() ?? "value";
-                    violations.Add(new Violation
+                    EnsureViolations().Add(new Violation
                     {
                         Path = req,
                         Expected = expectedType,
@@ -99,33 +116,34 @@ namespace GxMcp.Gateway
                 }
             }
 
+            var properties = compiled.Properties;
             if (args != null && properties != null)
             {
-                foreach (var prop in args.Properties())
+                bool additionalPropertiesFalse = compiled.AdditionalPropertiesFalse;
+                for (JToken? child = args.First; child != null; child = child.Next)
                 {
-                    // 2. additionalProperties: false — reject unknown keys
-                    if (additionalPropertiesFalse && !properties.ContainsKey(prop.Name))
+                    if (child is not JProperty prop) continue;
+                    if (!properties.TryGetValue(prop.Name, out var propSchema))
                     {
-                        if (CrossCuttingArgs.Contains(prop.Name))
-                            continue;
-
-                        string? keySuggestion = DidYouMean.Suggest(
-                            prop.Name, properties.Properties().Select(p => p.Name));
-
-                        violations.Add(new Violation
+                        // 2. additionalProperties: false — reject unknown keys
+                        if (additionalPropertiesFalse)
                         {
-                            Path = prop.Name,
-                            Expected = "none (additionalProperties: false)",
-                            Actual = "unknown argument",
-                            Suggestion = keySuggestion,
-                            Accepted = DeclaredArgumentNames(properties)
-                        });
-                        continue;
-                    }
+                            if (CrossCuttingArgs.Contains(prop.Name))
+                                continue;
 
-                    var propSchema = properties[prop.Name] as JObject;
-                    if (propSchema == null)
-                    {
+                            string? keySuggestion = DidYouMean.Suggest(prop.Name, compiled.DeclaredNames);
+
+                            EnsureViolations().Add(new Violation
+                            {
+                                Path = prop.Name,
+                                Expected = "none (additionalProperties: false)",
+                                Actual = "unknown argument",
+                                Suggestion = keySuggestion,
+                                Accepted = compiled.DeclaredNames
+                            });
+                            continue;
+                        }
+
                         // Unknown key on a tool without additionalProperties:false.
                         // Fail loud ONLY when it's a high-confidence typo of a
                         // declared property (edit distance <= 2) — that can't be a
@@ -133,56 +151,55 @@ namespace GxMcp.Gateway
                         // certainly a slip. Cross-cutting args are never flagged.
                         if (!CrossCuttingArgs.Contains(prop.Name))
                         {
-                            string? keySuggestion = DidYouMean.Suggest(
-                                prop.Name, properties.Properties().Select(p => p.Name));
+                            string? keySuggestion = DidYouMean.Suggest(prop.Name, compiled.DeclaredNames);
                             if (keySuggestion != null)
                             {
-                                violations.Add(new Violation
+                                EnsureViolations().Add(new Violation
                                 {
                                     Path = prop.Name,
                                     Expected = "a known argument",
                                     Actual = "unknown argument",
                                     Suggestion = keySuggestion,
-                                    Accepted = DeclaredArgumentNames(properties)
+                                    Accepted = compiled.DeclaredNames
                                 });
                             }
                         }
                         continue;
                     }
 
-                    string? declaredType = propSchema["type"]?.ToString();
-                    var enumValues = propSchema["enum"] as JArray;
+                    var propValue = prop.Value;
+                    if (propValue.Type == JTokenType.Null)
+                        continue;
 
                     // 3. Type check
-                    if (declaredType != null && prop.Value.Type != JTokenType.Null)
+                    if (propSchema.DeclaredType != null)
                     {
-                        if (!IsTypeMatch(prop.Value, declaredType))
+                        if (!IsTypeMatch(propValue, propSchema.DeclaredType))
                         {
-                            violations.Add(new Violation
+                            EnsureViolations().Add(new Violation
                             {
                                 Path = prop.Name,
-                                Expected = declaredType,
-                                Actual = prop.Value.Type.ToString().ToLowerInvariant(),
-                                Received = prop.Value.ToString(Newtonsoft.Json.Formatting.None),
-                                Description = propSchema["description"]?.ToString()
+                                Expected = propSchema.DeclaredType,
+                                Actual = propValue.Type.ToString().ToLowerInvariant(),
+                                Received = propValue.ToString(Newtonsoft.Json.Formatting.None),
+                                Description = propSchema.Description
                             });
                             continue; // don't also check enum if type is wrong
                         }
                     }
 
                     // 4. Enum membership
-                    if (enumValues != null && prop.Value.Type != JTokenType.Null)
+                    if (propSchema.EnumSet != null)
                     {
-                        string val = prop.Value.ToString();
-                        var allowed = enumValues.Select(e => e.ToString()).ToList();
-                        if (!allowed.Contains(val, StringComparer.Ordinal))
+                        string val = propValue is JValue jv && jv.Value is string s ? s : propValue.ToString();
+                        if (!propSchema.EnumSet.Contains(val))
                         {
-                            violations.Add(new Violation
+                            EnsureViolations().Add(new Violation
                             {
                                 Path = prop.Name,
-                                Expected = "one of [" + string.Join(", ", allowed) + "]",
+                                Expected = propSchema.EnumExpectedText!,
                                 Actual = val,
-                                Suggestion = DidYouMean.Suggest(val, allowed)
+                                Suggestion = DidYouMean.Suggest(val, propSchema.EnumValues!)
                             });
                         }
                     }
@@ -190,13 +207,25 @@ namespace GxMcp.Gateway
             }
 
             if (string.Equals(toolName, "genexus_variable", StringComparison.OrdinalIgnoreCase))
-                ValidateVariableDimensions(args, violations);
+            {
+                var varViolations = violations ?? new List<Violation>();
+                ValidateVariableDimensions(args, varViolations);
+                if (varViolations.Count > 0) violations = varViolations;
+            }
             if (string.Equals(toolName, "genexus_lifecycle", StringComparison.OrdinalIgnoreCase))
-                ValidateLifecycleActionArguments(args, violations);
+            {
+                if (args?["verification"] is JToken verification && verification.Type != JTokenType.Null)
+                {
+                    ValidateLifecycleActionArguments(args, EnsureViolations());
+                }
+            }
+
+            if (violations == null || violations.Count == 0)
+                return OkResult;
 
             return new ValidationResult
             {
-                Ok = violations.Count == 0,
+                Ok = false,
                 Violations = violations
             };
         }
@@ -399,9 +428,6 @@ namespace GxMcp.Gateway
         private const int MaxQuotedValueLength = 80;
         private const int MaxListedAcceptedArguments = 40;
 
-        private static List<string> DeclaredArgumentNames(JObject properties)
-            => properties.Properties().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToList();
-
         /// <summary>
         /// One sentence per violation that names the field, the value that was
         /// received and what is accepted. This text is also placed in
@@ -527,6 +553,87 @@ namespace GxMcp.Gateway
                 CollectVocabulary(child.Value, words);
         }
 
+        private static CompiledSchema? GetCompiledSchema(string toolName)
+        {
+            if (_compiledSchemaCache.TryGetValue(toolName, out var cached))
+                return cached;
+
+            var schema = GetSchema(toolName);
+            var compiled = CompileSchema(schema);
+            _compiledSchemaCache[toolName] = compiled;
+            return compiled;
+        }
+
+        private static CompiledSchema? CompileSchema(JObject? schema)
+        {
+            if (schema == null) return null;
+
+            var propertiesObj = schema["properties"] as JObject;
+            var requiredSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var requiredList = new List<(string Name, string ExpectedType)>();
+            if (schema["required"] is JArray reqArray)
+            {
+                foreach (var token in reqArray)
+                {
+                    string req = token.ToString();
+                    if (requiredSet.Add(req))
+                    {
+                        string expectedType = (propertiesObj?[req] as JObject)?["type"]?.ToString() ?? "value";
+                        requiredList.Add((req, expectedType));
+                    }
+                }
+            }
+
+            Dictionary<string, CompiledProperty>? compiledProps = null;
+            string[] declaredNames = Array.Empty<string>();
+            if (propertiesObj != null)
+            {
+                compiledProps = new Dictionary<string, CompiledProperty>(propertiesObj.Count, StringComparer.Ordinal);
+                var names = new List<string>(propertiesObj.Count);
+                foreach (var prop in propertiesObj.Properties())
+                {
+                    names.Add(prop.Name);
+                    if (prop.Value is not JObject propSchema) continue;
+
+                    string? declaredType = propSchema["type"]?.ToString();
+                    string? description = propSchema["description"]?.ToString();
+                    HashSet<string>? enumSet = null;
+                    string[]? enumValues = null;
+                    string? enumExpectedText = null;
+                    if (propSchema["enum"] is JArray enumArr)
+                    {
+                        enumValues = new string[enumArr.Count];
+                        enumSet = new HashSet<string>(enumArr.Count, StringComparer.Ordinal);
+                        for (int i = 0; i < enumArr.Count; i++)
+                        {
+                            string v = enumArr[i].ToString();
+                            enumValues[i] = v;
+                            enumSet.Add(v);
+                        }
+                        enumExpectedText = "one of [" + string.Join(", ", enumValues) + "]";
+                    }
+
+                    compiledProps[prop.Name] = new CompiledProperty
+                    {
+                        DeclaredType = declaredType,
+                        EnumSet = enumSet,
+                        EnumValues = enumValues,
+                        EnumExpectedText = enumExpectedText,
+                        Description = description
+                    };
+                }
+                declaredNames = names.ToArray();
+            }
+
+            return new CompiledSchema
+            {
+                Required = requiredList.ToArray(),
+                AdditionalPropertiesFalse = schema["additionalProperties"]?.ToObject<bool?>() == false,
+                Properties = compiledProps,
+                DeclaredNames = declaredNames
+            };
+        }
+
         private static JObject? GetSchema(string toolName)
         {
             if (_schemaCache.TryGetValue(toolName, out var cached))
@@ -578,6 +685,7 @@ namespace GxMcp.Gateway
         internal static void PrimeCache(string toolName, JObject? schema)
         {
             _schemaCache[toolName] = schema;
+            _compiledSchemaCache[toolName] = CompileSchema(schema);
             _vocabularyCache.TryRemove(toolName, out _);
         }
 
@@ -587,6 +695,7 @@ namespace GxMcp.Gateway
         internal static void ClearCache()
         {
             _schemaCache.Clear();
+            _compiledSchemaCache.Clear();
             _vocabularyCache.Clear();
             lock (_loadLock) { _toolDefs = null; }
             ToolDefinitionsLocator.ClearCache();

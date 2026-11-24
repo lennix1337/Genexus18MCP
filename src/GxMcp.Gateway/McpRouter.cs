@@ -85,6 +85,8 @@ namespace GxMcp.Gateway
         private static readonly List<IMcpModuleRouter> _routers;
         private static Dictionary<string, IMcpModuleRouter> _routerByTool = new Dictionary<string, IMcpModuleRouter>(StringComparer.OrdinalIgnoreCase);
         private static HashSet<string> _declaredToolNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static Dictionary<string, JObject> _toolDefinitionsByName = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+        private static HashSet<string> _toolsWithOutputSchema = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static JArray _toolDefinitions = new JArray();
         private static JObject? _cachedToolsListResponse;
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, JObject> _cachedProfileResponses =
@@ -258,18 +260,23 @@ namespace GxMcp.Gateway
                     // the source JSON is edited in a different order.
                     _toolDefinitions = new JArray(parsed.OfType<JObject>()
                         .OrderBy(definition => definition["name"]?.ToString() ?? string.Empty, StringComparer.Ordinal));
-                    _declaredToolNames = new HashSet<string>(
-                        _toolDefinitions.OfType<JObject>()
-                            .Select(d => d["name"]?.ToString() ?? string.Empty)
-                            .Where(n => !string.IsNullOrEmpty(n)),
-                        StringComparer.OrdinalIgnoreCase);
-                    _cachedToolsListResponse = new JObject
+                    var declaredToolNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var toolDefsByName = new Dictionary<string, JObject>(_toolDefinitions.Count, StringComparer.OrdinalIgnoreCase);
+                    var toolsWithOutputSchema = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var definition in _toolDefinitions.OfType<JObject>())
                     {
-                        ["resultType"] = "complete",
-                        ["tools"] = ToolProfileFilter.GetOrCreateFiltered(_toolDefinitions, "all"),
-                        ["ttlMs"] = PublicResourceTtlMs,
-                        ["cacheScope"] = "public"
-                    };
+                        string? defName = definition["name"]?.ToString();
+                        if (string.IsNullOrEmpty(defName)) continue;
+                        declaredToolNames.Add(defName);
+                        if (!toolDefsByName.ContainsKey(defName))
+                            toolDefsByName[defName] = definition;
+                        if (definition["outputSchema"] != null)
+                            toolsWithOutputSchema.Add(defName);
+                    }
+                    _declaredToolNames = declaredToolNames;
+                    _toolDefinitionsByName = toolDefsByName;
+                    _toolsWithOutputSchema = toolsWithOutputSchema;
+                    _cachedToolsListResponse = null;
                     _cachedProfileResponses.Clear();
                     _adaptiveListResponses.Clear();
                     ToolProfileFilter.InvalidateCache();
@@ -297,8 +304,21 @@ namespace GxMcp.Gateway
                 lookupName = canonicalName;
             }
 
-            return _toolDefinitions.OfType<JObject>().FirstOrDefault(definition =>
-                string.Equals(definition["name"]?.ToString(), lookupName, StringComparison.OrdinalIgnoreCase));
+            return _toolDefinitionsByName.TryGetValue(lookupName, out var definition) ? definition : null;
+        }
+
+        internal static bool ToolDeclaresOutputSchema(string? toolName)
+        {
+            if (string.IsNullOrWhiteSpace(toolName)) return false;
+
+            string lookupName = toolName!;
+            if (!_declaredToolNames.Contains(lookupName)
+                && TryRewriteLegacyTool(toolName!, null, out string canonicalName, out _))
+            {
+                lookupName = canonicalName;
+            }
+
+            return _toolsWithOutputSchema.Contains(lookupName);
         }
 
         private static void SetupToolDefinitionsWatcher()
@@ -498,7 +518,7 @@ namespace GxMcp.Gateway
                         string activeProfile = ToolProfileFilter.ResolveActiveProfile(Program.ActiveConfig?.Server?.ToolProfile);
                         if (string.IsNullOrEmpty(activeProfile) || activeProfile == "all")
                         {
-                            return _cachedToolsListResponse ?? new JObject
+                            return _cachedToolsListResponse ??= new JObject
                             {
                                 ["resultType"] = "complete",
                                 ["tools"] = ToolProfileFilter.GetOrCreateFiltered(_toolDefinitions, "all"),
@@ -1792,17 +1812,31 @@ namespace GxMcp.Gateway
 
         internal static void StripNulls(JObject obj)
         {
-            var toRemove = new List<string>();
-            foreach (var prop in obj.Properties())
+            JToken? current = obj.First;
+            while (current != null)
             {
-                if (prop.Value is null || prop.Value.Type == JTokenType.Null)
-                    toRemove.Add(prop.Name);
-                else if (prop.Value is JObject child)
-                    StripNulls(child);
-                else if (prop.Value is JArray arr)
-                    foreach (var item in arr) if (item is JObject o) StripNulls(o);
+                JToken? next = current.Next;
+                if (current is JProperty prop)
+                {
+                    var value = prop.Value;
+                    if (value is null || value.Type == JTokenType.Null)
+                    {
+                        prop.Remove();
+                    }
+                    else if (value is JObject child)
+                    {
+                        StripNulls(child);
+                    }
+                    else if (value is JArray arr)
+                    {
+                        for (int i = 0; i < arr.Count; i++)
+                        {
+                            if (arr[i] is JObject o) StripNulls(o);
+                        }
+                    }
+                }
+                current = next;
             }
-            foreach (var name in toRemove) obj.Remove(name);
         }
 
         /// <summary>

@@ -140,6 +140,12 @@ namespace GxMcp.Gateway
                 ["genexus_create"] = new[] { "objectType", "updateExisting", "parentPath" }
             };
 
+        private static readonly Dictionary<string, HashSet<string>> AdvancedInputSets =
+            AdvancedInputs.ToDictionary(
+                kvp => kvp.Key,
+                kvp => new HashSet<string>(kvp.Value, StringComparer.Ordinal),
+                StringComparer.OrdinalIgnoreCase);
+
         public static string ResolveActiveProfile(string? configuredProfile = null)
         {
             string? envProfile = global::System.Environment.GetEnvironmentVariable("GXMCP_PROFILE");
@@ -250,13 +256,6 @@ namespace GxMcp.Gateway
             return profiles;
         }
 
-        private static void RemoveAdvancedInputs(JObject tool)
-        {
-            if (!AdvancedInputs.TryGetValue(tool["name"]?.ToString() ?? string.Empty, out var hidden)) return;
-            if (tool["inputSchema"]?["properties"] is not JObject properties) return;
-            foreach (string input in hidden) properties.Remove(input);
-        }
-
         private static JArray Compact(IEnumerable<JToken> tools, bool hideAdvancedInputs)
         {
             var result = new JArray();
@@ -268,12 +267,39 @@ namespace GxMcp.Gateway
                     continue;
                 }
 
-                var compacted = (JObject)definition.DeepClone();
-                if (hideAdvancedInputs) RemoveAdvancedInputs(compacted);
-                compacted["description"] = BuildCompactToolDescription(
-                    compacted["name"]?.ToString(),
-                    compacted["description"]?.ToString());
-                if (compacted["inputSchema"] is JToken schema) CompactSchema(schema);
+                string? toolName = definition["name"]?.ToString();
+                HashSet<string>? hiddenProps = hideAdvancedInputs
+                    && !string.IsNullOrEmpty(toolName)
+                    && AdvancedInputSets.TryGetValue(toolName, out var hidden)
+                    ? hidden
+                    : null;
+
+                var compacted = new JObject();
+                bool wroteDescription = false;
+                for (JToken? child = definition.First; child != null; child = child.Next)
+                {
+                    if (child is not JProperty prop) continue;
+                    if (string.Equals(prop.Name, "description", StringComparison.Ordinal))
+                    {
+                        string? desc = prop.Value is JValue dv && dv.Value is string ds
+                            ? ds
+                            : (prop.Value.Type == JTokenType.Null ? null : prop.Value.ToString());
+                        compacted[prop.Name] = BuildCompactToolDescription(toolName, desc);
+                        wroteDescription = true;
+                    }
+                    else if (string.Equals(prop.Name, "inputSchema", StringComparison.Ordinal))
+                    {
+                        compacted[prop.Name] = CloneCompactedSchema(prop.Value, hiddenProps, isTopLevelSchema: true);
+                    }
+                    else
+                    {
+                        compacted[prop.Name] = prop.Value.DeepClone();
+                    }
+                }
+                if (!wroteDescription)
+                {
+                    compacted["description"] = BuildCompactToolDescription(toolName, null);
+                }
                 result.Add(compacted);
             }
             return result;
@@ -306,8 +332,10 @@ namespace GxMcp.Gateway
         {
             if (string.IsNullOrWhiteSpace(description)) return string.Empty;
 
-            string withoutPointer = ToolHelpPointerSentence.Replace(description, " ");
-            string text = string.Join(" ", withoutPointer.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            string withoutPointer = description.IndexOf("genexus://kb/tool-help/", StringComparison.Ordinal) >= 0
+                ? ToolHelpPointerSentence.Replace(description, " ")
+                : description;
+            string text = NormalizeWhitespace(withoutPointer);
             if (text.Length <= MaxToolSummaryLength) return text;
 
             int sentenceEnd = LastSentenceEnd(text, MaxToolSummaryLength);
@@ -393,62 +421,183 @@ namespace GxMcp.Gateway
             return allowlist == null || allowlist.Contains(toolName);
         }
 
-        private static void CompactSchema(JToken token)
+        private static JToken CloneCompactedSchema(JToken token, HashSet<string>? hiddenTopLevelProps, bool isTopLevelSchema)
         {
             if (token is JObject obj)
             {
-                foreach (var property in obj.Properties().ToList())
+                var clone = new JObject();
+                for (JToken? child = obj.First; child != null; child = child.Next)
                 {
-                    if (string.Equals(property.Name, "examples", StringComparison.OrdinalIgnoreCase))
+                    if (child is not JProperty property) continue;
+                    string propName = property.Name;
+                    if (string.Equals(propName, "examples", StringComparison.OrdinalIgnoreCase))
                     {
-                        property.Remove();
+                        continue;
                     }
-                    else if (string.Equals(property.Name, "description", StringComparison.OrdinalIgnoreCase)
-                        && property.Value.Type == JTokenType.String)
+                    if (string.Equals(propName, "description", StringComparison.OrdinalIgnoreCase)
+                        && property.Value is JValue dv && dv.Type == JTokenType.String && dv.Value is string descStr)
                     {
-                        property.Value = CompactDescription(property.Value.ToString());
+                        clone[propName] = CompactDescription(descStr);
+                    }
+                    else if (isTopLevelSchema
+                        && hiddenTopLevelProps != null
+                        && string.Equals(propName, "properties", StringComparison.Ordinal)
+                        && property.Value is JObject propsObj)
+                    {
+                        var filteredProps = new JObject();
+                        for (JToken? propChild = propsObj.First; propChild != null; propChild = propChild.Next)
+                        {
+                            if (propChild is not JProperty inputProp) continue;
+                            if (hiddenTopLevelProps.Contains(inputProp.Name)) continue;
+                            filteredProps[inputProp.Name] = CloneCompactedSchema(inputProp.Value, null, isTopLevelSchema: false);
+                        }
+                        clone[propName] = filteredProps;
+                    }
+                    else if (property.Value is JValue)
+                    {
+                        clone[propName] = property.Value.DeepClone();
                     }
                     else
                     {
-                        CompactSchema(property.Value);
+                        clone[propName] = CloneCompactedSchema(property.Value, null, isTopLevelSchema: false);
                     }
                 }
+                return clone;
             }
-            else if (token is JArray array)
+            if (token is JArray array)
             {
-                foreach (JToken item in array) CompactSchema(item);
+                var clone = new JArray();
+                for (int i = 0; i < array.Count; i++)
+                {
+                    JToken item = array[i];
+                    clone.Add(item is JValue ? item.DeepClone() : CloneCompactedSchema(item, null, isTopLevelSchema: false));
+                }
+                return clone;
+            }
+            return token.DeepClone();
+        }
+
+        private static string NormalizeWhitespace(string input)
+        {
+            int srcLen = input.Length;
+            char[]? rented = null;
+            Span<char> buf = srcLen <= 512
+                ? stackalloc char[srcLen]
+                : (rented = System.Buffers.ArrayPool<char>.Shared.Rent(srcLen)).AsSpan(0, srcLen);
+            try
+            {
+                int len = 0;
+                bool pendingSpace = false;
+                bool modified = false;
+                for (int i = 0; i < srcLen; i++)
+                {
+                    char c = input[i];
+                    if (char.IsWhiteSpace(c))
+                    {
+                        if (len > 0)
+                        {
+                            if (pendingSpace || c != ' ') modified = true;
+                            pendingSpace = true;
+                        }
+                        else
+                        {
+                            modified = true;
+                        }
+                        continue;
+                    }
+                    if (pendingSpace)
+                    {
+                        buf[len++] = ' ';
+                        pendingSpace = false;
+                    }
+                    buf[len++] = c;
+                }
+                if (pendingSpace) modified = true;
+                if (len == 0) return string.Empty;
+                return !modified ? input : new string(buf.Slice(0, len));
+            }
+            finally
+            {
+                if (rented != null) System.Buffers.ArrayPool<char>.Shared.Return(rented);
             }
         }
 
         private static string CompactDescription(string description)
         {
             const int maxLength = 40;
-            string normalized = string.Join(" ", description.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-            if (normalized.Length <= maxLength) return normalized;
+            if (string.IsNullOrEmpty(description)) return string.Empty;
 
-            int end = normalized.LastIndexOf(' ', maxLength - 1);
+            Span<char> buf = stackalloc char[maxLength + 1];
+            int len = 0;
+            bool pendingSpace = false;
+            bool modified = false;
+            bool overflow = false;
+
+            for (int i = 0; i < description.Length; i++)
+            {
+                char c = description[i];
+                if (char.IsWhiteSpace(c))
+                {
+                    if (len > 0)
+                    {
+                        if (pendingSpace || c != ' ') modified = true;
+                        pendingSpace = true;
+                    }
+                    else
+                    {
+                        modified = true;
+                    }
+                    continue;
+                }
+
+                if (pendingSpace)
+                {
+                    if (len == maxLength)
+                    {
+                        overflow = true;
+                        break;
+                    }
+                    buf[len++] = ' ';
+                    pendingSpace = false;
+                }
+
+                if (len == maxLength)
+                {
+                    overflow = true;
+                    break;
+                }
+                buf[len++] = c;
+            }
+
+            if (!overflow)
+            {
+                if (pendingSpace) modified = true;
+                if (len == 0) return string.Empty;
+                return !modified ? description : new string(buf.Slice(0, len));
+            }
+
+            int end = buf.Slice(0, maxLength).LastIndexOf(' ');
             if (end <= 0) end = maxLength - 1;
-            return normalized.Substring(0, end).TrimEnd() + "…";
+            while (end > 0 && buf[end - 1] == ' ') end--;
+            buf[end] = '…';
+            return new string(buf.Slice(0, end + 1));
         }
 
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, JArray> _profileCache =
-            new System.Collections.Concurrent.ConcurrentDictionary<string, JArray>(StringComparer.OrdinalIgnoreCase);
+        private static System.Runtime.CompilerServices.ConditionalWeakTable<JArray, System.Collections.Concurrent.ConcurrentDictionary<string, JArray>> _profileCacheBySource =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<JArray, System.Collections.Concurrent.ConcurrentDictionary<string, JArray>>();
 
         public static void InvalidateCache()
         {
-            _profileCache.Clear();
+            _profileCacheBySource = new System.Runtime.CompilerServices.ConditionalWeakTable<JArray, System.Collections.Concurrent.ConcurrentDictionary<string, JArray>>();
         }
 
         public static JArray GetOrCreateFiltered(JArray tools, string? profile)
         {
             if (tools == null || tools.Count == 0) return new JArray();
             string normalizedProfile = (profile ?? "").Trim().ToLowerInvariant();
-            if (string.IsNullOrEmpty(normalizedProfile) || normalizedProfile == "all")
-            {
-                return Filter(tools, "all");
-            }
-
-            return _profileCache.GetOrAdd(normalizedProfile, p => Filter(tools, p));
+            string cacheKey = string.IsNullOrEmpty(normalizedProfile) ? "all" : normalizedProfile;
+            var perSource = _profileCacheBySource.GetOrCreateValue(tools);
+            return perSource.GetOrAdd(cacheKey, p => Filter(tools, p));
         }
     }
 }

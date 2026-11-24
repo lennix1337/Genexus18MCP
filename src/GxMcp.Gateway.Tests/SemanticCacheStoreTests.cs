@@ -124,5 +124,37 @@ namespace GxMcp.Gateway.Tests
                 Environment.SetEnvironmentVariable("GXMCP_SEMANTIC_CACHE_MAX_BYTES", null);
             }
         }
+
+        [Fact]
+        public void SweepExpired_ConcurrentRefresh_PreservesRefreshedEntryAndNextExpiryDeadline()
+        {
+            long now = 0;
+            var store = new SemanticCacheStore(16, TimeSpan.FromMilliseconds(100), () => Interlocked.Read(ref now));
+            store.Set("k", Envelope("v1"));
+
+            Interlocked.Exchange(ref now, 200);
+            bool refreshedDuringSweep = false;
+            store.OnSweepCandidateForTest = key =>
+            {
+                if (key == "k" && !refreshedDuringSweep)
+                {
+                    refreshedDuringSweep = true;
+                    Interlocked.Exchange(ref now, 250);
+                    System.Threading.Tasks.Task.Run(() => store.Set("k", Envelope("v2"))).GetAwaiter().GetResult();
+                }
+            };
+
+            store.Set("trigger", Envelope("t"));
+            store.OnSweepCandidateForTest = null;
+
+            Assert.True(store.TryGet("k", out var refreshed));
+            Assert.Equal("v2", refreshed?["marker"]?.ToString());
+
+            // Advance past the refreshed entry's TTL (250 + 100 = 350) and verify the
+            // next Set sweeps it (i.e. _nextExpiryCheckAt was not clobbered to MaxValue).
+            Interlocked.Exchange(ref now, 400);
+            store.Set("trigger2", Envelope("t2"));
+            Assert.False(store.TryGet("k", out _));
+        }
     }
 }

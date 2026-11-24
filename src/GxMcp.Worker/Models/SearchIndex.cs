@@ -100,6 +100,15 @@ namespace GxMcp.Worker.Models
             public List<string> Tables { get => _tables ?? (_tables = new List<string>(0)); set => _tables = value; }
             public List<string> Rules { get => _rules ?? (_rules = new List<string>(0)); set => _rules = value; }
 
+            // Non-allocating read-only accessors for hot search/filter paths so inspecting
+            // empty entries never lazily materializes new List<string>(0) instances.
+            internal List<string> TagsOrNull => _tags;
+            internal List<string> KeywordsOrNull => _keywords;
+            internal List<string> CallsOrNull => _calls;
+            internal List<string> CalledByOrNull => _calledBy;
+            internal List<string> TablesOrNull => _tables;
+            internal List<string> RulesOrNull => _rules;
+
             public bool ShouldSerializeTags() => _tags != null && _tags.Count > 0;
             public bool ShouldSerializeKeywords() => _keywords != null && _keywords.Count > 0;
             public bool ShouldSerializeCalls() => _calls != null && _calls.Count > 0;
@@ -265,6 +274,18 @@ namespace GxMcp.Worker.Models
             return changed ? next : list;
         }
 
+        /// <summary>
+        /// Point-in-time snapshot enumeration of all entries in <see cref="Objects"/>.
+        /// Uses <c>ConcurrentDictionary.Values</c> so concurrent <c>AddOrUpdateBatch</c>
+        /// mutations do not mix pre- and post-mutation states during Search/List/SourceSearch.
+        /// </summary>
+        public IEnumerable<IndexEntry> EnumerateObjects()
+        {
+            var objects = Objects;
+            if (objects == null) return Array.Empty<IndexEntry>();
+            return objects.Values;
+        }
+
         private List<IndexEntry> ResolveKeys(HashSet<string> keys)
         {
             if (keys == null || Objects == null) return new List<IndexEntry>(0);
@@ -282,7 +303,7 @@ namespace GxMcp.Worker.Models
 
         /// <summary>
         /// Finds all objects with the given bare name.
-        /// Uses ByNameIndex (O(1)) when available, otherwise falls back to scanning Objects.Values.
+        /// Uses ByNameIndex (O(1)) when available, otherwise falls back to scanning Objects.
         /// </summary>
         public List<IndexEntry> FindByName(string name)
         {
@@ -297,9 +318,13 @@ namespace GxMcp.Worker.Models
                     : new List<IndexEntry>(0);
             }
 
-            return Objects.Values
-                .Where(e => e != null && string.Equals(e.Name, trimmed, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            var results = new List<IndexEntry>();
+            foreach (var e in EnumerateObjects())
+            {
+                if (string.Equals(e.Name, trimmed, StringComparison.OrdinalIgnoreCase))
+                    results.Add(e);
+            }
+            return results;
         }
 
         /// <summary>
@@ -336,7 +361,7 @@ namespace GxMcp.Worker.Models
 
         /// <summary>
         /// Finds an object by its Guid.
-        /// Uses GuidToKey (O(1)) when available, otherwise falls back to scanning Objects.Values.
+        /// Uses GuidToKey (O(1)) when available, otherwise falls back to scanning Objects.
         /// </summary>
         public IndexEntry FindByGuid(string guid)
         {
@@ -347,7 +372,12 @@ namespace GxMcp.Worker.Models
                 if (Objects.TryGetValue(key, out var entry) && entry != null)
                     return entry;
             }
-            return Objects.Values.FirstOrDefault(e => e != null && string.Equals(e.Guid, trimmed, StringComparison.OrdinalIgnoreCase));
+            foreach (var e in EnumerateObjects())
+            {
+                if (string.Equals(e.Guid, trimmed, StringComparison.OrdinalIgnoreCase))
+                    return e;
+            }
+            return null;
         }
 
         /// <summary>
@@ -359,7 +389,12 @@ namespace GxMcp.Worker.Models
         {
             if (string.IsNullOrWhiteSpace(entityKey) || Objects == null) return null;
             string trimmed = entityKey.Trim();
-            return Objects.Values.FirstOrDefault(e => e != null && string.Equals(e.EntityKey, trimmed, StringComparison.OrdinalIgnoreCase));
+            foreach (var e in EnumerateObjects())
+            {
+                if (string.Equals(e.EntityKey, trimmed, StringComparison.OrdinalIgnoreCase))
+                    return e;
+            }
+            return null;
         }
 
         /// <summary>
@@ -373,12 +408,17 @@ namespace GxMcp.Worker.Models
             {
                 return ByNameIndex.ContainsKey(trimmed);
             }
-            return Objects.Values.Any(e => e != null && string.Equals(e.Name, trimmed, StringComparison.OrdinalIgnoreCase));
+            foreach (var e in EnumerateObjects())
+            {
+                if (string.Equals(e.Name, trimmed, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>
         /// Finds all objects of the specified type.
-        /// Uses TypeIndex (O(1)) when available, otherwise falls back to scanning Objects.Values.
+        /// Uses TypeIndex (O(1)) when available, otherwise falls back to scanning Objects.
         /// </summary>
         public List<IndexEntry> FindByType(string type)
         {
@@ -393,14 +433,18 @@ namespace GxMcp.Worker.Models
                     : new List<IndexEntry>(0);
             }
 
-            return Objects.Values
-                .Where(e => e != null && string.Equals(e.Type, trimmed, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            var results = new List<IndexEntry>();
+            foreach (var e in EnumerateObjects())
+            {
+                if (string.Equals(e.Type, trimmed, StringComparison.OrdinalIgnoreCase))
+                    results.Add(e);
+            }
+            return results;
         }
 
         /// <summary>
         /// Finds all objects matching any of the specified types.
-        /// Uses TypeIndex (O(1)) when available, otherwise falls back to scanning Objects.Values.
+        /// Uses TypeIndex (O(1)) when available, otherwise falls back to scanning Objects.
         /// </summary>
         public List<IndexEntry> FindByTypes(IEnumerable<string> types)
         {
@@ -424,14 +468,18 @@ namespace GxMcp.Worker.Models
             }
 
             var typeSet = new HashSet<string>(typeList, StringComparer.OrdinalIgnoreCase);
-            return Objects.Values
-                .Where(e => e != null && !string.IsNullOrEmpty(e.Type) && typeSet.Contains(e.Type))
-                .ToList();
+            var results = new List<IndexEntry>();
+            foreach (var e in EnumerateObjects())
+            {
+                if (!string.IsNullOrEmpty(e.Type) && typeSet.Contains(e.Type))
+                    results.Add(e);
+            }
+            return results;
         }
 
         /// <summary>
         /// Finds all objects of the specified business domain.
-        /// Uses DomainIndex (O(1)) when available, otherwise falls back to scanning Objects.Values.
+        /// Uses DomainIndex (O(1)) when available, otherwise falls back to scanning Objects.
         /// </summary>
         public List<IndexEntry> FindByDomain(string domain)
         {
@@ -446,9 +494,13 @@ namespace GxMcp.Worker.Models
                     : new List<IndexEntry>(0);
             }
 
-            return Objects.Values
-                .Where(e => e != null && string.Equals(e.BusinessDomain, trimmed, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            var results = new List<IndexEntry>();
+            foreach (var e in EnumerateObjects())
+            {
+                if (string.Equals(e.BusinessDomain, trimmed, StringComparison.OrdinalIgnoreCase))
+                    results.Add(e);
+            }
+            return results;
         }
     }
 }

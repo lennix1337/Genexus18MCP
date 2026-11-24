@@ -48,6 +48,11 @@ namespace GxMcp.Gateway
         private readonly Func<long> _clock;
         private readonly int _maxEntries;
         private readonly TimeSpan _ttl;
+        private readonly long _ttlFloorMs;
+        // Earliest tick at which any entry currently in the cache may expire.
+        // Lets Set() skip scanning all entries when no entry can be expired yet.
+        private long _nextExpiryCheckAt = long.MaxValue;
+        internal Action<string>? OnSweepCandidateForTest { get; set; }
         // Logical clock: TickCount64 alone has 1ms resolution, so several accesses
         // can land on the same tick and leave LRU order ambiguous. Stamps only
         // move forward — a bumped stamp is still fresh enough for TTL checks.
@@ -77,6 +82,7 @@ namespace GxMcp.Gateway
             _maxEntries = maxEntries > 0 ? maxEntries : DefaultMaxEntries;
             _maxBytes = maxBytes > 0 ? maxBytes : DefaultMaxBytes;
             _ttl = ttl;
+            _ttlFloorMs = ttl <= TimeSpan.Zero ? 0L : (long)Math.Floor(ttl.TotalMilliseconds);
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         }
 
@@ -112,14 +118,15 @@ namespace GxMcp.Gateway
 
         public void Set(string key, JObject value)
         {
+            long now = _clock();
             // Opportunistic maintenance: expire stale entries first so they don't
             // consume capacity that would otherwise force live entries out.
-            SweepExpired();
+            SweepExpired(now);
 
             _entries[key] = value;
-            long now = _clock();
             _createdAt[key] = now;
             _lastAccess[key] = NextStamp();
+            RecordExpiryCheckAt(AddSaturated(now, _ttlFloorMs));
             TrackEntryBytes(key, value);
 
             EvictBeyondCap();
@@ -135,6 +142,7 @@ namespace GxMcp.Gateway
             _createdAt.Clear();
             _entryBytes.Clear();
             Interlocked.Exchange(ref _totalBytes, 0);
+            Interlocked.Exchange(ref _nextExpiryCheckAt, long.MaxValue);
             _scopeRevisions.Clear();
         }
 
@@ -328,15 +336,59 @@ namespace GxMcp.Gateway
             }
         }
 
-        private void SweepExpired()
+        private static long AddSaturated(long a, long b)
+            => b > 0 && a > long.MaxValue - b ? long.MaxValue : a + b;
+
+        private void RecordExpiryCheckAt(long candidate)
         {
-            foreach (var key in _lastAccess.Keys.ToArray())
+            long current = Volatile.Read(ref _nextExpiryCheckAt);
+            while (candidate < current)
             {
-                if (_entries.ContainsKey(key) && IsExpired(key))
+                long observed = Interlocked.CompareExchange(ref _nextExpiryCheckAt, candidate, current);
+                if (observed == current) return;
+                current = observed;
+            }
+        }
+
+        private void SweepExpired(long now)
+        {
+            if (_entries.IsEmpty)
+            {
+                Interlocked.Exchange(ref _nextExpiryCheckAt, long.MaxValue);
+                return;
+            }
+            if (_ttlFloorMs > 0 && now < Volatile.Read(ref _nextExpiryCheckAt))
+            {
+                return;
+            }
+
+            // Reset before scanning so any concurrent Set() after this point lowers
+            // _nextExpiryCheckAt via RecordExpiryCheckAt without being clobbered.
+            Interlocked.Exchange(ref _nextExpiryCheckAt, long.MaxValue);
+
+            long earliestRemaining = long.MaxValue;
+            foreach (var pair in _createdAt)
+            {
+                OnSweepCandidateForTest?.Invoke(pair.Key);
+                if (TimeSpan.FromMilliseconds(now - pair.Value) >= _ttl)
                 {
-                    RemoveEntry(key);
+                    if (!RemoveExpiredEntry(pair.Key, pair.Value)
+                        && _createdAt.TryGetValue(pair.Key, out long currentCreatedAt)
+                        && currentCreatedAt < earliestRemaining)
+                    {
+                        earliestRemaining = currentCreatedAt;
+                    }
+                }
+                else if (pair.Value < earliestRemaining)
+                {
+                    earliestRemaining = pair.Value;
                 }
             }
+
+            long nextCheck = earliestRemaining == long.MaxValue
+                ? long.MaxValue
+                : AddSaturated(earliestRemaining, _ttlFloorMs);
+            RecordExpiryCheckAt(nextCheck);
         }
 
         private void EvictBeyondCap()
@@ -344,14 +396,20 @@ namespace GxMcp.Gateway
             while (_entries.Count > _maxEntries
                 || Interlocked.Read(ref _totalBytes) > _maxBytes)
             {
-                // Least-recently-accessed victim. ToArray snapshot: concurrent writers
-                // may race, but the loop re-checks both bounds so we never over-evict.
+                // Least-recently-accessed victim via single O(N) pass with zero allocations.
+                // Concurrent writers may race, so the loop re-checks both bounds.
                 // A single entry bigger than the whole byte budget evicts everything
                 // else first, then itself — the next Get re-fetches (miss, not poison).
-                string? oldestKey = _lastAccess.ToArray()
-                    .OrderBy(pair => pair.Value)
-                    .Select(pair => pair.Key)
-                    .FirstOrDefault(candidate => _entries.ContainsKey(candidate));
+                string? oldestKey = null;
+                long oldestStamp = long.MaxValue;
+                foreach (var pair in _lastAccess)
+                {
+                    if (pair.Value < oldestStamp && _entries.ContainsKey(pair.Key))
+                    {
+                        oldestStamp = pair.Value;
+                        oldestKey = pair.Key;
+                    }
+                }
 
                 if (oldestKey == null || !RemoveEntry(oldestKey))
                 {
@@ -364,7 +422,7 @@ namespace GxMcp.Gateway
         {
             try
             {
-                return (long)value.ToString(Newtonsoft.Json.Formatting.None).Length * 2L;
+                return (long)McpRouter.MeasureSerializedCharCount(value) * 2L;
             }
             catch { return 0; }
         }
@@ -376,6 +434,18 @@ namespace GxMcp.Gateway
             if (_entryBytes.TryGetValue(key, out var old)) prev = old;
             _entryBytes[key] = next;
             Interlocked.Add(ref _totalBytes, next - prev);
+        }
+
+        private bool RemoveExpiredEntry(string key, long expectedCreatedAt)
+        {
+            if (!_createdAt.TryRemove(new KeyValuePair<string, long>(key, expectedCreatedAt)))
+                return false;
+
+            _lastAccess.TryRemove(key, out _);
+            if (_entryBytes.TryRemove(key, out var bytes))
+                Interlocked.Add(ref _totalBytes, -bytes);
+            _entries.TryRemove(key, out _);
+            return true;
         }
 
         private bool RemoveEntry(string key)

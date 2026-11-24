@@ -179,5 +179,60 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("Proc00001", second["result"]?["hits"]?[0]?["objectName"]?.ToString());
             Assert.Equal(firstLookups, lookups);
         }
+
+        [Fact]
+        public void CursorRejectsIndexMutationBetweenSelectionAndCursorEmission()
+        {
+            var index = new IndexCacheService();
+            index.LoadFromEntries(new[]
+            {
+                new SearchIndex.IndexEntry { Guid = Guid.NewGuid().ToString(), Name = "ProcB", Type = "Procedure", FullSource = "needle" },
+                new SearchIndex.IndexEntry { Guid = Guid.NewGuid().ToString(), Name = "ProcC", Type = "Procedure", FullSource = "needle" }
+            });
+            index.MarkIndexComplete(2);
+
+            var service = new SourceSearchService(index, null);
+            int reads = 0;
+            bool mutated = false;
+            service.CoverageForTest = (candidates, scope) =>
+            {
+                int count = candidates.Count();
+                reads += count;
+                if (!mutated)
+                {
+                    mutated = true;
+                    index.AddOrUpdateBatch(new[]
+                    {
+                        new SearchIndex.IndexEntry
+                        {
+                            Guid = Guid.NewGuid().ToString(),
+                            Name = "ProcA",
+                            Type = "Procedure",
+                            FullSource = "needle"
+                        }
+                    });
+                }
+                return new SourceStoreCoverage { TotalObjects = count, StaleObjects = count };
+            };
+            service.BudgetElapsedMillisecondsForTest = () => reads >= 1 ? 2 : 0;
+
+            var first = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "needle",
+                MaxResults = 1,
+                TimeoutMs = 1
+            }));
+            string cursor = first["result"]?["nextCursor"]?.ToString();
+            Assert.False(string.IsNullOrEmpty(cursor));
+
+            service.BudgetElapsedMillisecondsForTest = () => 0;
+            var second = JObject.Parse(service.SearchAsJson(new SourceSearchCriteria
+            {
+                Pattern = "needle",
+                Cursor = cursor,
+                MaxResults = 10
+            }));
+            Assert.Equal("InvalidCursor", second["error"]?["code"]?.ToString());
+        }
     }
 }

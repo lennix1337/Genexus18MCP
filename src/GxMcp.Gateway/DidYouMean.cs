@@ -54,9 +54,12 @@ namespace GxMcp.Gateway
             if (string.IsNullOrEmpty(input)) return null;
             string? best = null;
             int bestDist = int.MaxValue;
-            var list = candidates.Where(c => c != null).ToList();
-            foreach (var candidate in list)
+            IReadOnlyList<string> list = candidates as IReadOnlyList<string>
+                ?? candidates.Where(c => c != null).ToList();
+            for (int i = 0; i < list.Count; i++)
             {
+                string candidate = list[i];
+                if (candidate == null) continue;
                 if (Math.Abs(input.Length - candidate.Length) <= maxDistance)
                 {
                     int d = Levenshtein(input, candidate);
@@ -71,13 +74,17 @@ namespace GxMcp.Gateway
             if (bestDist <= maxDistance) return best;
 
             // Prefix / stem matching (e.g. "objects" -> "objectName", "procs" -> "procedures")
-            string lowerInput = input.ToLowerInvariant();
-            string stem = lowerInput.Length >= 4 && lowerInput.EndsWith("s") ? lowerInput.Substring(0, lowerInput.Length - 1) : lowerInput;
+            bool useStem = input.Length >= 4 && (input[input.Length - 1] == 's' || input[input.Length - 1] == 'S');
+            ReadOnlySpan<char> inputSpan = input.AsSpan();
+            ReadOnlySpan<char> stemSpan = useStem ? inputSpan.Slice(0, input.Length - 1) : ReadOnlySpan<char>.Empty;
 
-            foreach (var candidate in list)
+            for (int i = 0; i < list.Count; i++)
             {
-                string lowerCand = candidate.ToLowerInvariant();
-                if (lowerCand.StartsWith(lowerInput) || (stem.Length >= 4 && lowerCand.StartsWith(stem)))
+                string candidate = list[i];
+                if (candidate == null) continue;
+                ReadOnlySpan<char> candSpan = candidate.AsSpan();
+                if (candSpan.StartsWith(inputSpan, StringComparison.OrdinalIgnoreCase)
+                    || (stemSpan.Length >= 4 && candSpan.StartsWith(stemSpan, StringComparison.OrdinalIgnoreCase)))
                 {
                     return candidate;
                 }
@@ -86,29 +93,55 @@ namespace GxMcp.Gateway
             // Common arg synonyms (e.g. "limit" -> "maxResults")
             if (string.Equals(input, "limit", StringComparison.OrdinalIgnoreCase))
             {
-                var match = list.FirstOrDefault(c => string.Equals(c, "maxResults", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(c, "max", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(c, "take", StringComparison.OrdinalIgnoreCase));
-                if (match != null) return match;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    string c = list[i];
+                    if (c != null && (string.Equals(c, "maxResults", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(c, "max", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(c, "take", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return c;
+                    }
+                }
             }
 
             // Read verbs: the toolset's actions read with "get" (get, get_visual, ...) or
             // "inspect", not "read" (#655).
-            if (ReadVerbs.Contains(input, StringComparer.OrdinalIgnoreCase))
+            if (ArrayContainsIgnoreCase(ReadVerbs, input))
             {
-                foreach (string verb in new[] { "get", "inspect", "view", "list" })
+                for (int v = 0; v < ReadVerbReplacements.Length; v++)
                 {
-                    var match = list.FirstOrDefault(c => string.Equals(c, verb, StringComparison.OrdinalIgnoreCase));
-                    if (match != null) return match;
+                    string verb = ReadVerbReplacements[v];
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        string c = list[i];
+                        if (c != null && string.Equals(c, verb, StringComparison.OrdinalIgnoreCase))
+                            return c;
+                    }
                 }
-                var getVariant = list.FirstOrDefault(c => c.StartsWith("get_", StringComparison.OrdinalIgnoreCase));
-                if (getVariant != null) return getVariant;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    string c = list[i];
+                    if (c != null && c.StartsWith("get_", StringComparison.OrdinalIgnoreCase))
+                        return c;
+                }
             }
 
             return null;
         }
 
+        private static bool ArrayContainsIgnoreCase(string[] items, string value)
+        {
+            for (int i = 0; i < items.Length; i++)
+            {
+                if (string.Equals(items[i], value, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
         private static readonly string[] ReadVerbs = { "read", "fetch", "show", "view" };
+        private static readonly string[] ReadVerbReplacements = { "get", "inspect", "view", "list" };
 
         public static string FormatSuggestionMessage(string field, string value, IEnumerable<string> candidates, int maxDistance = 2)
         {

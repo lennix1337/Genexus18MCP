@@ -259,7 +259,7 @@ namespace GxMcp.Worker.Services
                     }
                     else
                     {
-                        entries = index.Objects.Values;
+                        entries = index.EnumerateObjects();
                         isFullScan = true;
                     }
 
@@ -273,17 +273,47 @@ namespace GxMcp.Worker.Services
                         // index hasn't built TypeIndex yet (e.g. LoadFromEntries test seam).
                         if (isFullScan && index.TypeIndex != null)
                         {
-                            var candidateKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                            foreach (var t in filterTypes)
+                            if (filterTypes.Count == 1)
                             {
-                                if (index.TypeIndex.TryGetValue(t, out var keys))
+                                string singleType = null;
+                                foreach (var t in filterTypes) { singleType = t; break; }
+                                if (singleType != null && index.TypeIndex.TryGetValue(singleType, out var keys) && keys != null)
                                 {
-                                    lock (keys) { candidateKeys.UnionWith(keys); }
+                                    var resolved = new List<SearchIndex.IndexEntry>();
+                                    lock (keys)
+                                    {
+                                        if (resolved.Capacity < keys.Count) resolved.Capacity = keys.Count;
+                                        foreach (var k in keys)
+                                        {
+                                            if (index.Objects.TryGetValue(k, out var e) && e != null)
+                                                resolved.Add(e);
+                                        }
+                                    }
+                                    entries = resolved;
+                                }
+                                else
+                                {
+                                    entries = Array.Empty<SearchIndex.IndexEntry>();
                                 }
                             }
-                            entries = candidateKeys
-                                .Select(k => index.Objects.TryGetValue(k, out var e) ? e : null)
-                                .Where(e => e != null);
+                            else
+                            {
+                                var candidateKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                                foreach (var t in filterTypes)
+                                {
+                                    if (index.TypeIndex.TryGetValue(t, out var keys) && keys != null)
+                                    {
+                                        lock (keys) { candidateKeys.UnionWith(keys); }
+                                    }
+                                }
+                                var resolved = new List<SearchIndex.IndexEntry>(candidateKeys.Count);
+                                foreach (var k in candidateKeys)
+                                {
+                                    if (index.Objects.TryGetValue(k, out var e) && e != null)
+                                        resolved.Add(e);
+                                }
+                                entries = resolved;
+                            }
                         }
                         entries = entries.Where(e => filterTypes.Contains(e.Type ?? string.Empty));
                     }
@@ -293,10 +323,10 @@ namespace GxMcp.Worker.Services
                     // / descriptionFilter / pathPrefix parameters below.
                     if (!string.IsNullOrEmpty(nameFilter))
                     {
-                        var descriptionMatches = IndexEntryFilterBuilder.DescriptionContains(nameFilter);
+                        bool nameFilterAscii = IndexEntryFilterBuilder.TryPrepareLowerAscii(nameFilter, out string preparedNameFilter);
                         entries = entries.Where(e =>
-                            (e.Name ?? string.Empty).IndexOf(nameFilter, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            descriptionMatches(e));
+                            IndexEntryFilterBuilder.ContainsIgnoreCaseFast(e.Name, 0, preparedNameFilter, nameFilterAscii) ||
+                            IndexEntryFilterBuilder.ContainsIgnoreCaseFast(e.Description, 0, preparedNameFilter, nameFilterAscii));
                     }
 
                     // v2.3.8 (Task 2.2): targeted discovery filters.
@@ -308,8 +338,9 @@ namespace GxMcp.Worker.Services
                     // tool args and match exactly one column each.
                     if (!string.IsNullOrEmpty(invokerNameFilter))
                     {
+                        bool invokerNameAscii = IndexEntryFilterBuilder.TryPrepareLowerAscii(invokerNameFilter, out string preparedInvokerName);
                         entries = entries.Where(e =>
-                            (e.Name ?? string.Empty).IndexOf(invokerNameFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+                            IndexEntryFilterBuilder.ContainsIgnoreCaseFast(e.Name, 0, preparedInvokerName, invokerNameAscii));
                     }
 
                     if (!string.IsNullOrEmpty(invokerDescriptionFilter))
@@ -521,7 +552,7 @@ namespace GxMcp.Worker.Services
                         }
                         else
                         {
-                            distinctTypes = index.Objects.Values
+                            distinctTypes = index.EnumerateObjects()
                                 .Select(e => e.Type ?? string.Empty)
                                 .Where(t => !string.IsNullOrEmpty(t))
                                 .Distinct(StringComparer.OrdinalIgnoreCase)

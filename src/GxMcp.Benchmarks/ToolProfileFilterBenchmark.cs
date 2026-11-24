@@ -1,10 +1,14 @@
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Jobs;
+using BenchmarkDotNet.Toolchains.InProcess.NoEmit;
 using Newtonsoft.Json.Linq;
 using System.IO;
 using GxMcp.Gateway;
 
 namespace GxMcp.Benchmarks
 {
+    [Config(typeof(ToolProfileFilterBenchmarkConfig))]
     [MemoryDiagnoser]
     public class ToolProfileFilterBenchmark
     {
@@ -22,6 +26,8 @@ namespace GxMcp.Benchmarks
             }
             string json = File.ReadAllText(candidate);
             _tools = JArray.Parse(json);
+            ToolProfileFilter.InvalidateCache();
+            _ = ToolProfileFilter.GetOrCreateFiltered(_tools, "all");
         }
 
         [Benchmark(Baseline = true)]
@@ -34,6 +40,26 @@ namespace GxMcp.Benchmarks
         public JArray FilterAuthoring_Uncached()
         {
             return ToolProfileFilter.Filter(_tools, "authoring");
+        }
+
+        [Benchmark]
+        public JArray FilterAll_Uncached()
+        {
+            return ToolProfileFilter.Filter(_tools, "all");
+        }
+
+        [Benchmark]
+        public JArray GetOrCreateFiltered_All()
+        {
+            return ToolProfileFilter.GetOrCreateFiltered(_tools, "all");
+        }
+    }
+
+    public sealed class ToolProfileFilterBenchmarkConfig : ManualConfig
+    {
+        public ToolProfileFilterBenchmarkConfig()
+        {
+            AddJob(Job.ShortRun.WithToolchain(InProcessNoEmitToolchain.Instance));
         }
     }
 }

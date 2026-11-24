@@ -228,11 +228,13 @@ namespace GxMcp.Worker.Services
 
                 IEnumerable<SearchIndex.IndexEntry> sourceSet = null;
                 // Plan 002: true only when sourceSet ends up as the unfiltered
-                // index.Objects.Values scan (no parent/parentPath filter already narrowed it).
+                // full-catalog scan (no parent/parentPath filter already narrowed it).
                 bool sourceIsFullScan = false;
+                bool parentFilteredByIndex = false;
 
                 if (criteria.ParentPathFilter != null && index.ChildrenByParent != null)
                 {
+                    parentFilteredByIndex = true;
                     if (index.ChildrenByParent.TryGetValue(criteria.ParentPathFilter, out var children))
                     {
                         sourceSet = children;
@@ -244,11 +246,12 @@ namespace GxMcp.Worker.Services
                 }
                 else if (!string.IsNullOrEmpty(criteria.ParentFilter) && index.ChildrenByParent != null)
                 {
+                    parentFilteredByIndex = true;
                     sourceSet = index.FindChildrenByParentName(criteria.ParentFilter);
                 }
                 else
                 {
-                    sourceSet = index.Objects.Values;
+                    sourceSet = index.EnumerateObjects();
                     sourceIsFullScan = true;
                 }
 
@@ -273,43 +276,113 @@ namespace GxMcp.Worker.Services
                 if (sourceIsFullScan && index.TypeIndex != null && index.DomainIndex != null
                     && (!string.IsNullOrEmpty(criteria.TypeFilter) || !string.IsNullOrEmpty(criteria.DomainFilter)))
                 {
-                    HashSet<string> candidateKeys = null;
+                    bool hasTypeFilter = !string.IsNullOrEmpty(criteria.TypeFilter);
+                    bool hasDomainFilter = !string.IsNullOrEmpty(criteria.DomainFilter);
 
-                    if (!string.IsNullOrEmpty(criteria.TypeFilter))
+                    if (hasTypeFilter && !hasDomainFilter)
                     {
-                        candidateKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        foreach (var typeKey in index.TypeIndex.Keys)
+                        List<HashSet<string>> matchedBuckets = null;
+                        HashSet<string> singleBucket = null;
+                        foreach (var kv in index.TypeIndex)
                         {
-                            if (!IsTypeMatch(typeKey, criteria.TypeFilter)) continue;
-                            if (index.TypeIndex.TryGetValue(typeKey, out var typeKeys))
+                            if (!IsTypeMatch(kv.Key, criteria.TypeFilter) || kv.Value == null) continue;
+                            if (singleBucket == null && matchedBuckets == null)
                             {
-                                lock (typeKeys) { candidateKeys.UnionWith(typeKeys); }
+                                singleBucket = kv.Value;
+                            }
+                            else
+                            {
+                                if (matchedBuckets == null)
+                                    matchedBuckets = new List<HashSet<string>>(4) { singleBucket };
+                                matchedBuckets.Add(kv.Value);
                             }
                         }
-                    }
 
-                    if (!string.IsNullOrEmpty(criteria.DomainFilter))
-                    {
-                        HashSet<string> domainKeys;
-                        if (index.DomainIndex.TryGetValue(criteria.DomainFilter, out var domainBucket))
+                        if (matchedBuckets == null && singleBucket != null)
                         {
-                            lock (domainBucket) { domainKeys = new HashSet<string>(domainBucket, StringComparer.OrdinalIgnoreCase); }
+                            var resolved = new List<SearchIndex.IndexEntry>();
+                            lock (singleBucket)
+                            {
+                                if (resolved.Capacity < singleBucket.Count) resolved.Capacity = singleBucket.Count;
+                                foreach (var k in singleBucket)
+                                {
+                                    if (index.Objects.TryGetValue(k, out var e) && e != null)
+                                        resolved.Add(e);
+                                }
+                            }
+                            sourceSet = resolved;
+                        }
+                        else if (matchedBuckets != null)
+                        {
+                            var candidateKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            for (int b = 0; b < matchedBuckets.Count; b++)
+                            {
+                                var bucket = matchedBuckets[b];
+                                lock (bucket) { candidateKeys.UnionWith(bucket); }
+                            }
+                            var resolved = new List<SearchIndex.IndexEntry>(candidateKeys.Count);
+                            foreach (var k in candidateKeys)
+                            {
+                                if (index.Objects.TryGetValue(k, out var e) && e != null)
+                                    resolved.Add(e);
+                            }
+                            sourceSet = resolved;
                         }
                         else
                         {
-                            domainKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            sourceSet = Array.Empty<SearchIndex.IndexEntry>();
                         }
-                        candidateKeys = candidateKeys == null
-                            ? domainKeys
-                            : new HashSet<string>(candidateKeys.Where(domainKeys.Contains), StringComparer.OrdinalIgnoreCase);
+                        sourceIsFullScan = false;
                     }
-
-                    if (candidateKeys != null)
+                    else if (!hasTypeFilter && hasDomainFilter)
                     {
-                        sourceSet = candidateKeys
-                            .Select(k => { index.Objects.TryGetValue(k, out var e); return e; })
-                            .Where(e => e != null)
-                            .ToList();
+                        if (index.DomainIndex.TryGetValue(criteria.DomainFilter, out var domainBucket) && domainBucket != null)
+                        {
+                            var resolved = new List<SearchIndex.IndexEntry>();
+                            lock (domainBucket)
+                            {
+                                if (resolved.Capacity < domainBucket.Count) resolved.Capacity = domainBucket.Count;
+                                foreach (var k in domainBucket)
+                                {
+                                    if (index.Objects.TryGetValue(k, out var e) && e != null)
+                                        resolved.Add(e);
+                                }
+                            }
+                            sourceSet = resolved;
+                        }
+                        else
+                        {
+                            sourceSet = Array.Empty<SearchIndex.IndexEntry>();
+                        }
+                        sourceIsFullScan = false;
+                    }
+                    else
+                    {
+                        var candidateKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var kv in index.TypeIndex)
+                        {
+                            if (!IsTypeMatch(kv.Key, criteria.TypeFilter) || kv.Value == null) continue;
+                            lock (kv.Value) { candidateKeys.UnionWith(kv.Value); }
+                        }
+
+                        if (index.DomainIndex.TryGetValue(criteria.DomainFilter, out var domainBucket) && domainBucket != null)
+                        {
+                            var resolved = new List<SearchIndex.IndexEntry>();
+                            lock (domainBucket)
+                            {
+                                foreach (var k in domainBucket)
+                                {
+                                    if (candidateKeys.Contains(k) && index.Objects.TryGetValue(k, out var e) && e != null)
+                                        resolved.Add(e);
+                                }
+                            }
+                            sourceSet = resolved;
+                        }
+                        else
+                        {
+                            sourceSet = Array.Empty<SearchIndex.IndexEntry>();
+                        }
+                        sourceIsFullScan = false;
                     }
                 }
 
@@ -327,8 +400,10 @@ namespace GxMcp.Worker.Services
                 // around 4096. Threshold 2048 keeps the common filtered range sequential
                 // and only engages PLINQ where it is at worst neutral.
                 const int ParallelScanThreshold = 2048;
-                bool parallelize = sourceSet is not ICollection<SearchIndex.IndexEntry> sourceCol
-                                   || sourceCol.Count >= ParallelScanThreshold;
+                int knownSourceCount = sourceIsFullScan
+                    ? index.Objects.Count
+                    : (sourceSet is ICollection<SearchIndex.IndexEntry> sourceCol ? sourceCol.Count : -1);
+                bool parallelize = knownSourceCount < 0 || knownSourceCount >= ParallelScanThreshold;
                 IEnumerable<SearchIndex.IndexEntry> queryResults = parallelize
                     ? sourceSet.AsParallel().WithDegreeOfParallelism(dop)
                     : sourceSet;
@@ -355,10 +430,10 @@ namespace GxMcp.Worker.Services
                         (e.RootTable ?? "").IndexOf(criteria.MetadataFilter, StringComparison.OrdinalIgnoreCase) >= 0
                     );
 
-                if (criteria.ParentPathFilter != null && (sourceSet == index.Objects.Values))
+                if (criteria.ParentPathFilter != null && !parentFilteredByIndex)
                     queryResults = queryResults.Where(e => string.Equals(e.ParentPath ?? string.Empty, criteria.ParentPathFilter, StringComparison.OrdinalIgnoreCase));
 
-                if (!string.IsNullOrEmpty(criteria.ParentFilter) && (sourceSet == index.Objects.Values))
+                if (!string.IsNullOrEmpty(criteria.ParentFilter) && !parentFilteredByIndex)
                     queryResults = queryResults.Where(e => string.Equals(e.Parent, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase));
 
                 // v2.6.8: temporal bounds. Same semantics as list_objects — Since
@@ -377,10 +452,11 @@ namespace GxMcp.Worker.Services
                     var candidates = index.FindByName(criteria.UsedByFilter);
                     foreach (var t in candidates)
                     {
-                        if (t?.CalledBy == null) continue;
-                        lock (t.CalledBy)
+                        var calledBy = t?.CalledByOrNull;
+                        if (calledBy == null) continue;
+                        lock (calledBy)
                         {
-                            foreach (var c in t.CalledBy)
+                            foreach (var c in calledBy)
                             {
                                 if (!string.IsNullOrEmpty(c)) consumerNames.Add(c);
                             }
@@ -390,13 +466,30 @@ namespace GxMcp.Worker.Services
                     queryResults = queryResults.Where(e =>
                         consumerNames.Contains(e.Name) ||
                         (e.RootTable != null && string.Equals(e.RootTable, criteria.UsedByFilter, StringComparison.OrdinalIgnoreCase)) ||
-                        (e.Calls != null && e.Calls.Exists(c => string.Equals(c, criteria.UsedByFilter, StringComparison.OrdinalIgnoreCase))) ||
-                        (e.Tables != null && e.Tables.Exists(t => string.Equals(t, criteria.UsedByFilter, StringComparison.OrdinalIgnoreCase)))
+                        (e.CallsOrNull != null && e.CallsOrNull.Exists(c => string.Equals(c, criteria.UsedByFilter, StringComparison.OrdinalIgnoreCase))) ||
+                        (e.TablesOrNull != null && e.TablesOrNull.Exists(t => string.Equals(t, criteria.UsedByFilter, StringComparison.OrdinalIgnoreCase)))
                     );
                 }
 
+                bool hasTerms = criteria.Terms.Count > 0;
+                string[] termsArray = hasTerms ? criteria.Terms.ToArray() : Array.Empty<string>();
+                bool[] termIsAscii = hasTerms ? new bool[termsArray.Length] : Array.Empty<bool>();
+                bool isTableFilter = string.Equals(criteria.TypeFilter, "Table", StringComparison.OrdinalIgnoreCase);
+                bool[] termLooksLikeAttr = (hasTerms && isTableFilter) ? new bool[termsArray.Length] : Array.Empty<bool>();
+                for (int i = 0; i < termsArray.Length; i++)
+                {
+                    termIsAscii[i] = IndexEntryFilterBuilder.TryPrepareLowerAscii(termsArray[i], out termsArray[i]);
+                    if (isTableFilter)
+                        termLooksLikeAttr[i] = _indexCacheService.LooksLikeAttributeName(termsArray[i]);
+                }
+
+                bool hasTypeFilterForNoise = !string.IsNullOrEmpty(criteria.TypeFilter);
+                bool allowFolderNoise = hasTypeFilterForNoise && IsTypeMatch("Folder", criteria.TypeFilter);
+                bool allowModuleNoise = hasTypeFilterForNoise && IsTypeMatch("Module", criteria.TypeFilter);
+                bool allowIndexNoise = hasTypeFilterForNoise && IsTypeMatch("Index", criteria.TypeFilter);
+
                 float[] queryEmbedding = null;
-                if (!isQuick && criteria.Terms.Count > 0)
+                if (!isQuick && hasTerms)
                 {
                     queryEmbedding = _vectorService.ComputeEmbedding(query);
                 }
@@ -407,21 +500,20 @@ namespace GxMcp.Worker.Services
                         int score = 0;
                         float vectorScore = 0;
 
-                        if (criteria.Terms.Count > 0)
+                        if (hasTerms)
                         {
-                            score = CalculateSemanticScore(entry, criteria.Terms, criteria.TypeFilter);
-
                             // SHORT-CIRCUIT: structural noise types should never surface unless
-                            // the caller explicitly asked for them via typeFilter. Index/Folder/
-                            // Module had been polluting query results when there was no exact
-                            // name match (see Probe#2: "Country" returned 15 Index objects).
-                            bool isNoiseType = entry.Type == "Folder" || entry.Type == "Module" || entry.Type == "Index";
-                            bool noiseExplicitlyRequested = !string.IsNullOrEmpty(criteria.TypeFilter)
-                                && IsTypeMatch(entry.Type, criteria.TypeFilter);
-                            if (score <= 0 && isNoiseType && !noiseExplicitlyRequested)
+                            // the caller explicitly asked for them via typeFilter. Checking this
+                            // before semantic scoring avoids wasted work on Folder/Module/Index.
+                            string entryType = entry.Type;
+                            if ((entryType == "Folder" && !allowFolderNoise)
+                                || (entryType == "Module" && !allowModuleNoise)
+                                || (entryType == "Index" && !allowIndexNoise))
+                            {
                                 return new RankedResult(null, -1, 0);
-                            if (isNoiseType && !noiseExplicitlyRequested)
-                                return new RankedResult(null, -1, 0);
+                            }
+
+                            score = CalculateSemanticScore(entry, termsArray, termIsAscii, isTableFilter, termLooksLikeAttr);
 
                             if (!isQuick && entry.Embedding != null && queryEmbedding != null)
                             {
@@ -846,38 +938,50 @@ namespace GxMcp.Worker.Services
             return false;
         }
 
-        private int CalculateSemanticScore(SearchIndex.IndexEntry entry, HashSet<string> terms, string typeFilter)
+        private int CalculateSemanticScore(
+            SearchIndex.IndexEntry entry,
+            string[] terms,
+            bool[] termIsAscii,
+            bool isTableFilter,
+            bool[] termLooksLikeAttr)
         {
             int score = 0;
             string name = entry.Name ?? "";
             string desc = entry.Description ?? "";
             int nameLen = name.Length;
             int descLen = desc.Length;
-            bool isTableType = string.Equals(entry.Type, "Table", StringComparison.OrdinalIgnoreCase);
-            bool isTableFilter = string.Equals(typeFilter, "Table", StringComparison.OrdinalIgnoreCase);
+            bool isTableType = isTableFilter && string.Equals(entry.Type, "Table", StringComparison.OrdinalIgnoreCase);
+            var keywords = entry.KeywordsOrNull;
+            var tags = entry.TagsOrNull;
+            var tables = entry.TablesOrNull;
+            var calls = entry.CallsOrNull;
 
-            foreach (var term in terms) {
+            for (int i = 0; i < terms.Length; i++)
+            {
+                string term = terms[i];
+                bool ascii = termIsAscii[i];
                 int termLen = term.Length;
-                if (nameLen >= termLen)
+                if (nameLen == termLen)
                 {
-                    if (nameLen == termLen && name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 10000;
-                    else if (name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 1000;
-                    else if (name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 500;
+                    if (IndexEntryFilterBuilder.StartsWithIgnoreCaseFast(name, term, ascii)) score += 10000;
+                }
+                else if (nameLen > termLen)
+                {
+                    if (IndexEntryFilterBuilder.StartsWithIgnoreCaseFast(name, term, ascii)) score += 1000;
+                    else if (IndexEntryFilterBuilder.ContainsIgnoreCaseFast(name, 1, term, ascii)) score += 500;
                 }
 
-                if (descLen >= termLen && desc.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 300;
+                if (descLen >= termLen && IndexEntryFilterBuilder.ContainsIgnoreCaseFast(desc, 0, term, ascii)) score += 300;
 
-                if (ContainsIgnoreCase(entry.Keywords, term)) score += 800;
-                if (ContainsIgnoreCase(entry.Tags, term)) score += 800;
+                if (keywords != null && ContainsIgnoreCase(keywords, term)) score += 800;
+                if (tags != null && ContainsIgnoreCase(tags, term)) score += 800;
 
-                if (entry.Tables != null && ContainsIgnoreCase(entry.Tables, term))
+                if (tables != null && ContainsIgnoreCase(tables, term))
                 {
-                    bool boostForAttributeMember = isTableFilter
-                                                   && isTableType
-                                                   && _indexCacheService.LooksLikeAttributeName(term);
+                    bool boostForAttributeMember = isTableType && termLooksLikeAttr[i];
                     score += boostForAttributeMember ? 5000 : 400;
                 }
-                if (ContainsIgnoreCase(entry.Calls, term)) score += 400;
+                if (calls != null && ContainsIgnoreCase(calls, term)) score += 400;
             }
             return score;
         }

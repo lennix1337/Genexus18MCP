@@ -50,7 +50,7 @@ namespace GxMcp.Gateway
                 }
             }
 
-            string raw = result.ToString(Formatting.None);
+            int rawLength = McpRouter.MeasureSerializedCharCount(result);
             // issue #25 #6: the worker already paginates genexus_read to ~200 lines /
             // 16 KB and reports it via `isTruncatedByWorker` + offset/limit/
             // suggestedNextOffset. When the worker already bounded the page, the
@@ -66,12 +66,13 @@ namespace GxMcp.Gateway
                 : string.Equals(toolName, "genexus_asset", StringComparison.OrdinalIgnoreCase)
                     ? 400000
                     : 60000;
-            if (raw.Length < softBudget) return result;
+            if (rawLength < softBudget) return result;
 
-            Log($"[Budget] Truncating response for {toolName} ({raw.Length} chars)");
+            Log($"[Budget] Truncating response for {toolName} ({rawLength} chars)");
 
             if (result is JObject obj)
             {
+                bool removedMetadata = false;
                 if (string.Equals(toolName, "genexus_read", StringComparison.OrdinalIgnoreCase))
                 {
                     foreach (var metadataField in new[] { "variables", "calls", "dataSchema", "patternMetadata" })
@@ -81,6 +82,7 @@ namespace GxMcp.Gateway
                             obj.Remove(metadataField);
                             obj["isTruncated"] = true;
                             obj["message"] = "Gateway trimmed derived metadata from genexus_read to keep the response within the MCP context budget.";
+                            removedMetadata = true;
                         }
                     }
                 }
@@ -88,18 +90,25 @@ namespace GxMcp.Gateway
                 if (obj["results"] is JArray searchResults && searchResults.Count > 10)
                 {
                     int originalCount = searchResults.Count;
-                    string currentRaw = obj.ToString(Formatting.None);
-                    if (currentRaw.Length > 80000)
+                    int currentLen = removedMetadata ? McpRouter.MeasureSerializedCharCount(obj) : rawLength;
+                    if (currentLen > 80000)
                     {
                         // Keep the longest prefix of rows that fits the budget (never a fixed handful),
                         // and make the page contract match what is left so the caller can continue.
-                        int fixedLen = currentRaw.Length;
-                        foreach (var row in searchResults) fixedLen -= row.ToString(Formatting.None).Length + 1;
+                        var rowLengths = new int[originalCount];
+                        int totalRowsLen = 0;
+                        for (int i = 0; i < originalCount; i++)
+                        {
+                            int rowLen = McpRouter.MeasureSerializedCharCount(searchResults[i]) + 1;
+                            rowLengths[i] = rowLen;
+                            totalRowsLen += rowLen;
+                        }
+                        int fixedLen = currentLen - totalRowsLen;
                         int room = ResultsTrimBudget - Math.Max(0, fixedLen);
                         int kept = 0, used = 0;
-                        foreach (var row in searchResults)
+                        for (int i = 0; i < originalCount; i++)
                         {
-                            int rowLen = row.ToString(Formatting.None).Length + 1;
+                            int rowLen = rowLengths[i];
                             if (kept > 0 && used + rowLen > room) break;
                             used += rowLen;
                             kept++;
@@ -191,8 +200,8 @@ namespace GxMcp.Gateway
                     }
                 }
 
-                string truncatedRaw = obj.ToString(Formatting.None);
-                if (truncatedRaw.Length > 80000)
+                int truncatedLen = McpRouter.MeasureSerializedCharCount(obj);
+                if (truncatedLen > 80000)
                 {
                     // issue #25 #6: for genexus_read, preserve the head+tail-trimmed
                     // object instead of wiping it to a bare error (the old fallback
@@ -231,7 +240,7 @@ namespace GxMcp.Gateway
                 // after every single removal (O(n²) on large lists). Measure once, drop an
                 // estimated block of items (avg serialized bytes per item, small safety
                 // margin), and re-measure only after each block — not per item.
-                int totalLen = arr.ToString(Formatting.None).Length;
+                int totalLen = rawLength;
                 while (arr.Count > 5 && totalLen > 80000)
                 {
                     long avgItemLen = Math.Max(1L, totalLen / arr.Count);
@@ -239,7 +248,7 @@ namespace GxMcp.Gateway
                     int block = (int)Math.Min(arr.Count - 5L, Math.Max(1L, estimatedRemove));
                     for (int i = 0; i < block; i++)
                         arr.RemoveAt(arr.Count - 1);
-                    totalLen = arr.ToString(Formatting.None).Length;
+                    totalLen = McpRouter.MeasureSerializedCharCount(arr);
                 }
                 if (totalLen > 80000)
                 {
@@ -251,7 +260,8 @@ namespace GxMcp.Gateway
                 return arr;
             }
 
-            return new JValue(raw.Substring(0, 75000) + "... [TRUNCATED]");
+            string scalarRaw = result.ToString(Formatting.None);
+            return new JValue(scalarRaw.Substring(0, 75000) + "... [TRUNCATED]");
         }
 
         /// <summary>
@@ -295,7 +305,7 @@ namespace GxMcp.Gateway
             return SizeOf(obj) <= ErrorBudget ? obj : VerdictOnly(obj);
         }
 
-        private static int SizeOf(JToken token) => token.ToString(Formatting.None).Length;
+        private static int SizeOf(JToken token) => McpRouter.MeasureSerializedCharCount(token);
 
         // Lists with more than one item, and long text outside the verdict names.
         private static IEnumerable<JToken> ErrorContributors(JObject obj)
@@ -900,7 +910,7 @@ namespace GxMcp.Gateway
             if (compactEditPatch && successfulMutation)
                 CompactSuccessfulEditPatchResponse(payload, omittedFields);
 
-            if (Encoding.UTF8.GetByteCount(payload.ToString(Formatting.None)) > MutationResponseBudgetBytes)
+            if (ResponseSizeGuard.ByteSize(payload) > MutationResponseBudgetBytes)
                 RemoveMutationPayloadProperties(payload, "persistedSnippet", string.Empty, omittedFields);
 
             return payload;
@@ -1093,8 +1103,8 @@ namespace GxMcp.Gateway
                 omittedFields.Add(path);
         }
 
-        private static int GetMutationPayloadBytes(JToken payload)
-            => Encoding.UTF8.GetByteCount(payload.ToString(Formatting.None));
+        private static long GetMutationPayloadBytes(JToken payload)
+            => ResponseSizeGuard.ByteSize(payload);
 
         private static bool ShouldOmitMutationText(JObject parent, string text)
         {
@@ -1353,8 +1363,7 @@ namespace GxMcp.Gateway
         }
 
         internal static bool ToolDeclaresOutputSchema(string? toolName)
-            => !string.IsNullOrWhiteSpace(toolName)
-               && McpRouter.FindToolDefinitionForHelp(toolName!)?["outputSchema"] != null;
+            => McpRouter.ToolDeclaresOutputSchema(toolName);
 
         // Resolved per call (cheap: one env lookup + one static field read) so a config
         // reload or env change takes effect without restart. Env wins over config file.
