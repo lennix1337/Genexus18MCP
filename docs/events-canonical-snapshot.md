@@ -161,6 +161,36 @@ e o SHA-256 de cada um é o `proofEvidenceSha256` do respectivo manifesto. Não 
 salvar um objeto que é, ele próprio, host WorkWithPlus persistido. Detalhes em
 [Required Events save isolation](events-object-save-isolation.md#the-other-genexus-18-u16-builds).
 
+## Build 189647 com WorkWithPlus 16.2.1.8463
+
+O WorkWithPlus 16.2.1.8463 substituiu o 16.2.0.8386 numa instalação da build 189647: mudaram os 8 arquivos do
+pacote do WorkWithPlus e os outros 444 arquivos do bundle auditado não mudaram. O manifesto da 189647 deixou de
+descrever a instalação e o Save protegido de Events passou a recusar com `SdkBundleNotAudited`. O bundle é uma build
+junto com uma release do WorkWithPlus: o manifesto novo `config/events-u16-wwp16.2.1-189647-audit.json` (452 arquivos,
+as mesmas nove DLLs centrais) convive com o da release anterior e o registro escolhe entre eles pelos bytes exatos
+de `DVelop.Patterns.WorkWithPlus` e depois de `Artech.Architecture.Common`. Nada foi relaxado: todo arquivo do manifesto
+confere com o SHA-256, toda assembly SDK carregada precisa estar listada e uma mistura das duas releases nunca é
+reconhecida como build auditada.
+
+A auditoria sem KB releu as 26 assemblies (as nove críticas e as 17 de padrões e controles de usuário) da própria
+instalação e as comparou com a leitura do bundle anterior. As 22 do Artech e do GeneXus são idênticas, método a método;
+nas quatro do WorkWithPlus a auditoria registra o que mudou: o `BeforeSaveKBObject` do assinante de eventos ganhou um
+prólogo que só age para o tipo de objeto de um modelo do WorkWithPlus (valida e pode cancelar o Save), seis métodos
+relacionados a Save mudaram de nome ofuscado sem gêmeo de corpo (os retornos de chamada de Save da instância de padrão
+e os ganchos de documento da interface) e 51 métodos pareados mudaram de IL fora de qualquer tópico de Save. As 65
+assinaturas `EventSubscription` das 26 assemblies e as 524 das 223 de código são as mesmas, assembly a assembly. Como o
+código do WorkWithPlus é ofuscado, a comparação estática diz pouco: esta release se apoia na prova nativa mais do que as
+builds que carregam os mesmos bytes do WorkWithPlus.
+
+A prova nativa de 23/11/2026 foi o mesmo cenário de 88 verificações, rodado contra a própria instalação (o Worker
+conferiu os 452 arquivos do manifesto) com o manifesto `pending`: nenhuma falhou (na 1ª rodada uma verificação de pins
+estava desatualizada, procurava `hubProfileRevision`, que o código substituiu por `profileRevision`; o caso foi
+atualizado e a 2ª rodada passou as 88). O resultado sanitizado está em
+`docs/evidence/events-u16-wwp16.2.1-189647-native-proof.json` e seu SHA-256 é o `proofEvidenceSha256` do manifesto. Não
+coberto: salvar um host WorkWithPlus persistido, um modelo do WorkWithPlus ou uma instância persistida, que o código
+alterado de Save do WorkWithPlus trata. Detalhes em
+[Required Events save isolation](events-object-save-isolation.md#genexus-18-u16-build-189647-with-workwithplus-16218463).
+
 ## Bundle U11 com WorkWithPlus 16.1
 
 O bundle `18.0.11.54344+wwp16.1.2.8167` segue o mesmo mecanismo, com o manifesto

@@ -66,8 +66,9 @@ also read [`AGENTS.md`](../AGENTS.md).
   [U11](evidence/events-u11-wwp16.1-native-proof.json) and of the U16 builds
   [189158](evidence/events-u16-wwp16.2-189158-native-proof.json),
   [189513](evidence/events-u16-wwp16.2-189513-native-proof.json),
-  [189552](evidence/events-u16-wwp16.2-189552-native-proof.json) and
-  [189647](evidence/events-u16-wwp16.2-189647-native-proof.json))
+  [189552](evidence/events-u16-wwp16.2-189552-native-proof.json),
+  [189647](evidence/events-u16-wwp16.2-189647-native-proof.json) and
+  [189647 with WorkWithPlus 16.2.1](evidence/events-u16-wwp16.2.1-189647-native-proof.json))
   and the [restricted U16 Events save candidate](events-save-u16-candidate.md).
 - [Snapshot canônico de Events](events-canonical-snapshot.md) — captura de Rules, verificação de Save e rollback.
 

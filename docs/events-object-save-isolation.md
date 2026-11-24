@@ -103,6 +103,7 @@ Only the audited bundles are eligible (`evidence.auditedBundles` lists their ids
 | `18.0.16.189552+wwp16.2.0.8386` | The complete-bundle manifest `config/events-u16-wwp16.2-189552-audit.json` (452 files), same WorkWithPlus. | The same proof, run on build 189552, 2026-11-13 ([same section](#the-other-genexus-18-u16-builds)). |
 | `18.0.16.189595+wwp16.2.0.8386` | The complete-bundle manifest `config/events-u16-wwp16.2-audit.json` (452 files). | A synthetic WebPanel with a persisted WorkWithPlus host in a test Knowledge Base, 2026-10-14 ([Events canonical snapshot](events-canonical-snapshot.md)). |
 | `18.0.16.189647+wwp16.2.0.8386` | The complete-bundle manifest `config/events-u16-wwp16.2-189647-audit.json` (452 files): the same WorkWithPlus bytes on the later SDK build that GeneXus 18 U16 shipped; 426 of the 452 files differ from the 189595 manifest, among them the five Artech critical assemblies. | See [GeneXus 18 U16 build 189647](#genexus-18-u16-build-189647). |
+| `18.0.16.189647+wwp16.2.1.8463` | The complete-bundle manifest `config/events-u16-wwp16.2.1-189647-audit.json` (452 files): build 189647 with the later WorkWithPlus release that replaced 16.2.0.8386 on it; the 444 files of the SDK and the other packages are those of the 189647 manifest, the 8 files of the WorkWithPlus package are the new release. | See [Build 189647 with WorkWithPlus 16.2.1.8463](#genexus-18-u16-build-189647-with-workwithplus-16218463). |
 | `18.0.11.54344+wwp16.1.2.8167` | The complete-bundle manifest `config/events-u11-wwp16.1-audit.json` (459 files). | A synthetic WebPanel in a Knowledge Base without pattern instances, 2026-10-28; scoped, see [Scope of a native proof](#scope-of-a-native-proof). |
 | `18.0.10.184260` (no WorkWithPlus) | The complete-bundle manifest `config/events-u10-audit.json` (372 files), selected by the hash of `Artech.Architecture.Common` because the installation has no WorkWithPlus package. | A synthetic WebPanel in a Knowledge Base without pattern instances, 2026-11-06; scoped, see [Scope of a native proof](#scope-of-a-native-proof). |
 
@@ -289,6 +290,52 @@ existing WebPanel was refused with `SdkBundleAuditFailed`, naming the bundles au
 Not covered, as in 189647: a saved object that is itself a persisted WorkWithPlus host (the disposable Knowledge Base has no Design
 System); the manifests say so in `nativeVerification.notCovered`. The bundle is a build together with that WorkWithPlus release: another
 WorkWithPlus release, or a build that is not one of the five, is still refused.
+
+### GeneXus 18 U16 build 189647 with WorkWithPlus 16.2.1.8463
+
+WorkWithPlus 16.2.1.8463 replaced 16.2.0.8386 on an installation of build 189647: the 8 files of the WorkWithPlus package changed (four
+assemblies and the culture satellites of two of them) and the other 444 files of the audited bundle did not. The 189647 manifest no longer
+described that installation, so the isolated Events save was refused with `SdkBundleNotAudited` until this bundle was audited. The bundle is a
+build together with a WorkWithPlus release, so the new manifest `config/events-u16-wwp16.2.1-189647-audit.json` (452 files, the same nine
+critical assemblies) is registered next to the 189647 manifest of the earlier release. The registry tells them apart by the exact bytes of
+`DVelop.Patterns.WorkWithPlus` and then of `Artech.Architecture.Common`, as it does for builds that share a release; the SDK core is now the same
+for two bundles, so the invariant became "no two bundles that carry the same WorkWithPlus share it". Nothing was relaxed: every listed file
+must match its SHA-256, every loaded SDK assembly must be listed, and a mixture of the two releases is never matched as an audited build.
+
+What was compared, without opening a Knowledge Base: the 26 assemblies the 189647 audit read for the nine critical assemblies and for the 17
+pattern and user-control assemblies, read again from the installed bundle with the same reader and compared with the reading of the earlier
+bundle; the 23 more assemblies that hold Save-topic subscribers are byte for byte the ones that audit read. The 22 Artech and GeneXus assemblies
+among the 26 are identical to the earlier bundle, method by method (80,472 methods, none left unpaired). The four WorkWithPlus assemblies are not,
+and the audit says what differs rather than calling it identical (`runtimeInspection` of the manifest):
+
+- `AutoLinkGeneratorEventSubscriptions.BeforeSaveKBObject`, the handler of `event://KnowledgeBase/BeforeSaveKBObject`, gained six instructions at
+  its start: a call that takes the cancelable event arguments and a return when they report `Cancel`. The other 454 instructions are identical apart
+  from obfuscated names and the assembly version embedded in one type reference. The called helper compares the type of the saved object with a GUID
+  constant defined in the WorkWithPlus assembly itself and skips the rest of its body for any other type; for that type it validates the pattern
+  settings and reports "The WorkWithPlus template ... has validation errors", so its purpose is to refuse the save of an invalid WorkWithPlus template.
+  Its body is control-flow flattened and was not recovered line by line.
+- Six save-related methods exist under a name in only one of the two releases and have no body twin: the pattern-instance `BeforeSaveObjects` and
+  `AfterSaveObjects` callbacks of WorkWithPlus (two in each release, rewritten under new obfuscated names with differently flattened control flow,
+  so their equality cannot be established statically) and the WWPPackages document hooks (IDE only, excluded from native object saves by
+  `eventSubscribers`). The native proof is what covers the behavior of the first four.
+- 51 more paired methods differ in IL (52 in all with the handler above), all in WorkWithPlus code: constructors and static constructors (one of
+  them, in `EventsBlocksElement`, counts as a hook by the audit's definition but is not a handler), HTML preview builders, template initializers
+  and the `AfterDeleteKBObject` and `BeforeDeleteKBObject` handlers of the same subscriber class. None of them is subscribed to a Save topic.
+- The 65 `EventSubscription` attributes of the 26 assemblies are the same on the same 36 topics (the handler names of seven of them, on lock,
+  commit and open topics, are obfuscated names that changed), and the 524 subscriptions of the 223 code assemblies are the same, assembly by assembly.
+
+Static comparison says little about obfuscated, control-flow-flattened WorkWithPlus code, which is why this bundle leans on its native proof more
+than the builds that carry the same WorkWithPlus bytes as their control. The proof (2026-11-23) is the 88-check scenario of the other builds, run
+against the installed bundle itself (the Worker verified all 452 files of the manifest) with the manifest `pending` and two synthetic WebPanels
+removed at the end, in the disposable Knowledge Base that has pattern instances: no check failed. The sanitized result is
+[`evidence/events-u16-wwp16.2.1-189647-native-proof.json`](evidence/events-u16-wwp16.2.1-189647-native-proof.json); its SHA-256 is the
+`proofEvidenceSha256` of the manifest. The first run failed one check that was out of date, not the bundle: it still looked for the pin evidence
+field `hubProfileRevision`, which the code replaced with `profileRevision` (the revision of the native configuration file); the case was updated
+to the current contract and the second run passed all 88.
+
+Not covered: a saved object that is itself a persisted WorkWithPlus host (the disposable Knowledge Base has no Design System), and the save of a
+WorkWithPlus template or of a persisted WorkWithPlus instance object, which the changed WorkWithPlus save code acts on; the manifest says so in
+`nativeVerification.notCovered`. The first protected save of such an object on this release is worth a preview and a look at the receipt.
 
 ## Applied versus pending configuration
 
