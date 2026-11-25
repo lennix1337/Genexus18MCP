@@ -268,7 +268,7 @@ the state of each pin variable (`absent`, `blank` or `present`), never a value.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `GXMCP_ELICITATION` | `auto` asks the human (through MCP `elicitation/create`) to pick a KB when a call has no KB context, and to approve irreversible calls made without `confirm=true`; `strict` also asks when the agent passed `confirm=true`; `off` disables elicitation. Only clients that declare the `elicitation` capability over stdio are asked. | `auto` |
+| `GXMCP_ELICITATION` | `auto` and `strict` ask the human (through MCP `elicitation/create`) to pick a KB when a call has no KB context and to approve destructive calls, even with `confirm=true`. `off` disables elicitation. Only clients that declare the `elicitation` capability over stdio are asked. | `auto` |
 | `GXMCP_ELICITATION_TIMEOUT_SECONDS` | Seconds to wait for the human's answer. An unanswered confirmation is refused; an unanswered KB picker returns the original error. | `300` |
 
 See [Human-in-the-loop elicitation](elicitation.md).

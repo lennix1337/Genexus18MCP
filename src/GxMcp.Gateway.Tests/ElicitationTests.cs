@@ -8,7 +8,7 @@ using Xunit;
 namespace GxMcp.Gateway.Tests
 {
     [Collection("Gateway route state")]
-    public sealed class ElicitationTests
+    public sealed partial class ElicitationTests
     {
         [Theory]
         [InlineData("genexus_delete_object", "{\"name\":\"OldPanel\",\"type\":\"WebPanel\"}", true)]
@@ -20,6 +20,15 @@ namespace GxMcp.Gateway.Tests
         [InlineData("genexus_deploy", "{\"action\":\"deploy\"}", true)]
         [InlineData("genexus_deploy", "{\"action\":\"list_targets\"}", false)]
         [InlineData("genexus_read", "{\"name\":\"OldPanel\"}", false)]
+        [InlineData("genexus_lifecycle", "{\"action\":\"reorg_preview\"}", false)]
+        [InlineData("genexus_lifecycle", "{\"action\":\"reorg\",\"dryRun\":true}", true)]
+        [InlineData("genexus_lifecycle", "{\"action\":\"build_all\",\"dryRun\":true}", false)]
+        [InlineData("genexus_lifecycle", "{\"action\":\"build\",\"target\":\"OldPanel\"}", false)]
+        [InlineData("genexus_edit", "{\"mode\":\"full\",\"dryRun\":true}", false)]
+        [InlineData("genexus_edit", "{\"mode\":\"patch\"}", false)]
+        [InlineData("genexus_io", "{\"action\":\"delete_kb_objects\",\"dryRun\":true}", false)]
+        [InlineData("genexus_io", "{\"action\":\"import_text_to_kb\",\"format\":\"native\"}", false)]
+        [InlineData("genexus_io", "{\"action\":\"import_text_to_kb\",\"listOnly\":true}", false)]
         public void DestructivePolicy_GatesOnlyIrreversibleCalls(string tool, string args, bool gated)
         {
             Assert.Equal(gated, Program.DescribeDestructiveOperation(tool, JObject.Parse(args)) != null);
@@ -39,9 +48,14 @@ namespace GxMcp.Gateway.Tests
         [Fact]
         public void UnknownResponseIds_AreNotIntercepted()
         {
-            Assert.False(ElicitationBroker.TryCompleteResponse(JObject.Parse("{\"jsonrpc\":\"2.0\",\"id\":\"gxmcp-elicit-999999\",\"result\":{}}")));
-            Assert.False(ElicitationBroker.TryCompleteResponse(JObject.Parse("{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}")));
-            Assert.False(ElicitationBroker.TryCompleteResponse(JObject.Parse("{\"jsonrpc\":\"2.0\",\"id\":\"gxmcp-elicit-1\",\"method\":\"ping\"}")));
+            string[] messages =
+            {
+                "{\"jsonrpc\":\"2.0\",\"id\":\"gxmcp-elicit-999999\",\"result\":{}}",
+                "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}",
+                "{\"jsonrpc\":\"2.0\",\"id\":\"gxmcp-elicit-1\",\"method\":\"ping\"}"
+            };
+            foreach (string message in messages)
+                Assert.False(ElicitationBroker.TryCompleteResponse(JObject.Parse(message), "stdio"));
         }
 
         [Fact]
@@ -97,22 +111,6 @@ namespace GxMcp.Gateway.Tests
         }
 
         [Fact]
-        public async Task AgentConfirmed_IsNotAskedInAutoMode_ButIsAskedInStrictMode()
-        {
-            using var fixture = ElicitationFixture.Create(answer: _ => new JObject { ["action"] = "cancel" });
-            var call = ElicitationFixture.ToolCall("genexus_delete_object", new JObject { ["name"] = "OldPanel", ["confirm"] = true });
-
-            var (_, autoRefusal) = await Program.ConfirmDestructiveCallAsync(call, fixture.Session, default);
-            Assert.Null(autoRefusal);
-            Assert.Empty(fixture.Elicitations);
-
-            ElicitationBroker.ModeOverrideForTest = ElicitationMode.Strict;
-            var (_, strictRefusal) = await Program.ConfirmDestructiveCallAsync(call, fixture.Session, default);
-            Assert.Single(fixture.Elicitations);
-            Assert.Equal(Program.HumanCancelledCode, Program.ExtractErrorCode(strictRefusal!));
-        }
-
-        [Fact]
         public async Task NoHumanAnswer_TimesOutWithoutMutating()
         {
             using var fixture = ElicitationFixture.Create(answer: null);
@@ -130,18 +128,6 @@ namespace GxMcp.Gateway.Tests
         public async Task ClientWithoutElicitationCapability_IsNeverAsked()
         {
             using var fixture = ElicitationFixture.Create(answer: _ => new JObject { ["action"] = "decline" }, clientSupportsElicitation: false);
-
-            var response = await fixture.CallToolAsync("genexus_delete_object", new JObject { ["name"] = "OldPanel" });
-
-            Assert.Empty(fixture.Elicitations);
-            Assert.NotEqual(Program.HumanDeclinedCode, Program.ExtractErrorCode(response));
-        }
-
-        [Fact]
-        public async Task ModeOff_DisablesElicitation()
-        {
-            using var fixture = ElicitationFixture.Create(answer: _ => new JObject { ["action"] = "decline" });
-            ElicitationBroker.ModeOverrideForTest = ElicitationMode.Off;
 
             var response = await fixture.CallToolAsync("genexus_delete_object", new JObject { ["name"] = "OldPanel" });
 
@@ -205,9 +191,11 @@ namespace GxMcp.Gateway.Tests
             private readonly IDisposable _state;
             private readonly IDisposable _sender;
             private readonly string _directory;
+            private IDisposable? _workerRouting;
 
             internal string Session { get; }
             internal ConcurrentQueue<JObject> Elicitations { get; } = new();
+            internal ConcurrentQueue<JObject> Writes { get; } = new();
 
             private ElicitationFixture(string directory, string session, IDisposable state, Func<JObject, JObject?>? answer)
             {
@@ -227,7 +215,8 @@ namespace GxMcp.Gateway.Tests
                 });
             }
 
-            internal static ElicitationFixture Create(Func<JObject, JObject?>? answer, bool clientSupportsElicitation = true)
+            internal static ElicitationFixture Create(
+                Func<JObject, JObject?>? answer, bool clientSupportsElicitation = true, bool fakeWrites = false)
             {
                 ElicitationBroker.ModeOverrideForTest = ElicitationMode.Auto;
                 ElicitationBroker.TimeoutOverrideForTest = TimeSpan.FromSeconds(10);
@@ -248,11 +237,15 @@ namespace GxMcp.Gateway.Tests
                     }
                 };
                 string session = "elicit-" + Guid.NewGuid().ToString("N");
-                var fixture = new ElicitationFixture(
-                    directory,
-                    session,
-                    Program.ConfigureRouteStateForTest(config, configPath, _ => throw new FileNotFoundException("No Worker binary exists in this test fixture.")),
-                    answer);
+                ElicitationFixture? fixture = null;
+                if (fakeWrites) config.Environment.KBs[0].Path = directory;
+                fixture = new ElicitationFixture(directory, session,
+                    Program.ConfigureRouteStateForTest(config, configPath, handle =>
+                    {
+                        if (!fakeWrites) throw new FileNotFoundException("No Worker binary exists in this test fixture.");
+                        return CreateInMemoryWriteSink(config, handle, fixture!.Writes);
+                    }), answer);
+                if (fakeWrites) fixture._workerRouting = Program.AttachWorkerResponseRoutingForTest();
                 var capabilities = new JObject();
                 if (clientSupportsElicitation) capabilities["elicitation"] = new JObject();
                 ElicitationBroker.ObserveInitialize(new JObject
@@ -283,6 +276,7 @@ namespace GxMcp.Gateway.Tests
                 ElicitationBroker.ForgetSessionForTest(Session);
                 ElicitationBroker.ModeOverrideForTest = null;
                 ElicitationBroker.TimeoutOverrideForTest = null;
+                _workerRouting?.Dispose();
                 _state.Dispose();
                 try { Directory.Delete(_directory, true); } catch { }
             }

@@ -53,7 +53,7 @@ namespace GxMcp.Gateway
 
         private static readonly ConcurrentDictionary<string, bool> _capableSessions = new(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, Func<JObject, Task>> _senders = new(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<string, TaskCompletionSource<JObject>> _pending = new(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<(string SessionId, string RequestId), TaskCompletionSource<JObject>> _pending = new();
         private static long _nextRequestId;
 
         internal static ElicitationMode? ModeOverrideForTest { get; set; }
@@ -132,13 +132,13 @@ namespace GxMcp.Gateway
         /// Completes a pending elicitation when <paramref name="message"/> is the client's
         /// JSON-RPC response to it. Returns false for every other message.
         /// </summary>
-        internal static bool TryCompleteResponse(JObject message)
+        internal static bool TryCompleteResponse(JObject message, string sessionId)
         {
             if (message["method"] != null) return false;
             if (message["result"] == null && message["error"] == null) return false;
             string? id = message["id"]?.Type == JTokenType.String ? message["id"]!.ToString() : null;
             if (id == null || !id.StartsWith(RequestIdPrefix, StringComparison.Ordinal)) return false;
-            if (!_pending.TryRemove(id, out var completion)) return false;
+            if (!_pending.TryRemove((sessionId, id), out var completion)) return false;
             completion.TrySetResult(message);
             return true;
         }
@@ -154,7 +154,8 @@ namespace GxMcp.Gateway
 
             string id = RequestIdPrefix + Interlocked.Increment(ref _nextRequestId).ToString(System.Globalization.CultureInfo.InvariantCulture);
             var completion = new TaskCompletionSource<JObject>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pending[id] = completion;
+            var key = (sessionId, id);
+            _pending[key] = completion;
             try
             {
                 var outbound = new JObject
@@ -205,7 +206,7 @@ namespace GxMcp.Gateway
             }
             finally
             {
-                _pending.TryRemove(id, out _);
+                _pending.TryRemove(key, out _);
             }
         }
 
