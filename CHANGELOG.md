@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Modern HTTP calls that opt into MCP Tasks now require `Mcp-Client-Id` before dispatch, so they cannot create a task they cannot poll ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
 - MCP Tasks polling now returns standard tool results and distinguishes tool errors from request failures. Modern clients can cancel queued jobs and see their waiting state; legacy clients keep the existing task responses ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
 
 - `genexus_doctor`: `DoctorService.BuildKbBlock` and `DoctorService.BuildCacheBlock` now probe `IndexCacheService.TryGetLoadedIndex()` instead of calling `GetIndex()`, avoiding a blocking 30–60s cold index load (and potential Gateway timeout) when diagnosing a cold Worker. `objectCount` and `indexEntries` report `0` until the index is loaded in memory.
