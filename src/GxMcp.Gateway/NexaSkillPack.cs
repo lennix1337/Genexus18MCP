@@ -18,8 +18,10 @@ namespace GxMcp.Gateway
 
         private static readonly IReadOnlyDictionary<string, string> Resources = LoadResources();
 
-        internal static int ReferenceCount => Resources.Keys.Count(key =>
-            key.StartsWith("references/", StringComparison.OrdinalIgnoreCase));
+        internal static IEnumerable<KeyValuePair<string, string>> References => Resources.Where(file =>
+            file.Key.StartsWith("references/", StringComparison.OrdinalIgnoreCase));
+
+        internal static int ReferenceCount => References.Count();
 
         internal static string ReadRoot()
         {
