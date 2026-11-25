@@ -445,8 +445,12 @@ namespace GxMcp.Gateway
             };
         }
 
-        private static JObject BuildServerDiscoverResponse()
+        private static JObject BuildServerDiscoverResponse(bool modern)
         {
+            var extensions = new JObject { ["io.modelcontextprotocol/tasks"] = new JObject() };
+            // SEP-2640 targets 2026-07-28 and newer, which use discovery rather than initialize.
+            if (modern) extensions[McpSkillsProtocol.Capability] = new JObject();
+
             return new JObject
             {
                 ["resultType"] = "complete",
@@ -458,10 +462,7 @@ namespace GxMcp.Gateway
                     ["prompts"] = new JObject { ["listChanged"] = false },
                     ["logging"] = new JObject(),
                     ["completion"] = new JObject(),
-                    ["extensions"] = new JObject
-                    {
-                        ["io.modelcontextprotocol/tasks"] = new JObject()
-                    }
+                    ["extensions"] = extensions
                 },
                 ["_meta"] = new JObject
                 {
@@ -512,7 +513,11 @@ namespace GxMcp.Gateway
                         return BuildInitializeResponse(clientVersion);
                     }
                 case "server/discover":
-                    return BuildServerDiscoverResponse();
+                    return BuildServerDiscoverResponse(IsModernRequest(request));
+                case "skills/list" when IsModernRequest(request):
+                    return McpSkillsProtocol.List(request);
+                case "skills/get" when IsModernRequest(request):
+                    return McpSkillsProtocol.Get(request);
                 case "tools/list":
                     {
                         string activeProfile = ToolProfileFilter.ResolveActiveProfile(Program.ActiveConfig?.Server?.ToolProfile);
@@ -538,7 +543,7 @@ namespace GxMcp.Gateway
                 case "resources/list":
                     return _cachedResourcesListResponse;
                 case "resources/read":
-                    return BuildStaticResourceResponse(request);
+                    return BuildSkillResourceResponse(request) ?? BuildStaticResourceResponse(request);
                 case "resources/templates/list":
                     return _cachedResourceTemplatesListResponse;
                 case "resources/subscribe":
@@ -1177,6 +1182,17 @@ namespace GxMcp.Gateway
                     }
                 }
             };
+
+        private static object? BuildSkillResourceResponse(JObject request)
+        {
+            if (!IsModernRequest(request)) return null;
+            string? uri = ((request["params"] as JObject)?["uri"] as JValue)?.Value as string;
+            if (uri == null || !McpSkillsProtocol.IsSkillUri(uri)) return null;
+
+            return McpSkillsProtocol.TryRead(uri, out var text)
+                ? ResourceCompletion(uri, text)
+                : new McpRouterError(-32602, "Unknown skill resource URI.");
+        }
 
         private static object? BuildStaticResourceResponse(JObject request)
         {
