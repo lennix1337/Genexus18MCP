@@ -12,6 +12,7 @@ namespace GxMcp.Gateway
         internal const string HumanDeclinedCode = "HUMAN_DECLINED";
         internal const string HumanCancelledCode = "HUMAN_CANCELLED";
         internal const string HumanConfirmationTimeoutCode = "HUMAN_CONFIRMATION_TIMEOUT";
+        internal const string HumanConfirmationUnavailableCode = "HUMAN_CONFIRMATION_UNAVAILABLE";
 
         /// <summary>
         /// Describes the irreversible effect of a destructive call that a human should approve,
@@ -21,30 +22,79 @@ namespace GxMcp.Gateway
         {
             if (string.IsNullOrEmpty(toolName) || args == null) return null;
             string action = args["action"]?.ToString()?.Trim().ToLowerInvariant() ?? string.Empty;
-            bool dryRunTrue = args["dryRun"]?.Type == JTokenType.Boolean && args["dryRun"]!.Value<bool>();
-            bool dryRunFalse = args["dryRun"]?.Type == JTokenType.Boolean && !args["dryRun"]!.Value<bool>();
+            bool? dryRun = ReadDryRun(args["dryRun"]);
             string kbSuffix = string.IsNullOrWhiteSpace(args["kb"]?.ToString()) ? string.Empty : $" in KB '{args["kb"]}'";
 
             switch (toolName)
             {
                 case "genexus_delete_object":
-                    if (dryRunTrue) return null;
+                    if (dryRun == true) return null;
                     string type = args["type"]?.ToString() ?? string.Empty;
                     string name = args["name"]?.ToString() ?? "(unnamed)";
                     string label = string.IsNullOrWhiteSpace(type) ? $"'{name}'" : $"{type} '{name}'";
                     return $"Delete {label}{kbSuffix}? This is irreversible.";
                 case "genexus_data_view":
-                    if (action != "delete" || dryRunTrue) return null;
+                    if (action != "delete" || dryRun == true) return null;
                     return $"Delete Transaction '{args["transaction"]}' and Data View '{args["dataViewName"]}'{kbSuffix}? This is irreversible.";
                 case "genexus_transfer":
-                    if (action != "import" || !dryRunFalse) return null;
-                    return $"Import XPZ '{args["file"]}'{kbSuffix}? Objects in the KB will be created or overwritten.";
+                    if (action != "import" || dryRun != false) return null;
+                    return $"Import XPZ '{args["file"] ?? args["inputPath"]}'{kbSuffix}? Objects in the KB will be created or overwritten.";
+                case "genexus_io":
+                    return DescribeDestructiveIo(action, args, dryRun, kbSuffix);
+                case "genexus_lifecycle" when action == "reorg":
+                case "genexus_build" when action == "reorg":
+                    // The reorg route does not guarantee dryRun; reorg_preview is the safe preview.
+                    return $"Reorganize the database{kbSuffix}? This can change its schema and data.";
+                case "genexus_lifecycle" when dryRun != true && action is "build_all" or "rebuild":
+                case "genexus_build" when action is "buildall" or "rebuildall":
+                    return $"Build all objects{kbSuffix}? This can run SDK-configured commands.";
+                case "genexus_edit" or "genexus_edit_and_build" when OverwritesObjectPart(args):
+                    string target = args["name"]?.ToString() ?? "the requested objects";
+                    return $"Overwrite complete object parts for {target}{kbSuffix}?";
+                case "genexus_write_object":
+                    return $"Overwrite an object part for '{args["name"]}'{kbSuffix}?";
                 case "genexus_deploy":
                     if (action != "deploy") return null;
                     return $"Build and deploy the application{kbSuffix}?";
                 default:
                     return null;
             }
+        }
+
+        private static string? DescribeDestructiveIo(string action, JObject args, bool? dryRun, string kbSuffix)
+        {
+            if (dryRun == true) return null;
+            switch (action)
+            {
+                case "delete_kb_objects":
+                    return $"Delete the selected objects{kbSuffix}? This is irreversible.";
+                case "import_part":
+                    return $"Overwrite an object part for '{args["name"]}'{kbSuffix} from '{args["inputPath"]}'?";
+                case "import_text_to_kb" when ReadDryRun(args["listOnly"]) != true:
+                    // Native formats preview by default; the legacy text route writes by default.
+                    string? format = args["format"]?.ToString().ToLowerInvariant();
+                    if (dryRun == null && format is "native" or "sdk" or "sdk-tree" or "src-ref") return null;
+                    return $"Import text from '{args["inputPath"]}'{kbSuffix}? Objects can be created or overwritten.";
+                default:
+                    return null;
+            }
+        }
+
+        private static bool? ReadDryRun(JToken? token)
+        {
+            if (token is not JValue || token.Type == JTokenType.Null) return null;
+            if (bool.TryParse(token.ToString(), out bool dryRun)) return dryRun;
+            return token.Type == JTokenType.Integer ? token.Value<bool>() : null;
+        }
+
+        private static bool OverwritesObjectPart(JObject args)
+        {
+            if (ReadDryRun(args["dryRun"]) == true) return false;
+            if (args["targets"] is JArray targets)
+                return targets.OfType<JObject>().Any(OverwritesObjectPart);
+
+            string? mode = args["mode"]?.ToString();
+            return string.IsNullOrWhiteSpace(mode) || string.Equals(mode, "full", StringComparison.OrdinalIgnoreCase);
         }
 
         private static async Task<JObject?> ProcessMcpRequestWithElicitation(
@@ -54,7 +104,7 @@ namespace GxMcp.Gateway
             CancellationToken transportCancellation,
             bool taskScopeEnabled)
         {
-            if (ElicitationBroker.TryCompleteResponse(request)) return null;
+            if (ElicitationBroker.TryCompleteResponse(request, sessionId)) return null;
 
             string? method = request["method"]?.ToString();
             if (string.Equals(method, "initialize", StringComparison.Ordinal))
@@ -90,9 +140,6 @@ namespace GxMcp.Gateway
             string? effect = DescribeDestructiveOperation(toolName, args);
             if (effect == null) return (request, null);
 
-            bool agentConfirmed = args?["confirm"]?.Type == JTokenType.Boolean && args["confirm"]!.Value<bool>();
-            if (agentConfirmed && ElicitationBroker.Mode != ElicitationMode.Strict) return (request, null);
-
             var schema = new JObject
             {
                 ["type"] = "object",
@@ -126,10 +173,12 @@ namespace GxMcp.Gateway
                     approvedArgs["confirm"] = true;
                     return (approved, null);
                 case ElicitationAction.Unavailable:
-                case ElicitationAction.Failed:
-                    // The client could not ask: keep today's contract (the Worker's own
-                    // confirm=true gate still protects the KB).
+                    // No prompt was attempted; preserve the Worker's existing safeguards.
                     return (request, null);
+                case ElicitationAction.Failed:
+                    return (request, BuildHumanRefusal(request, toolName, args, HumanConfirmationUnavailableCode,
+                        $"Could not obtain human confirmation for {toolName}; nothing was changed.",
+                        "Do not retry automatically. Use a client that can collect human confirmation."));
                 case ElicitationAction.Timeout:
                     return (request, BuildHumanRefusal(request, toolName, args, HumanConfirmationTimeoutCode,
                         $"No human answer to the confirmation for {toolName} within {ElicitationBroker.Timeout.TotalSeconds:0}s; nothing was changed.",

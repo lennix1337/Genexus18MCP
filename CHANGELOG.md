@@ -13,6 +13,7 @@
 
 ### Changed
 
+- MCP clients that declare elicitation over stdio now confirm object deletion, full-part overwrites, reorganization and Build All before the Gateway dispatches them, even if the agent passed `confirm=true`. A decline, cancellation or unavailable answer stops the operation. Other clients retain their existing behavior ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
 - Gateway (`BuildToolResultContent` / `InjectMetaTokens`): inject `_meta.tokens` directly in memory before serializing `content[0].text` once and mark the envelope as handled, eliminating the redundant `JObject.Parse` + re-serialize per tool call (100x ~48 KB payload benchmark: 77 ms / 78.1 MB allocated -> 17 ms / 21.5 MB allocated) and keeping `structuredContent` in sync.
 - Gateway (`TruncateResponseIfNeeded` / `SemanticCacheStore` / `McpRouter.StripNulls`): measure serialized sizes in-place with `MeasureSerializedCharCount`/`ResponseSizeGuard.ByteSize` instead of allocating full JSON strings, strip nulls in-place without per-object `List<string>` allocations, and replace `SemanticCacheStore`'s O(N log N) eviction sort and unconditional `Keys.ToArray()` expiry sweep with an O(N) min-scan and earliest-expiry gate (`Truncate_UnderBudget_100Rows`: 30.17 -> 21.70 us, 148.3 KB -> 536 B; `Truncate_OverBudget_400Rows`: 1254.38 -> 491.33 us; `SemanticCache_Set_AtCap_40KB`: 101.18 -> 61.18 us, 171.34 KB -> 1.23 KB).
 - Gateway (`GatewayArgsValidator` / `DidYouMean` / `McpRouter`): pre-compile per-tool schema metadata (required fields, property types, enum sets, schema-ordered declared names) once per tool with zero-allocation valid-call fast path, avoid per-candidate string lowercasing in `DidYouMean.Suggest`, and index tool definitions and `outputSchema` declarations in O(1) maps in `McpRouter` (`Validate_GenexusLifecycle_ValidEnum`: 306.4 -> 56.73 ns, 736 -> 0 B; `Validate_GenexusEdit_ValidArgs`: 40.25 -> 2.18 us, 3352 -> 0 B; `Validate_GenexusQuery_ValidArgs`: 168.0 -> 43.64 ns, 480 -> 0 B; `ToolDeclaresOutputSchema`: 693.1 -> 21.52 ns, 112 -> 0 B).
@@ -23,6 +24,8 @@
 
 ### Fixed
 
+- Destructive calls keep their existing Worker safeguards when MCP elicitation is disabled or unsupported; a failed attempt to ask a capable client still stops the call ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
+- Modern HTTP calls that opt into MCP Tasks now require `Mcp-Client-Id` before dispatch, so they cannot create a task they cannot poll ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
 - MCP Tasks polling now returns standard tool results and distinguishes tool errors from request failures. Modern clients can cancel queued jobs and see their waiting state; legacy clients keep the existing task responses ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
 
 - `genexus_doctor`: `DoctorService.BuildKbBlock` and `DoctorService.BuildCacheBlock` now probe `IndexCacheService.TryGetLoadedIndex()` instead of calling `GetIndex()`, avoiding a blocking 30–60s cold index load (and potential Gateway timeout) when diagnosing a cold Worker. `objectCount` and `indexEntries` report `0` until the index is loaded in memory.

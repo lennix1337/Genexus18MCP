@@ -53,8 +53,9 @@ The `io.modelcontextprotocol/tasks` extension is advertised by
 `server/discover`. Modern task requests must opt in through
 `params._meta.io.modelcontextprotocol/clientCapabilities.extensions`; legacy
 session clients remain backward compatible. On sessionless HTTP, task callers
-must also send a stable `Mcp-Client-Id` header; requests without that explicit
-scope fail closed before looking up a task. Task handles (`tasks/get`,
+must also send a stable `Mcp-Client-Id` header. A `tools/call` with Tasks opt-in
+and no client scope is rejected before dispatch, just as task polling is
+rejected before lookup. Task handles (`tasks/get`,
 `tasks/update`, and `tasks/cancel`) are scoped to the transport identity that
 created the background job. Asynchronous `tools/call` responses use
 `resultType:"task"`; polling uses `resultType:"complete"`, while update and

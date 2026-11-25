@@ -14,11 +14,16 @@ Gated operations:
 - `genexus_delete_object` unless `dryRun=true`;
 - `genexus_data_view action=delete` unless `dryRun=true`;
 - `genexus_transfer action=import` with `dryRun=false`;
+- `genexus_io action=delete_kb_objects`, `import_part`, or `import_text_to_kb` when not previewing;
+- full/default-mode writes through `genexus_edit` (including flat `targets`), `genexus_edit_and_build`, or legacy `genexus_write_object`;
+- `genexus_lifecycle action=reorg`, and non-preview `build_all` and `rebuild` (also legacy `genexus_build` equivalents);
 - `genexus_deploy action=deploy`.
 
-A refusal response tells the agent not to retry the operation unless the user asks
-again, so the agent cannot simply re-send it with `confirm=true`. In `strict` mode
-the human is asked even when the agent already passed `confirm=true`.
+Build All and Rebuild prompt regardless of KB size: the Gateway does not guess
+whether a build is large enough to warrant approval. For reorganization, use
+`reorg_preview`; `reorg` itself does not guarantee a non-mutating `dryRun`.
+The human is asked even when the agent passed `confirm=true`. Decline or cancel
+returns a tool error and stops the operation before dispatch.
 
 ## When it is active
 
@@ -29,16 +34,16 @@ Elicitation is used only when all of these hold:
    keep the non-interactive behaviour;
 3. `GXMCP_ELICITATION` is not `off`.
 
-When the client cannot answer (missing capability, an error reply, or an
-unrecognised action), the call goes ahead as if elicitation did not exist, and the
-Worker's own `confirm=true` check still applies. No existing contract changes for
-clients that do not support elicitation.
+Without the capability, a registered transport sender, or with elicitation off,
+the Gateway uses its existing non-interactive path. Once it asks for approval,
+it does not dispatch on a timeout, client error, or unrecognised answer. The KB
+picker still returns the original context error if it cannot get a selection.
 
 ## Configuration
 
 | Variable | Values | Default |
 |----------|--------|---------|
-| `GXMCP_ELICITATION` | `auto`: KB picker, and confirmation only when `confirm` is missing. `strict`: also confirm when the agent passed `confirm=true`. `off`: never elicit. | `auto` |
+| `GXMCP_ELICITATION` | `auto` or `strict`: KB picker and destructive-write confirmation, even with `confirm=true`. `off`: never elicit. | `auto` |
 | `GXMCP_ELICITATION_TIMEOUT_SECONDS` | How long to wait for the human. An unanswered confirmation is treated as a refusal; an unanswered KB picker returns the original error. | `300` |
 
 ## Implementation

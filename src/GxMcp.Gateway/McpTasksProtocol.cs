@@ -32,6 +32,11 @@ namespace GxMcp.Gateway
             OwnershipFence? ownership = null)
         {
             string? method = request["method"]?.ToString();
+            if (method == "tools/call")
+            {
+                // Reject an unpollable task before any tool can enqueue work.
+                return !taskScopeEnabled && SupportsTasks(request) ? MissingClientScope(request["id"]) : null;
+            }
             if (method != "tasks/get" && method != "tasks/update" && method != "tasks/cancel")
                 return null;
 
@@ -49,12 +54,7 @@ namespace GxMcp.Gateway
                     });
             }
 
-            if (modern && !taskScopeEnabled)
-            {
-                return Error(id, -32023,
-                    "Modern MCP tasks require the Mcp-Client-Id header so task ownership can be isolated.",
-                    new JObject { ["requiredHeader"] = "Mcp-Client-Id" });
-            }
+            if (modern && !taskScopeEnabled) return MissingClientScope(id);
 
             var parameters = request["params"] as JObject;
             var rawTaskId = parameters?["taskId"];
@@ -181,6 +181,10 @@ namespace GxMcp.Gateway
             McpTaskResult.AttachOutcome(task, wireStatus, localStatus, job.Kind, payload);
             return task;
         }
+
+        private static JObject MissingClientScope(JToken? id) => Error(id, -32023,
+            "Modern MCP tasks require the Mcp-Client-Id header so task ownership can be isolated.",
+            new JObject { ["requiredHeader"] = "Mcp-Client-Id" });
 
         private static bool ClientDeclaredTasksExtension(JObject request)
         {
