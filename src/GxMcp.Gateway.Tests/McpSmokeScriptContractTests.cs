@@ -26,6 +26,10 @@ namespace GxMcp.Gateway.Tests
     [Trait("Category", "ProcessSmoke")]
     public class McpSmokeScriptContractTests
     {
+        private readonly Xunit.Abstractions.ITestOutputHelper _output;
+
+        public McpSmokeScriptContractTests(Xunit.Abstractions.ITestOutputHelper output) => _output = output;
+
         private static bool IsWindows =>
             OperatingSystem.IsWindows();
 
@@ -129,6 +133,7 @@ namespace GxMcp.Gateway.Tests
                         }
                     };
                     bool started;
+                    var phase = Stopwatch.StartNew();
                     try
                     {
                         started = proc.Start();
@@ -154,6 +159,12 @@ namespace GxMcp.Gateway.Tests
                         continue;
                     }
 
+                    // Phase timings reach the TRX StdOut, which assert-test-durations.ps1 prints
+                    // when this test breaks the CI time budget: they say whether the gateway
+                    // cold start or the PowerShell script ate the time.
+                    long gatewayReadyMs = phase.ElapsedMilliseconds;
+                    _output.WriteLine($"gateway listening after {gatewayReadyMs} ms (attempt {startupAttempt})");
+
                     // THE CONTRACT: run the actual smoke script unmodified. If anyone
                     // tightens gateway header validation without updating the script —
                     // or loosens the script below the gateway's requirements — this fails.
@@ -176,6 +187,7 @@ namespace GxMcp.Gateway.Tests
                     }
                     string stdout = smoke.StandardOutput.ReadToEnd();
                     string stderr = smoke.StandardError.ReadToEnd();
+                    _output.WriteLine($"smoke script finished {phase.ElapsedMilliseconds - gatewayReadyMs} ms after the gateway was ready");
 
                     Assert.True(smokeExited && smoke.ExitCode == 0,
                         "mcp_smoke.ps1 FAILED against a healthy gateway — first-party diagnostic " +
