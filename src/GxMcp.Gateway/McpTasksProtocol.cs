@@ -40,7 +40,13 @@ namespace GxMcp.Gateway
             if (modern && !ClientDeclaredTasksExtension(request))
             {
                 return Error(id, -32021, "The client did not declare the io.modelcontextprotocol/tasks extension.",
-                    new JObject { ["requiredExtension"] = "io.modelcontextprotocol/tasks" });
+                    new JObject
+                    {
+                        ["requiredCapabilities"] = new JObject
+                        {
+                            ["extensions"] = new JObject { [ExtensionId] = new JObject() }
+                        }
+                    });
             }
 
             if (modern && !taskScopeEnabled)
@@ -51,13 +57,17 @@ namespace GxMcp.Gateway
             }
 
             var parameters = request["params"] as JObject;
-            string taskId = parameters?["taskId"]?.ToString() ?? parameters?["id"]?.ToString() ?? "";
+            var rawTaskId = parameters?["taskId"];
+            string? taskId = modern
+                ? (rawTaskId?.Type == JTokenType.String ? (string?)rawTaskId : null)
+                : rawTaskId?.ToString() ?? parameters?["id"]?.ToString() ?? "";
             if (string.IsNullOrWhiteSpace(taskId))
-                return Error(id, -32602, "taskId is required.", new JObject { ["taskId"] = taskId });
+                return Error(id, -32602, "taskId is required.", new JObject { ["taskId"] = taskId ?? "" });
 
             var job = registry.Get(taskId);
             if (job == null)
-                return Error(id, modern ? -32602 : -32001, "Task not found", new JObject { ["taskId"] = taskId });
+                return Error(id, modern ? -32602 : -32001, modern ? "Invalid taskId." : "Task not found",
+                    new JObject { ["taskId"] = taskId });
             ownership ??= new OwnershipFence(sessionId, string.Empty, 0);
             bool sameSession = string.Equals(job.Session, sessionId, StringComparison.Ordinal);
             if (!sameSession || !registry.BelongsTo(job, ownership))
@@ -89,7 +99,7 @@ namespace GxMcp.Gateway
 
             if (method == "tasks/cancel")
             {
-                if (!string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase))
+                if (!modern && !string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase))
                 {
                     return Error(id, -32602, "Cannot cancel a terminal task.",
                         new JObject { ["taskId"] = taskId, ["status"] = job.Status });
@@ -97,13 +107,12 @@ namespace GxMcp.Gateway
                 bool cancelled = registry.Cancel(taskId, parameters?["reason"]?.ToString() ?? "Cancelled by client");
                 return Success(id, modern
                     ? CompleteAck()
-                    : BuildTask(job, cancelled ? "cancelled" : job.Status));
+                    : BuildLegacyTask(job, cancelled ? "cancelled" : job.Status));
             }
 
             if (method == "tasks/update" && modern)
             {
-                var inputResponses = parameters?["inputResponses"];
-                if (inputResponses != null && inputResponses.Type != JTokenType.Object)
+                if (parameters?["inputResponses"] is not JObject)
                     return Error(id, -32602, "inputResponses must be an object.",
                         new JObject { ["taskId"] = taskId });
 
@@ -113,32 +122,24 @@ namespace GxMcp.Gateway
                 return Success(id, CompleteAck());
             }
 
-            return Success(id, BuildTask(job, modern: modern));
+            return Success(id, modern ? BuildModernTask(job) : BuildLegacyTask(job));
         }
 
         internal static JObject BuildCreateTaskResult(JobEntry job, string statusMessage)
         {
             if (job == null) throw new ArgumentNullException(nameof(job));
-            var task = BuildTask(job, statusOverride: "working", modern: true);
-            task["resultType"] = "task";
-            if (!string.IsNullOrWhiteSpace(statusMessage)) task["statusMessage"] = statusMessage;
-            return task;
+            lock (job.SyncRoot)
+            {
+                var task = BuildTaskMetadata(job, "working");
+                task["resultType"] = "task";
+                if (!string.IsNullOrWhiteSpace(statusMessage)) task["statusMessage"] = statusMessage;
+                return task;
+            }
         }
 
-        internal static JObject BuildTask(JobEntry job, string? statusOverride = null, bool modern = false)
+        private static JObject BuildLegacyTask(JobEntry job, string? statusOverride = null)
         {
-            string status = statusOverride ?? job.Status;
-            if (modern) status = MapModernStatus(status);
-            var task = new JObject
-            {
-                ["taskId"] = job.Id,
-                ["status"] = status,
-                ["createdAt"] = job.StartedAt.ToUniversalTime().ToString("O"),
-                ["lastUpdatedAt"] = (job.LastUpdatedAt ?? job.StartedAt).ToUniversalTime().ToString("O"),
-                ["pollIntervalMs"] = PollIntervalMs,
-                ["ttlMs"] = TaskTtlMs
-            };
-            if (modern) task["resultType"] = "complete";
+            var task = BuildTaskMetadata(job, statusOverride ?? job.Status);
             task["estimatedSeconds"] = job.EstimatedSeconds;
             if (job.CompletedAt.HasValue) task["completedAt"] = job.CompletedAt.Value.ToUniversalTime().ToString("O");
             if (!string.IsNullOrWhiteSpace(job.Summary)) task["statusMessage"] = job.Summary;
@@ -150,11 +151,35 @@ namespace GxMcp.Gateway
             return task;
         }
 
-        private static string MapModernStatus(string status)
+        private static JObject BuildTaskMetadata(JobEntry job, string status) => new JObject
         {
-            if (string.Equals(status, "running", StringComparison.OrdinalIgnoreCase)) return "working";
-            if (string.Equals(status, "succeeded", StringComparison.OrdinalIgnoreCase)) return "completed";
-            return status.ToLowerInvariant();
+            ["taskId"] = job.Id,
+            ["status"] = status,
+            ["createdAt"] = job.StartedAt.ToUniversalTime().ToString("O"),
+            ["lastUpdatedAt"] = (job.LastUpdatedAt ?? job.StartedAt).ToUniversalTime().ToString("O"),
+            ["pollIntervalMs"] = PollIntervalMs,
+            ["ttlMs"] = TaskTtlMs
+        };
+
+        private static JObject BuildModernTask(JobEntry job)
+        {
+            string localStatus;
+            string wireStatus;
+            JObject? payload;
+            JObject task;
+            lock (job.SyncRoot)
+            {
+                localStatus = job.Status;
+                payload = job.Result;
+                wireStatus = McpTaskResult.GetStatus(localStatus, payload);
+                task = BuildTaskMetadata(job, wireStatus);
+                task["resultType"] = "complete";
+                if (!string.IsNullOrWhiteSpace(job.Summary)) task["statusMessage"] = job.Summary;
+                else if (localStatus == "queued") task["statusMessage"] = "Waiting for the worker.";
+            }
+
+            McpTaskResult.AttachOutcome(task, wireStatus, localStatus, job.Kind, payload);
+            return task;
         }
 
         private static bool ClientDeclaredTasksExtension(JObject request)
@@ -162,7 +187,7 @@ namespace GxMcp.Gateway
             var metadata = (request["params"] as JObject)?["_meta"] as JObject;
             var capabilities = metadata?["io.modelcontextprotocol/clientCapabilities"] as JObject;
             return capabilities?["extensions"] is JObject extensions
-                   && extensions.Property(ExtensionId) != null;
+                   && extensions[ExtensionId] is JObject;
         }
 
         private static JObject CompleteAck() => new JObject { ["resultType"] = "complete" };
