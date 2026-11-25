@@ -445,11 +445,15 @@ namespace GxMcp.Gateway
             };
         }
 
-        private static JObject BuildServerDiscoverResponse(bool modern)
+        private static JObject BuildServerDiscoverResponse(JObject request)
         {
+            bool modern = IsModernRequest(request);
             var extensions = new JObject { ["io.modelcontextprotocol/tasks"] = new JObject() };
             // SEP-2640 targets 2026-07-28 and newer, which use discovery rather than initialize.
             if (modern) extensions[McpSkillsProtocol.Capability] = new JObject();
+            bool files = modern && McpFileUploadsProtocol.DeclaresSupport(request);
+            if (files)
+                extensions[McpFileUploadsProtocol.Capability] = new JObject { ["maxInlineBytes"] = McpFileUploadsProtocol.MaxInlineBytes };
 
             return new JObject
             {
@@ -474,8 +478,8 @@ namespace GxMcp.Gateway
                 },
                 ["instructions"] = ServerInstructions.ForActiveProfile(),
                 ["profiles"] = new JArray("exploration", "safe-edit", "ui", "build", "versioning", "deploy"),
-                ["ttlMs"] = PublicResourceTtlMs,
-                ["cacheScope"] = "public"
+                ["ttlMs"] = files ? 0 : PublicResourceTtlMs,
+                ["cacheScope"] = files ? "private" : "public"
             };
         }
 
@@ -496,6 +500,29 @@ namespace GxMcp.Gateway
             });
         }
 
+        private static JObject BuildToolsListResponse()
+        {
+            string activeProfile = ToolProfileFilter.ResolveActiveProfile(Program.ActiveConfig?.Server?.ToolProfile);
+            if (string.IsNullOrEmpty(activeProfile) || activeProfile == "all")
+            {
+                return _cachedToolsListResponse ??= new JObject
+                {
+                    ["resultType"] = "complete",
+                    ["tools"] = ToolProfileFilter.GetOrCreateFiltered(_toolDefinitions, "all"),
+                    ["ttlMs"] = PublicResourceTtlMs,
+                    ["cacheScope"] = "public"
+                };
+            }
+            return _cachedProfileResponses.GetOrAdd(activeProfile, p => new JObject
+            {
+                ["resultType"] = "complete",
+                ["tools"] = ToolProfileFilter.GetOrCreateFiltered(_toolDefinitions, p),
+                ["profile"] = p,
+                ["ttlMs"] = PublicResourceTtlMs,
+                ["cacheScope"] = "public"
+            });
+        }
+
         public static object? Handle(JObject request)
         {
             string? method = request["method"]?.ToString();
@@ -513,33 +540,13 @@ namespace GxMcp.Gateway
                         return BuildInitializeResponse(clientVersion);
                     }
                 case "server/discover":
-                    return BuildServerDiscoverResponse(IsModernRequest(request));
+                    return BuildServerDiscoverResponse(request);
                 case "skills/list" when IsModernRequest(request):
                     return McpSkillsProtocol.List(request);
                 case "skills/get" when IsModernRequest(request):
                     return McpSkillsProtocol.Get(request);
                 case "tools/list":
-                    {
-                        string activeProfile = ToolProfileFilter.ResolveActiveProfile(Program.ActiveConfig?.Server?.ToolProfile);
-                        if (string.IsNullOrEmpty(activeProfile) || activeProfile == "all")
-                        {
-                            return _cachedToolsListResponse ??= new JObject
-                            {
-                                ["resultType"] = "complete",
-                                ["tools"] = ToolProfileFilter.GetOrCreateFiltered(_toolDefinitions, "all"),
-                                ["ttlMs"] = PublicResourceTtlMs,
-                                ["cacheScope"] = "public"
-                            };
-                        }
-                        return _cachedProfileResponses.GetOrAdd(activeProfile, p => new JObject
-                        {
-                            ["resultType"] = "complete",
-                            ["tools"] = ToolProfileFilter.GetOrCreateFiltered(_toolDefinitions, p),
-                            ["profile"] = p,
-                            ["ttlMs"] = PublicResourceTtlMs,
-                            ["cacheScope"] = "public"
-                        });
-                    }
+                    return McpFileUploadsProtocol.ProjectToolsList(request, BuildToolsListResponse());
                 case "resources/list":
                     return _cachedResourcesListResponse;
                 case "resources/read":

@@ -992,12 +992,14 @@ namespace GxMcp.Gateway
 
                 // PERF: pass the JObject so WorkerProcess doesn't re-parse the
                 // serialized command on the write path (it serializes exactly once).
+                var releaseUndeliveredUpload = workerCommand.Annotation<McpFileUploadsProtocol.StagedFile>()?.HoldForWorker(worker, attemptRequestId);
                 try
                 {
                     await worker.SendCommandAsync(workerRequest);
                 }
                 catch (WorkerCommandNotDeliveredException notDelivered)
                 {
+                    releaseUndeliveredUpload?.Invoke();
                     // Issue #692: the Worker was already stopping (idle reap) when this
                     // command was offered. Nothing reached it, so wait for its exit to
                     // detach the pool entry and send the command to the replacement.

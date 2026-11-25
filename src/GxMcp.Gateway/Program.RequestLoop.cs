@@ -135,7 +135,8 @@ namespace GxMcp.Gateway
             {
                 var adaptiveList = McpRouter.BuildAdaptiveToolsList(
                     sessionContextEnabled ? AdaptiveToolSessions.EnabledGroups(sessionId) : Array.Empty<string>());
-                return new JObject { ["jsonrpc"] = "2.0", ["id"] = idToken?.DeepClone(), ["result"] = adaptiveList };
+                return new JObject { ["jsonrpc"] = "2.0", ["id"] = idToken?.DeepClone(),
+                    ["result"] = McpFileUploadsProtocol.ProjectToolsList(request, adaptiveList) };
             }
 
             var mcpResponse = McpRouter.Handle(request);
@@ -518,6 +519,11 @@ namespace GxMcp.Gateway
                     }
                 }
 
+                var inlineUpload = McpFileUploadsProtocol.ParseToolArguments(request, toolName, ref args);
+                if (inlineUpload.Invalid)
+                    return BuildToolTextResponse(idToken, McpFileUploadsProtocol.InvalidFile(), isError: true,
+                        toolName: toolName, toolArgs: args, payloadOwned: true);
+
                 // Gateway-side schema pre-validation: reject malformed args immediately,
                 // before forwarding to the worker. Saves an STA round-trip and gives LLM
                 // clients faster feedback on typos / missing required fields.
@@ -621,7 +627,7 @@ namespace GxMcp.Gateway
                 {
                     _autoInjectedType = _ait;
                     // Keep paramsObj["arguments"] in sync (same ref, but be explicit)
-                    if (paramsObj != null) paramsObj["arguments"] = args;
+                    if (paramsObj != null && inlineUpload.File == null) paramsObj["arguments"] = args;
                 }
 
                 if (string.Equals(toolName, "genexus_worker_reload", StringComparison.OrdinalIgnoreCase))
@@ -668,7 +674,11 @@ namespace GxMcp.Gateway
                     {
                         toolInnerResult = await idempotencyMiddleware.Invoke(
                             toolCallParams,
-                            tcParams => DispatchToolCallCoreAsync(tcParams, request, sessionId, sessionContextEnabled, idToken, transportCancellation));
+                            tcParams =>
+                            {
+                                tcParams = inlineUpload.ForDispatch(tcParams, args);
+                                return DispatchToolCallCoreAsync(tcParams, request, sessionId, sessionContextEnabled, idToken, transportCancellation);
+                            });
                     }
                 }
                 catch (UsageException ux)

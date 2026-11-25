@@ -7,6 +7,7 @@
 
 ### Added
 
+- Experimental MCP file uploads ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)): MCP 2026-07-28 clients can send `.xpz` packages up to 1 MiB inline to `genexus_transfer` for import without a local path. Existing path-based clients are unchanged.
 - Skills over MCP ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)): MCP 2026-07-28 clients can discover and verify the GeneXus skill catalog and Nexa references without changing the existing `genexus://kb/skills/*` resources.
 - `genexus_doctor` / `gx doctor` ([#965](https://github.com/lennix1337/Genexus18MCP/issues/965)): `issueReportBlock` with the data a GX9/GXPublic crash report needs (PE bitness of the gateway, worker and GeneXus install, IDE running or closed, worker exit code named as NTSTATUS), ready to paste into the issue.
 
