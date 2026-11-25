@@ -559,9 +559,9 @@ namespace GxMcp.Gateway
                         }
                         if (method == "tools/list" || method == "resources/list" || method == "prompts/list")
                         {
-                            // The adaptive list changes within a session; never let a cache serve it.
+                            // Adaptive and capability-specific tool lists must not be cached across callers.
                             request.HttpContext.Response.Headers["Cache-Control"] =
-                                method == "tools/list" && response["result"]?["profile"]?.ToString() == AdaptiveTools.ProfileName
+                                method == "tools/list" && response["result"]?["cacheScope"]?.Value<string>() == "private"
                                     ? "no-store"
                                     : "public, max-age=3600";
                         }

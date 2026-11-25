@@ -424,6 +424,18 @@ namespace GxMcp.Gateway
                 KbAlias = _currentKb.Value?.Alias,
                 SessionId = sessionId
             };
+            var upload = tcParams.Annotation<McpFileUploadsProtocol.InlineFile>();
+            using var stagedUpload = upload?.TryStage();
+            if (upload != null && stagedUpload == null)
+                return BuildToolResultContent(
+                    McpFileUploadsProtocol.Error("UploadStagingFailed", "The Gateway could not stage the uploaded XPZ."),
+                    isError: true, toolName: tName, toolArgs: tArgs);
+            if (stagedUpload != null)
+            {
+                ((JObject)workerCmd["params"]!)["file"] = stagedUpload.Path;
+                workerCmd.AddAnnotation(stagedUpload);
+            }
+
             innerResult = await SendWorkerCommandAsync(
                 workerCmd,
                 timeoutMs,
