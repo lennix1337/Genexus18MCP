@@ -63,6 +63,10 @@ namespace GxMcp.Gateway.Tests
         {
             var modern = ModernRequest("tools/call", 1, "unused", declaresTasks: true);
             Assert.True(McpTasksProtocol.SupportsTasks(modern));
+            Assert.False(McpTasksProtocol.SupportsTasks(modern, taskScopeEnabled: false));
+            var extensions = modern["params"]!["_meta"]!["io.modelcontextprotocol/clientCapabilities"]!["extensions"]!;
+            extensions["io.modelcontextprotocol/tasks"] = true;
+            Assert.False(McpTasksProtocol.SupportsTasks(modern));
 
             var noCapability = ModernRequest("tools/call", 2, "unused", declaresTasks: false);
             Assert.False(McpTasksProtocol.SupportsTasks(noCapability));
@@ -77,6 +81,8 @@ namespace GxMcp.Gateway.Tests
             var registry = new BackgroundJobRegistry();
             var job = registry.Start("client-a", "edit/genexus_edit", 30);
             var invalid = ModernRequest("tasks/update", 1, job.Id, declaresTasks: true);
+            var missing = McpTasksProtocol.Handle(invalid, "client-a", registry);
+            Assert.Equal(-32602, (int?)missing?["error"]?["code"]);
             invalid["params"]!["inputResponses"] = new JArray();
             var invalidResponse = McpTasksProtocol.Handle(invalid, "client-a", registry);
             Assert.Equal(-32602, invalidResponse!["error"]!["code"]!.ToObject<int>());
@@ -136,11 +142,11 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(-32001, missing!["error"]!["code"]!.ToObject<int>());
         }
 
-        private static JObject Request(string method, object id, string taskId)
+        internal static JObject Request(string method, object id, string taskId)
             => new JObject { ["jsonrpc"] = "2.0", ["id"] = JToken.FromObject(id), ["method"] = method,
                 ["params"] = new JObject { ["taskId"] = taskId } };
 
-        private static JObject ModernRequest(string method, object id, string taskId, bool declaresTasks)
+        internal static JObject ModernRequest(string method, object id, string taskId, bool declaresTasks)
             => new JObject {
                 ["jsonrpc"] = "2.0", ["id"] = JToken.FromObject(id), ["method"] = method,
                 ["params"] = new JObject {
