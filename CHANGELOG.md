@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Destructive calls keep their existing Worker safeguards when MCP elicitation is disabled or unsupported; a failed attempt to ask a capable client still stops the call ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
 - Modern HTTP calls that opt into MCP Tasks now require `Mcp-Client-Id` before dispatch, so they cannot create a task they cannot poll ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
 - MCP Tasks polling now returns standard tool results and distinguishes tool errors from request failures. Modern clients can cancel queued jobs and see their waiting state; legacy clients keep the existing task responses ([#1100](https://github.com/lennix1337/Genexus18MCP/issues/1100)).
 

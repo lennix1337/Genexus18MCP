@@ -88,6 +88,29 @@ namespace GxMcp.Gateway.Tests
             Assert.Equal(baseline!.ToString(Formatting.None), response!.ToString(Formatting.None));
         }
 
+        [Theory]
+        [InlineData(false, "genexus_edit", "{\"name\":\"OldPanel\",\"part\":\"Source\",\"content\":\"// replacement\"}")]
+        [InlineData(false, "genexus_io", "{\"action\":\"import_part\",\"name\":\"OldPanel\",\"inputPath\":\"replacement.txt\"}")]
+        [InlineData(false, "genexus_lifecycle", "{\"action\":\"reorg\"}")]
+        [InlineData(true, "genexus_edit", "{\"name\":\"OldPanel\",\"part\":\"Source\",\"content\":\"// replacement\"}")]
+        [InlineData(true, "genexus_io", "{\"action\":\"import_part\",\"name\":\"OldPanel\",\"inputPath\":\"replacement.txt\"}")]
+        [InlineData(true, "genexus_lifecycle", "{\"action\":\"reorg\"}")]
+        public async Task DestructiveWrite_WithoutElicitationForwardsOriginalRequest(
+            bool clientSupportsElicitation, string tool, string arguments)
+        {
+            using var fixture = ElicitationFixture.Create(answer: null, clientSupportsElicitation: clientSupportsElicitation);
+            if (clientSupportsElicitation) ElicitationBroker.ModeOverrideForTest = ElicitationMode.Off;
+            var call = ElicitationFixture.ToolCall(tool, JObject.Parse(arguments));
+            string original = call.ToString(Formatting.None);
+
+            var (forwarded, refusal) = await Program.ConfirmDestructiveCallAsync(call, fixture.Session, default);
+
+            Assert.Null(refusal);
+            Assert.Same(call, forwarded);
+            Assert.Equal(original, forwarded.ToString(Formatting.None));
+            Assert.Empty(fixture.Elicitations);
+        }
+
         [Fact]
         public async Task DestructiveWrite_OnlyItsOwnSessionCanApprove()
         {

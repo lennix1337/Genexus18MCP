@@ -173,6 +173,8 @@ namespace GxMcp.Gateway
                     approvedArgs["confirm"] = true;
                     return (approved, null);
                 case ElicitationAction.Unavailable:
+                    // No prompt was attempted; preserve the Worker's existing safeguards.
+                    return (request, null);
                 case ElicitationAction.Failed:
                     return (request, BuildHumanRefusal(request, toolName, args, HumanConfirmationUnavailableCode,
                         $"Could not obtain human confirmation for {toolName}; nothing was changed.",
