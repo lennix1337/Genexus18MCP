@@ -75,7 +75,7 @@ namespace GxMcp.Worker.Services
                 }
                 catch (UsageException ux)
                 {
-                    results.Add(new OpResult { Index = i, Op = op.Op, Ok = false, Reason = ux.Message, Code = ux.Code });
+                    results.Add(new OpResult { Index = i, Op = op.Op, Ok = false, Extra = ux.Extra, Reason = ux.Message, Code = ux.Code });
                     if (mode == "strict") { aborted = true; break; }
                 }
                 catch (Exception ex)
@@ -115,6 +115,7 @@ namespace GxMcp.Worker.Services
             public bool Ok;
             public string Reason;
             public string Code;
+            public JObject Extra;
 
             public JObject ToJson()
             {
@@ -128,6 +129,14 @@ namespace GxMcp.Worker.Services
                 {
                     if (!string.IsNullOrEmpty(Reason)) j["reason"] = Reason;
                     if (!string.IsNullOrEmpty(Code)) j["code"] = Code;
+                    if (Extra != null)
+                    {
+                        foreach (var prop in Extra.Properties())
+                        {
+                            if (j[prop.Name] == null)
+                                j[prop.Name] = prop.Value?.DeepClone();
+                        }
+                    }
                 }
                 return j;
             }
@@ -417,7 +426,12 @@ namespace GxMcp.Worker.Services
 
             var textIssue = TextPayloadGuard.Analyze(text);
             if (textIssue != null)
-                throw new UsageException(textIssue.ErrorCode, TextPayloadGuard.BuildMessage("text", textIssue));
+            {
+                throw new UsageException(
+                    textIssue.ErrorCode,
+                    TextPayloadGuard.BuildMessage("text", textIssue),
+                    TextPayloadGuard.BuildDiagnosticExtra("Rules", "text", textIssue, text));
+            }
 
             var rules = doc.Descendants("Rules").FirstOrDefault();
             if (rules == null)

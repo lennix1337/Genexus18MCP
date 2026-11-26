@@ -176,16 +176,21 @@ namespace GxMcp.Worker.Services
             return res;
         }
 
-        public static MutationResult Error(string code, string message, JObject plan = null)
+        public static MutationResult Error(string code, string message, JObject plan = null, string hint = null, string target = null, JObject extra = null)
         {
-            var extra = plan != null ? new JObject { ["plan"] = plan } : null;
+            JObject mergedExtra = extra != null ? (JObject)extra.DeepClone() : null;
+            if (plan != null)
+            {
+                mergedExtra = mergedExtra ?? new JObject();
+                mergedExtra["plan"] = plan;
+            }
 
             return new MutationResult
             {
                 Success = false,
                 ErrorCode = code,
                 ErrorMessage = message,
-                ResponseJson = McpResponse.Err(code, message, extra: extra)
+                ResponseJson = McpResponse.Err(code, message, hint: hint, target: target, extra: mergedExtra)
             };
         }
     }
@@ -289,7 +294,10 @@ namespace GxMcp.Worker.Services
                     {
                         return MutationResult.Error(
                             issue.ErrorCode,
-                            TextPayloadGuard.BuildMessage(guardedPart, issue)
+                            TextPayloadGuard.BuildMessage(guardedPart, issue),
+                            hint: TextPayloadGuard.BuildHint(issue),
+                            target: request.Target,
+                            extra: TextPayloadGuard.BuildDiagnosticExtra(guardedPart, "content", issue, request.Content)
                         );
                     }
                 }
@@ -320,7 +328,10 @@ namespace GxMcp.Worker.Services
                         {
                             return MutationResult.Error(
                                 issue.ErrorCode,
-                                TextPayloadGuard.BuildMessage($"{targetName} ({itemPart})", issue)
+                                TextPayloadGuard.BuildMessage($"{targetName} ({itemPart})", issue),
+                                hint: TextPayloadGuard.BuildHint(issue),
+                                target: targetName,
+                                extra: TextPayloadGuard.BuildDiagnosticExtra(itemPart, "content", issue, itemContent)
                             );
                         }
                     }

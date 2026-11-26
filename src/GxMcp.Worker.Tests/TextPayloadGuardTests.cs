@@ -415,5 +415,101 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("Source", response["part"]?.ToString());
             Assert.Equal(2, response["line"]?.Value<int>());
         }
+
+        [Fact]
+        public void MutationEngine_SingleTargetMultiLineFindings_PropagatesLineAndLinesInResponse()
+        {
+            var engine = new MutationEngine();
+            var res = engine.Execute(new MutationRequest
+            {
+                Target = "TestProc",
+                Part = "Source",
+                Content = "DoA()\r\n&x = &y \u2013 1\r\nDoB()\r\nMsg(\u201Chi\u201D)",
+                Mode = MutationMode.Xml
+            });
+
+            Assert.False(res.Success);
+            Assert.Equal("TypographicCharactersDetected", res.ErrorCode);
+            var response = JObject.Parse(res.ResponseJson);
+            Assert.Equal(2, response["line"]?.Value<int>());
+            Assert.Equal(new[] { 2, 4 }, response["lines"]?.ToObject<int[]>());
+            Assert.Equal("Source", response["part"]?.ToString());
+            Assert.Equal("content", response["field"]?.ToString());
+            Assert.Equal("TestProc", response["target"]?.ToString());
+            Assert.NotNull(response["typographicCharacters"] as JArray);
+        }
+
+        [Fact]
+        public void MutationEngine_MultiTargetMultiLineFindings_PropagatesLineAndLinesInResponse()
+        {
+            var engine = new MutationEngine();
+            var res = engine.Execute(new MutationRequest
+            {
+                Targets = new JArray
+                {
+                    new JObject { ["name"] = "Proc1", ["part"] = "Source", ["content"] = "DoA()\r\nDoB()" },
+                    new JObject { ["name"] = "Proc2", ["part"] = "Source", ["content"] = "DoA()\r\nDoB()\\nDoC()\r\nDoD()\r\n&x\u00A0= 1" }
+                }
+            });
+
+            Assert.False(res.Success);
+            Assert.Equal("LiteralLineBreaksDetected", res.ErrorCode);
+            var response = JObject.Parse(res.ResponseJson);
+            Assert.Equal(2, response["line"]?.Value<int>());
+            Assert.Equal(new[] { 2, 4 }, response["lines"]?.ToObject<int[]>());
+            Assert.Equal("Proc2", response["target"]?.ToString());
+            Assert.Equal("Source", response["part"]?.ToString());
+            Assert.Contains(response["literalSequences"] as JArray, t => t.ToString() == "\\n");
+            Assert.Contains(response["typographicCharacters"] as JArray, t =>
+                t.ToString().IndexOf("U+00A0", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        [Fact]
+        public void SemanticOpsAddRule_MultiLineFindings_PropagatesLineAndLinesInOpResult()
+        {
+            var service = new SemanticOpsService();
+            var op = SemanticOp.From(new JObject
+            {
+                ["op"] = "add_rule",
+                ["text"] = "Parm(in:&A);\r\nError(\u2018bad1\u2019);\r\nMsg('ok');\r\nError(\u201Cbad2\u201D);"
+            });
+
+            var outcome = service.ApplyWithResults("<Rules />", "Transaction", new[] { op }, "best-effort");
+
+            Assert.Single(outcome.Results);
+            var opJson = outcome.Results[0].ToJson();
+            Assert.False(opJson["ok"]?.Value<bool>() ?? true);
+            Assert.Equal("TypographicCharactersDetected", opJson["code"]?.ToString());
+            Assert.Equal(2, opJson["line"]?.Value<int>());
+            Assert.Equal(new[] { 2, 4 }, opJson["lines"]?.ToObject<int[]>());
+            Assert.NotNull(opJson["typographicCharacters"] as JArray);
+        }
+
+        [Fact]
+        public void SemanticOpsAddRule_StrictUsageException_CarriesLineAndLinesIntoErrorEnvelope()
+        {
+            var service = new SemanticOpsService();
+            var op = SemanticOp.From(new JObject
+            {
+                ["op"] = "add_rule",
+                ["text"] = "Parm(in:&A);\r\nError(\u2018bad1\u2019);\r\nMsg('ok');\r\nError(\u201Cbad2\u201D);"
+            });
+
+            var ex = Assert.Throws<UsageException>(() =>
+                service.Apply("<Rules />", "Transaction", new[] { op }));
+
+            Assert.NotNull(ex.Extra);
+            Assert.Equal(2, ex.Extra["line"]?.Value<int>());
+            Assert.Equal(new[] { 2, 4 }, ex.Extra["lines"]?.ToObject<int[]>());
+
+            var envelope = JObject.Parse(WriteService.BuildUsageErrorResponse(ex));
+            Assert.True(envelope["isError"]?.Value<bool>() ?? false);
+            Assert.Equal("TypographicCharactersDetected", envelope["error"]?["code"]?.ToString());
+            Assert.Equal(2, envelope["line"]?.Value<int>());
+            Assert.Equal(new[] { 2, 4 }, envelope["lines"]?.ToObject<int[]>());
+            Assert.Equal("Rules", envelope["part"]?.ToString());
+            Assert.Equal("text", envelope["field"]?.ToString());
+            Assert.NotNull(envelope["typographicCharacters"] as JArray);
+        }
     }
 }

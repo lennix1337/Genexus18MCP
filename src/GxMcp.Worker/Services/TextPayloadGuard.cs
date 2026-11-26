@@ -190,20 +190,18 @@ namespace GxMcp.Worker.Services
             return error;
         }
 
-        internal static string BuildWriteError(string target, string partName, string field, string text)
+        internal static JObject BuildDiagnosticExtra(string partName, string field, Issue issue, string text = null)
         {
-            var issue = Analyze(text);
-            if (issue == null) return null;
-
             var extra = new JObject
             {
                 ["part"] = partName,
                 ["field"] = field,
-                ["inputLength"] = text == null ? 0 : text.Length,
                 ["line"] = issue.FirstLine,
                 ["lines"] = ToJArray(issue.Lines),
                 ["hasActualLineBreaks"] = issue.HasActualLineBreaks
             };
+            if (text != null)
+                extra["inputLength"] = text.Length;
             if (issue.HasLiteralLineBreaks)
             {
                 extra["literalSequences"] = ToJArray(issue.LiteralSequences);
@@ -213,6 +211,15 @@ namespace GxMcp.Worker.Services
             {
                 extra["typographicCharacters"] = ToJArray(issue.TypographicCharacters);
             }
+            return extra;
+        }
+
+        internal static string BuildWriteError(string target, string partName, string field, string text)
+        {
+            var issue = Analyze(text);
+            if (issue == null) return null;
+
+            var extra = BuildDiagnosticExtra(partName, field, issue, text ?? string.Empty);
 
             return McpResponse.Err(
                 code: issue.ErrorCode,
@@ -255,7 +262,7 @@ namespace GxMcp.Worker.Services
                 + ") " + location + "; send actual line breaks. Nothing was written.";
         }
 
-        private static string BuildHint(Issue issue)
+        internal static string BuildHint(Issue issue)
         {
             if (issue.HasLiteralLineBreaks && issue.HasTypographicCharacters)
             {

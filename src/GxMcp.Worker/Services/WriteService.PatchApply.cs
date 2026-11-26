@@ -80,15 +80,7 @@ namespace GxMcp.Worker.Services
             }
             catch (UsageException ux)
             {
-                return new JObject
-                {
-                    ["isError"] = true,
-                    ["error"] = new JObject
-                    {
-                        ["code"] = ux.Code,
-                        ["message"] = ux.Message
-                    }
-                }.ToString(Newtonsoft.Json.Formatting.None);
+                return BuildUsageErrorResponse(ux);
             }
             catch (Exception ex)
             {
@@ -194,7 +186,8 @@ namespace GxMcp.Worker.Services
             {
                 var failed = outcome.Results.FirstOrDefault(r => !r.Ok);
                 throw new UsageException(failed?.Code ?? "usage_error",
-                    failed?.Reason ?? "op failed");
+                    failed?.Reason ?? "op failed",
+                    failed?.Extra);
             }
 
             var opResultsJson = new JArray();
@@ -269,7 +262,7 @@ namespace GxMcp.Worker.Services
             if (mode == "strict" && outcome.Aborted)
             {
                 var failed = outcome.Results.FirstOrDefault(r => !r.Ok);
-                throw new UsageException(failed?.Code ?? "usage_error", failed?.Reason ?? "op failed");
+                throw new UsageException(failed?.Code ?? "usage_error", failed?.Reason ?? "op failed", failed?.Extra);
             }
 
             var opResultsJson = new JArray();
@@ -405,6 +398,28 @@ namespace GxMcp.Worker.Services
         /// changes are in the KB, so the note must not say nothing was persisted
         /// (issue #558).
         /// </summary>
+        internal static string BuildUsageErrorResponse(UsageException ux)
+        {
+            var payload = new JObject
+            {
+                ["isError"] = true,
+                ["error"] = new JObject
+                {
+                    ["code"] = ux.Code,
+                    ["message"] = ux.Message
+                }
+            };
+            if (ux.Extra != null)
+            {
+                foreach (var prop in ux.Extra.Properties())
+                {
+                    if (payload[prop.Name] == null)
+                        payload[prop.Name] = prop.Value?.DeepClone();
+                }
+            }
+            return payload.ToString(Newtonsoft.Json.Formatting.None);
+        }
+
         internal static string BuildOpsPersistFailureNote(JObject writeJson)
         {
             bool saved = writeJson["saved"]?.ToObject<bool?>() == true
@@ -455,15 +470,7 @@ namespace GxMcp.Worker.Services
             }
             catch (UsageException ux)
             {
-                return new JObject
-                {
-                    ["isError"] = true,
-                    ["error"] = new JObject
-                    {
-                        ["code"] = ux.Code,
-                        ["message"] = ux.Message
-                    }
-                }.ToString(Newtonsoft.Json.Formatting.None);
+                return BuildUsageErrorResponse(ux);
             }
             catch (Exception ex)
             {
