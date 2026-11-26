@@ -13,6 +13,14 @@
 
 ---
 
+**The problem:** AI assistants can't see or change a GeneXus Knowledge Base, so every question about your KB and every edit still goes through the IDE by hand. This server gives Claude, Cursor and any MCP client direct, validated access to the KB.
+
+- **Ask about your KB in plain language:** find objects, read source, rules and events, trace callers and impact.
+- **Edit for real:** procedures, transactions, rules, variables, WorkWithPlus patterns, saved through the native GeneXus SDK on the supported versions, not text hacks.
+- **Build and validate:** build, reorg and run GXtest from the chat, with errors fed back to the agent.
+- **Refactor safely:** rename across the KB, extract procedures, check the blast radius before changing anything.
+- **Works with your setup:** native SDK on GeneXus 16, 17, 18 and Evolution 3; basic legacy support for older versions (see below); installed with one `npx` command.
+
 **GeneXus MCP Server** lets AI agents — Claude Desktop, Claude Code, Cursor, Antigravity, and any MCP-compatible client — read, edit, analyze, and refactor objects inside a Knowledge Base supported by the selected native SDK or legacy compatibility driver. Native SDK paths work with the **real GeneXus SDK** and legacy paths use explicit reflection/COM adapters; neither path relies on a parsed copy of the KB.
 
 In practice: you point the MCP at your KB, then ask your AI assistant things like *"list all transactions with attribute CustomerId"*, *"add a rule to the Order transaction that validates the total"*, or *"refactor this procedure to use the new SDT"* — and it does it.
