@@ -8,6 +8,14 @@ const lock = { packages: { 'node_modules/demo': { version: '1.0.0' } } };
 const check = (audit = report(), entries = [entry]) => checkAudit(audit, lock, entries, 'nexus', '2026-01-01');
 test('accepts current moderate and string via regardless of fixAvailable shape', () => { for (const fix of [true, false, { name: 'demo' }]) { const a = report(); a.vulnerabilities.demo.fixAvailable = fix; assert.deepEqual(check(a), []); } });
 test('rejects high and critical even when allowlisted', () => { for (const severity of ['high', 'critical']) { const a = report(); a.vulnerabilities.demo.severity = severity; a.vulnerabilities.demo.via[0].severity = severity; assert.ok(check(a).length); } });
+test('rejects high and critical on the package alone, and on the advisory alone', () => {
+  for (const severity of ['high', 'critical']) {
+    const pkg = report(); pkg.vulnerabilities.demo.severity = severity;
+    assert.deepEqual(check(pkg), [`demo: ${severity}`]);
+    const adv = report(); adv.vulnerabilities.demo.via[0].severity = severity;
+    assert.deepEqual(check(adv), [`demo: ${entry.ghsa} ${severity}`]);
+  }
+});
 test('rejects expired entries', () => assert.match(check(report(), [{ ...entry, expiresOn: '2025-12-31' }]).join(), /Expired/));
 test('rejects absent entries and changed versions', () => { const a = report(); delete a.vulnerabilities.demo; assert.match(check(a).join(), /absent/); assert.match(check(report(), [{ ...entry, version: '0.9' }]).join(), /absent/); });
 test('rejects unlisted moderates and malformed reports', () => { assert.match(check(report(), []).join(), /Unlisted/); assert.match(check(null).join(), /Invalid/); });
