@@ -1,5 +1,7 @@
 # GeneXus MCP Server — Multi-version GeneXus for Claude, Cursor, and AI Agents
 
+![genexus-mcp finding a transaction, reading it and previewing an edit on a real GeneXus 18 KB](docs/assets/demo.gif)
+
 [![npm version](https://img.shields.io/npm/v/genexus-mcp.svg)](https://www.npmjs.com/package/genexus-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/genexus-mcp.svg)](https://www.npmjs.com/package/genexus-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
