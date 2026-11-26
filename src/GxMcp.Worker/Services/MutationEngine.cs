@@ -288,8 +288,8 @@ namespace GxMcp.Worker.Services
                     if (issue != null)
                     {
                         return MutationResult.Error(
-                            TextPayloadGuard.ErrorCode,
-                            $"Detected literal line break escape sequences in {guardedPart}. Pass real line breaks instead of literal \\r\\n."
+                            issue.ErrorCode,
+                            TextPayloadGuard.BuildMessage(guardedPart, issue)
                         );
                     }
                 }
@@ -319,8 +319,8 @@ namespace GxMcp.Worker.Services
                         if (issue != null)
                         {
                             return MutationResult.Error(
-                                TextPayloadGuard.ErrorCode,
-                                $"Detected literal line break escape sequences in {targetName} ({itemPart}). Pass real line breaks instead of literal \\r\\n."
+                                issue.ErrorCode,
+                                TextPayloadGuard.BuildMessage($"{targetName} ({itemPart})", issue)
                             );
                         }
                     }

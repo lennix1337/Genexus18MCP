@@ -315,6 +315,14 @@ namespace GxMcp.Worker.Services.Structure
         {
             try
             {
+                var json = string.IsNullOrWhiteSpace(payload) ? new JObject() : JObject.Parse(payload);
+                string source = json["source"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(source))
+                {
+                    string textError = TextPayloadGuard.BuildWriteError(objName, "Conditions", "payload.source", source);
+                    if (textError != null) return textError;
+                }
+
                 var obj = _objectService.FindObject(objName);
                 if (obj == null) return HealingService.FormatNotFoundError(objName, _objectService.GetKbService().GetIndexCache().GetIndex());
                 if (!(obj is DataSelector)) return Models.McpResponse.Err(
@@ -324,8 +332,6 @@ namespace GxMcp.Worker.Services.Structure
                 if (part == null) return Models.McpResponse.Err(
                     code: "StructurePartNotFound", message: "Data Selector has no structure part.", target: objName);
 
-                var json = string.IsNullOrWhiteSpace(payload) ? new JObject() : JObject.Parse(payload);
-                string source = json["source"]?.ToString();
                 if (string.IsNullOrWhiteSpace(source)) return Models.McpResponse.Err(
                     code: "InvalidPayload", message: "payload.source is required.",
                     hint: "e.g. { \"source\": \"CategoryId = &CategoryId\" }.", target: objName);
