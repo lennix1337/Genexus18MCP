@@ -35,6 +35,21 @@ class ValidateV3EvaluationTests(unittest.TestCase):
         self.assertFalse(document["executionContract"]["requiresLiveSdk"])
         self.assertEqual(document["executionContract"]["modelEvaluation"], "not_executed")
 
+    def test_replay_corpus_rejects_invalid_execution_fields(self):
+        cases = (
+            ("mode", "live", "must be deterministic-replay"),
+            ("requiresLiveSdk", True, "must be false for replay manifests"),
+            ("modelEvaluation", "executed", "must remain not_executed"),
+        )
+        for field, value, reason in cases:
+            with self.subTest(field=field):
+                document = json.loads(REPLAY_MANIFEST.read_text(encoding="utf-8"))
+                document["executionContract"][field] = value
+                self.assertEqual(
+                    self.module.validate(document),
+                    [f"executionContract.{field} {reason}"],
+                )
+
     def test_duplicate_or_missing_scenario_is_rejected(self):
         document = json.loads(MANIFEST.read_text(encoding="utf-8"))
         document["scenarios"][-1]["id"] = document["scenarios"][0]["id"]

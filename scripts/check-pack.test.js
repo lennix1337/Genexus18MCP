@@ -40,3 +40,14 @@ test('readPackManifest still accepts the older array shape', () => {
     const runner = () => ({ status: 0, stdout: JSON.stringify([{ files }]) });
     assert.deepEqual(readPackManifest(runner).files, files);
 });
+
+test('readPackManifest rejects a nonzero npm exit even with a valid manifest', () => {
+    const runner = () => ({
+        status: 2,
+        stdout: JSON.stringify([{ files: [{ path: 'cli/run.js' }] }]),
+        stderr: 'packing failed'
+    });
+    assert.throws(() => readPackManifest(runner), {
+        message: 'npm pack --dry-run failed (exit 2): packing failed'
+    });
+});
