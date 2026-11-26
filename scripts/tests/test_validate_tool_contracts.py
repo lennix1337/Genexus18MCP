@@ -71,6 +71,43 @@ class ValidateToolContractsTests(unittest.TestCase):
         with self.assertRaises(MODULE.ContractError):
             MODULE.validate_document([{"name": "example", "inputSchema": schema}])
 
+    def _example_error(self, schema, example):
+        schema = {"type": "object", "additionalProperties": False, **schema, "examples": [example]}
+        try:
+            MODULE.validate_document([{"name": "example", "inputSchema": schema}])
+        except MODULE.ContractError as error:
+            return str(error)
+        self.fail("contract was accepted")
+
+    def test_valid_example_is_accepted(self):
+        schema = {
+            "type": "object",
+            "required": ["name"],
+            "properties": {"name": {"type": "string", "enum": ["a"], "description": "Name."}},
+            "additionalProperties": False,
+            "examples": [{"name": "a"}],
+        }
+        counts = MODULE.validate_document([{"name": "example", "inputSchema": schema}])
+        self.assertEqual(1, counts["tools"])
+
+    def test_example_outside_enum_is_rejected_for_that_reason(self):
+        message = self._example_error(
+            {"properties": {"name": {"type": "string", "enum": ["a"], "description": "Name."}}}, {"name": "b"}
+        )
+        self.assertIn("is not in enum", message)
+
+    def test_example_without_required_property_is_rejected_for_that_reason(self):
+        message = self._example_error(
+            {"required": ["name"], "properties": {"name": {"type": "string", "description": "Name."}}}, {}
+        )
+        self.assertIn("missing required property 'name'", message)
+
+    def test_example_with_unknown_property_is_rejected_for_that_reason(self):
+        message = self._example_error(
+            {"properties": {"name": {"type": "string", "description": "Name."}}}, {"name": "a", "extra": True}
+        )
+        self.assertIn("unknown properties ['extra']", message)
+
     def test_repository_router_parameter_contract_is_valid(self):
         document = json.loads(
             (ROOT / "src" / "GxMcp.Gateway" / "tool_definitions.json").read_text(
