@@ -53,6 +53,21 @@ class ValidateV3PlanTests(unittest.TestCase):
         errors = self.module.validate(document, require_ready=True)
         self.assertTrue(any("integrationEvidence must be an object" in error for error in errors))
 
+    def test_release_mode_rejects_invalid_evidence_fields(self):
+        cases = (
+            ("report", "   ", "must be a non-empty string"),
+            ("artifacts", [], "must be a non-empty string array"),
+            ("externalGates", [17], "must be a string array"),
+        )
+        for field, value, reason in cases:
+            with self.subTest(field=field):
+                document = json.loads(MANIFEST.read_text(encoding="utf-8"))
+                document["packages"][0]["integrationEvidence"][field] = value
+                self.assertEqual(
+                    self.module.validate(document, require_ready=True),
+                    [f"packages[0].integrationEvidence.{field} {reason}"],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
