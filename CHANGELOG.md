@@ -12,6 +12,7 @@
 ### Fixed
 
 - Source-writing preflight (`TextPayloadGuard`, [#1114](https://github.com/lennix1337/Genexus18MCP/issues/1114)): refuse typographic quotes, dashes, ellipsis, and non-breaking spaces (`‘ ’ “ ” – — …`, `U+00A0`) outside string literals and comments with `TypographicCharactersDetected`, report the 1-based line number (`line`, `lines`, and message) on both literal line-break and typographic refusals, and propagate those structured fields through `AuthoringService.AddDataSelectorCondition`, `SemanticOpsService.AddRule`, `MutationEngine` (single and multi-target), `AtomicAuthoringService`, and Gateway terse error trimming (`McpRouter.TrimErrorEnvelope`).
+- Gateway crash logs now go beside its debug log instead of appearing in the client's working directory ([#1115](https://github.com/lennix1337/Genexus18MCP/issues/1115)).
 
 ### Internal
 
