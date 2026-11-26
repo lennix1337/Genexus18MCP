@@ -56,5 +56,59 @@ namespace GxMcp.Gateway.Tests
             Assert.True(JToken.DeepEquals(input["literalEscapeSequences"], trimmed["literalEscapeSequences"]));
             Assert.Equal("The MCP does not convert escape sequences.", trimmed["literalEscapeHint"]!.ToString());
         }
+
+        [Fact]
+        public void TerseProjection_KeepsLineAndLinesForTextPayloadGuardRefusals()
+        {
+            var typographic = JObject.Parse(@"{
+                ""status"":""error"",
+                ""error"":{
+                    ""code"":""TypographicCharactersDetected"",
+                    ""message"":""Field 'content' contains typographic characters starting on line 2 (lines 2, 4)."",
+                    ""hint"":""Use plain ASCII characters.""
+                },
+                ""part"":""Source"",
+                ""field"":""content"",
+                ""line"":2,
+                ""lines"":[2,4],
+                ""typographicCharacters"":[""\u2013 (U+2013 en dash)"",""NBSP (U+00A0 non-breaking space)""],
+                ""hasActualLineBreaks"":true,
+                ""stack"":""internal""}");
+
+            var trimmedTypo = McpRouter.TrimErrorEnvelope(typographic, verbose: false);
+
+            Assert.Equal("TypographicCharactersDetected", trimmedTypo["code"]?.ToString());
+            Assert.Equal(2, trimmedTypo["line"]?.Value<int>());
+            Assert.Equal(new[] { 2, 4 }, trimmedTypo["lines"]?.ToObject<int[]>());
+            Assert.Equal("content", trimmedTypo["field"]?.ToString());
+            Assert.True(JToken.DeepEquals(typographic["typographicCharacters"], trimmedTypo["typographicCharacters"]));
+            Assert.True(trimmedTypo["hasActualLineBreaks"]?.Value<bool>() ?? false);
+            Assert.Null(trimmedTypo["stack"]);
+
+            var literal = JObject.Parse(@"{
+                ""status"":""error"",
+                ""error"":{
+                    ""code"":""LiteralLineBreaksDetected"",
+                    ""message"":""Field 'content' contains literal line break escape sequences (\\n) starting on line 3 (lines 3, 5)."",
+                    ""hint"":""Send real line breaks.""
+                },
+                ""part"":""Source"",
+                ""field"":""content"",
+                ""line"":3,
+                ""lines"":[3,5],
+                ""literalSequences"":[""\\n""],
+                ""firstLiteralIndex"":18,
+                ""hasActualLineBreaks"":true,
+                ""stack"":""internal""}");
+
+            var trimmedLiteral = McpRouter.TrimErrorEnvelope(literal, verbose: false);
+
+            Assert.Equal("LiteralLineBreaksDetected", trimmedLiteral["code"]?.ToString());
+            Assert.Equal(3, trimmedLiteral["line"]?.Value<int>());
+            Assert.Equal(new[] { 3, 5 }, trimmedLiteral["lines"]?.ToObject<int[]>());
+            Assert.True(JToken.DeepEquals(literal["literalSequences"], trimmedLiteral["literalSequences"]));
+            Assert.Equal(18, trimmedLiteral["firstLiteralIndex"]?.Value<int>());
+            Assert.Null(trimmedLiteral["stack"]);
+        }
     }
 }

@@ -2214,6 +2214,10 @@ namespace GxMcp.Gateway
                 // error envelope; keep them at the response level named by the
                 // synthesized inspect_near_match hint.
                 "nearMatches", "nearMatchHint", "nearMatchHintDetail", "eolDiff", "literalEscapeSequences", "literalEscapeHint",
+                // Source-write preflight (TextPayloadGuard, #1114): preserve 1-based line
+                // locations and detected sequences/typographic glyphs through terse trimming.
+                "line", "lines", "field", "literalSequences", "typographicCharacters",
+                "firstLiteralIndex", "hasActualLineBreaks",
                 "did_you_mean", "noNearMatchHint",
                 // Save+specify (SpecificationFailed): the itemized spc/gen diagnostics and
                 // the stale-environment-copy warning are the whole point of the error.
