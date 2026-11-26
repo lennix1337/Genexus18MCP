@@ -415,6 +415,10 @@ namespace GxMcp.Worker.Services
             if (string.IsNullOrEmpty(text))
                 throw new UsageException("usage_error", "add_rule: text required");
 
+            var textIssue = TextPayloadGuard.Analyze(text);
+            if (textIssue != null)
+                throw new UsageException(textIssue.ErrorCode, TextPayloadGuard.BuildMessage("text", textIssue));
+
             var rules = doc.Descendants("Rules").FirstOrDefault();
             if (rules == null)
             {

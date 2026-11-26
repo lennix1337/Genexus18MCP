@@ -279,8 +279,15 @@ namespace GxMcp.Worker.Services
             var fieldError = TextPayloadGuard.BuildFieldError(member, text);
             if (fieldError == null) return;
 
-            var diagnostic = Diagnostic(TextPayloadGuard.ErrorCode, objectName, member, TextPayloadGuard.BuildMessage(member));
-            diagnostic["literalSequences"] = fieldError["literalSequences"]?.DeepClone();
+            string code = fieldError["code"]?.ToString() ?? TextPayloadGuard.ErrorCode;
+            string message = fieldError["errors"]?[0]?.ToString() ?? TextPayloadGuard.BuildMessage(member);
+            var diagnostic = Diagnostic(code, objectName, member, message);
+            diagnostic["line"] = fieldError["line"]?.DeepClone();
+            diagnostic["lines"] = fieldError["lines"]?.DeepClone();
+            if (fieldError["literalSequences"] != null)
+                diagnostic["literalSequences"] = fieldError["literalSequences"].DeepClone();
+            if (fieldError["typographicCharacters"] != null)
+                diagnostic["typographicCharacters"] = fieldError["typographicCharacters"].DeepClone();
             diagnostic["hasActualLineBreaks"] = fieldError["hasActualLineBreaks"];
             errors.Add(diagnostic);
         }
