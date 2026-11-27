@@ -101,6 +101,53 @@
       "name": "genexus_analyze"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "describe": [
+              "read"
+            ],
+            "diff_baseline": [
+              "read"
+            ],
+            "export_openapi": [
+              "read"
+            ],
+            "import_openapi": [
+              "read"
+            ],
+            "list": [
+              "read"
+            ],
+            "routes_clone": [
+              "write"
+            ],
+            "routes_inspect": [
+              "read"
+            ],
+            "routes_update": [
+              "write"
+            ],
+            "snapshot": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "routes_clone",
+                "routes_update"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": "notFalse"
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -231,6 +278,41 @@
       "name": "genexus_api"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add_grid_action": [
+              "write"
+            ],
+            "add_user_action": [
+              "write"
+            ],
+            "list_actions": [
+              "read"
+            ],
+            "move_action": [
+              "write"
+            ],
+            "remove_action": [
+              "write",
+              "destructive"
+            ],
+            "update_action": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -367,6 +449,25 @@
       "name": "genexus_apply_pattern"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add_condition": [
+              "write"
+            ],
+            "add_external_method": [
+              "write"
+            ],
+            "add_external_property": [
+              "write"
+            ],
+            "add_menu_option": [
+              "write"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -408,6 +509,74 @@
       "name": "genexus_authoring"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "a11y": [
+              "read",
+              "external"
+            ],
+            "capture": [
+              "read",
+              "external"
+            ],
+            "cross": [
+              "read",
+              "expensive",
+              "external"
+            ],
+            "preview": [
+              "read",
+              "external"
+            ],
+            "smoke": [
+              "read",
+              "expensive",
+              "external"
+            ],
+            "wcag": [
+              "read",
+              "external"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "preview"
+              ],
+              "add": [
+                "write",
+                "expensive"
+              ],
+              "param": "buildFirst",
+              "when": true
+            },
+            {
+              "actions": [
+                "preview"
+              ],
+              "add": [
+                "write"
+              ],
+              "param": "updateBaseline",
+              "when": true
+            },
+            {
+              "actions": [
+                "preview"
+              ],
+              "add": [
+                "write"
+              ],
+              "param": "capture",
+              "when": {
+                "contains": "screenshot"
+              }
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -577,6 +746,38 @@
       "name": "genexus_compare"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "journal_repair": [
+              "write"
+            ],
+            "journal_status": [
+              "read"
+            ],
+            "recover": [
+              "write"
+            ],
+            "recovery_read_complete": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "journal_repair",
+                "recovery_read_complete"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": "notFalse"
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": true,
@@ -642,6 +843,85 @@
       "name": "genexus_connection_recover"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "curl_procedure": [
+              "write"
+            ],
+            "object": [
+              "write"
+            ],
+            "object_atomic": [
+              "write"
+            ],
+            "popup": [
+              "write"
+            ],
+            "sample": [
+              "write"
+            ],
+            "save_as": [
+              "write"
+            ],
+            "scaffold": [
+              "write"
+            ],
+            "sd_panel_create": [
+              "write"
+            ],
+            "sd_panel_edit": [
+              "write"
+            ],
+            "sd_panel_inspect": [
+              "read"
+            ],
+            "template": [
+              "write"
+            ],
+            "translate": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "object",
+                "object_atomic",
+                "popup",
+                "save_as",
+                "template"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            },
+            {
+              "actions": [
+                "save_as"
+              ],
+              "add": [
+                "destructive"
+              ],
+              "param": "overwrite",
+              "when": true
+            },
+            {
+              "actions": [
+                "object_atomic"
+              ],
+              "add": [
+                "destructive"
+              ],
+              "param": "updateExisting",
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -888,6 +1168,38 @@
       "name": "genexus_create"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "create": [
+              "write"
+            ],
+            "delete": [
+              "write",
+              "destructive"
+            ],
+            "dry_run": [
+              "read"
+            ],
+            "inspect": [
+              "read"
+            ],
+            "update": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -989,6 +1301,81 @@
       "name": "genexus_data_view"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "drift_check": [
+              "read"
+            ],
+            "drift_report": [
+              "read"
+            ],
+            "optimize_analyze": [
+              "read"
+            ],
+            "optimize_report": [
+              "read"
+            ],
+            "optimize_suggest": [
+              "read"
+            ],
+            "records_insert": [
+              "write"
+            ],
+            "records_query": [
+              "read"
+            ],
+            "records_update": [
+              "write",
+              "destructive"
+            ],
+            "reorg_impact": [
+              "read",
+              "expensive"
+            ],
+            "reorg_preview": [
+              "read",
+              "expensive"
+            ],
+            "sample_data": [
+              "write",
+              "expensive"
+            ],
+            "sql_ddl": [
+              "read"
+            ],
+            "sql_navigation": [
+              "read"
+            ],
+            "translations_import": [
+              "write"
+            ],
+            "types_describe": [
+              "read"
+            ],
+            "types_list": [
+              "read"
+            ],
+            "types_validate": [
+              "read"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "records_insert",
+                "records_update"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": "notFalse"
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -1199,6 +1586,22 @@
       "name": "genexus_delete_object"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "deploy": [
+              "write",
+              "expensive",
+              "destructive",
+              "external"
+            ],
+            "list_targets": [
+              "read"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -1259,6 +1662,24 @@
       "name": "genexus_dfd"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "health": [
+              "read"
+            ],
+            "visualize": [
+              "write",
+              "expensive"
+            ],
+            "wiki": [
+              "write",
+              "expensive"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -1753,6 +2174,38 @@
       "name": "genexus_edit_and_build"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add_button": [
+              "write"
+            ],
+            "add_textblock": [
+              "write"
+            ],
+            "remove_control": [
+              "write",
+              "destructive"
+            ],
+            "set_visibility": [
+              "write"
+            ],
+            "wrap_in_fieldset": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -1872,6 +2325,35 @@
       "name": "genexus_format"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "define_api": [
+              "write"
+            ],
+            "deploy": [
+              "write",
+              "destructive"
+            ],
+            "status": [
+              "read"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "deploy"
+              ],
+              "add": [
+                "expensive"
+              ],
+              "param": "rebuild",
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -1912,6 +2394,38 @@
       "name": "genexus_gam"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add": [
+              "write"
+            ],
+            "dry_run_add": [
+              "read"
+            ],
+            "dry_run_remove": [
+              "read"
+            ],
+            "list": [
+              "read"
+            ],
+            "remove": [
+              "write",
+              "destructive"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": true,
@@ -1978,6 +2492,83 @@
       "name": "genexus_generator_reference"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "commit": [
+              "write",
+              "external"
+            ],
+            "conflicts": [
+              "read",
+              "external"
+            ],
+            "history": [
+              "read",
+              "external"
+            ],
+            "ignored": [
+              "read"
+            ],
+            "lock": [
+              "write",
+              "external"
+            ],
+            "pending": [
+              "read"
+            ],
+            "pipeline_abort": [
+              "write",
+              "destructive",
+              "external"
+            ],
+            "pipeline_list": [
+              "read",
+              "external"
+            ],
+            "pipeline_output": [
+              "read",
+              "external"
+            ],
+            "pipeline_run": [
+              "write",
+              "external"
+            ],
+            "pipeline_runs": [
+              "read",
+              "external"
+            ],
+            "resolve": [
+              "write",
+              "destructive",
+              "external"
+            ],
+            "status": [
+              "read",
+              "external"
+            ],
+            "update": [
+              "write",
+              "expensive",
+              "destructive",
+              "external"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "pipeline_run"
+              ],
+              "add": [
+                "expensive"
+              ],
+              "param": "rebuild",
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -2215,6 +2806,107 @@
       "name": "genexus_inspect"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "asset_find": [
+              "read"
+            ],
+            "asset_read": [
+              "read"
+            ],
+            "asset_write": [
+              "write"
+            ],
+            "delete_kb_objects": [
+              "write",
+              "destructive"
+            ],
+            "export_kb_to_text": [
+              "write",
+              "expensive"
+            ],
+            "export_part": [
+              "write"
+            ],
+            "export_unified": [
+              "write",
+              "expensive"
+            ],
+            "import_part": [
+              "write",
+              "destructive"
+            ],
+            "import_text_to_kb": [
+              "write",
+              "expensive",
+              "destructive"
+            ],
+            "list_text_files": [
+              "read"
+            ],
+            "ocr": [
+              "read",
+              "expensive"
+            ],
+            "read_blob": [
+              "read"
+            ],
+            "screenshot_publish": [
+              "write"
+            ],
+            "text_mirror_catchup": [
+              "write",
+              "expensive"
+            ],
+            "text_mirror_set_references": [
+              "write"
+            ],
+            "text_mirror_start": [
+              "write"
+            ],
+            "text_mirror_status": [
+              "read"
+            ],
+            "text_mirror_stop": [
+              "write"
+            ],
+            "validate_kb_text_files": [
+              "read"
+            ],
+            "validate_text_in_memory": [
+              "read"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "import_part",
+                "import_text_to_kb",
+                "delete_kb_objects"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            },
+            {
+              "actions": [
+                "export_kb_to_text",
+                "import_text_to_kb",
+                "delete_kb_objects"
+              ],
+              "param": "listOnly",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -2456,6 +3148,35 @@
       "name": "genexus_io"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add_node": [
+              "write"
+            ],
+            "inspect": [
+              "read"
+            ],
+            "move_node": [
+              "write"
+            ],
+            "preview": [
+              "read"
+            ],
+            "remove_node": [
+              "write",
+              "destructive"
+            ],
+            "set_property": [
+              "write"
+            ],
+            "tree": [
+              "read"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -2540,6 +3261,65 @@
       "name": "genexus_k2b_designer"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "close": [
+              "write"
+            ],
+            "create": [
+              "write",
+              "expensive"
+            ],
+            "get_environment": [
+              "read"
+            ],
+            "get_startup": [
+              "read"
+            ],
+            "list": [
+              "read"
+            ],
+            "list_environments": [
+              "read"
+            ],
+            "open": [
+              "write"
+            ],
+            "select": [
+              "write"
+            ],
+            "set_default": [
+              "write"
+            ],
+            "set_environment": [
+              "write"
+            ],
+            "set_persistent_default": [
+              "write"
+            ],
+            "set_session_default": [
+              "write"
+            ],
+            "set_startup": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "create"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -2722,6 +3502,34 @@
       "name": "genexus_kb_import"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "branch": [
+              "write",
+              "expensive"
+            ],
+            "changed_objects": [
+              "read"
+            ],
+            "freeze": [
+              "write",
+              "expensive"
+            ],
+            "list": [
+              "read"
+            ],
+            "revert": [
+              "write",
+              "destructive"
+            ],
+            "set_active": [
+              "write"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -2799,6 +3607,74 @@
       "name": "genexus_kb_version"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add_printblock": [
+              "write"
+            ],
+            "add_report_control": [
+              "write"
+            ],
+            "delete_printblock": [
+              "write",
+              "destructive"
+            ],
+            "design_system": [
+              "read"
+            ],
+            "find_controls": [
+              "read"
+            ],
+            "get_preview": [
+              "read"
+            ],
+            "get_tree": [
+              "read"
+            ],
+            "inspect_surface": [
+              "read"
+            ],
+            "list_controls": [
+              "read"
+            ],
+            "move_report_control": [
+              "write"
+            ],
+            "remove_report_control": [
+              "write",
+              "destructive"
+            ],
+            "rename_printblock": [
+              "write"
+            ],
+            "scan_mutators": [
+              "read"
+            ],
+            "set_properties": [
+              "write"
+            ],
+            "set_property": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "add_report_control",
+                "move_report_control",
+                "remove_report_control"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -3001,6 +3877,126 @@
       "name": "genexus_layout"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "build": [
+              "write",
+              "expensive"
+            ],
+            "build_all": [
+              "write",
+              "expensive",
+              "destructive",
+              "external"
+            ],
+            "cancel": [
+              "write"
+            ],
+            "index": [
+              "write"
+            ],
+            "inspect": [
+              "read"
+            ],
+            "rebuild": [
+              "write",
+              "expensive",
+              "destructive",
+              "external"
+            ],
+            "reconcile": [
+              "write"
+            ],
+            "reorg": [
+              "write",
+              "expensive",
+              "destructive"
+            ],
+            "reorg_preview": [
+              "read",
+              "expensive"
+            ],
+            "result": [
+              "read"
+            ],
+            "snapshots-list": [
+              "read"
+            ],
+            "snapshots-restore": [
+              "write",
+              "destructive"
+            ],
+            "specify": [
+              "write",
+              "expensive"
+            ],
+            "specify_only": [
+              "write"
+            ],
+            "status": [
+              "read"
+            ],
+            "sync": [
+              "write"
+            ],
+            "validate": [
+              "write"
+            ],
+            "validate-kb": [
+              "write",
+              "expensive"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "build",
+                "build_all",
+                "specify_only",
+                "rebuild",
+                "index"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            },
+            {
+              "actions": [
+                "build"
+              ],
+              "add": [
+                "external"
+              ],
+              "param": "deploy",
+              "when": true
+            },
+            {
+              "actions": [
+                "build"
+              ],
+              "add": [
+                "external"
+              ],
+              "param": "notifyOnFailure",
+              "when": "present"
+            },
+            {
+              "actions": [
+                "index"
+              ],
+              "add": [
+                "expensive"
+              ],
+              "param": "force",
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -3352,6 +4348,44 @@
       "name": "genexus_list_objects"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "consolidate": [
+              "write"
+            ],
+            "forget": [
+              "write",
+              "destructive"
+            ],
+            "list": [
+              "read"
+            ],
+            "promote": [
+              "write"
+            ],
+            "recall": [
+              "read"
+            ],
+            "save": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "consolidate"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -3468,6 +4502,78 @@
       "name": "genexus_merge"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add_modules_server": [
+              "write"
+            ],
+            "install": [
+              "write",
+              "expensive",
+              "external"
+            ],
+            "install_builtin": [
+              "write",
+              "expensive"
+            ],
+            "list": [
+              "read"
+            ],
+            "list_modules_servers": [
+              "read"
+            ],
+            "package": [
+              "write"
+            ],
+            "publish": [
+              "write",
+              "expensive",
+              "destructive",
+              "external"
+            ],
+            "restore": [
+              "write",
+              "expensive",
+              "external"
+            ],
+            "search_modules_in_servers": [
+              "read",
+              "external"
+            ],
+            "update": [
+              "write",
+              "expensive",
+              "external"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "install",
+                "install_builtin",
+                "update"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            },
+            {
+              "actions": [
+                "package"
+              ],
+              "add": [
+                "expensive"
+              ],
+              "param": "rebuild",
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -3564,6 +4670,25 @@
       "name": "genexus_module"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "view": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "latest",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -3653,6 +4778,31 @@
       "name": "genexus_object_context"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "get": [
+              "read"
+            ],
+            "move": [
+              "write"
+            ],
+            "set": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -3976,6 +5126,25 @@
       "name": "genexus_read"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "crystallize": [
+              "write"
+            ],
+            "describe": [
+              "read"
+            ],
+            "list": [
+              "read"
+            ],
+            "suggest_macro": [
+              "read"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -4029,6 +5198,46 @@
       "name": "genexus_recipe"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "ExtractProcedure": [
+              "write"
+            ],
+            "ExtractSubroutine": [
+              "write"
+            ],
+            "RenameAttribute": [
+              "write",
+              "expensive",
+              "destructive"
+            ],
+            "RenameObject": [
+              "write",
+              "expensive",
+              "destructive"
+            ],
+            "RenameVariable": [
+              "write",
+              "expensive",
+              "destructive"
+            ],
+            "WWPSetCondition": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -4144,6 +5353,21 @@
       "name": "genexus_run_object"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "create": [
+              "write",
+              "expensive"
+            ],
+            "remove": [
+              "write",
+              "destructive"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": true,
@@ -4316,6 +5540,27 @@
       "name": "genexus_search_source"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "audit_gam": [
+              "read"
+            ],
+            "audit_object": [
+              "read"
+            ],
+            "scan_native": [
+              "read",
+              "expensive"
+            ],
+            "scan_secrets": [
+              "read",
+              "expensive"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": true,
@@ -4368,6 +5613,77 @@
       "name": "genexus_security"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "check_subtypes": [
+              "read"
+            ],
+            "create_index": [
+              "write"
+            ],
+            "drop_index": [
+              "write",
+              "destructive"
+            ],
+            "get_indexes": [
+              "read"
+            ],
+            "get_item_property": [
+              "read"
+            ],
+            "get_logic": [
+              "read"
+            ],
+            "get_visual": [
+              "read"
+            ],
+            "move_attribute": [
+              "write"
+            ],
+            "remove_attribute": [
+              "write",
+              "destructive"
+            ],
+            "set_attribute": [
+              "write"
+            ],
+            "set_domain": [
+              "write"
+            ],
+            "set_item_property": [
+              "write"
+            ],
+            "set_level": [
+              "write"
+            ],
+            "update_group": [
+              "write"
+            ],
+            "update_visual": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "update_visual",
+                "create_index",
+                "drop_index",
+                "move_attribute",
+                "remove_attribute",
+                "set_item_property"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -4496,6 +5812,40 @@
       "name": "genexus_structure"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "executions": [
+              "read"
+            ],
+            "friction_append": [
+              "write"
+            ],
+            "friction_tail": [
+              "read"
+            ],
+            "learning_report": [
+              "read"
+            ],
+            "logs": [
+              "read"
+            ],
+            "profile_analyze": [
+              "read"
+            ],
+            "profile_correlate": [
+              "read"
+            ],
+            "profile_hotspots": [
+              "read"
+            ],
+            "watch_event": [
+              "read"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -4620,6 +5970,37 @@
       "name": "genexus_test"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "export": [
+              "write",
+              "expensive"
+            ],
+            "import": [
+              "write",
+              "expensive",
+              "destructive"
+            ],
+            "inspect": [
+              "read"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "import"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": "notFalse"
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -4687,6 +6068,32 @@
       "name": "genexus_transfer"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add": [
+              "write"
+            ],
+            "delete": [
+              "write",
+              "destructive"
+            ],
+            "modify": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -4877,6 +6284,58 @@
       "name": "genexus_variable"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "blame": [
+              "read"
+            ],
+            "diff": [
+              "read"
+            ],
+            "diff_generated": [
+              "read"
+            ],
+            "history_diff": [
+              "read"
+            ],
+            "history_get": [
+              "read"
+            ],
+            "history_list": [
+              "read"
+            ],
+            "history_restore": [
+              "write",
+              "destructive"
+            ],
+            "history_save": [
+              "write"
+            ],
+            "time_travel": [
+              "read"
+            ],
+            "undo": [
+              "write",
+              "destructive"
+            ]
+          },
+          "modifiers": [
+            {
+              "actions": [
+                "history_restore",
+                "undo"
+              ],
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -5023,6 +6482,44 @@
       "name": "genexus_whoami"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "callers": [
+              "read"
+            ],
+            "doctor": [
+              "read"
+            ],
+            "for": [
+              "read"
+            ],
+            "impact": [
+              "read"
+            ],
+            "index": [
+              "read",
+              "expensive"
+            ],
+            "pack_task": [
+              "read"
+            ],
+            "path": [
+              "read"
+            ],
+            "safe_delete": [
+              "read"
+            ],
+            "slice": [
+              "read"
+            ],
+            "status": [
+              "read"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": true,
@@ -5107,6 +6604,17 @@
       "name": "genexus_wire"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "warm_spares": [
+              "write",
+              "expensive"
+            ]
+          },
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": true,
@@ -5177,6 +6685,42 @@
       "name": "genexus_worker_reload"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add_action": [
+              "write"
+            ],
+            "add_filter_attribute": [
+              "write"
+            ],
+            "list_actions": [
+              "read"
+            ],
+            "list_filters": [
+              "read"
+            ],
+            "remove_action": [
+              "write",
+              "destructive"
+            ],
+            "remove_filter_attribute": [
+              "write",
+              "destructive"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,
@@ -5283,6 +6827,101 @@
       "name": "genexus_workwith"
     },
     {
+      "_meta": {
+        "gxmcp/actionEffects": {
+          "actions": {
+            "add_action": [
+              "write"
+            ],
+            "add_grid": [
+              "write"
+            ],
+            "add_grid_attribute": [
+              "write"
+            ],
+            "add_grid_variable": [
+              "write"
+            ],
+            "add_layout": [
+              "write"
+            ],
+            "add_tab": [
+              "write"
+            ],
+            "add_table": [
+              "write"
+            ],
+            "add_user_action": [
+              "write"
+            ],
+            "list": [
+              "read"
+            ],
+            "list_tabs": [
+              "read"
+            ],
+            "move_action": [
+              "write"
+            ],
+            "move_control": [
+              "write"
+            ],
+            "move_grid_column": [
+              "write"
+            ],
+            "move_tab": [
+              "write"
+            ],
+            "regenerate_derived": [
+              "write",
+              "expensive"
+            ],
+            "remove_action": [
+              "write",
+              "destructive"
+            ],
+            "remove_tab": [
+              "write",
+              "destructive"
+            ],
+            "replace_web_component_with_user_action": [
+              "write",
+              "destructive"
+            ],
+            "set_combo_properties": [
+              "write"
+            ],
+            "set_table_type": [
+              "write"
+            ],
+            "settings_edit": [
+              "write"
+            ],
+            "settings_read": [
+              "read"
+            ],
+            "settings_templates": [
+              "read"
+            ],
+            "tab_schema": [
+              "read"
+            ],
+            "update_action": [
+              "write"
+            ]
+          },
+          "modifiers": [
+            {
+              "param": "dryRun",
+              "set": [
+                "read"
+              ],
+              "when": true
+            }
+          ],
+          "version": 1
+        }
+      },
       "annotations": {
         "destructiveHint": true,
         "idempotentHint": false,

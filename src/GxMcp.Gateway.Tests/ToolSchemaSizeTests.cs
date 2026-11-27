@@ -347,12 +347,14 @@ namespace GxMcp.Gateway.Tests
         // (measured 104138), core 27100 -> 27250 (measured 27158), authoring 72350 -> 72550 (measured 72439),
         // devops 53050 -> 53250 (measured 53146), ui 51100 -> 51300 (measured 51168); standard and db stay within
         // their budgets.
-        [InlineData("all", 104300)]
+        // Issue #1113 publishes per-action effect metadata under tool._meta["gxmcp/actionEffects"] in profile "all"
+        // only (never in inputSchema): all 104300 -> 117700 (measured 117528); the other profiles are unchanged.
+        [InlineData("all", 117700)]
         // Every profile except "all" stops publishing the advanced inputs of genexus_edit, genexus_lifecycle,
         // genexus_io and genexus_create (ToolProfileFilter.AdvancedInputs), so their budgets move down to the new
         // measured size plus ~170 bytes: core 27250 -> 24550 (measured 24381, was 27188), standard 61000 -> 40100
         // (39947, was 44724), authoring 72550 -> 69550 (69362, was 72457), devops 53250 -> 48750 (48569, was
-        // 53058), ui 51300 -> 48650 (48478, was 51285), db 40000 -> 32550 (32391, was 35198). "all" is unchanged.
+        // 53058), ui 51300 -> 48650 (48478, was 51285), db 40000 -> 32550 (32391, was 35198).
         [InlineData("core", 24550)]
         [InlineData("standard", 40100)]
         [InlineData("authoring", 69550)]
@@ -374,10 +376,13 @@ namespace GxMcp.Gateway.Tests
             var tools = JArray.Parse(File.ReadAllText(FindToolDefinitionsJson()));
             var publishedTools = ToolProfileFilter.Filter(tools, "all");
 
+            // Issue #1113: genexus_wwp (25 actions) grows from 7515 to 8179 bytes with _meta["gxmcp/actionEffects"];
+            // only that tool gets a 8400 ceiling; every other tool keeps the 8000 cap.
             foreach (JObject tool in publishedTools)
             {
                 int bytes = Encoding.UTF8.GetByteCount(tool.ToString(Formatting.None));
-                Assert.True(bytes <= 8000, $"Tool '{tool["name"]}' is {bytes} bytes; per-tool budget 8000.");
+                int budget = (string?)tool["name"] == "genexus_wwp" ? 8400 : 8000;
+                Assert.True(bytes <= budget, $"Tool '{tool["name"]}' is {bytes} bytes; per-tool budget {budget}.");
             }
         }
     }
