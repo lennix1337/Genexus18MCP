@@ -71,7 +71,8 @@ suite("GxUriParser.resolveWithinRoot containment", () => {
   });
 
   test("rejects an absolute segment that would replace the root", () => {
-    const result = GxUriParser.resolveWithinRoot(root, "C:\\Windows\\System32", "x");
+    const outsideAbsolute = path.join(path.parse(path.resolve(root)).root, "outside-root");
+    const result = GxUriParser.resolveWithinRoot(root, outsideAbsolute, "x");
     assert.strictEqual(result, null);
   });
 });
