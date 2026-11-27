@@ -168,8 +168,10 @@ namespace GxMcp.Gateway
 
             var allowlist = GetAllowlist(profile);
             // No allowlist means `all` (or an unknown profile, which fails open): the complete surface.
+            var tokens = (profile ?? string.Empty).Split(new[] { ',', '+', '|', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            bool includeActionEffects = tokens.Length == 0 || tokens.Any(token => string.Equals(token, "all", StringComparison.OrdinalIgnoreCase));
             return allowlist == null
-                ? Compact(tools, hideAdvancedInputs: false)
+                ? Compact(tools, hideAdvancedInputs: false, includeActionEffects: includeActionEffects)
                 : Compact(
                     tools.OfType<JObject>().Where(tool => allowlist.Contains(tool["name"]?.ToString() ?? string.Empty)),
                     hideAdvancedInputs: true);
@@ -256,7 +258,7 @@ namespace GxMcp.Gateway
             return profiles;
         }
 
-        private static JArray Compact(IEnumerable<JToken> tools, bool hideAdvancedInputs)
+        private static JArray Compact(IEnumerable<JToken> tools, bool hideAdvancedInputs, bool includeActionEffects = false)
         {
             var result = new JArray();
             foreach (JToken tool in tools)
@@ -300,6 +302,15 @@ namespace GxMcp.Gateway
                 {
                     compacted["description"] = BuildCompactToolDescription(toolName, null);
                 }
+
+                var actionEffects = includeActionEffects ? ActionEffectCatalog.BuildForTool(definition) : null;
+                if (actionEffects != null)
+                {
+                    var meta = compacted["_meta"] as JObject ?? new JObject();
+                    meta[ActionEffectCatalog.MetaExtensionKey] = actionEffects;
+                    compacted["_meta"] = meta;
+                }
+
                 result.Add(compacted);
             }
             return result;

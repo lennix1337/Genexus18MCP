@@ -82,6 +82,20 @@ Optional response-shaping arguments for list-heavy tools:
 
 The table below is the machine-checkable action contract for every umbrella tool. An action appears in exactly one column. A mutating action changes KB, gateway, filesystem, database, team-server, or deployment state; `dryRun` is read-only only where the tool explicitly supports that preview mode.
 
+### Per-action effect metadata (`_meta["gxmcp/actionEffects"]`)
+
+In profile `all`, every action-bearing tool returned by `tools/list` also publishes an additive MCP tool-level extension under `_meta["gxmcp/actionEffects"]` (`version: 1`) without altering `annotations` or `inputSchema`:
+
+- `actions`: maps each `action` enum value to a non-empty ordered subset of five effect tags:
+  - `read` — reads state without mutating (mutually exclusive with `write`).
+  - `write` — mutates KB, database, local files, config, or process state (mutually exclusive with `read`).
+  - `expensive` — long-running or resource-intensive operation (builds, reorg/reorg_preview, full scans/exports/imports, browser suites, KB creation/cloning).
+  - `destructive` — irreversible delete, overwrite, schema change, version revert/restore, or elicitation-gated operation (always accompanies `write`).
+  - `external` — leaves the local machine (GXserver/Module servers, app deploy, browser HTTP, failure webhooks, SDK-configured build hooks).
+- `modifiers` (optional array): rules describing parameters that change the base effect of an action (`param`, optional `actions` filter — omitted when the rule applies to all actions of the tool — `when`: `true` | `"notFalse"` | `"present"` | `{"contains": "<value>"}`, and either `set` to replace the effect set or `add` to add tags, where adding `write` replaces `read`).
+- Base `actions` entries are conservative for actions whose `dryRun` defaults to `true` (`genexus_transfer:import`, `genexus_connection_recover:journal_repair`/`recovery_read_complete`, `genexus_db:records_insert`/`records_update`, `genexus_api:routes_clone`/`routes_update`): clients that ignore `modifiers` still see the mutating effect, while clients that evaluate `modifiers` see `["read"]` when `dryRun` is not explicitly `false`.
+- Authoritative C# source: `src/GxMcp.Gateway/ActionEffectCatalog.cs` (derives base read/write and dry-run capability from `OperationClassifier` and stays aligned with `Program.DescribeDestructiveOperation`).
+
 | Tool | Read-only actions | Mutating actions |
 | --- | --- | --- |
 | `genexus_wire` | `pack_task`, `status`, `for`, `callers`, `impact`, `path`, `slice`, `safe_delete`, `index`, `doctor` | — |

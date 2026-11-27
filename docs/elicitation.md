@@ -53,5 +53,7 @@ picker still returns the original context error if it cannot get a selection.
   and correlates the client's response by its `gxmcp-elicit-<n>` id.
 - `src/GxMcp.Gateway/Program.Elicitation.cs` holds the destructive-operation policy
   (`DescribeDestructiveOperation`), the confirmation step that runs before dispatch,
-  and the KB recovery step that runs after it.
+  and the KB recovery step that runs after it. The multi-action subset of this policy
+  is also published to clients in `tools/list` (profile `all`) under `_meta["gxmcp/actionEffects"]`
+  (`src/GxMcp.Gateway/ActionEffectCatalog.cs`).
 - Tests: `src/GxMcp.Gateway.Tests/ElicitationTests.cs`.
