@@ -137,6 +137,7 @@ namespace GxMcp.Gateway
             var parameters = request["params"] as JObject;
             string? toolName = parameters?["name"]?.ToString();
             var args = parameters?["arguments"] as JObject;
+            if (KbAccessPolicy.ShouldRefuseWriteWithoutExplicitKb(_activeConfig, toolName, args)) return (request, null);
             string? effect = DescribeDestructiveOperation(toolName, args);
             if (effect == null) return (request, null);
 

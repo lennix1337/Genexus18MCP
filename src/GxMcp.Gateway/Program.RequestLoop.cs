@@ -42,7 +42,9 @@ namespace GxMcp.Gateway
         private static bool KeepsKbArgument(string? toolName, string? action)
             => string.Equals(toolName, "genexus_worker_reload", StringComparison.OrdinalIgnoreCase)
                 || (string.Equals(toolName, OperationClassifier.KbTool, StringComparison.OrdinalIgnoreCase)
-                    && !OperationClassifier.IsKbEnvironmentAction(toolName, action));
+                    && !OperationClassifier.IsKbEnvironmentAction(toolName, action)
+                    && !string.Equals(action, "set_startup", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(action, "get_startup", StringComparison.OrdinalIgnoreCase));
 
         private static JObject BuildStableKbContextError(string code, string message)
         {
@@ -202,6 +204,19 @@ namespace GxMcp.Gateway
                         }
                     };
                 }
+
+                var earlyArgs = (request["params"] as JObject)?["arguments"] as JObject;
+                _currentExplicitKb.Value = KbAccessPolicy.HasExplicitKbArgument(earlyToolName, earlyArgs);
+                if (KbAccessPolicy.ShouldRefuseWriteWithoutExplicitKb(_activeConfig, earlyToolName, earlyArgs, _currentExplicitKb.Value))
+                {
+                    return BuildToolTextResponse(
+                        idToken,
+                        KbAccessPolicy.BuildExplicitKbRequiredForWriteError(earlyToolName ?? string.Empty, earlyArgs, _activeConfig),
+                        isError: true,
+                        toolName: earlyToolName,
+                        toolArgs: earlyArgs,
+                        payloadOwned: true);
+                }
             }
 
             // Resolve KB once per request and stash in AsyncLocal so SendWorkerCommandAsync routes correctly.
@@ -231,7 +246,10 @@ namespace GxMcp.Gateway
                 bool kbEnvironmentTool = OperationClassifier.IsKbEnvironmentAction(toolNameForResolver, resolverAction);
                 bool kbEnvironmentMutation = OperationClassifier.IsKbEnvironmentMutation(toolNameForResolver, resolverAction);
                 bool explicitReadOnlyMetaKb = !string.IsNullOrWhiteSpace(resolverArgs?["kb"]?.ToString() ?? resolverArgs?["kbAlias"]?.ToString())
-                    && OperationClassifier.IsKbScopedReadMetaTool(toolNameForResolver);
+                    && (OperationClassifier.IsKbScopedReadMetaTool(toolNameForResolver)
+                        || (string.Equals(toolNameForResolver, OperationClassifier.KbTool, StringComparison.OrdinalIgnoreCase)
+                            && (string.Equals(resolverAction, "set_startup", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(resolverAction, "get_startup", StringComparison.OrdinalIgnoreCase))));
                 statefulMetaTool |= kbEnvironmentMutation;
                 bool needsKbResolution = !gatewayMetricsStatusCall
                     && ((string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase) && (!isMetaTool || statefulMetaTool))
@@ -242,9 +260,9 @@ namespace GxMcp.Gateway
 
                 if (needsKbResolution)
                 {
+                    string? kbArg = null;
                     try
                     {
-                        string? kbArg = null;
                         if (string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase))
                         {
                             var paramsObj = request["params"] as JObject;
@@ -323,6 +341,21 @@ namespace GxMcp.Gateway
                     }
                     catch (KbResolutionException ex)
                     {
+                        if (string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(ex.Code, KbAccessPolicy.OpenOnlyConfiguredKbsCode, StringComparison.OrdinalIgnoreCase))
+                        {
+                            bool looksLikePath = KbAccessPolicy.LooksLikeFilesystemPath(kbArg);
+                            return BuildToolTextResponse(
+                                idToken,
+                                KbAccessPolicy.BuildOpenOnlyConfiguredKbsError(
+                                    _activeConfig,
+                                    requestedPath: looksLikePath ? kbArg : null,
+                                    requestedAlias: looksLikePath ? null : kbArg),
+                                isError: true,
+                                toolName: toolNameForResolver,
+                                toolArgs: (request["params"] as JObject)?["arguments"] as JObject,
+                                payloadOwned: true);
+                        }
                         if (string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase)
                             && (OperationClassifier.RequiresSessionLease(
                                     toolNameForResolver,

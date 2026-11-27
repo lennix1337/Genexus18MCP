@@ -715,6 +715,10 @@ Resolution rules when `kb` is omitted (default `ResolutionPolicy: "strict"`):
 - `action=set_persistent_default` writes the startup fallback to `config.json` and returns `persistedTo` (`set_default` is the legacy alias)
 - `ResolutionPolicy: "legacy"` keeps the older chain (`config-default` → `single-open` → `declared-first`)
 
+Optional server-side KB guardrails under `Server` (both opt-in, default `false`):
+- `Server.RequireExplicitKbForWrites`: when `true`, any mutating tool call that omits an explicit `kb` argument is refused before dispatch with `EXPLICIT_KB_REQUIRED_FOR_WRITE` and the list of configured `Environment.KBs` aliases; read-only calls and effect-free `dryRun` previews keep the normal resolution policy.
+- `Server.OpenOnlyConfiguredKbs`: when `true`, `genexus_kb action=open` (as well as ad-hoc path selection and resolution) refuses filesystem paths and unconfigured aliases with `KB_OPEN_ONLY_CONFIGURED` and the list of configured `Environment.KBs` aliases.
+
 Manage the pool at runtime:
 
 ```jsonc
