@@ -125,6 +125,50 @@ namespace GxMcp.Worker.Tests
             Assert.Equal("UnsupportedCursorVersion", response["error"]?["code"]?.ToString());
         }
 
+        [Theory]
+        [InlineData(null)]
+        [InlineData("Attribute")]
+        public void UnnamedFormulaScanYieldsAndResumesAtNextCandidate(string typeFilter)
+        {
+            var entries = Enumerable.Range(0, 3).Select(i => new SearchIndex.IndexEntry
+            {
+                Name = "Attr" + i, Type = "Attribute", Formula = "needle"
+            }).ToArray();
+            var index = new IndexCacheService();
+            index.LoadFromEntries(entries);
+            index.MarkIndexComplete(entries.Length);
+            var service = new SourceSearchService(index, null);
+            // Simulate one metadata read crossing the short STA budget. Do not sleep or
+            // depend on machine speed; all three candidates otherwise fit the 30s request.
+            int clockChecks = 0;
+            service.BudgetElapsedMillisecondsForTest = () => clockChecks++ == 0 ? 0 : 251;
+            var criteria = new SourceSearchCriteria
+            {
+                Pattern = "needle",
+                Fields = new System.Collections.Generic.List<string> { "formula" },
+                TypeFilter = typeFilter
+            };
+
+            var first = JObject.Parse(service.SearchAsJson(criteria));
+            Assert.Equal("Timeout", first["code"]?.ToString());
+            Assert.Equal("partial", first["status"]?.ToString());
+            var page = first["result"]!;
+            Assert.Equal(250, page["effectiveTimeoutMs"]?.Value<int>());
+            Assert.Equal(30000, page["requestedTimeoutMs"]?.Value<int>());
+            Assert.Equal("metadata", page["progress"]?["phase"]?.ToString());
+            Assert.Equal(1, page["nextOffset"]?.Value<int>());
+            Assert.Equal("Attr0", Assert.Single(page["hits"]!)["objectName"]?.ToString());
+            criteria.Cursor = page["nextCursor"]?.ToString();
+            Assert.False(string.IsNullOrEmpty(criteria.Cursor));
+
+            service.BudgetElapsedMillisecondsForTest = () => 0;
+            var resumed = JObject.Parse(service.SearchAsJson(criteria));
+            Assert.Equal("SourceSearchCompleted", resumed["code"]?.ToString());
+            Assert.Equal(new[] { "Attr1", "Attr2" },
+                resumed["result"]!["hits"]!.Select(hit => hit["objectName"]?.ToString()));
+            Assert.Null(resumed["result"]!["nextCursor"]);
+        }
+
         [Fact]
         public void OversizedTimeoutReportsEffectiveBudget()
         {

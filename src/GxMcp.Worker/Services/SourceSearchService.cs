@@ -1010,21 +1010,21 @@ namespace GxMcp.Worker.Services
                     });
                 }
 
-                // v2.3.8 (Task 2.1): hard wall-clock timeout — emits a Timeout
-                // envelope with partial hits, replacing the legacy budgetExceeded
-                // flag. The 25s internal cap is now driven by c.TimeoutMs (default
-                // 30s) so callers can tune the budget per-call.
-                // TimeoutMs=0 is an explicit, legacy immediate-timeout request; the
-                // property initializer supplies the normal 30s default when omitted.
-                int requestedTimeoutMs = Math.Max(0, c.TimeoutMs);
-                bool broadSdkScan = IsDefaultSourceScope(scanScope)
+                // An unnamed scan can still span the KB even with typeFilter or
+                // metadata-only fields (issue #1116). Apply the short STA budget
+                // in every scan phase and return the existing cursor at a candidate
+                // boundary. A synchronous SDK call already in progress cannot be interrupted.
+                const int unnamedScanBudgetMs = 250;
+                bool unnamedScan = objectNameSet == null;
+                // Preserve automatic cache warming only for default source scans.
+                bool autoContinueSource = unnamedScan
+                    && IsDefaultSourceScope(scanScope)
                     && HasOnlySourceFields(c.Fields)
                     && string.IsNullOrWhiteSpace(c.ObjectName)
                     && string.IsNullOrWhiteSpace(c.TypeFilter);
-                // Server-owned broad scans are cooperative: one STA slice is capped at
-                // roughly 250ms and returns the opaque cursor for the next P2 slice.
-                // Scoped scans are capped below the Gateway's no-progress deadline.
-                int timeoutMs = Math.Min(requestedTimeoutMs, broadSdkScan ? 250 : 40000);
+                // TimeoutMs=0 still requests an immediate timeout.
+                int requestedTimeoutMs = Math.Max(0, c.TimeoutMs);
+                int timeoutMs = Math.Min(requestedTimeoutMs, unnamedScan ? unnamedScanBudgetMs : 40000);
                 var swBudget = System.Diagnostics.Stopwatch.StartNew();
                 long BudgetElapsedMilliseconds() => BudgetElapsedMillisecondsForTest?.Invoke() ?? swBudget.ElapsedMilliseconds;
 
@@ -1195,7 +1195,7 @@ namespace GxMcp.Worker.Services
                         JObject executionSnapshot = BuildExecutionSnapshot();
                         int pct = entries.Count > 0 ? (int)(100L * cursor / entries.Count) : 100;
                         string continuationCursor = BuildBoundCursor(cursor, skippedHits, metadata: false);
-                        bool continuationScheduled = broadSdkScan
+                        bool continuationScheduled = autoContinueSource
                             && _objectService != null
                             && requestedTimeoutMs > 0
                             && !c.SuppressContinuation
@@ -1214,8 +1214,8 @@ namespace GxMcp.Worker.Services
                             ["coverageComplete"] = true,
                             ["progress"] = Progress("source", cursor),
                              ["requestedTimeoutMs"] = requestedTimeoutMs,
-                             ["sliceBudgetMs"] = broadSdkScan ? 250 : timeoutMs,
-                             ["sliceContinuation"] = broadSdkScan,
+                             ["sliceBudgetMs"] = autoContinueSource ? unnamedScanBudgetMs : timeoutMs,
+                             ["sliceContinuation"] = autoContinueSource,
                             ["nextCursor"] = continuationCursor,
                             ["nextOffset"] = cursor,
                             ["continuationScheduled"] = continuationScheduled,
