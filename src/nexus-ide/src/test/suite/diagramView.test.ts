@@ -4,7 +4,15 @@ import { createHash } from "crypto";
 import { readFileSync } from "fs";
 import { DiagramView } from "../../webviews/DiagramView";
 
-suite("DiagramView - CSP + local mermaid", () => {
+suite("DiagramView - CSP + local mermaid", function () {
+  // Headroom justified by measurement and scoped to this suite, not the runner (same approach as
+  // GxInlineCompletionItemProvider): on an idle host the test finishes in well under 100 ms, but it
+  // creates a real webview panel, and on a host contended by the other validation lanes the extension
+  // host reported "Extension host is unresponsive" and the test exceeded mocha's 2000 ms default
+  // although the generated HTML was correct. The global timeout is untouched so the other tests are
+  // not slowed or masked; a real hang still fails, only after 10 s.
+  this.timeout(10000);
+
   test("generated HTML has a Content-Security-Policy meta and no remote script src", () => {
     const panel = vscode.window.createWebviewPanel(
       "gxDiagramTest",
