@@ -19,6 +19,8 @@
 
 ### Internal
 
+- Nexus IDE tests: the `DiagramView - CSP + local mermaid` suite now has a 10 s timeout scoped to that suite, as `GxInlineCompletionItemProvider` does; the runner default stays 2000 ms. The test creates a real webview panel and exceeded mocha's 2000 ms default on a host contended by the other validation lanes (`Extension host ... is unresponsive`) although the generated HTML was correct.
+
 ## v4.7.4 - 2026-11-25
 
 
