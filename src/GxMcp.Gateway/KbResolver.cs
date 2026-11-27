@@ -321,6 +321,9 @@ namespace GxMcp.Gateway
                 if (knownMatch != null) return KbSelectionResult.Resolved(knownMatch, selectionSource);
             }
 
+            var configuredOnly = KbAccessPolicy.TryBuildOpenOnlyConfiguredKbsUnresolved(_config, kbArg, selectionSource);
+            if (configuredOnly != null) return configuredOnly;
+
             if (Path.IsPathRooted(kbArg) && Directory.Exists(kbArg))
             {
                 // A path that names a KB this Gateway already knows is that KB, under its

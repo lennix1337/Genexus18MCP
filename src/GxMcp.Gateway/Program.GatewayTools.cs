@@ -281,6 +281,16 @@ namespace GxMcp.Gateway
                             string? resolvedPath = null;
                             if (!string.IsNullOrWhiteSpace(path))
                             {
+                                if (_activeConfig?.Server?.OpenOnlyConfiguredKbs == true)
+                                {
+                                    return BuildToolTextResponse(
+                                        idToken,
+                                        KbAccessPolicy.BuildOpenOnlyConfiguredKbsError(_activeConfig, requestedPath: path, requestedAlias: alias),
+                                        isError: true,
+                                        "genexus_kb",
+                                        args,
+                                        payloadOwned: true);
+                                }
                                 if (!Configuration.IsPlausibleKbPath(path!))
                                     throw new ArgumentException($"Path '{path}' does not look like a GeneXus Knowledge Base.");
                                 resolvedAlias = string.IsNullOrWhiteSpace(alias)
@@ -297,6 +307,20 @@ namespace GxMcp.Gateway
                                 {
                                     resolvedAlias = declared.Alias;
                                     resolvedPath = declared.Path;
+                                }
+                                else if (_activeConfig?.Server?.OpenOnlyConfiguredKbs == true)
+                                {
+                                    bool looksLikePath = KbAccessPolicy.LooksLikeFilesystemPath(alias);
+                                    return BuildToolTextResponse(
+                                        idToken,
+                                        KbAccessPolicy.BuildOpenOnlyConfiguredKbsError(
+                                            _activeConfig,
+                                            requestedPath: looksLikePath ? alias : null,
+                                            requestedAlias: looksLikePath ? null : alias),
+                                        isError: true,
+                                        "genexus_kb",
+                                        args,
+                                        payloadOwned: true);
                                 }
                                 else
                                 {
@@ -360,6 +384,20 @@ namespace GxMcp.Gateway
                                 {
                                     sessionAlias = declaredSession.Alias;
                                     sessionPath = declaredSession.Path;
+                                }
+                                else if (_activeConfig?.Server?.OpenOnlyConfiguredKbs == true)
+                                {
+                                    bool looksLikePath = KbAccessPolicy.LooksLikeFilesystemPath(alias);
+                                    return BuildToolTextResponse(
+                                        idToken,
+                                        KbAccessPolicy.BuildOpenOnlyConfiguredKbsError(
+                                            _activeConfig,
+                                            requestedPath: looksLikePath ? alias : null,
+                                            requestedAlias: looksLikePath ? null : alias),
+                                        isError: true,
+                                        "genexus_kb",
+                                        args,
+                                        payloadOwned: true);
                                 }
                                 else
                                 {
@@ -469,8 +507,37 @@ namespace GxMcp.Gateway
                             string? alias = args?["alias"]?.ToString();
                             string? path = args?["path"]?.ToString();
                             KbHandle handleToOpen;
+                            if (_activeConfig?.Server?.OpenOnlyConfiguredKbs == true)
+                            {
+                                if (!string.IsNullOrWhiteSpace(path))
+                                {
+                                    return BuildToolTextResponse(
+                                        idToken,
+                                        KbAccessPolicy.BuildOpenOnlyConfiguredKbsError(_activeConfig, requestedPath: path, requestedAlias: alias),
+                                        isError: true,
+                                        "genexus_kb",
+                                        args,
+                                        payloadOwned: true);
+                                }
+                                var declaredOnly = KbAccessPolicy.FindConfiguredKb(_activeConfig, alias);
+                                if (declaredOnly == null)
+                                {
+                                    bool looksLikePath = KbAccessPolicy.LooksLikeFilesystemPath(alias);
+                                    return BuildToolTextResponse(
+                                        idToken,
+                                        KbAccessPolicy.BuildOpenOnlyConfiguredKbsError(
+                                            _activeConfig,
+                                            requestedPath: looksLikePath ? alias : null,
+                                            requestedAlias: looksLikePath ? null : alias),
+                                        isError: true,
+                                        "genexus_kb",
+                                        args,
+                                        payloadOwned: true);
+                                }
+                                handleToOpen = KbHandle.FromEntry(declaredOnly);
+                            }
                             // Path wins: register ad-hoc (with optional caller-supplied alias).
-                            if (!string.IsNullOrWhiteSpace(path))
+                            else if (!string.IsNullOrWhiteSpace(path))
                             {
                                 string finalAlias = string.IsNullOrWhiteSpace(alias)
                                     ? System.IO.Path.GetFileName(path!.TrimEnd('\\', '/')).ToLowerInvariant()

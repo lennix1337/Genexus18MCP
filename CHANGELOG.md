@@ -7,6 +7,8 @@
 
 ### Added
 
+- Opt-in `Server` KB-targeting guardrails ([#1112](https://github.com/lennix1337/Genexus18MCP/issues/1112)): `Server.RequireExplicitKbForWrites` (default `false`) refuses KB-mutating tool calls that omit an explicit `kb` argument with `EXPLICIT_KB_REQUIRED_FOR_WRITE` and the configured `Environment.KBs` aliases while leaving reads and effect-free `dryRun` previews unchanged; `Server.OpenOnlyConfiguredKbs` (default `false`) restricts `genexus_kb action=open` and ad-hoc path selection/resolution to aliases declared in `Environment.KBs`, refusing filesystem paths and unconfigured aliases with `KB_OPEN_ONLY_CONFIGURED`.
+
 ### Changed
 
 ### Fixed

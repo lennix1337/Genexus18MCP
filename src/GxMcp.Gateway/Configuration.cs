@@ -335,11 +335,13 @@ namespace GxMcp.Gateway
                 "WorkerIdleTimeoutMinutes", "WedgedCommandTimeoutMinutes", "WorkerHeapRecycleMB",
                 "ArtifactOutputDirectory", "IdempotencyTtlMinutes", "IdempotencyCacheSize", "BuildSyncThresholdSeconds", "MaxOpenKbs",
                 "ToolProfile", "EmitStructuredContent", "TerseResponses", "WorkerSharingMode", "SourceStoreMaxMB", "SourceStoreBackfill",
+                "RequireExplicitKbForWrites", "OpenOnlyConfiguredKbs",
                 "SharedHost"
             }, StringComparer.Ordinal), "Server", path);
             ValidateStrictSharedHostSection(server["SharedHost"], path);
             if (server["HttpPort"]?.Type != JTokenType.Integer || server["McpStdio"]?.Type != JTokenType.Boolean)
                 throw new InvalidDataException("Strict config requires typed Server.HttpPort and Server.McpStdio.");
+            ValidateOptionalStrictBools(server, "Server", "RequireExplicitKbForWrites", "OpenOnlyConfiguredKbs");
             int port = server.Value<int>("HttpPort");
             bool stdio = server.Value<bool>("McpStdio");
             if (mode == "stdio-isolated" && (port != 0 || !stdio))
@@ -587,6 +589,16 @@ namespace GxMcp.Gateway
                 throw new InvalidDataException($"Strict config requires non-empty {scope}.{name}.");
         }
 
+        private static void ValidateOptionalStrictBools(JObject value, string scope, params string[] names)
+        {
+            foreach (string name in names)
+            {
+                var token = value[name];
+                if (token != null && token.Type != JTokenType.Boolean)
+                    throw new InvalidDataException($"Strict config {scope}.{name} must be boolean when present.");
+            }
+        }
+
         // issue #28 item 6: a path is real KB only if it exists and carries a .gxw
         // (or the legacy KnowledgeBase.Connection). Used to skip auto-migrating the
         // shipped placeholder KBPath into a phantom DefaultKb.
@@ -775,6 +787,19 @@ namespace GxMcp.Gateway
         public int SourceStoreMaxMB { get; set; } = 512;
         /// <summary>Source-store background population: auto (default) or off.</summary>
         public string SourceStoreBackfill { get; set; } = "auto";
+        /// <summary>
+        /// Opt-in guard (Issue #1112): when true, any mutating tool call that omits an
+        /// explicit `kb` argument is refused before dispatch with a structured error listing
+        /// the configured KB aliases (`Environment.KBs`). Read-only calls keep the existing
+        /// resolution policy. Default: false.
+        /// </summary>
+        public bool RequireExplicitKbForWrites { get; set; } = false;
+        /// <summary>
+        /// Opt-in guard (Issue #1112): when true, `genexus_kb action=open` (and ad-hoc path
+        /// resolution) refuses filesystem paths and unconfigured aliases, accepting only
+        /// aliases declared in `Environment.KBs`. Default: false.
+        /// </summary>
+        public bool OpenOnlyConfiguredKbs { get; set; } = false;
         /// <summary>
         /// Optional shared-host tuning (RFC #854). Null when the document has no
         /// Server.SharedHost object; never written back as null. Holds the file values only:
