@@ -434,18 +434,18 @@ namespace GxMcp.Gateway
             try
             {
                 var env = Environment.GetEnvironmentVariable("GXMCP_LOG_DIR");
-                if (!string.IsNullOrWhiteSpace(env)) { Directory.CreateDirectory(env); return env; }
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory ?? "";
+                if (!string.IsNullOrWhiteSpace(env)) return Directory.CreateDirectory(env).FullName;
+                string baseDir = AppContext.BaseDirectory;
                 if (baseDir.Replace('/', '\\').IndexOf("\\node_modules\\", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    string dir = Path.Combine(local, "GenexusMCP", "logs");
-                    Directory.CreateDirectory(dir);
-                    return dir;
+                    // A new profile may not have a local data directory yet.
+                    string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.DoNotVerify);
+                    if (Path.IsPathFullyQualified(local))
+                        return Directory.CreateDirectory(Path.Combine(local, "GenexusMCP", "logs")).FullName;
                 }
                 return baseDir;
             }
-            catch { return AppDomain.CurrentDomain.BaseDirectory ?? ""; }
+            catch { return AppContext.BaseDirectory; }
         }
         // Rotation: when the log exceeds this many bytes the current file is renamed to
         // gateway_debug.log.1 and a fresh file is opened.  Only two files are kept.
@@ -717,6 +717,23 @@ namespace GxMcp.Gateway
             };
         }
 
+        private static void WritePanicLog(string message)
+        {
+            try
+            {
+                File.AppendAllText(Path.Combine(_logDir, "gateway_panic.log"), message);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Never fall back to the client's working directory or mask the original crash.
+                try { Console.Error.WriteLine($"Could not write gateway panic log: {ex.Message}"); }
+                catch (Exception stderrError) when (stderrError is IOException or ObjectDisposedException)
+                {
+                    // The client may have closed stderr during shutdown.
+                }
+            }
+        }
+
         public static async Task Main(string[] args)
         {
             // Short-circuit self-test before any I/O setup. The CLI installer calls this
@@ -733,9 +750,10 @@ namespace GxMcp.Gateway
 
             AppDomain.CurrentDomain.UnhandledException += async (s, e) => {
                 string msg = $"[{DateTime.Now}] FATAL UNHANDLED: {e.ExceptionObject}\n";
+                // Persist the crash before asynchronous stdout can yield during process termination.
+                WritePanicLog(msg);
                 var errorObj = new { jsonrpc = "2.0", method = "notifications/message", @params = new { level = "error", logger = "gateway", data = msg } };
                 await TryWriteStdout(Newtonsoft.Json.JsonConvert.SerializeObject(errorObj));
-                try { File.AppendAllText("gateway_panic.log", msg); } catch { }
             };
 
             // Register encoding provider for Windows-1252 support in .NET 10
