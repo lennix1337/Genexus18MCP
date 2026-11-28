@@ -1380,6 +1380,11 @@ namespace GxMcp.Worker.Services
                             }
                         });
                 }
+                if (GxMcp.Worker.Compatibility.DynamicSdkBridge.IsComDriver)
+                    return Models.McpResponse.Err(
+                        code: "UNSUPPORTED_IN_GENEXUS_VERSION",
+                        message: "The GXPublic driver does not build the native SDK search index.",
+                        hint: "Use genexus_list_objects or genexus_query to read metadata directly through GXPublic.");
                 return _kbService.BulkIndex(force);
             }
             if (action == "SelfTest") return _selfTestService.RunAllTests();

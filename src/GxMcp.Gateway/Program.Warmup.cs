@@ -26,6 +26,8 @@ namespace GxMcp.Gateway
             var bootstrapPool = _workerPool;
             var bootstrapWorker = bootstrapPool?.TryGet(bootstrapKey);
             if (bootstrapWorker == null) return;
+            if (IsGxPublicDriver(bootstrapWorker.EffectiveDriver ?? bootstrapWorker.Kb.Driver))
+                return;
             if (!_indexBootstrapStartedByKb.TryAdd(bootstrapKey, 0)) return;
 
             if (IndexBootstrapTriggerForTest != null)
@@ -381,7 +383,9 @@ namespace GxMcp.Gateway
                     // command. Strict resolution does not auto-open declared KBs,
                     // so the command would otherwise fail when initialize starts
                     // with no worker already attached.
-                    await PrespawnDefaultKbWorkerAsync();
+                    var defaultWorker = await PrespawnDefaultKbWorkerAsync();
+                    if (IsGxPublicDriver(defaultWorker?.EffectiveDriver ?? defaultWorker?.Kb.Driver))
+                        return;
 
                     Log("[Warmup] Starting worker warmup sequence...");
                     BroadcastNotification("notifications/message", new
@@ -739,7 +743,7 @@ namespace GxMcp.Gateway
         // Pre-spawn the configured default KB's worker via the same AcquireAsync path the
         // explicit `genexus_kb action=open` uses. Fire-and-forget from initialize; errors
         // are swallowed (the regular resolve path re-tries on demand).
-        private static async Task PrespawnDefaultKbWorkerAsync()
+        private static async Task<WorkerProcess?> PrespawnDefaultKbWorkerAsync()
         {
             try
             {
@@ -749,18 +753,20 @@ namespace GxMcp.Gateway
                 if (entry == null || _workerPool == null)
                 {
                     Log("[Warmup] No default KB declared — skipping pre-spawn.");
-                    return;
+                    return null;
                 }
 
                 var handle = KbHandle.FromEntry(entry);
                 Log($"[Warmup] Pre-spawning worker for default KB '{entry.Alias}' ({entry.Path})");
-                await _workerPool.AcquireAsync(handle, CancellationToken.None);
+                var worker = await _workerPool.AcquireAsync(handle, CancellationToken.None);
                 Log($"[Warmup] Pre-spawn of '{entry.Alias}' completed.");
+                return worker;
             }
             catch (Exception ex)
             {
                 // Non-fatal: the first real call falls back to the standard open path.
                 Log("[Warmup] Default-KB pre-spawn skipped: " + ex.Message);
+                return null;
             }
         }
 

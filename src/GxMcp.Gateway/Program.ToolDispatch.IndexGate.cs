@@ -33,7 +33,8 @@ namespace GxMcp.Gateway
             // never hit the worker dispatcher. genexus_doctor is deliberately NOT
             // listed: the Gateway answers it from its own state, and its one Worker
             // read, the WorkWithPlus template block, does not go through the index.
-            if (IsIndexDependentTool(tName, tArgs))
+            var kb = _currentKb.Value;
+            if (IsIndexDependentTool(tName, tArgs, kb?.Path, GetEffectiveKbDriver(kb)))
             {
                 IndexStateSnapshot idxSnap = GetLastKnownIndexState(_currentKb.Value?.NormalizedAlias);
                 bool indexUsable = IsIndexUsableForReads(idxSnap);

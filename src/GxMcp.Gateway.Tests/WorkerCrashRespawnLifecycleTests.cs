@@ -22,6 +22,25 @@ namespace GxMcp.Gateway.Tests
 
         public void Dispose() => Program.ResetWorkerLifecycleForTest();
 
+        [Fact]
+        public async Task GxPublicWorkerSkipsNativeIndexBootstrapWithoutAffectingOtherKbs()
+        {
+            var config = new Configuration();
+            var gx9 = new KbHandle("gx9", @"C:\Models\Gx9", null, "com-gxpublic", "9");
+            var gx18 = new KbHandle("gx18", @"C:\Models\Gx18", null, "native-sdk", "18");
+            int bootstraps = 0;
+            Program.IndexBootstrapTriggerForTest = () => Interlocked.Increment(ref bootstraps);
+            Program.StartWorkerForTest(config);
+            var pool = Program.GetWorkerPool()!;
+            pool.SpawnFactoryForTest = handle => new WorkerProcess(config, handle);
+
+            await pool.AcquireAsync(gx9, CancellationToken.None);
+            Assert.Equal(0, bootstraps);
+
+            await pool.AcquireAsync(gx18, CancellationToken.None);
+            Assert.Equal(1, bootstraps);
+        }
+
         [Theory]
         [InlineData(false)]
         [InlineData(true)]

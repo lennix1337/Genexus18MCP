@@ -266,6 +266,7 @@ namespace GxMcp.Gateway
         public string? SharedInstallationPath => IsSharedHostMode ? _sharedIdentity?.InstallationPath : null;
         public string? SharedDriver => IsSharedHostMode ? _sharedIdentity?.Driver : null;
         public string? SharedMajor => IsSharedHostMode ? _sharedIdentity?.Major : null;
+        internal string? EffectiveDriver { get; private set; }
 
         internal bool ExitConfirmed => _exitConfirmedForTest ?? Volatile.Read(ref _exitConfirmed) != 0;
         internal bool IsProcessAliveForPool => _processAliveForTest ?? (IsSharedHostMode ? _sharedConnection?.IsConnected == true : (_process == null || IsProcessRunning(_process)));
@@ -1203,6 +1204,7 @@ namespace GxMcp.Gateway
                 string workerDriver = string.IsNullOrWhiteSpace(Kb.Driver)
                     ? (sdkProbe.Driver ?? "native-sdk")
                     : Kb.Driver!;
+                EffectiveDriver = workerDriver;
                 string workerMajor = string.IsNullOrWhiteSpace(Kb.Major)
                     ? (sdkProbe.Major ?? string.Empty)
                     : Kb.Major!;
