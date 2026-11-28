@@ -44,9 +44,24 @@ namespace GxMcp.Gateway
         internal static bool IsIndexDependentToolForTest(string? toolName, JObject? args, string? openKbPath)
             => IsIndexDependentTool(toolName, args, openKbPath);
 
-        private static bool IsIndexDependentTool(string? toolName, JObject? args, string? openKbPath)
+        internal static bool IsGxPublicDriver(string? driver)
+            => string.Equals(driver, "com-gxpublic", StringComparison.OrdinalIgnoreCase);
+
+        private static string? GetEffectiveKbDriver(KbHandle? kb)
+            => kb == null ? null : _workerPool?.TryGet(kb.NormalizedAlias)?.EffectiveDriver
+                ?? kb.Driver ?? GeneXusVersionCatalog.GetDriverProfile(kb.Major);
+
+        internal static bool IsIndexDependentTool(
+            string? toolName, JObject? args, string? openKbPath, string? driver = null)
         {
             if (string.IsNullOrWhiteSpace(toolName)) return false;
+
+            // GXPublic reads metadata directly through its OLE DB provider, not the SDK index.
+            if (IsGxPublicDriver(driver)
+                && (string.Equals(toolName, "genexus_list_objects", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(toolName, "genexus_query", StringComparison.OrdinalIgnoreCase)))
+                return false;
+
             if (IsIdentityBoundReadAvailableDuringIndexing(toolName, args)) return false;
             if (IndexDependentToolSet.Contains(toolName)) return true;
 

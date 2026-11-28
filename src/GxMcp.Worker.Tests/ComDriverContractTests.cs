@@ -96,6 +96,25 @@ namespace GxMcp.Worker.Tests
         }
 
         [Fact]
+        public void CommandDispatcher_RefusesNativeBulkIndexUnderComDriver()
+        {
+            using (GxMcp.Worker.Compatibility.DynamicSdkBridge.Scoped("com-gxpublic", "9"))
+            {
+                var req = new JObject
+                {
+                    ["method"] = "kb",
+                    ["action"] = "BulkIndex",
+                    ["params"] = new JObject()
+                };
+
+                string respJson = GxMcp.Worker.Services.CommandDispatcher.Instance.Dispatch(req, req.ToString());
+                var resp = JObject.Parse(respJson);
+                Assert.Equal("error", resp["status"]?.ToString());
+                Assert.Equal("UNSUPPORTED_IN_GENEXUS_VERSION", resp["error"]?["code"]?.ToString());
+            }
+        }
+
+        [Fact]
         public void CommandDispatcher_DispatchesReadUnderComDriver()
         {
             using (GxMcp.Worker.Compatibility.DynamicSdkBridge.Scoped("com-gxpublic", "9"))

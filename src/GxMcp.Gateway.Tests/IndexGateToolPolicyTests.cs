@@ -22,6 +22,20 @@ namespace GxMcp.Gateway.Tests
             Assert.True(Program.IsIndexDependentToolForTest(toolName));
         }
 
+        [Theory]
+        [InlineData("com-gxpublic", "genexus_list_objects", false)]
+        [InlineData("COM-GXPUBLIC", "genexus_query", false)]
+        [InlineData("com-gxpublic", "genexus_search_source", true)]
+        [InlineData("native-sdk", "genexus_list_objects", true)]
+        [InlineData("dotnet-reflection", "genexus_query", true)]
+        [InlineData(null, "genexus_list_objects", true)]
+        public void OnlyGxPublicMetadataReadsBypassTheIndexGate(
+            string? driver, string toolName, bool expectedGate)
+        {
+            Assert.Equal(expectedGate,
+                Program.IsIndexDependentTool(toolName, null, null, driver));
+        }
+
         // The gate is applied to the name the request loop settled on, which is AFTER the legacy
         // alias rewrite (Program.RequestLoop, default ON). A gate entry the rewrite consumes
         // therefore never matches, and its umbrella is what actually needs the gate.
